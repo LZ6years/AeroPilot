@@ -40,7 +40,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    M1["M1<br/>UAV 原子飞控"] --> M2["M2<br/>地图资源与环境工厂"]
+    M1["M1<br/>UAV 原子飞控"] --> M2["M2<br/>AirVLN Scene 管理"]
     M2 --> M3["M3<br/>任务解析与语义规划"]
     M3 --> M4["M4<br/>短期滚动执行器"]
     M4 --> M5["M5<br/>原始观测与状态管理"]
@@ -53,7 +53,7 @@ flowchart LR
 需要完成：
 
 - `M1`：封装起飞、悬停、移动、转向、降落、获取位姿和图像。
-- `M2`：用配置加载地图，支持 `gym_unrealcv` 风格资源和本地 UE 启动脚本。
+- `M2`：明确 EnvClient / SimulationServer 边界，用 AirVLN 风格管理 MapPackage、SceneInstance、端口和场景进程。
 - `M3`：把用户输入解析成语义目标、目标描述、完成条件和不确定性。
 - `M4`：每次只生成 1-3 个原子动作。
 - `M5`：保存 RGB/depth/pose、动作日志、状态和轨迹。
@@ -134,7 +134,7 @@ sequenceDiagram
     participant Agent as Agent Planner
     participant VLM as 多模态大模型
     participant UAV as UAV Tools
-    participant Env as UE / gym_unrealcv
+    participant Env as AirVLN-style Scene / UE
 
     User->>CLI: 前面右转会有一个黑色的路灯，右转面向路灯后停下
     CLI->>Agent: 创建 run + 解析语义目标

@@ -1,0 +1,10 @@
+# Optional AirSim package for the real AirSim primitive adapter.
+#
+# Install requirements.txt first. AirSim 1.8.1 builds from source and imports
+# numpy + msgpackrpc during metadata generation.
+#
+# Recommended install:
+#   pip install -r requirements.txt
+#   pip install --no-build-isolation -r requirements-airsim.txt
+
+airsim==1.8.1

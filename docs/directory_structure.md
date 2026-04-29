@@ -8,11 +8,12 @@ UAV-Agent/                              # 项目根目录
 
   docs/                                 # 文档目录
     requirements.md                     # 需求文档：目标、能力边界、VLM 决策、困惑提问、验收标准
-    architecture.md                     # 架构说明：语义规划、短期执行、VLM、Clarification、工具层、runtime
+    architecture.md                     # 架构说明：Agent Runtime、EnvClient、SimulationServer、Planner、VLM
+    cs_architecture.md                  # C/S 职责划分：Agent Runtime、EnvClient、SimulationServer
     mvp_plan.md                         # MVP 分阶段计划
     mvp_flow_diagrams.md                # MVP 流程图：总闭环、阶段交付、VLM、提问状态机、Demo
     task_example.md                     # 典型任务示例：右转面向黑色路灯后停下
-    simulation_environment_strategy.md  # 仿真环境、地图资源、gym_unrealcv、工厂模式
+    simulation_environment_strategy.md  # 仿真环境、AirVLN scene 资源、C/S 扩展、UnrealCV 后续接入
     frontend_strategy.md                # Electron 和飞书预留策略
     reference_notes.md                  # AirNavigation、AirVLN、UAV-Flow、QiClaw 参考说明
     directory_structure.md              # 当前文件，解释目录用途
@@ -22,11 +23,19 @@ UAV-Agent/                              # 项目根目录
       suburb_day.json                   # 示例地图配置
     envs/                               # 仿真环境后端配置
       airsim.json                       # AirSim 连接/启动配置
-      unrealcv_gym.json                 # gym_unrealcv 环境配置
+      airvln_maps.json                  # AirVLN 风格 MapPackage 配置
     models/                             # VLM 使用的模型配置
       vlm.json                          # 多模态大模型配置
 
   src/                                  # 核心源码
+    runtime/                            # CLI 运行时
+      main.py                           # CLI 主入口
+      agent_runtime.py                  # Agent Runtime 主循环，负责任务闭环
+      config.py                         # 加载配置
+      run_store.py                      # 保存 run 状态
+      record_writer.py                  # 保存日志、轨迹、观测 artifact、VLM 判断、用户澄清
+      user_reply_handler.py             # CLI/未来飞书回复处理
+
     agent/                              # Agent 决策逻辑
       task_parser.py                    # 自然语言解析为语义任务
       semantic_planner.py               # 生成整体语义规划
@@ -49,21 +58,26 @@ UAV-Agent/                              # 项目根目录
       dispatcher.py                     # 工具调用分发器
       schemas.py                        # 工具输入输出 schema
 
-    adapters/                           # 外部系统适配层
-      uav_primitives.py                 # UAV 原子控制：起飞、悬停、转向、速度控制等
-      airnavigation_uav.py              # AirNavigation UAV 控制封装适配
-      sim_env_factory.py                # 仿真环境工厂，根据配置创建后端
-      airsim_env.py                     # AirSim 环境后端
-      unrealcv_gym_env.py               # gym_unrealcv 环境后端
-      local_ue_env.py                   # 本地 UE .sh/.bat 启动方式适配
-      airvln_env_client.py              # AirVLN C/S 客户端预留
+    env_client/                         # C/S 中的 Client，只负责调用 SimulationServer
+      base.py                           # EnvClient 抽象接口
+      local_client.py                   # 本地伪 C/S client，通过类调用 LocalSimulationServer
+      remote_client.py                  # 远程 RPC client 预留
+      schemas.py                        # 请求/响应 schema
 
-    runtime/                            # CLI 运行时
-      main.py                           # CLI 主入口
-      config.py                         # 加载配置
-      run_store.py                      # 保存 run 状态
-      record_writer.py                  # 保存日志、轨迹、观测 artifact、VLM 判断、用户澄清
-      user_reply_handler.py             # CLI/未来飞书回复处理
+    sim_server/                         # C/S 中的 Server，负责仿真进程和场景资源
+      server.py                         # SimulationServer 入口
+      scene_manager.py                  # scene 生命周期管理
+      process_manager.py                # UE 进程管理
+      port_manager.py                   # AirSim/UnrealCV/RPC 端口管理
+      object_manager.py                 # 环境对象增删改查
+      backends/                         # 仿真后端适配
+        airvln_backend.py               # AirVLN 风格 scene 后端
+        unrealcv_backend.py             # 后续 UnrealCV/gym_unrealcv 后端
+        local_ue_backend.py             # 本地 UE .sh/.bat 启动方式适配
+
+    adapters/                           # 非 C/S 外部库适配
+      uav_primitives.py                 # UAV 原子控制能力封装
+      airnavigation_uav.py              # AirNavigation UAV 控制封装适配
 
     integrations/                       # 外部消息入口预留
       feishu_gateway.py                 # 未来飞书接入，第一阶段只预留
@@ -79,8 +93,8 @@ UAV-Agent/                              # 项目根目录
     test_confusion_detector.py          # 测试困惑触发条件
     test_clarification.py               # 测试主动提问流程
     test_vlm_schema.py                  # 测试 VLM 输出 schema
-    test_tool_dispatcher.py             # 测试工具分发
-    test_sim_env_factory.py             # 测试地图/环境工厂
+    test_env_client.py                  # 测试 EnvClient 请求封装
+    test_sim_server.py                  # 测试 SimulationServer 生命周期和后端调用
 
   runs/                                 # 本地运行记录，通常不提交 Git
     run_*/                              # 单次任务记录：计划、动作、观测、日志、提问
@@ -90,6 +104,9 @@ UAV-Agent/                              # 项目根目录
 
 ## 关键边界
 
+- `Agent Runtime` 是大脑，负责任务闭环。
+- `EnvClient` 是 C/S 中的 Client，只封装环境服务调用。
+- `SimulationServer` 是 C/S 中的 Server，管理 UE 进程、scene、端口、后端和对象操作。
 - `src/adapters/uav_primitives.py` 只做原子飞控，不做“面向目标”“靠近目标”。
 - `src/cognition/` 是第一阶段临时认知层，VLM 只能建议，不能直接执行飞控。
 - `src/agent/safety.py` 是所有 UAV 动作的最后安全门。

@@ -82,18 +82,23 @@ https://github.com/AirVLN/AirVLN
 对 FlyAgent 的启发：
 
 ```text
-FlyAgent CLI / Agent Runtime
+Agent Runtime
   -> EnvClient
-  -> EnvServer
-  -> UE/AirSim Scene Process
-  -> UAV Control / Observation
+    -> SimulationServer
+      -> UE/AirSim Scene Process
+      -> UAV Control / Observation
 ```
 
 第一阶段可以退化为：
 
 ```text
-LocalEnvClient -> Local UE/AirSim
+Agent Runtime
+  -> LocalEnvClient
+    -> LocalSimulationServer
+      -> Local UE/AirSim
 ```
+
+注意：这里的 `EnvClient` 只是环境服务调用封装，不包含任务解析、规划、VLM 或用户交互。
 
 但接口保留：
 
@@ -114,8 +119,9 @@ https://github.com/buaa-colalab/UAV-Flow
 
 定位：
 
-- 主要参考地图资源如何配置和引用。
-- 重点看 `UAV-Flow-Eval`，它基于 UnrealZoo Gym / `gym_unrealcv`。
+- 不作为第一阶段地图资源主模型。
+- 后续主要参考 UnrealCV / `gym_unrealcv` 的对象级环境操作能力。
+- 当前地图资源主线改为 AirVLN 风格 scene 管理。
 
 关键参考：
 
@@ -161,9 +167,9 @@ https://github.com/buaa-colalab/UAV-Flow
 
 建议：
 
-- 地图资源第一阶段优先使用 `gym_unrealcv` 中可运行的内容。
-- FlyAgent 自己实现 `EnvFactory`，不要把业务逻辑绑定死到 `gym_unrealcv`。
-- 本地 UE `.sh` 启动方式作为 `LocalUEScriptProvider` 适配。
+- 第一阶段不要让 `gym_unrealcv` 主导地图资源模型。
+- 先实现 AirVLN 风格的 `MapPackage + SceneInstance + SimulationServer`。
+- 等 AirVLN-style scene 启动和观测闭环跑通后，再把 `gym_unrealcv` 接成 `SimulationServer` 的一个 backend。
 
 ## 4. QiClaw
 
@@ -228,5 +234,5 @@ CLI 输入
 | --- | --- | --- |
 | AirNavigation | UAV 基础操作、RGB/depth/pose 获取、多模态调用方式参考 | 整体架构、UI、任务循环 |
 | AirVLN | C/S、场景进程管理、多 scene/machine/client 扩展 | 训练框架、大模型 baseline |
-| UAV-Flow | UnrealZoo Gym、`gym_unrealcv`、地图 JSON 配置、对象操作能力 | OpenVLA 训练主链路 |
+| UAV-Flow | 后续 UnrealCV/gym_unrealcv 对象操作能力 | 第一阶段地图主模型、OpenVLA 训练主链路 |
 | QiClaw | Agent runtime、planner、gateway、records、Electron 预留 | 具体业务 Agent、微信/企微/抖音技能 |

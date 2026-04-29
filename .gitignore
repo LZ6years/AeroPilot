@@ -21,6 +21,7 @@ env/
 # Logs and runtime outputs
 *.log
 logs/
+runs/
 data/state_logs/
 data/rec_videos/
 .external_refs/

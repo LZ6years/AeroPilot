@@ -2,7 +2,7 @@
 
 ## 1. MVP 范围
 
-MVP 只做单机单 UAV 的 UE 仿真闭环，先以 CLI 跑通任务，不做完整 Electron 前端，不做多机协同，不做独立手机端能力。
+MVP 只做单机单 UAV 的 UE / AirSim 仿真闭环，先以 CLI 跑通任务，不做完整 Electron 前端，不做多机协同，不做独立手机端能力。
 
 优先支持任务：
 
@@ -20,12 +20,22 @@ MVP 只做单机单 UAV 的 UE 仿真闭环，先以 CLI 跑通任务，不做�
 
 ## 2. 阶段划分
 
+C/S 边界以 [C/S 架构职责划分](C:/Users/HP/Desktop/UAV-Agent/docs/cs_architecture.md) 为准。
+
+```text
+Agent Runtime
+  -> LocalEnvClient
+    -> LocalSimulationServer
+      -> One AirVLN-style Scene
+      -> One UAV
+```
+
 ### M1：UAV 原子飞控封装
 
 目标：
 
 - 从 AirNavigation 中抽取 UAV 基础操作。
-- 只封装原子飞控和原始观测，不继承它的整体架构。
+- 只封装原子飞控和原始观测，不继承它的整体架构和地图架构。
 
 交付：
 
@@ -53,28 +63,38 @@ MVP 只做单机单 UAV 的 UE 仿真闭环，先以 CLI 跑通任务，不做�
 - 可以起飞、悬停、转向、低速移动、降落。
 - 可以获取 pose、RGB、depth。
 
-### M2：地图资源与环境工厂
+### M2：AirVLN 风格地图资源与场景管理
 
 目标：
 
-- 参考 `gym_unrealcv` 的地图配置方式管理 UE 环境。
-- 第一阶段优先使用 `gym_unrealcv` 中可运行的地图资源。
-- 通过工厂模式预留后续多来源地图适配。
+- 参考 AirVLN 的 scene 管理方式管理地图资源。
+- 使用 `MapPackage` 描述静态地图资源。
+- 使用 `SceneInstance` 描述一次运行中的地图实例。
+- 由 `SimulationServer` 负责查找 scene、生成 AirSim settings、分配端口、启动进程。
+- UnrealCV / gym_unrealcv 放到后续 backend，不作为第一阶段主模型。
 
 交付：
 
-- `src/envs/base.py`
-- `src/envs/factory.py`
-- `src/envs/gym_unrealcv_env.py`
-- `src/envs/local_ue_env.py`
-- `configs/maps/*.json`
+- `src/env_client/base.py`
+- `src/env_client/local_client.py`
+- `src/env_client/schemas.py`
+- `src/sim_server/server.py`
+- `src/sim_server/scene_manager.py`
+- `src/sim_server/process_manager.py`
+- `src/sim_server/port_manager.py`
+- `src/sim_server/backends/airvln_backend.py`
+- `src/sim_server/backends/local_ue_backend.py`
+- `configs/maps/airvln_maps.json`
 
 验收：
 
-- 可以从配置加载地图。
-- 可以通过本地 UE `.sh` 或可执行文件启动环境。
-- 可以连接环境并读取 RGB/depth/pose。
-- 后续能扩展到 AirVLN 风格 C/S 环境。
+- 可以从配置加载 AirVLN 风格 `MapPackage`。
+- 可以根据 `scene_id` 查找并启动 scene。
+- 可以自动生成 AirSim `settings.json`。
+- 可以分配 AirSim port 并记录到 `SceneInstance`。
+- Agent Runtime 只通过 EnvClient 获取 RGB/depth/pose。
+- Agent Runtime 只通过 EnvClient 请求 UAV 原子动作。
+- 后续可以把 UnrealCV/gym_unrealcv 接成 SimulationServer backend。
 
 ### M3：任务解析与语义规划
 
@@ -88,28 +108,6 @@ MVP 只做单机单 UAV 的 UE 仿真闭环，先以 CLI 跑通任务，不做�
 - `src/agent/task_parser.py`
 - `src/agent/semantic_plan.py`
 - `src/agent/schemas.py`
-
-示例语义计划：
-
-```json
-{
-  "intent": "navigate_to_visual_target",
-  "target": {
-    "class": "street_lamp",
-    "color": "black",
-    "hint": "after turning right"
-  },
-  "route_hints": [
-    {"type": "turn", "direction": "right", "angle_deg": 90}
-  ],
-  "final_condition": "face_target_and_hover",
-  "constraints": {
-    "max_speed_mps": 1.0,
-    "min_depth_m": 2.0,
-    "timeout_sec": 60
-  }
-}
-```
 
 验收：
 
@@ -131,19 +129,6 @@ MVP 只做单机单 UAV 的 UE 仿真闭环，先以 CLI 跑通任务，不做�
 - `src/agent/safety.py`
 - `src/runtime/main.py`
 
-短期动作示例：
-
-```json
-{
-  "horizon": 2,
-  "actions": [
-    {"tool": "uav.turn_relative", "args": {"yaw_deg": 15}},
-    {"tool": "uav.hover", "args": {"duration_sec": 0.5}}
-  ],
-  "need_observation_after": true
-}
-```
-
 验收：
 
 - 不一次性执行长距离 `move_forward`。
@@ -163,23 +148,6 @@ MVP 只做单机单 UAV 的 UE 仿真闭环，先以 CLI 跑通任务，不做�
 - `src/perception/raw_observation.py`
 - `src/agent/mission_state.py`
 - `src/runtime/record_writer.py`
-
-状态字段：
-
-```json
-{
-  "pose": {},
-  "velocity": {},
-  "raw_observation": {
-    "rgb_frame_id": "frame_001",
-    "depth_frame_id": "depth_001",
-    "segmentation_frame_id": null
-  },
-  "semantic_plan": {},
-  "short_horizon_plan": {},
-  "vlm_scene_judgement": null
-}
-```
 
 验收：
 
@@ -201,31 +169,6 @@ MVP 只做单机单 UAV 的 UE 仿真闭环，先以 CLI 跑通任务，不做�
 - `src/cognition/schemas.py`
 - `configs/models/vlm.json`
 
-VLM 输入：
-
-- 用户任务。
-- 当前语义阶段。
-- 最近动作。
-- RGB 图像。
-- depth 安全摘要。
-- pose / yaw / 高度。
-- 历史观察结论。
-
-VLM 输出：
-
-```json
-{
-  "scene_summary": "画面右侧有黑色杆状物，可能是路灯",
-  "target_status": "candidate_visible",
-  "confidence": 0.72,
-  "suggested_next_actions": [
-    {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}},
-    {"tool": "uav.hover", "args": {"duration_sec": 0.5}}
-  ],
-  "ask_user": null
-}
-```
-
 验收：
 
 - 能把当前观测和任务上下文发送给 VLM。
@@ -245,26 +188,6 @@ VLM 输出：
 - `src/agent/confusion_detector.py`
 - `src/agent/clarification.py`
 - `src/runtime/user_reply_handler.py`
-
-触发条件：
-
-- VLM 置信度低于阈值。
-- 连续多轮没有发现目标。
-- 发现多个候选目标。
-- 观测和用户描述冲突。
-- depth 显示前方可能不安全。
-- Planner 无法选择下一步动作。
-
-提问流程：
-
-```text
-detect_confusion
-  -> force_hover
-  -> ask_one_question
-  -> wait_user_reply
-  -> update_mission_state
-  -> replan
-```
 
 验收：
 
@@ -291,6 +214,7 @@ detect_confusion
 
 - 每次任务有 run id。
 - 每轮保存输入、语义计划、短期计划、动作、观测、VLM 判断、困惑提问、用户回复、错误。
+- 保存 `MapPackage`、`SceneInstance`、AirSim port、settings 路径和 scene process 信息。
 - 失败时能看到失败阶段和原因。
 
 ### M9：Electron 与飞书预留
@@ -317,7 +241,8 @@ detect_confusion
 最高优先级：
 
 - UAV 原子飞控封装。
-- 地图资源配置和启动。
+- AirVLN 风格 scene 资源配置和启动。
+- EnvClient / SimulationServer 本地伪 C/S。
 - RGB/depth/pose 原始观测。
 - 短期滚动执行。
 - VLM 临时决策。
@@ -328,11 +253,12 @@ detect_confusion
 - 自然语言到语义计划。
 - run store 和轨迹记录。
 - 主动提问。
-- `gym_unrealcv` 最小 demo 验证。
+- AirVLN 风格 scene 启动 demo 验证。
 
 低优先级：
 
 - 视觉语义能力模块化。
+- UnrealCV / gym_unrealcv 对象级操作。
 - 多 UAV。
 - AirVLN C/S 完整迁移。
 - Electron 前端。
@@ -348,22 +274,26 @@ src/runtime/lamp_right_turn_demo.py
 
 流程：
 
-1. 连接环境和 UAV。
-2. 起飞或确认已起飞。
-3. 解析用户指令为语义计划。
-4. 执行短期窗口：先小角度右转或右转到约 90 度。
-5. 获取 RGB/depth/pose。
-6. 调用 VLM 读取任务上下文和图像，判断是否有黑色路灯候选。
-7. 若 VLM 置信度足够，则用小角度 yaw 调整让目标居中。
-8. 若 VLM 困惑或发现多个候选，则 hover 并向用户提问。
-9. 满足完成条件后 hover。
-10. 输出 run 记录。
+1. 读取 AirVLN 风格 `MapPackage`。
+2. Agent Runtime 通过 LocalEnvClient 请求 LocalSimulationServer 启动 scene。
+3. LocalSimulationServer 生成 AirSim `settings.json`、分配 port、启动 scene process。
+4. EnvClient 获得 `SceneInstance`。
+5. 连接 UAV。
+6. 起飞或确认已起飞。
+7. 解析用户指令为语义计划。
+8. 执行短期窗口：先小角度右转或右转到约 90 度。
+9. 获取 RGB/depth/pose。
+10. 调用 VLM 判断是否有黑色路灯候选。
+11. 若 VLM 置信度足够，则用小角度 yaw 调整让目标居中。
+12. 若 VLM 困惑或发现多个候选，则 hover 并向用户提问。
+13. 满足完成条件后 hover。
+14. 输出 run 记录。
 
 ## 5. 风险
 
 - AirNavigation 整体架构不适合继承，只能抽取 UAV 基础操作。
-- `gym_unrealcv` 是否能稳定运行取决于 UnrealZoo 环境包、UnrealCV 版本和地图路径。
-- AirVLN 的 C/S 更适合后续扩展，第一阶段直接照搬会增加复杂度。
+- AirVLN 场景包路径、AirSim settings、端口分配和进程 ready 检测需要先验证。
+- Windows 本地启动方式可能和 AirVLN Linux packaged scene 不同，需要 `local_ue_backend` 兼容。
 - LLM 直接生成动作序列不稳定，必须经过 schema 校验和短期执行器。
 - VLM 视觉判断可能幻觉，必须被 Safety Supervisor 约束。
 - VLM 视觉判断不稳定时，系统不应执行“靠近目标”等危险动作。

@@ -19,6 +19,7 @@ FlyAgent 是一个面向 UAV/UE 仿真环境的轻量级 Agent 项目。目标�
 
 - [需求文档](C:/Users/HP/Desktop/UAV-Agent/docs/requirements.md)
 - [架构说明](C:/Users/HP/Desktop/UAV-Agent/docs/architecture.md)
+- [C/S 架构职责划分](C:/Users/HP/Desktop/UAV-Agent/docs/cs_architecture.md)
 - [MVP 计划](C:/Users/HP/Desktop/UAV-Agent/docs/mvp_plan.md)
 - [示例任务闭环](C:/Users/HP/Desktop/UAV-Agent/docs/task_example.md)
 - [MVP 流程图](C:/Users/HP/Desktop/UAV-Agent/docs/mvp_flow_diagrams.md)
@@ -38,8 +39,8 @@ FlyAgent 是一个面向 UAV/UE 仿真环境的轻量级 Agent 项目。目标�
   - 第一阶段仍只做单 UAV。
 
 - [buaa-colalab/UAV-Flow](https://github.com/buaa-colalab/UAV-Flow)
-  - 参考 `UAV-Flow-Eval` 的 UnrealZoo Gym / `gym_unrealcv` 地图配置方式。
-  - 地图、agent、动作空间、safe_start、reset_area、目标对象等用 JSON 管理。
+  - 后续参考 `UAV-Flow-Eval` 的 UnrealZoo Gym / `gym_unrealcv` 对象级环境操作。
+  - 不作为第一阶段地图资源主模型。
 
 - `F:\openclaw-main\wojiazaiyugang.QiClaw\QiClaw`
   - 参考 Agent runtime、planner、run store、records、Electron 前端预留。
@@ -48,10 +49,10 @@ FlyAgent 是一个面向 UAV/UE 仿真环境的轻量级 Agent 项目。目标�
 ## 第一阶段目标
 
 - CLI 方式跑通完整任务。
-- 支持本地 UE/AirSim 或 UnrealCV Gym 环境。
+- 支持 AirVLN 风格 scene 资源管理和本地 UE/AirSim 环境。
 - 基础 UAV 控制只暴露原子能力。
 - 多模态感知与决策先统一由 VLM 处理，不在第一阶段拆分视觉语义模块。
-- 地图资源先参考 `gym_unrealcv` 的 JSON 配置方式，并用工厂模式适配不同来源。
+- 地图资源先参考 AirVLN 的 scene 管理方式：`MapPackage + SceneInstance + SimulationServer`。
 
 ## 建议目录
 

@@ -1,0 +1,33 @@
+{
+  "provider": "airvln",
+  "maps": [
+    {
+      "map_id": "airvln_demo_manual",
+      "provider": "airvln",
+      "scene_id": "demo",
+      "root": null,
+      "launch": {
+        "manual": true,
+        "args": []
+      },
+      "airsim": {
+        "mode": "Multirotor",
+        "vehicle_name": "Drone_1",
+        "camera_name": "front_0",
+        "image_width": 224,
+        "image_height": 224,
+        "depth_width": 256,
+        "depth_height": 256
+      },
+      "resources": {
+        "supports_object_edit": false,
+        "supports_weather": false
+      }
+    }
+  ],
+  "port_policy": {
+    "server_port": 30000,
+    "airsim_port_start": 30001,
+    "max_scene_num": 8
+  }
+}

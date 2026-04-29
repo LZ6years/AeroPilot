@@ -1,0 +1,20 @@
+# FlyAgent core dependencies.
+#
+# This file must stay installable with:
+#   pip install -r requirements.txt
+#
+# AirSim itself is intentionally not listed here. The PyPI airsim==1.8.1 source
+# package imports numpy and msgpackrpc while building metadata, so install this
+# file first, then install requirements-airsim.txt with --no-build-isolation.
+
+# Testing
+pytest>=8.0,<9.0
+
+# Image / numeric handling for RGB, depth, and future observation artifacts
+numpy==1.24.4
+opencv-python>=4.8,<5.0
+Pillow>=10.0,<11.0
+
+# AirSim metadata-generation prerequisites
+msgpack-python==0.5.6
+msgpack-rpc-python==0.4.1

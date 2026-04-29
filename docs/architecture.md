@@ -7,18 +7,19 @@ FlyAgent 不采用“一次性 Planner 生成完整动作序列”的方式，�
 ```text
 整体语义规划
   -> 短期滚动执行
-  -> 原子工具调用
-  -> 观测更新
+  -> EnvClient 调用环境服务
+  -> 原始观测更新
   -> 必要时询问用户
 ```
 
-LLM / VLM 可以负责理解任务、理解图像和提出建议，但底层飞控必须通过原子工具和 Safety Supervisor 执行。
+LLM / VLM 可以负责理解任务、理解图像和提出建议，但底层飞控必须通过原子工具、`EnvClient` 和 Safety Supervisor 执行。
 
 ## 2. 总体架构
 
 ```mermaid
 flowchart TD
-    U["User / CLI / Future Feishu"] --> TP["Task Parser"]
+    U["User / CLI / Future Feishu"] --> AR["Agent Runtime"]
+    AR --> TP["Task Parser"]
     TP --> SP["Semantic Planner"]
     SP --> MS["Mission State"]
     MS --> HP["Short Horizon Planner"]
@@ -27,14 +28,12 @@ flowchart TD
     SS -->|confused / unsafe| CM["Clarification Manager"]
     CM --> UAVH["Force Hover"]
     CM --> U
-    TD --> TR["Tool Registry"]
-    TD --> UAV["UAV Primitive Adapter"]
-    TD --> ENV["Map / Simulation Env Adapter"]
+    TD --> EC["EnvClient"]
     TD --> VLM["VLM Decision Fallback"]
-    UAV --> SIM["AirSim / UAV Base Ops"]
-    ENV --> MAP["UE Map / gym_unrealcv / AirVLN C/S"]
-    SIM --> OBS["Raw Observation"]
-    MAP --> OBS
+    EC --> SV["SimulationServer"]
+    SV --> BE["Backend: AirVLN-style / LocalUE / Future UnrealCV"]
+    BE --> MAP["MapPackage -> SceneInstance -> Scene Process"]
+    BE --> OBS["Raw Observation"]
     OBS --> VLM
     VLM --> VJ["VLM Scene Judgement"]
     VJ --> MS
@@ -43,9 +42,39 @@ flowchart TD
     RR --> UI["Future Electron UI"]
 ```
 
-## 3. 模块说明
+## 3. C/S 边界
 
-### 3.1 Task Parser
+FlyAgent 中的 `Client` 只指 `EnvClient`，不指整个 Agent。
+
+分层如下：
+
+```text
+Agent Runtime
+  -> EnvClient
+    -> SimulationServer
+      -> AirVLN-style Scene / Local UE / Future UnrealCV
+```
+
+- `Agent Runtime`：用户输入、任务解析、语义规划、短期规划、VLM、安全策略、困惑提问、run 记录。
+- `EnvClient`：调用 `SimulationServer` 获取观测、执行 UAV 原子动作、reset/start/stop scene。
+- `SimulationServer`：管理 UE 进程、地图资源、端口、scene、agent，并翻译成具体后端调用。
+
+详细职责见 [C/S 架构职责划分](C:/Users/HP/Desktop/UAV-Agent/docs/cs_architecture.md)。
+
+## 4. 模块说明
+
+### 4.1 Agent Runtime
+
+职责：
+
+- 作为 FlyAgent 主运行时。
+- 接收 CLI / 未来 Feishu / 未来 Electron 的任务输入。
+- 维护任务主循环。
+- 调用 Task Parser、Planner、VLM、Safety、Clarification。
+- 调用 `EnvClient`，但不直接操作 UE / AirSim / UnrealCV。
+- 写入 Run Store。
+
+### 4.2 Task Parser
 
 职责：
 
@@ -64,7 +93,7 @@ flowchart TD
 }
 ```
 
-### 3.2 Semantic Planner
+### 4.3 Semantic Planner
 
 职责：
 
@@ -79,7 +108,7 @@ flowchart TD
 - `align_to_landmark`
 - `stop`
 
-### 3.3 Short Horizon Planner
+### 4.4 Short Horizon Planner
 
 职责：
 
@@ -101,7 +130,7 @@ flowchart TD
 }
 ```
 
-### 3.4 VLM Decision Fallback
+### 4.5 VLM Decision Fallback
 
 第一阶段不拆分视觉语义模块，统一用多模态大模型作为临时决策参考。
 
@@ -134,51 +163,9 @@ flowchart TD
 - VLM 建议动作必须经过 Safety Supervisor。
 - 低置信度时只允许 hover、observe、小角度扫描或提问。
 
-等当前闭环全部跑通后，再考虑是否做模块化；这不进入当前 MVP 设计。
+等当前闭环全部跑通后，再考虑是否做视觉能力模块化；这不进入当前 MVP 设计。
 
-### 3.5 UAV Primitive Adapter
-
-职责：
-
-- 只提供底层 UAV 原子控制。
-- 不包含“靠近、面向、搜索、跟踪”等高级语义。
-
-接口：
-
-- `connect`
-- `takeoff`
-- `land`
-- `hover`
-- `move_velocity_body`
-- `move_velocity_world`
-- `turn_yaw`
-- `rotate_camera`
-- `get_pose`
-- `get_velocity`
-- `get_frame`
-- `get_depth`
-- `get_segmentation`
-
-### 3.6 Mission State
-
-职责：
-
-- 保存语义目标。
-- 保存当前阶段。
-- 保存短期计划。
-- 保存 UAV 原始状态。
-- 保存原始观测引用。
-- 保存 VLM 判断。
-- 保存 VLM 判断。
-- 保存工具调用历史。
-- 保存困惑原因和用户澄清。
-
-注意：
-
-- 不把目标框、目标距离等视觉语义结果作为必然存在字段。
-- 第一阶段可以保存 `vlm_scene_judgement` 作为临时视觉语义状态。
-
-### 3.7 Safety Supervisor
+### 4.6 Safety Supervisor
 
 职责：
 
@@ -196,7 +183,7 @@ flowchart TD
 - 多个候选目标无法区分时 hover 并提问。
 - 用户说“停下”默认解释为 hover，而不是 land。
 
-### 3.8 Clarification Manager
+### 4.7 Clarification Manager
 
 职责：
 
@@ -214,21 +201,40 @@ flowchart TD
 - Planner 无法选择安全下一步。
 - 连续 N 轮没有发现目标。
 
-示例问题：
+### 4.8 EnvClient
 
-```text
-我右转后看到了两个疑似黑色路灯：一个在左侧较近，一个在中间偏远。
-你希望我面向哪一个？
-```
+EnvClient 是 C/S 中的 Client。
 
-### 3.9 Map / Simulation Env Adapter
+职责：
+
+- 封装对 `SimulationServer` 的调用。
+- 向 Agent Runtime 暴露统一环境 API。
+- 获取 RGB/depth/pose 等观测。
+- 执行 UAV 原子动作请求。
+- 请求 scene start/reset/stop。
+- 做超时、重试、返回结果解析。
+
+EnvClient 不做：
+
+- 任务理解。
+- VLM 判断。
+- 规划。
+- 用户提问。
+- 任务完成判断。
+
+### 4.9 SimulationServer
+
+SimulationServer 是 C/S 中的 Server。
 
 职责：
 
 - 管理地图资源和仿真环境。
-- 通过工厂模式创建不同环境后端。
+- 管理 AirVLN 风格 scene、本地 UE / AirSim 和后续 UnrealCV 后端进程。
+- 管理 scene、agent、端口和启动脚本。
+- 把 EnvClient 请求翻译成具体后端调用。
+- 返回标准化 observation 和 action result。
 - 支持本地 UE `.sh` / `.bat` 启动。
-- 支持 `gym_unrealcv` 风格地图 JSON。
+- 支持 AirVLN 风格 `MapPackage + SceneInstance`。
 - 支持环境对象操作。
 
 对象操作预留：
@@ -241,7 +247,25 @@ flowchart TD
 - `set_weather`
 - `reset_map`
 
-### 3.10 Run Store / Records
+### 4.10 Mission State
+
+职责：
+
+- 保存语义目标。
+- 保存当前阶段。
+- 保存短期计划。
+- 保存 UAV 原始状态。
+- 保存原始观测引用。
+- 保存 VLM 判断。
+- 保存工具调用历史。
+- 保存困惑原因和用户澄清。
+
+注意：
+
+- 不把目标框、目标距离等视觉语义结果作为必然存在字段。
+- 第一阶段保存 `vlm_scene_judgement` 作为临时视觉语义状态。
+
+### 4.11 Run Store / Records
 
 职责：
 
@@ -257,17 +281,20 @@ flowchart TD
 
 未来 Electron UI 只读取 runtime 状态，不直接操作底层 UAV。
 
-## 4. 规划执行流程
+## 5. 规划执行流程
 
 ```text
 用户输入
+  -> Agent Runtime
   -> Task Parser 提取语义
   -> Semantic Planner 生成整体阶段
   -> Mission State 初始化
   -> Short Horizon Planner 生成 1-3 个动作
   -> Safety Supervisor 检查
-  -> Tool Dispatcher 执行原子工具
-  -> 获取原始观测
+  -> Tool Dispatcher 调用 EnvClient
+  -> EnvClient 请求 SimulationServer
+  -> SimulationServer 调用仿真后端执行原子能力
+  -> 返回原始观测
   -> VLM 处理观测
   -> 更新 Mission State
   -> 如果困惑：hover + 提问
@@ -275,10 +302,17 @@ flowchart TD
   -> 完成或失败后写入 Run Store
 ```
 
-## 5. 代码目录建议
+## 6. 代码目录建议
 
 ```text
 src/
+  runtime/                       # CLI 运行时和记录
+    main.py                       # CLI 入口
+    agent_runtime.py              # Agent Runtime 主循环
+    config.py                     # 配置加载
+    run_store.py                  # run 状态存储
+    record_writer.py              # 轨迹、观测、日志记录
+
   agent/                         # Agent 规划、状态、安全逻辑
     task_parser.py                # 自然语言到语义任务
     semantic_planner.py           # 整体语义规划
@@ -297,18 +331,24 @@ src/
     dispatcher.py                 # 工具调用分发
     schemas.py                    # 工具输入输出 schema
 
-  adapters/                      # 外部系统适配
-    uav_primitives.py             # UAV 原子控制适配
-    sim_env_factory.py            # 仿真环境工厂
-    airsim_env.py                 # AirSim 环境后端
-    unrealcv_gym_env.py           # gym_unrealcv 环境后端
-    airvln_env_client.py          # AirVLN C/S 客户端预留
+  env_client/                    # C/S 中的 Client
+    base.py                       # EnvClient 抽象接口
+    local_client.py               # 本地伪 C/S client
+    remote_client.py              # 远程 RPC client 预留
+    schemas.py                    # 请求/响应 schema
 
-  runtime/                       # CLI 运行时和记录
-    main.py                       # CLI 入口
-    config.py                     # 配置加载
-    run_store.py                  # run 状态存储
-    record_writer.py              # 轨迹、观测、日志记录
+  sim_server/                    # C/S 中的 Server
+    server.py                     # SimulationServer 入口
+    scene_manager.py              # scene 生命周期管理
+    process_manager.py            # UE 进程管理
+    port_manager.py               # 端口管理
+    backends/                     # 仿真后端
+      airvln_backend.py           # AirVLN 风格 scene 后端
+      local_ue_backend.py         # 本地 UE 脚本后端
+      unrealcv_backend.py         # 后续 UnrealCV/gym_unrealcv 后端
+
+  adapters/                      # 非 C/S 的外部库适配
+    uav_primitives.py             # UAV 原子控制能力封装
 
 configs/                         # 配置
   maps/                           # 地图 JSON

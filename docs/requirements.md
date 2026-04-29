@@ -9,7 +9,7 @@
 
 - 一张地图多个 UAV。
 - 多种地图资源来源。
-- AirSim / UnrealCV Gym 等多后端环境。
+- AirVLN 风格 scene 管理、AirSim / UnrealCV Gym 等多后端环境。
 - 多模态感知和决策先由 VLM 统一处理。
 - 多模态大模型作为第一阶段临时认知核心。
 - 困惑时主动向用户提问。
@@ -350,26 +350,27 @@ Mission State
 
 ## 11. 地图资源管理
 
-地图资源优先参考 `gym_unrealcv` 的 JSON 配置方式。
+地图资源优先参考 AirVLN 的 scene 管理方式。
 
 要求：
 
-- 地图资源通过配置加载，不写死在代码中。
-- 支持本地 UE `.sh` 或 `.bat` 启动脚本。
-- 支持 UnrealCV Gym 风格的 `env_bin_win`、`env_map`、`agents`、`safe_start`、`reset_area`。
-- 支持删除物体、增加物体、隐藏物体、改变物体状态等环境操作。
-- 使用工厂模式适配不同地图来源。
+- 地图资源通过 `MapPackage` 配置加载，不写死在代码中。
+- 运行中的场景通过 `SceneInstance` 记录。
+- SimulationServer 负责查找 scene、分配端口、生成 AirSim settings、启动进程。
+- Agent Runtime 只能通过 EnvClient 使用地图和观测。
+- 支持本地 UE `.sh` 或 `.bat` 启动脚本作为兼容 backend。
+- UnrealCV / gym_unrealcv 的对象级操作后续作为 backend 接入。
 
 地图来源初期：
 
-- `gym_unrealcv` / UnrealZoo Gym。
+- AirVLN 风格 scene package。
+- 本地 UE/AirSim scene。
 
 未来适配：
 
-- AirSim UE 项目。
-- AirVLN 场景。
+- UnrealCV / gym_unrealcv。
 - 自定义 UE 地图。
-- 其他第三方仿真地图。
+- 其他第三方仿真地图包。
 
 ## 12. 第一阶段验收标准
 
