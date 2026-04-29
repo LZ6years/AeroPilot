@@ -1,17 +1,19 @@
-# UAV Agent
+# FlyAgent
 
-一个面向无人机自主导航任务的轻量级 Agent 项目。目标是让用户可以用自然语言描述空间动作和视觉目标，Agent 结合飞控、图像、深度、轨迹和可选手机端参数 API，完成“理解任务 -> 规划动作 -> 调用工具 -> 观察反馈 -> 安全停止”的闭环。
+FlyAgent 是一个面向 UAV/UE 仿真环境的轻量级 Agent 项目。目标是让用户用自然语言描述任务，系统通过“整体语义规划 + 短期滚动执行 + 环境反馈更新”的方式控制无人机完成目标。
 
-示例指令：
+典型指令：
 
-> 前面右转会有一个黑色的路灯，右转面向路灯后停下
+```text
+前面右转会有一个黑色的路灯，右转面向路灯后停下
+```
 
-Agent 应将其理解为：
+这类指令不能一次性翻译成一长串确定动作。更合理的方式是：
 
-1. 向右转。
-2. 搜索黑色路灯。
-3. 调整机头和相机，使 UAV 面向目标。
-4. 确认目标后悬停停止。
+1. 先生成整体语义目标：右转后寻找黑色路灯，并最终让 UAV 朝向它后悬停。
+2. 每次只预测未来几步短期动作。
+3. 执行后读取观测，再更新计划。
+4. 用户语言不确定、目标未确认或环境状态变化时，保守悬停或重新观察。
 
 ## 文档
 
@@ -19,61 +21,46 @@ Agent 应将其理解为：
 - [架构说明](C:/Users/HP/Desktop/UAV-Agent/docs/architecture.md)
 - [MVP 计划](C:/Users/HP/Desktop/UAV-Agent/docs/mvp_plan.md)
 - [示例任务闭环](C:/Users/HP/Desktop/UAV-Agent/docs/task_example.md)
+- [MVP 流程图](C:/Users/HP/Desktop/UAV-Agent/docs/mvp_flow_diagrams.md)
+- [仿真环境与地图资源策略](C:/Users/HP/Desktop/UAV-Agent/docs/simulation_environment_strategy.md)
+- [前端预留策略](C:/Users/HP/Desktop/UAV-Agent/docs/frontend_strategy.md)
+- [目录结构说明](C:/Users/HP/Desktop/UAV-Agent/docs/directory_structure.md)
 - [参考项目说明](C:/Users/HP/Desktop/UAV-Agent/docs/reference_notes.md)
 
-## 参考来源
-
-本项目主要参考两个本地项目：
+## 参考来源分工
 
 - `C:\Users\HP\Desktop\AirNavigation\AirNavigation`
-  - 复用飞控、图像、深度、轨迹、检测/跟踪等能力。
-  - 重点参考 `utils/UAV_controller.py`、`utils/UAV_navigater.py`、`ai/ai_vision.py`、`utils/CommandDecorator.py`。
+  - 只抽取 UAV 基础操作，例如连接、起飞、降落、悬停、速度控制、相机控制、图像/深度获取、位姿/轨迹记录。
+  - 不参考它的整体架构。
 
-- `F:\openclaw-main\openclaw-main`
-  - 轻量参考工具注册、能力清单、统一 dispatcher、手机参数 API 接入模式。
-  - 不建议照搬完整 openclaw 架构。
+- [AirVLN/AirVLN](https://github.com/AirVLN/AirVLN)
+  - 参考 C/S 架构、环境 server、场景进程管理、多 scene / 多机器 / 多 UAV 扩展方式。
+  - 第一阶段仍只做单 UAV。
+
+- [buaa-colalab/UAV-Flow](https://github.com/buaa-colalab/UAV-Flow)
+  - 参考 `UAV-Flow-Eval` 的 UnrealZoo Gym / `gym_unrealcv` 地图配置方式。
+  - 地图、agent、动作空间、safe_start、reset_area、目标对象等用 JSON 管理。
+
+- `F:\openclaw-main\wojiazaiyugang.QiClaw\QiClaw`
+  - 参考 Agent runtime、planner、run store、records、Electron 前端预留。
+  - Electron 前端等 CLI 在 UE 中完整跑通后再做。
 
 ## 第一阶段目标
 
-先做一个能跑通的单机闭环：
-
-- 包装 AirNavigation 的 UAV 控制 API。
-- 支持获取 Scene、Depth、Segmentation 等视觉信息。
-- 支持简单自然语言任务解析。
-- 支持“右转 -> 搜索目标 -> 面向目标 -> 悬停”的任务。
-- 所有动作经过安全限制：限速、超时、找不到目标则悬停。
+- CLI 方式跑通完整任务。
+- 支持本地 UE/AirSim 或 UnrealCV Gym 环境。
+- 基础 UAV 控制只暴露原子能力。
+- 多模态感知与决策先统一由 VLM 处理，不在第一阶段拆分视觉语义模块。
+- 地图资源先参考 `gym_unrealcv` 的 JSON 配置方式，并用工厂模式适配不同来源。
 
 ## 建议目录
 
 ```text
-UAV-Agent/
-  README.md
-  docs/
-    requirements.md
-    architecture.md
-    mvp_plan.md
-    task_example.md
-    reference_notes.md
-  src/
-    agent/
-      task_parser.py
-      planner.py
-      mission_state.py
-      safety.py
-    tools/
-      registry.py
-      dispatcher.py
-      schemas.py
-    adapters/
-      airnavigation_uav.py
-      airnavigation_perception.py
-      phone_gateway.py
-    runtime/
-      main.py
-      config.py
-  tests/
-    test_task_parser.py
-    test_planner_lamp_task.py
-    test_tool_dispatcher.py
+UAV-Agent/                         # 项目根目录
+  README.md                        # 项目入口说明
+  docs/                            # 需求、架构、策略文档
+  configs/                         # 地图、环境、模型、本地运行配置
+  src/                             # 主要源码
+  ui/                              # 未来 Electron 前端预留
+  tests/                           # 单元测试和集成测试
 ```
-

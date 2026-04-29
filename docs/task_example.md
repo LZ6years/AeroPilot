@@ -6,212 +6,177 @@
 前面右转会有一个黑色的路灯，右转面向路灯后停下
 ```
 
-## 2. 任务解释
+## 2. 不推荐的一次性 Planner
 
-该指令包含四个阶段：
-
-1. 向右转。
-2. 在右转后的视野中搜索黑色路灯。
-3. 调整 UAV 朝向，使其面向路灯。
-4. 悬停停止。
-
-## 3. 结构化任务
+不推荐直接生成：
 
 ```json
 {
-  "intent": "navigate_to_visual_target",
-  "target": {
-    "description": "black street lamp",
-    "color": "black",
-    "class": "street_lamp"
-  },
   "steps": [
-    {
-      "type": "turn",
-      "direction": "right",
-      "angle_deg": 90
-    },
-    {
-      "type": "search_target",
-      "description": "black street lamp"
-    },
-    {
-      "type": "face_target",
-      "description": "black street lamp"
-    },
-    {
-      "type": "hover"
-    }
+    {"type": "turn", "direction": "right", "angle_deg": 90},
+    {"type": "search_target", "target": "black street lamp"},
+    {"type": "face_target", "target": "black street lamp"},
+    {"type": "hover"}
+  ]
+}
+```
+
+原因：
+
+- 用户说的“右转”不一定是精确 90 度。
+- 目标不一定转一次就能看到。
+- `面向` 不是一次动作，而是多个小角度调整和观测。
+- `靠近/前进` 的距离不能提前确定。
+- 视觉判断可能失败或目标描述有歧义。
+
+## 3. 推荐的整体语义规划
+
+```json
+{
+  "intent": "navigate_by_visual_landmark",
+  "goal": {
+    "target_description": "黑色路灯",
+    "final_condition": "UAV 朝向目标并悬停"
+  },
+  "semantic_phases": [
+    {"phase": "orient_right", "goal": "根据用户线索向右侧观察"},
+    {"phase": "search_landmark", "goal": "寻找可能是黑色路灯的目标"},
+    {"phase": "align_to_landmark", "goal": "通过小角度调整让 UAV 朝向目标"},
+    {"phase": "stop", "goal": "悬停结束"}
   ],
-  "safety": {
-    "max_speed_mps": 1.5,
-    "min_depth_m": 2.0,
-    "timeout_sec": 60
+  "uncertainties": [
+    "目标可能不在首次右转后的视野中",
+    "目标类别需要 VLM 确认",
+    "右转角度需要根据观测滚动修正"
+  ]
+}
+```
+
+## 4. 短期滚动执行示例
+
+### Round 1：先向右观察
+
+```json
+{
+  "phase": "orient_right",
+  "next_actions": [
+    {"type": "turn_yaw", "direction": "right", "angle_deg": 30},
+    {"type": "hover", "duration_sec": 0.3},
+    {"type": "observe", "modalities": ["rgb", "depth", "pose"]}
+  ],
+  "replan_after": "observe"
+}
+```
+
+### Round 2：用 VLM 临时理解观测
+
+第一阶段将当前图像、深度摘要、任务目标和最近动作交给多模态大模型。
+
+```json
+{
+  "vlm_input": {
+    "user_instruction": "前面右转会有一个黑色的路灯，右转面向路灯后停下",
+    "phase": "search_landmark",
+    "last_actions": ["turn_yaw_right_30", "hover", "observe"],
+    "rgb_frame_id": "frame_001",
+    "depth_summary": {
+      "min_forward_depth_m": 3.2,
+      "has_close_obstacle": false
+    },
+    "pose": {
+      "yaw_deg": 32.0,
+      "height_m": 3.0
+    }
   }
 }
 ```
 
-## 4. 执行流程
+VLM 输出：
 
-### 4.1 初始化
-
-工具调用：
-
-```text
-uav.connect
-uav.takeoff
-uav.get_pose
-uav.get_frames(types=["Scene", "DepthPlanar", "DepthVis"])
-```
-
-期望结果：
-
-- UAV 可控。
-- UAV 已在安全高度。
-- 获取当前画面、深度和姿态。
-
-### 4.2 右转
-
-工具调用：
-
-```text
-uav.turn_relative(angle_deg=90)
-uav.hover
-uav.get_pose
+```json
+{
+  "scene_summary": "画面中间偏右有一个黑色细长杆状物，可能是路灯",
+  "target_status": "candidate_visible",
+  "confidence": 0.70,
+  "suggested_next_actions": [
+    {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}},
+    {"tool": "uav.hover", "args": {"duration_sec": 0.5}},
+    {"tool": "uav.get_frames", "args": {"modalities": ["rgb", "depth", "pose"]}}
+  ],
+  "ask_user": null
+}
 ```
 
 注意：
 
-- 如果没有现成 `turn_relative`，可通过当前 yaw + `rotateToYawAsync` 包装。
-- 右转完成后必须短暂停稳，再开始识别。
+- VLM 输出只是建议。
+- `uav.turn_relative` 等动作必须经过 Safety Supervisor。
+- 如果 VLM 置信度不足，不允许直接前进或靠近。
 
-### 4.3 搜索黑色路灯
-
-工具调用：
-
-```text
-uav.get_frames(types=["Scene", "DepthPlanar", "DepthVis"])
-vision.detect(description="black street lamp")
-```
-
-如果没有找到：
-
-```text
-uav.turn_relative(angle_deg=15)
-uav.hover
-vision.detect(description="black street lamp")
-```
-
-建议最多扫描：
-
-- 左右各 45 度。
-- 或累计 6 次，每次 15 度。
-
-失败策略：
-
-- 找不到目标时悬停。
-- 返回 `TARGET_NOT_FOUND`。
-- 不继续向前飞。
-
-### 4.4 面向目标
-
-输入：
-
-- 目标 bbox。
-- 当前图像宽高。
-- 当前 UAV yaw。
-- 当前相机 pitch。
-
-计算：
-
-- bbox 中心点。
-- bbox 中心相对图像中心的水平偏移。
-- 将水平偏移转换为 yaw 修正角。
-- 将垂直偏移转换为相机 pitch 修正。
-
-工具调用：
-
-```text
-uav.turn_relative(angle_deg=small_yaw_delta)
-uav.rotate_camera(pitch_rate=small_pitch_rate, duration=0.1)
-uav.hover
-```
-
-完成条件：
-
-- bbox 中心距离画面中心小于宽高的 5%。
-- 深度距离大于安全阈值。
-- 连续 2 帧目标检测一致。
-
-### 4.5 停下
-
-工具调用：
-
-```text
-uav.hover
-uav.get_pose
-uav.get_frames(types=["Scene"])
-```
-
-输出：
+### Round 3：目标候选明确，执行小角度对齐
 
 ```json
 {
-  "status": "completed",
-  "message": "已右转并面向黑色路灯悬停",
-  "final_phase": "hovering"
+  "phase": "align_to_landmark",
+  "next_actions": [
+    {"type": "turn_yaw", "direction": "right", "angle_deg": 5},
+    {"type": "hover", "duration_sec": 0.3},
+    {"type": "observe", "modalities": ["rgb", "depth", "pose"]}
+  ],
+  "replan_after": "observe"
 }
 ```
 
-## 5. 伪代码
+### Round 4：困惑时主动提问
 
-```python
-def run_lamp_right_turn_task(agent):
-    agent.call("uav.connect")
-    agent.call("uav.takeoff")
+如果 VLM 返回多个候选：
 
-    agent.call("uav.turn_relative", angle_deg=90)
-    agent.call("uav.hover")
-
-    target = None
-    for _ in range(6):
-        frames = agent.call("uav.get_frames", types=["Scene", "DepthPlanar", "DepthVis"])
-        target = agent.call("vision.detect", description="black street lamp", frame=frames["Scene"])
-        if target.ok and target.payload.get("bbox"):
-            break
-        agent.call("uav.turn_relative", angle_deg=15)
-        agent.call("uav.hover")
-
-    if not target or not target.payload.get("bbox"):
-        agent.call("uav.hover")
-        return {"status": "failed", "reason": "TARGET_NOT_FOUND"}
-
-    for _ in range(10):
-        frames = agent.call("uav.get_frames", types=["Scene", "DepthPlanar"])
-        bbox = agent.call("vision.detect", description="black street lamp", frame=frames["Scene"]).payload["bbox"]
-        offset = agent.call("vision.estimate_target_offset", bbox=bbox)
-        distance = agent.call("depth.estimate_bbox_distance", bbox=bbox, depth=frames["DepthPlanar"])
-
-        if distance.payload["meters"] < 2.0:
-            agent.call("uav.hover")
-            return {"status": "completed", "reason": "SAFE_DISTANCE_REACHED"}
-
-        if abs(offset.payload["yaw_deg"]) < 3:
-            agent.call("uav.hover")
-            return {"status": "completed", "reason": "TARGET_CENTERED"}
-
-        agent.call("uav.turn_relative", angle_deg=offset.payload["yaw_deg"])
-        agent.call("uav.hover")
-
-    agent.call("uav.hover")
-    return {"status": "completed", "reason": "MAX_ALIGNMENT_STEPS_REACHED"}
+```json
+{
+  "scene_summary": "画面左侧和中间偏远处都有黑色杆状物，二者都可能是路灯",
+  "target_status": "ambiguous_candidates",
+  "confidence": 0.42,
+  "suggested_next_actions": [
+    {"tool": "uav.hover", "args": {"duration_sec": 1.0}}
+  ],
+  "ask_user": "我看到了两个疑似黑色路灯：左侧较近一个，中间偏远一个。你希望我面向哪一个？"
+}
 ```
 
-## 6. 关键安全点
+系统行为：
 
-- 不允许目标未确认时向前快速飞。
-- 不允许深度距离过近时继续靠近。
-- 目标丢失后必须悬停并重新扫描。
-- 工具调用超时必须悬停。
-- 用户说“停下”时，停下应解释为 `hover`，不是 `land`。
+1. 强制 hover。
+2. 将困惑原因写入 run record。
+3. 向用户提问。
+4. 等待用户回复。
+5. 根据用户回复更新 Mission State。
+6. 重新规划。
 
+### Round 5：目标已居中，停止
+
+```json
+{
+  "phase": "stop",
+  "next_actions": [
+    {"type": "hover", "duration_sec": 1.0}
+  ],
+  "finish_reason": "target_aligned"
+}
+```
+
+## 5. 后续能力拆分
+
+当前 MVP 不拆分视觉语义模块。
+先让 VLM 统一完成图像理解、目标候选判断、下一步建议和困惑提问。
+
+等 UAV 在 UE 中完整跑通后，再评估是否需要把某些稳定能力拆出来。
+
+## 6. 安全策略
+
+- 每次只执行短动作。
+- 每次动作后重新观察。
+- 目标不确定时不前进。
+- VLM 低置信度时不执行靠近。
+- 无观测时悬停。
+- 困惑时主动提问。
+- 用户说“停下”解释为 `hover`，不是 `land`。

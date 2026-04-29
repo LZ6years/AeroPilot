@@ -10,10 +10,11 @@ C:\Users\HP\Desktop\AirNavigation\AirNavigation
 
 定位：
 
-- Python/Qt + AirSim 的 UAV 自主导航仿真系统。
-- 已包含飞控、图像获取、深度/分割、目标检测、目标跟踪、轨迹记录等能力。
+- 只参考 UAV 基础操作和原始观测获取。
+- 不参考整体架构、任务循环和 UI。
+- 高级视觉逻辑暂不拆分，第一阶段统一交给 VLM 处理。
 
-### 1.1 建议复用文件
+建议抽取：
 
 `utils/UAV_controller.py`
 
@@ -23,91 +24,209 @@ C:\Users\HP\Desktop\AirNavigation\AirNavigation
 `docs/uav_controller.md`
 
 - 已整理 wrapper API。
-- 适合作为 Agent 工具层的接口来源。
+- 可作为 Agent 工具层接口来源。
 
 `utils/UAV_navigater.py`
 
-- 视觉导航逻辑。
-- 包含目标检测、bbox 到角度偏差、相机调整、目标跟踪。
+- 只参考局部算法，例如视觉线索到角度偏差、相机调整。
+- 不继承它的整体导航闭环。
 
 `ai/ai_vision.py`
 
-- 使用多模态视觉模型根据图像和描述返回目标 bbox。
-- 可以作为 `vision.detect(description)` 的早期实现。
+- 只作为“如何调用多模态模型理解图像”的参考。
+- 不作为第一阶段基础感知能力直接继承。
+- 其中硬编码 API key 必须移除，改为环境变量或配置。
 
-`utils/CommandDecorator.py`
+注意：
 
-- 命令注册装饰器。
-- 可借鉴为 Python 版工具注册表。
+- AirNavigation 整体架构较重且耦合，不适合直接继承。
+- 基础层只保留原子飞控和 RGB/depth/pose 获取。
+- “面向目标、靠近目标、搜索目标”应由 Planner + VLM + 安全策略组合完成。
 
-### 1.2 需要注意的问题
+## 2. AirVLN
 
-- 部分源码注释存在编码显示问题，但 API 名称和结构仍可读。
-- `ai_vision.py` 中存在硬编码 API key，后续必须迁移到环境变量。
-- 当前视觉导航偏目标追踪，尚未形成完整 Agent 任务管理层。
-- 深度信息已有获取入口，但需要进一步确认精确距离计算方式。
-
-## 2. OpenClaw
-
-路径：
+链接：
 
 ```text
-F:\openclaw-main\openclaw-main
+https://github.com/AirVLN/AirVLN
 ```
 
 定位：
 
-- 大型 Agent/移动端/工具网关项目。
-- 本项目只轻量参考架构思想，不照搬完整系统。
+- 主要参考 C/S 仿真架构。
+- 用于后续扩展“一张地图多个 UAV / 多 scene / 多机器”。
+- 第一阶段只做单机单 UAV，不照搬完整训练和评测框架。
 
-### 2.1 建议参考文件
+关键参考：
 
-`apps/android/app/src/main/java/ai/openclaw/app/node/InvokeCommandRegistry.kt`
+`airsim_plugin/AirVLNSimulatorServerTool.py`
 
-- 能力清单和命令注册。
-- 可借鉴工具的名称、可用性、权限条件设计。
+- server 管理 UE/AirSim 场景进程。
+- 通过 msgpack-rpc 暴露 `reopen_scenes`。
+- 为每个场景写入独立 AirSim `settings.json`。
+- 为每个场景分配 `ApiServerPort`。
+- 通过 subprocess 启动场景。
 
-`apps/android/app/src/main/java/ai/openclaw/app/node/InvokeDispatcher.kt`
+`airsim_plugin/AirVLNSimulatorClientTool.py`
 
-- 统一工具分发。
-- 可借鉴未知命令、权限不可用、后台不可用、handler 调用等错误处理方式。
+- client 根据 `machines_info` 连接多个 server。
+- 每台 machine 可以包含多个 `open_scenes`。
+- 每个 scene 对应一个 AirSim client。
+- 统一获取 RGB/depth。
 
-`apps/android/app/src/main/java/ai/openclaw/app/gateway/GatewaySession.kt`
+`utils/env_vector.py`
 
-- WebSocket RPC、事件、请求、响应和 invoke result。
-- 可作为手机端 API 通信参考。
+- 用 worker 管理多个环境实例。
+- command 包含 `set_batch`、`get_obs`、`get_collision_sensor`。
 
-`LocationHandler.kt`、`MotionHandler.kt`、`CameraHandler.kt`、`DeviceHandler.kt`
-
-- 可参考手机端定位、运动、相机、设备状态的工具能力。
-
-### 2.2 适合借鉴的思想
-
-- 工具能力清单。
-- 工具可用性检查。
-- 统一 dispatcher。
-- 统一错误结构。
-- 手机端能力作为 node 工具暴露。
-- 权限、前台状态、超时等安全检查。
-
-### 2.3 不建议照搬的内容
-
-- 完整 Android/iOS App 架构。
-- 复杂网关认证系统。
-- 大量通信、UI、插件和多端平台代码。
-- 与 UAV MVP 无关的日历、短信、联系人等能力。
-
-## 3. 对本项目的结论
-
-本项目应采用：
-
-- AirNavigation 作为 UAV/视觉能力底座。
-- OpenClaw 作为工具系统和手机 API 接入参考。
-- 自己实现轻量 Agent 层。
-
-最小闭环优先级：
+对 FlyAgent 的启发：
 
 ```text
-自然语言任务 -> 结构化步骤 -> 安全 Planner -> 工具调用 -> UAV 观察 -> 状态更新 -> 完成/失败
+FlyAgent CLI / Agent Runtime
+  -> EnvClient
+  -> EnvServer
+  -> UE/AirSim Scene Process
+  -> UAV Control / Observation
 ```
 
+第一阶段可以退化为：
+
+```text
+LocalEnvClient -> Local UE/AirSim
+```
+
+但接口保留：
+
+- `map_id`
+- `scene_id`
+- `agent_id`
+- `server_host`
+- `server_port`
+- `airsim_port`
+
+## 3. UAV-Flow
+
+链接：
+
+```text
+https://github.com/buaa-colalab/UAV-Flow
+```
+
+定位：
+
+- 主要参考地图资源如何配置和引用。
+- 重点看 `UAV-Flow-Eval`，它基于 UnrealZoo Gym / `gym_unrealcv`。
+
+关键参考：
+
+`UAV-Flow-Eval/README.md`
+
+- evaluation environment 基于 UnrealZoo Gym。
+- Windows 使用 packaged UnrealZoo environment。
+- 需要修改 JSON 配置中的 `env_bin_win` 指向本地 UE 环境可执行文件。
+
+`UAV-Flow-Eval/load_env.py`
+
+- 通过 modelscope 下载 UnrealZoo/UnrealCV 环境资源。
+- 根据平台选择 binary。
+- 解压后放入 UnrealCV 环境目录。
+
+`gym_unrealcv/envs/setting/Navigation/*.json`
+
+- 地图配置包含：
+  - `env_name`
+  - `env_bin`
+  - `env_bin_win`
+  - `env_map`
+  - `third_cam`
+  - `agents`
+  - `safe_start`
+  - `reset_area`
+  - `targets`
+
+`gym_unrealcv/envs/base_env.py`
+
+- 读取 setting JSON。
+- 选择平台对应的 env binary。
+- 提供 `reset/step/close`。
+- 通过 UnrealCV 执行移动、相机、动画、对象命令。
+- 返回 pose、image、mask、depth 等观测。
+
+`gym_unrealcv` 是否可用：
+
+- 可以作为候选，先做最小 demo 验证。
+- 优点是地图、agent、动作空间、safe_start、reset_area、targets 都可配置。
+- 还可参考其对象操作能力，例如删除物体、增加物体、设置目标对象。
+- 风险是依赖 UnrealZoo 环境包、UnrealCV 版本和地图资源路径。
+
+建议：
+
+- 地图资源第一阶段优先使用 `gym_unrealcv` 中可运行的内容。
+- FlyAgent 自己实现 `EnvFactory`，不要把业务逻辑绑定死到 `gym_unrealcv`。
+- 本地 UE `.sh` 启动方式作为 `LocalUEScriptProvider` 适配。
+
+## 4. QiClaw
+
+路径：
+
+```text
+F:\openclaw-main\wojiazaiyugang.QiClaw\QiClaw
+```
+
+定位：
+
+- Electron + Agent runtime + task 编排系统。
+- 主要参考 Agent 架构和前端预留方式。
+- 第一阶段只做 CLI，Electron 等 UE 完整跑通后再接。
+
+建议参考：
+
+`src/core/assistant-service.js`
+
+- 统一处理用户请求、planner、task runtime、records。
+
+`src/core/planner.js`
+
+- 规范 planner 输出。
+- 支持分类、路由、execution hint。
+
+`src/core/gateway/`
+
+- run queue、run store、session manager、gateway control plane。
+
+`src/hosts/electron/`
+
+- Electron host，可作为最终前端参考。
+
+对 FlyAgent 的启发：
+
+- `Agent Runtime`：任务入口、任务状态、运行记录。
+- `Planner`：语义计划与短期执行计划。
+- `Tool Registry`：飞控、环境工具注册。
+- `Tool Executor`：统一执行和错误处理。
+- `Run Store`：保存任务状态、日志、轨迹、artifacts。
+- `Electron UI`：最后只作为 control surface。
+
+最小闭环：
+
+```text
+CLI 输入
+  -> Task Parser
+  -> Semantic Planner
+  -> Short Horizon Planner
+  -> Safety
+  -> Tool Executor
+  -> Env/UAV
+  -> Raw Observation
+  -> State Update
+  -> Record
+```
+
+## 5. 参考分工总结
+
+| 来源 | 只参考什么 | 不参考什么 |
+| --- | --- | --- |
+| AirNavigation | UAV 基础操作、RGB/depth/pose 获取、多模态调用方式参考 | 整体架构、UI、任务循环 |
+| AirVLN | C/S、场景进程管理、多 scene/machine/client 扩展 | 训练框架、大模型 baseline |
+| UAV-Flow | UnrealZoo Gym、`gym_unrealcv`、地图 JSON 配置、对象操作能力 | OpenVLA 训练主链路 |
+| QiClaw | Agent runtime、planner、gateway、records、Electron 预留 | 具体业务 Agent、微信/企微/抖音技能 |

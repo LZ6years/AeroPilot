@@ -2,7 +2,7 @@
 
 ## 1. MVP 范围
 
-MVP 只做单机 UAV 视觉导航闭环，不做复杂多机协同，不做完整移动端平台。
+MVP 只做单机单 UAV 的 UE 仿真闭环，先以 CLI 跑通任务，不做完整 Electron 前端，不做多机协同，不做独立手机端能力。
 
 优先支持任务：
 
@@ -10,141 +10,335 @@ MVP 只做单机 UAV 视觉导航闭环，不做复杂多机协同，不做完�
 前面右转会有一个黑色的路灯，右转面向路灯后停下
 ```
 
+这个任务不应一次性生成很长的固定动作序列，而应拆成：
+
+- 整体语义目标：右转后寻找黑色路灯，并让 UAV 朝向它悬停。
+- 短期执行窗口：每轮只输出少量可验证的原子动作。
+- 观测更新：每次动作后重新读取 RGB/depth/pose，再决定下一步。
+- VLM 判断：用多模态大模型理解当前图像和任务上下文。
+- 困惑提问：Agent 不确定且继续飞行有风险时，先 hover，再向用户提问。
+
 ## 2. 阶段划分
 
-### M1：飞控工具封装
+### M1：UAV 原子飞控封装
 
 目标：
 
-- 将 AirNavigation 的 `UAVController` 包装成 Agent 工具。
-- 所有飞控调用通过 Adapter，不直接暴露 AirSim client。
+- 从 AirNavigation 中抽取 UAV 基础操作。
+- 只封装原子飞控和原始观测，不继承它的整体架构。
 
 交付：
 
 - `src/adapters/airnavigation_uav.py`
+- `src/adapters/uav_primitives.py`
 - `src/tools/registry.py`
 - `src/tools/dispatcher.py`
 
-工具：
+原子动作：
 
 - `uav.connect`
 - `uav.takeoff`
 - `uav.hover`
 - `uav.land`
-- `uav.turn_relative`
 - `uav.move_body`
+- `uav.turn_relative`
+- `uav.ascend`
+- `uav.descend`
 - `uav.get_pose`
 - `uav.get_frames`
 
 验收：
 
 - 可以连接 UAV。
-- 可以起飞、右转、悬停、降落。
-- 可以获取当前位姿和 RGB 图像。
+- 可以起飞、悬停、转向、低速移动、降落。
+- 可以获取 pose、RGB、depth。
 
-### M2：视觉目标检测与面向
+### M2：地图资源与环境工厂
 
 目标：
 
-- 接入 AirNavigation 视觉能力。
-- 根据目标描述返回 bbox。
-- 根据 bbox 中心偏移调整 UAV yaw 和相机 pitch。
+- 参考 `gym_unrealcv` 的地图配置方式管理 UE 环境。
+- 第一阶段优先使用 `gym_unrealcv` 中可运行的地图资源。
+- 通过工厂模式预留后续多来源地图适配。
 
 交付：
 
-- `src/adapters/airnavigation_perception.py`
-- `src/agent/planner.py` 的目标搜索与面向逻辑。
-
-工具：
-
-- `vision.detect`
-- `vision.estimate_target_offset`
-- `depth.estimate_bbox_distance`
+- `src/envs/base.py`
+- `src/envs/factory.py`
+- `src/envs/gym_unrealcv_env.py`
+- `src/envs/local_ue_env.py`
+- `configs/maps/*.json`
 
 验收：
 
-- 给定“黑色路灯”描述，可以尝试返回目标 bbox。
-- 目标不在中心时，UAV 可以慢速转向修正。
-- 目标居中后，UAV 悬停。
+- 可以从配置加载地图。
+- 可以通过本地 UE `.sh` 或可执行文件启动环境。
+- 可以连接环境并读取 RGB/depth/pose。
+- 后续能扩展到 AirVLN 风格 C/S 环境。
 
-### M3：任务解析与规则 Planner
+### M3：任务解析与语义规划
 
 目标：
 
-- 将自然语言指令转换成结构化任务。
-- 使用规则 Planner 执行步骤。
+- 将用户自然语言解析成稳定的语义任务。
+- 语义任务只描述意图、约束和完成条件，不直接展开为完整动作列表。
 
 交付：
 
 - `src/agent/task_parser.py`
+- `src/agent/semantic_plan.py`
+- `src/agent/schemas.py`
+
+示例语义计划：
+
+```json
+{
+  "intent": "navigate_to_visual_target",
+  "target": {
+    "class": "street_lamp",
+    "color": "black",
+    "hint": "after turning right"
+  },
+  "route_hints": [
+    {"type": "turn", "direction": "right", "angle_deg": 90}
+  ],
+  "final_condition": "face_target_and_hover",
+  "constraints": {
+    "max_speed_mps": 1.0,
+    "min_depth_m": 2.0,
+    "timeout_sec": 60
+  }
+}
+```
+
+验收：
+
+- 输入中文任务后能生成结构化语义计划。
+- schema 校验失败时拒绝执行。
+- 计划不会把“靠近/面向”误写成原子动作。
+
+### M4：短期滚动执行器
+
+目标：
+
+- 每轮根据当前状态和语义计划，只输出未来几步原子动作。
+- 每次执行后重新观测并更新状态。
+
+交付：
+
+- `src/agent/short_horizon_planner.py`
 - `src/agent/mission_state.py`
 - `src/agent/safety.py`
 - `src/runtime/main.py`
 
+短期动作示例：
+
+```json
+{
+  "horizon": 2,
+  "actions": [
+    {"tool": "uav.turn_relative", "args": {"yaw_deg": 15}},
+    {"tool": "uav.hover", "args": {"duration_sec": 0.5}}
+  ],
+  "need_observation_after": true
+}
+```
+
 验收：
 
-- 输入“右转面向黑色路灯后停下”，能生成步骤：
-  - 右转
-  - 搜索黑色路灯
-  - 面向目标
-  - 悬停
+- 不一次性执行长距离 `move_forward`。
+- 动作有速度、角度、时间、距离上限。
+- 每轮执行后重新读取观测。
+- 异常、超时、低置信度时进入 hover。
 
-### M4：手机参数 API 辅助
+### M5：原始观测与状态管理
 
 目标：
 
-- 轻量接入手机端参数 API。
-- 不依赖手机完成飞控主闭环。
+- 基础感知层只负责原始数据，不做高级语义。
+- 视觉语义判断暂不拆成独立模块，第一阶段统一交给 VLM 处理。
 
 交付：
 
-- `src/adapters/phone_gateway.py`
+- `src/perception/raw_observation.py`
+- `src/agent/mission_state.py`
+- `src/runtime/record_writer.py`
 
-工具：
+状态字段：
 
-- `phone.device.status`
-- `phone.device.permissions`
-- `phone.location.get`
-- `phone.motion.activity`
-- `phone.camera.snap`
+```json
+{
+  "pose": {},
+  "velocity": {},
+  "raw_observation": {
+    "rgb_frame_id": "frame_001",
+    "depth_frame_id": "depth_001",
+    "segmentation_frame_id": null
+  },
+  "semantic_plan": {},
+  "short_horizon_plan": {},
+  "vlm_scene_judgement": null
+}
+```
 
 验收：
 
-- 能查询手机状态。
-- 能查询定位或运动状态。
-- 手机 API 异常不影响 UAV 安全悬停。
+- 能保存原始图像、深度、位姿、动作日志。
+- 目标框、目标距离等视觉语义结果不作为必填状态字段。
+- VLM 未确认目标时系统不会假装已经看见目标。
+
+### M6：VLM 临时决策层
+
+目标：
+
+- 第一阶段使用多模态大模型处理图像和上下文。
+- VLM 负责“看图理解 + 下一步建议”，但不直接执行控制。
+
+交付：
+
+- `src/cognition/vlm_client.py`
+- `src/cognition/context_builder.py`
+- `src/cognition/schemas.py`
+- `configs/models/vlm.json`
+
+VLM 输入：
+
+- 用户任务。
+- 当前语义阶段。
+- 最近动作。
+- RGB 图像。
+- depth 安全摘要。
+- pose / yaw / 高度。
+- 历史观察结论。
+
+VLM 输出：
+
+```json
+{
+  "scene_summary": "画面右侧有黑色杆状物，可能是路灯",
+  "target_status": "candidate_visible",
+  "confidence": 0.72,
+  "suggested_next_actions": [
+    {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}},
+    {"tool": "uav.hover", "args": {"duration_sec": 0.5}}
+  ],
+  "ask_user": null
+}
+```
+
+验收：
+
+- 能把当前观测和任务上下文发送给 VLM。
+- VLM 输出必须通过 schema 校验。
+- VLM 建议动作必须经过 Safety Supervisor。
+- 低置信度时只允许观察、悬停、小角度扫描或提问。
+- 后续等完整闭环跑通后，再考虑是否做视觉语义能力模块化。
+
+### M7：困惑提问与安全中断
+
+目标：
+
+- 当 Agent 不确定继续行动是否正确或安全时，主动停下来问用户。
+
+交付：
+
+- `src/agent/confusion_detector.py`
+- `src/agent/clarification.py`
+- `src/runtime/user_reply_handler.py`
+
+触发条件：
+
+- VLM 置信度低于阈值。
+- 连续多轮没有发现目标。
+- 发现多个候选目标。
+- 观测和用户描述冲突。
+- depth 显示前方可能不安全。
+- Planner 无法选择下一步动作。
+
+提问流程：
+
+```text
+detect_confusion
+  -> force_hover
+  -> ask_one_question
+  -> wait_user_reply
+  -> update_mission_state
+  -> replan
+```
+
+验收：
+
+- 触发困惑时立即 hover。
+- 每次只问一个问题。
+- 用户回复可以更新目标、方向、候选选择或停止指令。
+- 用户超时不回复时保持 hover 或按配置安全降落。
+
+### M8：运行记录与 CLI
+
+目标：
+
+- 参考 QiClaw 的 run store / records。
+- CLI 是第一阶段主入口。
+
+交付：
+
+- `src/runtime/run_store.py`
+- `src/runtime/record_writer.py`
+- `src/runtime/main.py`
+- `runs/<run_id>/`
+
+验收：
+
+- 每次任务有 run id。
+- 每轮保存输入、语义计划、短期计划、动作、观测、VLM 判断、困惑提问、用户回复、错误。
+- 失败时能看到失败阶段和原因。
+
+### M9：Electron 与飞书预留
+
+目标：
+
+- Electron 等 UE CLI 完整跑通后再做。
+- 手机端先不做独立 API，未来固定接入飞书。
+
+交付：
+
+- `ui/electron/README.md`
+- `src/integrations/feishu_gateway.py`
+- runtime event schema
+
+验收：
+
+- 文档明确 UI 只能调用 runtime/gateway。
+- 飞书只作为未来消息入口和通知入口。
+- 第一阶段不依赖手机传感器 API。
 
 ## 3. 优先级
 
 最高优先级：
 
-- 飞控安全封装。
-- 悬停和异常处理。
-- RGB/Depth 获取。
-- 目标搜索和面向。
+- UAV 原子飞控封装。
+- 地图资源配置和启动。
+- RGB/depth/pose 原始观测。
+- 短期滚动执行。
+- VLM 临时决策。
+- hover/timeout/confusion guard。
 
 中优先级：
 
-- 自然语言结构化解析。
-- 工具调用日志。
-- 轨迹记录。
+- 自然语言到语义计划。
+- run store 和轨迹记录。
+- 主动提问。
+- `gym_unrealcv` 最小 demo 验证。
 
 低优先级：
 
-- 手机 API。
-- 多机协同。
-- 复杂记忆系统。
-- Web UI。
+- 视觉语义能力模块化。
+- 多 UAV。
+- AirVLN C/S 完整迁移。
+- Electron 前端。
+- 飞书接入。
 
-## 4. 风险
-
-- AirNavigation 中视觉模型和类别可能不包含“路灯”，需要使用多模态视觉模型兜底。
-- 深度图格式需要确认，不能只依赖 `DepthVis` 可视化图做精确距离。
-- LLM 输出不稳定，第一版应使用规则解析和 schema 校验。
-- 飞控动作必须有限速和超时保护。
-- `ai_vision.py` 中硬编码 API key 需要移除。
-
-## 5. 推荐第一条 Demo
+## 4. 推荐第一条 Demo
 
 文件：
 
@@ -154,13 +348,22 @@ src/runtime/lamp_right_turn_demo.py
 
 流程：
 
-1. 连接 UAV。
+1. 连接环境和 UAV。
 2. 起飞或确认已起飞。
-3. 右转 90 度。
-4. 获取 RGB + Depth。
-5. 检测“黑色路灯”。
-6. 若未找到，小角度扫描。
-7. 找到后调整 yaw，使目标居中。
-8. 深度安全时悬停。
-9. 输出任务结果。
+3. 解析用户指令为语义计划。
+4. 执行短期窗口：先小角度右转或右转到约 90 度。
+5. 获取 RGB/depth/pose。
+6. 调用 VLM 读取任务上下文和图像，判断是否有黑色路灯候选。
+7. 若 VLM 置信度足够，则用小角度 yaw 调整让目标居中。
+8. 若 VLM 困惑或发现多个候选，则 hover 并向用户提问。
+9. 满足完成条件后 hover。
+10. 输出 run 记录。
 
+## 5. 风险
+
+- AirNavigation 整体架构不适合继承，只能抽取 UAV 基础操作。
+- `gym_unrealcv` 是否能稳定运行取决于 UnrealZoo 环境包、UnrealCV 版本和地图路径。
+- AirVLN 的 C/S 更适合后续扩展，第一阶段直接照搬会增加复杂度。
+- LLM 直接生成动作序列不稳定，必须经过 schema 校验和短期执行器。
+- VLM 视觉判断可能幻觉，必须被 Safety Supervisor 约束。
+- VLM 视觉判断不稳定时，系统不应执行“靠近目标”等危险动作。
