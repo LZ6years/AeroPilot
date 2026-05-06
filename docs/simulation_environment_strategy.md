@@ -2,289 +2,164 @@
 
 ## 1. 当前结论
 
-地图资源管理先参考 **AirVLN 的场景管理方式**，不是 AirNavigation，也不是第一阶段直接接 UnrealCV Gym。
-
-当前优先级：
+FlyAgent 的仿真层分成两件事：
 
 ```text
-第一阶段：AirVLN 风格 scene 资源管理 + AirSim 场景进程启动
-第二阶段：补充本地 UE 启动脚本适配
-第三阶段：再接入 UnrealCV / gym_unrealcv 的对象级操作能力
+地图资源形态 / 启动方式
+  packaged_unreal: 已打包 UE 场景，例如 WindowsNoEditor、LinuxNoEditor
+  existing_process: 已经在本机或远端机器运行的 UE 进程
+
+控制协议 / 观测协议
+  airsim: AirSim RPC，适合真实 UAV primitive
+  unrealcv: UnrealCV socket，适合相机、图像、对象级操作
 ```
 
-原因：
+因此 backend 不再按“地图来自哪里”来理解，而是按“怎么和运行中的 UE 通讯”来理解。
 
-- AirVLN 的 C/S 和场景进程管理更接近 FlyAgent 后续多地图、多 UAV 扩展目标。
-- AirNavigation 的地图处理太薄，只是 `map.json + bat`，不适合作为主设计。
-- UnrealCV/gym_unrealcv 的对象增删改能力有价值，但第一阶段先不让它主导架构。
+## 2. 推荐配置模型
 
-## 2. AirVLN 地图处理方式拆解
-
-AirVLN 的地图资源本质是 `scene_id -> env_N -> scene executable`。
-
-关键流程：
-
-```text
-EnvClient 请求打开 scenes
-  -> SimulationServer 接收 open_scenes
-  -> 根据 scene_id 查找 ENVs/**/env_<scene_id>/LinuxNoEditor/AirVLN.sh
-  -> 为每个 scene 分配 AirSim ApiServerPort
-  -> 为每个 scene 写独立 AirSim settings.json
-  -> 启动 scene process
-  -> 等待 scene 可连接
-  -> 返回 ip + ports
-  -> EnvClient 建立 AirSim client
-```
-
-AirVLN 中值得参考的点：
-
-- `machines_info` 描述多机器、多 scene。
-- `open_scenes` 是当前要打开的 scene 列表。
-- `reopen_scenes(ip, scen_ids)` 由 server 统一关闭旧 scene 并打开新 scene。
-- server 根据 `scene_id` 搜索环境路径。
-- server 统一分配 AirSim 端口。
-- server 为每个 scene 写独立 `settings.json`。
-- client 只拿返回的 `ip + ports` 建立连接。
-
-不直接照搬的点：
-
-- Linux-only 偏重，Windows 本地需要适配。
-- scene 查找路径写死为 `ENVs/**/env_N/LinuxNoEditor/AirVLN.sh`，FlyAgent 要配置化。
-- `settings.json` 目录按 index 写入，FlyAgent 要按 `scene_instance_id` 管理。
-- 端口和进程管理要封装，不能散落在业务代码。
-
-## 3. FlyAgent 地图资源模型
-
-建议将地图资源拆成两层：
-
-```text
-MapPackage      # 静态地图资源包
-SceneInstance   # 一次运行中的地图实例
-```
-
-### 3.1 MapPackage
-
-`MapPackage` 描述一个可启动的地图包。
-
-示例：
+`MapPackage` 描述静态地图资源，`SceneInstance` 描述一次运行中的 scene。
 
 ```json
 {
-  "map_id": "airvln_env_1",
-  "provider": "airvln",
-  "scene_id": 1,
-  "display_name": "AirVLN Env 1",
-  "root": "D:/AirVLN/ENVs/env_1",
+  "map_id": "unrealzoo_collection",
+  "provider": "packaged_unreal",
+  "scene_id": "collection",
+  "root": "G:/UnrealZoo-UE4/Collection_WinNoEditor_0424_25",
   "launch": {
-    "windows": null,
-    "linux": "LinuxNoEditor/AirVLN.sh",
-    "args": ["-RenderOffscreen", "-NoSound", "-NoVSync"]
+    "method": "direct",
+    "windows": "Collection/Binaries/Win64/Collection.exe",
+    "args": ["-windowed", "-ResX=1280", "-ResY=720"],
+    "ready_timeout_sec": 60
   },
-  "airsim": {
-    "mode": "ComputerVision",
-    "vehicle_name": "Drone_1",
-    "camera_name": "front_0",
-    "image_width": 224,
-    "image_height": 224,
-    "depth_width": 256,
-    "depth_height": 256
+  "control": {
+    "protocol": "unrealcv"
   },
-  "resources": {
-    "supports_object_edit": false,
-    "supports_weather": false
+  "unrealcv": {
+    "host": "127.0.0.1",
+    "port": 9010,
+    "camera_id": 0
   }
 }
 ```
 
-### 3.2 SceneInstance
+AirSim UAV 地图同样使用 `provider: "packaged_unreal"`，只把 `control.protocol` 换成 `airsim`。
 
-`SceneInstance` 描述一次正在运行的 scene。
-
-示例：
-
-```json
-{
-  "scene_instance_id": "scene_001",
-  "map_id": "airvln_env_1",
-  "scene_id": 1,
-  "machine_id": "local",
-  "host": "127.0.0.1",
-  "server_port": 30000,
-  "airsim_port": 30001,
-  "settings_path": "runs/run_001/scenes/scene_001/settings.json",
-  "process_id": 12345,
-  "status": "running"
-}
-```
-
-这样做的好处：
-
-- 静态资源和运行实例分离。
-- 同一张地图可以启动多个实例。
-- 后续可扩展一张地图多个 UAV。
-- run 记录能明确知道当时启动的是哪个 scene、哪个端口、哪个 settings。
-
-## 4. SimulationServer 职责
-
-地图资源相关能力放在 `SimulationServer`，不放进 Agent Runtime。
-
-SimulationServer 负责：
-
-- 读取 map package 配置。
-- 查找 scene 可执行文件或启动脚本。
-- 为 scene 分配端口。
-- 生成 AirSim `settings.json`。
-- 启动 scene process。
-- 等待 scene ready。
-- 维护 `SceneInstance` 状态。
-- 关闭 scene process。
-- reset scene。
-- 返回标准化 observation。
-
-接口：
+## 3. 代码边界
 
 ```text
-register_map(map_config)
-list_maps()
-start_scene(map_id, scene_id=None)
-stop_scene(scene_instance_id)
-reset_scene(scene_instance_id)
-get_scene_status(scene_instance_id)
-get_observation(scene_instance_id, agent_id, modalities)
-execute_action(scene_instance_id, agent_id, action)
+AgentRuntime
+  -> EnvClient
+    -> SimulationServer
+      -> launcher/process manager
+      -> backend selected by control.protocol
 ```
 
-## 5. EnvClient 职责
+`SimulationServer` 负责：
 
-EnvClient 不管理地图资源，只调用 SimulationServer。
+- 读取 `MapPackage`
+- 分配端口
+- 写 AirSim settings
+- 启动或连接 scene process
+- 等待控制协议端口 ready
+- 按 `control.protocol` 选择 backend
 
-EnvClient 负责：
+backend 负责：
 
-- 请求 `start_scene`。
-- 保存 `scene_instance_id`。
-- 请求 observation。
-- 请求 UAV 原子动作。
-- 处理超时、重试、错误转换。
+- `airsim` backend: 调 AirSim UAV primitive，例如 connect、takeoff、hover、move_body、get_pose、get_frames
+- `unrealcv` backend: 调 UnrealCV 命令，例如 camera location、rotation、lit/depth/object_mask
 
-EnvClient 不负责：
+## 4. 远端 UE 资源服务器
 
-- 查找地图路径。
-- 写 AirSim settings。
-- 分配端口。
-- 启动 UE 进程。
-- kill 进程。
+如果 UE 地图已经在另一台电脑运行，本机有两种连接方式。
 
-## 6. 第一阶段配置建议
-
-第一阶段用一个统一的 `configs/maps/airvln_maps.json`。
-
-示例：
+第一种是直接连控制协议，适合当前阶段：
 
 ```json
 {
-  "provider": "airvln",
-  "search_roots": [
-    "D:/AirVLN/ENVs",
-    "F:/AirVLN/ENVs"
-  ],
-  "maps": [
-    {
-      "map_id": "airvln_env_1",
-      "scene_id": 1,
-      "relative_executable": "LinuxNoEditor/AirVLN.sh",
-      "windows_executable": null,
-      "default_vehicle": "Drone_1",
-      "default_camera": "front_0"
-    }
-  ],
-  "port_policy": {
-    "server_port": 30000,
-    "airsim_port_start": 30001,
-    "max_scene_num": 8
+  "map_id": "remote_unrealzoo_collection",
+  "provider": "packaged_unreal",
+  "scene_id": "collection",
+  "root": null,
+  "launch": {
+    "method": "existing_process",
+    "ready_timeout_sec": 30
+  },
+  "control": {
+    "protocol": "unrealcv"
+  },
+  "unrealcv": {
+    "host": "192.168.1.20",
+    "port": 9010,
+    "camera_id": 0
   }
 }
 ```
 
-Windows 本地如果不是 Linux packaged scene，则新增：
+运行：
 
-```json
-{
-  "map_id": "local_ue_city",
-  "provider": "local_ue",
-  "scene_id": "city_001",
-  "windows_executable": "D:/UEMaps/City/City.exe",
-  "windows_script": "D:/UEMaps/City/start_city.bat",
-  "default_vehicle": "Drone_1",
-  "default_camera": "front_0"
-}
+```powershell
+conda run -n flyagent python -m src.runtime.main smoke-test --map-id remote_unrealzoo_collection --config configs/maps/airvln_maps.json --connect-existing
 ```
 
-## 7. AirNavigation 只作为反例和兼容来源
+要求：
 
-AirNavigation 的地图处理方式：
+- 远端 Windows 防火墙放行 UnrealCV/AirSim 端口
+- UE 插件监听地址不能只绑定 localhost
+- 两台电脑网络互通
+- 本机配置里的 `host` 写远端机器 IP
+
+第二种是真正的远程 SimulationServer：
 
 ```text
-settings/map.json
-  -> map
-  -> start_map_batfile
-  -> map_list
-
-MapController
-  -> set_map(name)
-  -> 拼出 Shell/<map>.bat
-  -> restart_UE(batfile)
+AgentRuntime on PC A
+  -> RemoteEnvClient
+    -> SimulationServer on PC B
+      -> local UE process on PC B
 ```
 
-它的问题：
+这个模式可以让 PC B 负责启动、停止、重启地图进程，但需要实现网络 RPC server。当前代码只实现了本地伪 C/S 和直接连接已有控制端口，`RemoteEnvClient` 还只是预留。
 
-- 配置只记录当前地图和 bat 路径，没有 scene instance 概念。
-- 路径写死，跨机器不可迁移。
-- 没有端口管理。
-- 没有进程状态管理。
-- 没有 scene ready 检测。
-- 没有 map package / scene instance 分离。
-- 不适合多 scene、多 UAV、多机器。
+## 5. Windows AirSim Packaged Map
 
-因此 FlyAgent 不继承它的地图架构，只保留两个兼容点：
+Windows 打包的 AirSim 地图也可以使用每次 run 独立生成的 settings 文件。启动参数使用 AirSim 官方格式：
 
-- 可以读取旧式 `map_name + bat_path`，迁移成 `MapPackage`。
-- 可以用本地 `.bat/.sh` 作为一种启动后端。
+```powershell
+CityEnviron.exe -settings=C:\path\to\settings.json
+```
 
-## 8. UnrealCV / gym_unrealcv 后续接入
+Linux AirVLN packaged scene 仍使用 AirVLN 脚本格式：
 
-UnrealCV / gym_unrealcv 的价值在于对象级环境操作：
+```bash
+bash AirVLN.sh --settings /path/to/settings.json
+```
 
-- `list_objects`
-- `add_object`
-- `remove_object`
-- `hide_object`
-- `set_object_pose`
-- `set_object_color`
-- `get_object_pose`
-
-但这些不作为第一阶段主地图资源模型。
-
-后续接入方式：
+`CityEnviron` 已经接入为：
 
 ```text
-SimulationServer
-  -> Backend
-    -> AirVLNBackend
-    -> LocalUEBackend
-    -> UnrealCvGymBackend
+map_id: cityenviron_win64
+provider: packaged_unreal
+launch.method: direct
+control.protocol: airsim
+airsim.settings_profile: camera_defaults
 ```
 
-也就是说，UnrealCV 是 `SimulationServer` 的一个 backend，而不是 Agent Runtime 的直接依赖。
+`settings_profile: camera_defaults` 会把 RGB/depth 捕获配置写到 `CameraDefaults`，而不是写到 `Vehicles.<name>.Cameras`。这个 profile 是为了兼容部分 Windows AirSim 包对 per-vehicle camera 配置不稳定的问题。
 
-## 9. 推荐验证顺序
+验证命令：
 
-1. 按 AirVLN 风格配置 `MapPackage`。
-2. 实现 `SimulationServer.start_scene(map_id)`。
-3. 自动生成 AirSim `settings.json`。
-4. 分配 AirSim port。
-5. 启动 scene process。
-6. EnvClient 拿到 `scene_instance_id + airsim_port`。
-7. 获取 RGB/depth/pose。
-8. 执行 UAV 原子动作。
-9. 保存 `SceneInstance` 到 run record。
-10. 再考虑接入 UnrealCV 对象操作。
+```powershell
+conda run -n flyagent python -m src.runtime.main smoke-test --map-id cityenviron_win64 --config configs/maps/airvln_maps.json --launch
+```
+
+## 6. AirNavigation 和 AirVLN 的使用原则
+
+AirNavigation 只参考基础飞控接口名称和行为，不使用它的地图结构、任务循环、UI 或硬编码配置。
+
+AirVLN 只参考它的 C/S 思路和 scene 进程管理思路，不照搬路径组织、地图 JSON 或任务循环。
+
+FlyAgent 自己的主模型是：
+
+```text
+MapPackage + SceneInstance + control.protocol backend
+```

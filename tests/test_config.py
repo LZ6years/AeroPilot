@@ -59,3 +59,60 @@ def test_load_map_config_requires_vehicle_and_camera(tmp_path):
 
     with pytest.raises(ValueError, match="airsim.vehicle_name"):
         load_map_config(config)
+
+
+def test_load_map_config_accepts_unrealcv_package(tmp_path):
+    # Verify packaged maps can select UnrealCV as their control protocol.
+    config = tmp_path / "maps.json"
+    config.write_text(
+        json.dumps(
+            {
+                "maps": [
+                    {
+                        "map_id": "uzoo",
+                        "provider": "packaged_unreal",
+                        "scene_id": "collection",
+                        "root": "G:/UnrealZoo-UE4/Collection_WinNoEditor_0424_25",
+                        "launch": {"method": "direct", "windows": "Collection.exe"},
+                        "control": {"protocol": "unrealcv"},
+                        "unrealcv": {"host": "127.0.0.1", "port": 9010, "camera_id": 0},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    maps, _ = load_map_config(config)
+
+    assert maps[0].provider == "packaged_unreal"
+    assert maps[0].control_protocol == "unrealcv"
+    assert maps[0].unrealcv["port"] == 9010
+
+
+def test_load_map_config_accepts_existing_remote_process(tmp_path):
+    # Verify remote already-running UE processes do not require local root paths.
+    config = tmp_path / "maps.json"
+    config.write_text(
+        json.dumps(
+            {
+                "maps": [
+                    {
+                        "map_id": "remote_uzoo",
+                        "provider": "packaged_unreal",
+                        "scene_id": "collection",
+                        "root": None,
+                        "launch": {"method": "existing_process"},
+                        "control": {"protocol": "unrealcv"},
+                        "unrealcv": {"host": "192.168.1.20", "port": 9010, "camera_id": 0},
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    maps, _ = load_map_config(config)
+
+    assert maps[0].root is None
+    assert maps[0].unrealcv["host"] == "192.168.1.20"

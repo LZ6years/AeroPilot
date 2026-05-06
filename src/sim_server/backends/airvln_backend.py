@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from src.adapters.airsim_uav import AirSimUavAdapter
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter, UavPrimitiveAdapter
 from src.env_client.schemas import ActionResult, MapPackage, Observation, SceneInstance
 
@@ -14,12 +15,20 @@ class AirVlnBackend:
     backend receives the SceneInstance.
     """
 
-    def __init__(self, uav: UavPrimitiveAdapter | None = None) -> None:
+    def __init__(self, uav: UavPrimitiveAdapter | None = None, use_real_uav: bool = False) -> None:
         # Use a real or dry-run UAV primitive adapter behind the backend.
         self.uav = uav or NullUavPrimitiveAdapter()
+        self.use_real_uav = use_real_uav
 
     def start(self, package: MapPackage, scene: SceneInstance) -> SceneInstance:
         # Mark the scene running once SimulationServer has prepared it.
+        if self.use_real_uav:
+            self.uav = AirSimUavAdapter(
+                host=str(package.airsim.get("host", scene.host)),
+                port=int(package.airsim.get("port", scene.airsim_port)),
+                vehicle_name=package.airsim["vehicle_name"],
+                camera_name=package.airsim["camera_name"],
+            )
         scene.status = "running"
         return scene
 

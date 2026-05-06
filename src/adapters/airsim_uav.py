@@ -102,7 +102,7 @@ class AirSimUavAdapter:
         requests = []
         for modality in modalities:
             image_type = self._image_type(modality)
-            pixels_as_float = modality.lower() in {"depth", "depth_perspective"}
+            pixels_as_float = False
             requests.append(airsim.ImageRequest(self.camera_name, image_type, pixels_as_float, False))
         responses = self._require_client().simGetImages(requests, vehicle_name=self.vehicle_name)
         frames = {

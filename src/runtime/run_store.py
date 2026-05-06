@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from uuid import uuid4
 
 
 class RunStore:
@@ -13,7 +14,7 @@ class RunStore:
 
     def create_run_dir(self, prefix: str = "run") -> Path:
         # Create a timestamped run directory for one execution.
-        run_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        run_id = f"{prefix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid4().hex[:6]}"
         run_dir = self.root / run_id
         run_dir.mkdir(parents=True, exist_ok=False)
         return run_dir

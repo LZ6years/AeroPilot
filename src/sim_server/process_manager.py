@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -11,12 +13,23 @@ class ProcessManager:
         # Track launched subprocesses by scene instance id.
         self._processes: dict[str, subprocess.Popen] = {}
 
-    def start(self, instance_id: str, executable: str, args: list[str]) -> int:
+    def start(
+        self,
+        instance_id: str,
+        executable: str,
+        args: list[str],
+        method: str = "direct",
+        settings_path: str | None = None,
+        log_path: str | None = None,
+    ) -> int:
         # Launch a scene executable and remember its process handle.
-        path = Path(executable)
-        if not path.exists():
-            raise FileNotFoundError(f"Scene executable not found: {executable}")
-        proc = subprocess.Popen([str(path), *args], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        command = self.build_command(executable, args, method, settings_path)
+        stdout = subprocess.DEVNULL
+        if log_path is not None:
+            Path(log_path).parent.mkdir(parents=True, exist_ok=True)
+            stdout = open(log_path, "ab")
+        cwd = None if method == "wsl_bash" else str(Path(executable).resolve().parent)
+        proc = subprocess.Popen(command, stdout=stdout, stderr=subprocess.STDOUT, cwd=cwd)
         self._processes[instance_id] = proc
         return proc.pid
 
@@ -26,4 +39,49 @@ class ProcessManager:
         if proc is None:
             return
         if proc.poll() is None:
-            proc.terminate()
+            if os.name == "nt":
+                subprocess.run(
+                    ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            else:
+                proc.terminate()
+
+    def build_command(
+        self, executable: str, args: list[str], method: str = "direct", settings_path: str | None = None
+    ) -> list[str]:
+        # Build a platform-aware process command without launching it.
+        path = Path(executable)
+        if not path.exists():
+            raise FileNotFoundError(
+                f"Scene executable not found: {executable}"
+                + (f" (WSL path: {windows_path_to_wsl(executable)})" if method == "wsl_bash" else "")
+            )
+        if method == "wsl_bash":
+            full_args = [*args]
+            if settings_path:
+                full_args.extend(["--settings", settings_path])
+            wsl_executable = windows_path_to_wsl(executable)
+            wsl_args = [windows_path_to_wsl(arg) if _looks_like_windows_path(arg) else arg for arg in full_args]
+            shell_command = " ".join(shlex.quote(part) for part in [wsl_executable, *wsl_args])
+            return ["wsl.exe", "bash", "-lc", shell_command]
+        full_args = [*args]
+        if settings_path:
+            full_args.append(f"-settings={settings_path}")
+        return [str(path), *full_args]
+
+
+def windows_path_to_wsl(path: str) -> str:
+    # Convert a Windows absolute path into the matching /mnt/<drive> WSL path.
+    normalized = path.replace("\\", "/")
+    if len(normalized) >= 3 and normalized[1:3] == ":/":
+        drive = normalized[0].lower()
+        return f"/mnt/{drive}/{normalized[3:]}"
+    return normalized
+
+
+def _looks_like_windows_path(value: str) -> bool:
+    # Detect Windows drive paths before passing arguments to WSL.
+    return len(value) >= 3 and value[1:3] in {":\\", ":/"}

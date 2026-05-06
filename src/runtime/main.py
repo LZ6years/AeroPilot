@@ -20,6 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-id", default=None)
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--launch", action="store_true", help="Actually launch scene process")
+    parser.add_argument(
+        "--connect-existing",
+        action="store_true",
+        help="Use real control protocol against an already running UE process",
+    )
     parser.add_argument("command", choices=["smoke-test"])
     return parser
 
@@ -33,11 +38,31 @@ def main() -> None:
     recorder = RecordWriter(run_dir)
     selected_map = next(pkg for pkg in maps if pkg.map_id == map_id)
     recorder.write_json("map_package.json", selected_map.to_dict())
-    server = LocalSimulationServer(maps, port_policy, Path(run_dir), launch_processes=args.launch)
+    server = LocalSimulationServer(
+        maps,
+        port_policy,
+        Path(run_dir),
+        launch_processes=args.launch,
+        real_control=args.launch or args.connect_existing,
+    )
     runtime = AgentRuntime(LocalEnvClient(server), recorder)
     if args.command == "smoke-test":
-        runtime.run_smoke_test(map_id)
-        print(f"Smoke test complete. Run record: {run_dir}")
+        try:
+            runtime.run_smoke_test(map_id)
+            print(f"Smoke test complete. Run record: {run_dir}")
+        except ModuleNotFoundError as exc:
+            recorder.event(
+                "run_failed",
+                {
+                    "error": str(exc),
+                    "hint": "Install AirSim support with: pip install -r requirements.txt; "
+                    "pip install --no-build-isolation -r requirements-airsim.txt",
+                },
+            )
+            raise
+        except Exception as exc:
+            recorder.event("run_failed", {"error_type": type(exc).__name__, "error": str(exc)})
+            raise
 
 
 if __name__ == "__main__":

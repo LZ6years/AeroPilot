@@ -3,12 +3,15 @@
   "maps": [
     {
       "map_id": "airvln_demo_manual",
-      "provider": "airvln",
+      "provider": "packaged_unreal",
       "scene_id": "demo",
       "root": null,
       "launch": {
         "manual": true,
         "args": []
+      },
+      "control": {
+        "protocol": "airsim"
       },
       "airsim": {
         "mode": "Multirotor",
@@ -21,6 +24,93 @@
       },
       "resources": {
         "supports_object_edit": false,
+        "supports_weather": false
+      }
+    },
+    {
+      "map_id": "airvln_env_1",
+      "provider": "packaged_unreal",
+      "scene_id": "1",
+      "root": "G:/airvln-envs/envs/env_1/env_1",
+      "launch": {
+        "method": "wsl_bash",
+        "linux": "LinuxNoEditor/AirVLN.sh",
+        "args": ["-RenderOffscreen", "-NoSound", "-NoVSync"],
+        "ready_timeout_sec": 90
+      },
+      "control": {
+        "protocol": "airsim"
+      },
+      "airsim": {
+        "mode": "Multirotor",
+        "vehicle_name": "Drone_1",
+        "camera_name": "front_0",
+        "image_width": 224,
+        "image_height": 224,
+        "depth_width": 256,
+        "depth_height": 256
+      },
+      "resources": {
+        "supports_object_edit": false,
+        "supports_weather": false
+      }
+    },
+    {
+      "map_id": "cityenviron_win64",
+      "provider": "packaged_unreal",
+      "scene_id": "cityenviron",
+      "root": "G:/ue-envs/airsim-win64/CityEnviron/WindowsNoEditor",
+      "launch": {
+        "method": "direct",
+        "windows": "CityEnviron/Binaries/Win64/CityEnviron.exe",
+        "args": ["-windowed", "-ResX=1280", "-ResY=720", "-NoSound", "-NoVSync"],
+        "ready_timeout_sec": 90
+      },
+      "control": {
+        "protocol": "airsim"
+      },
+      "airsim": {
+        "mode": "Multirotor",
+        "settings_profile": "camera_defaults",
+        "vehicle_name": "Drone1",
+        "camera_name": "front_center",
+        "image_width": 224,
+        "image_height": 224,
+        "depth_width": 256,
+        "depth_height": 256,
+        "x": 0,
+        "y": -5,
+        "z": 0
+      },
+      "resources": {
+        "supports_object_edit": false,
+        "supports_weather": false
+      }
+    },
+    {
+      "map_id": "unrealzoo_collection",
+      "provider": "packaged_unreal",
+      "scene_id": "collection",
+      "root": "G:/UnrealZoo-UE4/Collection_WinNoEditor_0424_25",
+      "launch": {
+        "method": "direct",
+        "windows": "Collection/Binaries/Win64/Collection.exe",
+        "args": ["-windowed", "-ResX=1280", "-ResY=720"],
+        "ready_timeout_sec": 60
+      },
+      "control": {
+        "protocol": "unrealcv"
+      },
+      "unrealcv": {
+        "host": "127.0.0.1",
+        "port": 9010,
+        "camera_id": 0,
+        "width": 256,
+        "height": 256,
+        "fov": 90
+      },
+      "resources": {
+        "supports_object_edit": true,
         "supports_weather": false
       }
     }

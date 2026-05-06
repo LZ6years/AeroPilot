@@ -21,35 +21,65 @@ class MapPackage:
     root: str | None
     launch: dict[str, Any]
     airsim: dict[str, Any]
+    control: dict[str, Any] = field(default_factory=dict)
+    unrealcv: dict[str, Any] = field(default_factory=dict)
     resources: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MapPackage":
         # Validate and normalize a map configuration dictionary.
-        missing = [key for key in ("map_id", "provider", "scene_id", "airsim") if key not in data]
+        missing = [key for key in ("map_id", "provider", "scene_id") if key not in data]
         if missing:
             raise ValueError(f"MapPackage missing required fields: {', '.join(missing)}")
-        airsim = data["airsim"]
-        for key in ("vehicle_name", "camera_name"):
-            if key not in airsim:
-                raise ValueError(f"MapPackage {data['map_id']} missing airsim.{key}")
+        provider = str(data["provider"])
+        airsim = data.get("airsim", {})
+        unrealcv = data.get("unrealcv", {})
+        control = dict(data.get("control", {}))
+        control.setdefault("protocol", _legacy_protocol_for_provider(provider))
+        protocol = str(control["protocol"])
+        if protocol == "airsim":
+            for key in ("vehicle_name", "camera_name"):
+                if key not in airsim:
+                    raise ValueError(f"MapPackage {data['map_id']} missing airsim.{key}")
+        if protocol == "unrealcv":
+            for key in ("host", "port", "camera_id"):
+                if key not in unrealcv:
+                    raise ValueError(f"MapPackage {data['map_id']} missing unrealcv.{key}")
         launch = data.get("launch", {})
         root = data.get("root")
-        if data["provider"] in {"airvln", "local_ue"} and not root and not launch.get("manual", False):
-            raise ValueError(f"MapPackage {data['map_id']} requires root unless launch.manual=true")
+        if provider in {"airvln", "local_ue", "unrealcv", "packaged_unreal"}:
+            remote_or_manual = launch.get("manual", False) or launch.get("method") == "existing_process"
+            if not root and not remote_or_manual:
+                raise ValueError(f"MapPackage {data['map_id']} requires root unless launch.manual=true")
+        if protocol not in {"airsim", "unrealcv"}:
+            raise ValueError(f"MapPackage {data['map_id']} has unsupported control.protocol: {protocol}")
         return cls(
             map_id=str(data["map_id"]),
-            provider=str(data["provider"]),
+            provider=provider,
             scene_id=str(data["scene_id"]),
             root=str(root) if root is not None else None,
             launch=dict(launch),
             airsim=dict(airsim),
+            control=control,
+            unrealcv=dict(unrealcv),
             resources=dict(data.get("resources", {})),
         )
 
     def to_dict(self) -> dict[str, Any]:
         # Convert the package into JSON-serializable data.
         return asdict(self)
+
+    @property
+    def control_protocol(self) -> str:
+        # Return the runtime control protocol used by the simulation backend.
+        return str(self.control.get("protocol", _legacy_protocol_for_provider(self.provider)))
+
+
+def _legacy_protocol_for_provider(provider: str) -> str:
+    # Keep old provider-based map configs working while the config model migrates.
+    if provider == "unrealcv":
+        return "unrealcv"
+    return "airsim"
 
 
 @dataclass

@@ -11,7 +11,7 @@ from src.env_client.schemas import MapPackage, PortPolicy
 def load_map_config(path: str | Path) -> tuple[list[MapPackage], PortPolicy]:
     # Read map packages and port policy from one JSON file.
     config_path = Path(path)
-    data = json.loads(config_path.read_text(encoding="utf-8"))
+    data = json.loads(config_path.read_text(encoding="utf-8-sig"))
     port_data = data.get("port_policy", {})
     port_policy = PortPolicy(
         server_port=int(port_data.get("server_port", 30000)),
