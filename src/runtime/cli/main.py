@@ -7,10 +7,10 @@ import socket
 from pathlib import Path
 
 from src.env_client.local_client import LocalEnvClient
-from src.runtime.agent_runtime import AgentRuntime
-from src.runtime.async_run_logger import AsyncRunLogger
-from src.runtime.config import build_remote_airsim_config, load_map_config
-from src.runtime.run_store import RunStore
+from src.runtime.configs.map_config import build_remote_airsim_config, load_map_config
+from src.runtime.logging.async_run_logger import AsyncRunLogger
+from src.runtime.logging.run_store import RunStore
+from src.runtime.runners.agent_runtime import AgentRuntime
 from src.sim_server.server import LocalSimulationServer
 
 

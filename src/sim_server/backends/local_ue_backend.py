@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.runtime.action_config import UavActionConfig
+from src.runtime.configs.action_config import UavActionConfig
 
 from .airvln_backend import AirVlnBackend
 

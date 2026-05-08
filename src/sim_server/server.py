@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 
 from src.env_client.schemas import ActionResult, MapPackage, Observation, PortPolicy, SceneInstance
-from src.runtime.action_config import UavActionConfig
+from src.runtime.configs.action_config import UavActionConfig
 from src.sim_server.backends.airvln_backend import AirVlnBackend
 from src.sim_server.backends.base import SimulationBackend
 from src.sim_server.backends.local_ue_backend import LocalUeBackend

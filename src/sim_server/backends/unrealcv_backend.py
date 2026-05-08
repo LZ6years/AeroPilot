@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.env_client.schemas import ActionResult, MapPackage, Observation, SceneInstance
-from src.runtime.action_config import UavActionConfig
+from src.runtime.configs.action_config import UavActionConfig
 
 
 @dataclass

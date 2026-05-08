@@ -7,7 +7,7 @@ from pathlib import Path
 from src.adapters.airsim_uav import AirSimUavAdapter
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter, UavPrimitiveAdapter
 from src.env_client.schemas import ActionResult, MapPackage, Observation, SceneInstance
-from src.runtime.action_config import UavActionConfig
+from src.runtime.configs.action_config import UavActionConfig
 
 
 class AirVlnBackend:

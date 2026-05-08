@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from src.runtime.async_run_logger import AsyncRunLogger
+from src.runtime.logging.async_run_logger import AsyncRunLogger
 
 
 def test_async_run_logger_writes_system_events_and_artifacts(tmp_path):

@@ -6,8 +6,8 @@ import json
 
 import pytest
 
-from src.runtime.config import build_remote_airsim_config, load_map_config
-from src.runtime.action_config import UavActionConfig, load_uav_action_config
+from src.runtime.configs.action_config import UavActionConfig, load_uav_action_config
+from src.runtime.configs.map_config import build_remote_airsim_config, load_map_config
 from test_uav_client_demo import load_demo_action_config
 
 

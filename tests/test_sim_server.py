@@ -7,7 +7,7 @@ import json
 import src.sim_server.server as server_module
 from src.env_client.schemas import MapPackage, PortPolicy, SceneInstance
 from src.adapters.airsim_uav import AirSimUavAdapter
-from src.runtime.action_config import UavActionConfig
+from src.runtime.configs.action_config import UavActionConfig
 from src.sim_server.process_manager import ProcessManager, windows_path_to_wsl
 from src.sim_server.server import LocalSimulationServer
 
