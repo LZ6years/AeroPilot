@@ -36,7 +36,8 @@
         "method": "wsl_bash",
         "linux": "LinuxNoEditor/AirVLN.sh",
         "args": ["-RenderOffscreen", "-NoSound", "-NoVSync"],
-        "ready_timeout_sec": 90
+        "ready_timeout_sec": 90,
+        "post_launch_wait_sec": 5
       },
       "control": {
         "protocol": "airsim"
@@ -64,7 +65,8 @@
         "method": "direct",
         "windows": "CityEnviron/Binaries/Win64/CityEnviron.exe",
         "args": ["-windowed", "-ResX=1280", "-ResY=720", "-NoSound", "-NoVSync"],
-        "ready_timeout_sec": 90
+        "ready_timeout_sec": 90,
+        "post_launch_wait_sec": 8
       },
       "control": {
         "protocol": "airsim"
@@ -96,7 +98,8 @@
         "method": "direct",
         "windows": "Collection/Binaries/Win64/Collection.exe",
         "args": ["-windowed", "-ResX=1280", "-ResY=720"],
-        "ready_timeout_sec": 60
+        "ready_timeout_sec": 60,
+        "post_launch_wait_sec": 5
       },
       "control": {
         "protocol": "unrealcv"

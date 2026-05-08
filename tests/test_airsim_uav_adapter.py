@@ -1,0 +1,109 @@
+"""Test AirSimUavAdapter behavior without launching a real AirSim scene."""
+
+from __future__ import annotations
+
+from src.adapters.airsim_uav import AirSimUavAdapter
+
+
+class FakeAirSim:
+    # Provide the tiny AirSim API surface set_pose needs.
+    class Vector3r:
+        def __init__(self, x_val: float, y_val: float, z_val: float) -> None:
+            # Store vector coordinates with AirSim-compatible attribute names.
+            self.x_val = x_val
+            self.y_val = y_val
+            self.z_val = z_val
+
+    class Pose:
+        def __init__(self, position: "FakeAirSim.Vector3r", orientation: tuple[float, float, float]) -> None:
+            # Store position and orientation exactly like a lightweight AirSim Pose.
+            self.position = position
+            self.orientation = orientation
+
+    @staticmethod
+    def to_quaternion(pitch: float, roll: float, yaw: float) -> tuple[float, float, float]:
+        # Return radians directly so the test can inspect degree-to-radian conversion.
+        return (pitch, roll, yaw)
+
+
+class FakeAirSimClient:
+    def __init__(self) -> None:
+        # Capture simSetVehiclePose calls for assertions.
+        self.set_pose_calls = []
+        self.move_body_calls = []
+
+    def simSetVehiclePose(self, pose, ignore_collision: bool, vehicle_name: str) -> None:
+        # Record the pose placement request that would have gone to AirSim.
+        self.set_pose_calls.append(
+            {
+                "pose": pose,
+                "ignore_collision": ignore_collision,
+                "vehicle_name": vehicle_name,
+            }
+        )
+
+    def moveByVelocityBodyFrameAsync(self, vx: float, vy: float, vz: float, duration: float, vehicle_name: str):
+        # Record body-frame movement calls and return a joinable future.
+        self.move_body_calls.append(
+            {
+                "vx": vx,
+                "vy": vy,
+                "vz": vz,
+                "duration": duration,
+                "vehicle_name": vehicle_name,
+            }
+        )
+        return self
+
+    def join(self) -> None:
+        # Match the AirSim async future API used by the adapter.
+        return None
+
+
+def test_set_pose_calls_airsim_sim_set_vehicle_pose(monkeypatch):
+    # Verify set_pose translates FlyAgent x/y/z/yaw inputs into an AirSim pose call.
+    adapter = AirSimUavAdapter(vehicle_name="Drone1")
+    client = FakeAirSimClient()
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.set_pose(1.0, 2.0, -3.0, yaw_deg=90.0, ignore_collision=False)
+
+    assert result.ok
+    assert result.data["pose"]["position"] == {"x": 1.0, "y": 2.0, "z": -3.0}
+    assert result.data["pose"]["euler_deg"]["yaw"] == 90.0
+    assert len(client.set_pose_calls) == 1
+    call = client.set_pose_calls[0]
+    assert call["vehicle_name"] == "Drone1"
+    assert call["ignore_collision"] is False
+    assert call["pose"].position.x_val == 1.0
+    assert call["pose"].position.y_val == 2.0
+    assert call["pose"].position.z_val == -3.0
+    assert round(call["pose"].orientation[2], 6) == 1.570796
+
+
+def test_ascend_and_descend_use_speed_and_duration():
+    # Verify vertical primitives call AirSim body velocity with correct NED z signs.
+    adapter = AirSimUavAdapter(vehicle_name="Drone1")
+    client = FakeAirSimClient()
+    adapter._client = client
+
+    ascend = adapter.ascend(0.5, 4.0)
+    descend = adapter.descend(0.25, 2.0)
+
+    assert ascend.ok
+    assert descend.ok
+    assert client.move_body_calls[0] == {
+        "vx": 0.0,
+        "vy": 0.0,
+        "vz": -0.5,
+        "duration": 4.0,
+        "vehicle_name": "Drone1",
+    }
+    assert client.move_body_calls[1] == {
+        "vx": 0.0,
+        "vy": 0.0,
+        "vz": 0.25,
+        "duration": 2.0,
+        "vehicle_name": "Drone1",
+    }

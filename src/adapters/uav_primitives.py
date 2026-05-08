@@ -45,12 +45,25 @@ class UavPrimitiveAdapter(Protocol):
         # Rotate the UAV by a relative yaw angle.
         ...
 
-    def ascend(self, meters: float) -> PrimitiveResult:
-        # Move upward by a bounded distance.
+    def set_pose(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        yaw_deg: float = 0.0,
+        pitch_deg: float = 0.0,
+        roll_deg: float = 0.0,
+        ignore_collision: bool = True,
+    ) -> PrimitiveResult:
+        # Teleport/place the UAV at an absolute simulator pose.
         ...
 
-    def descend(self, meters: float) -> PrimitiveResult:
-        # Move downward by a bounded distance.
+    def ascend(self, speed_mps: float, duration: float) -> PrimitiveResult:
+        # Move upward using vertical speed for a bounded duration.
+        ...
+
+    def descend(self, speed_mps: float, duration: float) -> PrimitiveResult:
+        # Move downward using vertical speed for a bounded duration.
         ...
 
     def get_pose(self) -> PrimitiveResult:
@@ -119,13 +132,41 @@ class NullUavPrimitiveAdapter:
         self.yaw_deg += yaw_deg
         return PrimitiveResult(True, "null UAV turn_relative", {"pose": self._pose()})
 
-    def ascend(self, meters: float) -> PrimitiveResult:
-        # Convert ascend into negative-Z NED motion.
-        return self.move_body(0.0, 0.0, -abs(meters), 1.0)
+    def set_pose(
+        self,
+        x: float,
+        y: float,
+        z: float,
+        yaw_deg: float = 0.0,
+        pitch_deg: float = 0.0,
+        roll_deg: float = 0.0,
+        ignore_collision: bool = True,
+    ) -> PrimitiveResult:
+        # Directly place the dry-run UAV at an absolute pose.
+        if not self.connected:
+            return PrimitiveResult(False, "UAV is not connected")
+        self.position = {"x": x, "y": y, "z": z}
+        self.yaw_deg = yaw_deg
+        return PrimitiveResult(
+            True,
+            "null UAV set_pose",
+            {
+                "pose": {
+                    **self._pose(),
+                    "pitch_deg": pitch_deg,
+                    "roll_deg": roll_deg,
+                    "ignore_collision": ignore_collision,
+                }
+            },
+        )
 
-    def descend(self, meters: float) -> PrimitiveResult:
-        # Convert descend into positive-Z NED motion.
-        return self.move_body(0.0, 0.0, abs(meters), 1.0)
+    def ascend(self, speed_mps: float, duration: float) -> PrimitiveResult:
+        # Convert ascend into negative-Z NED velocity over time.
+        return self.move_body(0.0, 0.0, -abs(speed_mps), duration)
+
+    def descend(self, speed_mps: float, duration: float) -> PrimitiveResult:
+        # Convert descend into positive-Z NED velocity over time.
+        return self.move_body(0.0, 0.0, abs(speed_mps), duration)
 
     def get_pose(self) -> PrimitiveResult:
         # Return the current dry-run pose.

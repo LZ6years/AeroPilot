@@ -25,6 +25,16 @@ def test_tool_dispatcher_routes_uav_actions_through_env_client(tmp_path):
     dispatcher = ToolDispatcher(client)
 
     result = dispatcher.call(scene.scene_instance_id, "uav_1", "uav.connect", {})
+    set_pose = dispatcher.call(
+        scene.scene_instance_id,
+        "uav_1",
+        "uav.set_pose",
+        {"x": 4.0, "y": 5.0, "z": -6.0, "yaw_deg": 90.0},
+    )
 
     assert result.ok
+    assert set_pose.ok
+    assert set_pose.data["pose"]["yaw_deg"] == 90.0
+    assert set_pose.data["pose"]["z"] == -6.0
     assert "uav.connect" in dispatcher.registry.names()
+    assert "uav.set_pose" in dispatcher.registry.names()

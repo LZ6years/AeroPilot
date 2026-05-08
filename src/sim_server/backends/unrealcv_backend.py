@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.env_client.schemas import ActionResult, MapPackage, Observation, SceneInstance
+from src.runtime.action_config import UavActionConfig
 
 
 @dataclass
@@ -19,9 +20,10 @@ class UnrealCvState:
 class UnrealCvBackend:
     """Backend for gym_unrealcv / UnrealZoo Windows packaged maps."""
 
-    def __init__(self, use_real_client: bool = False) -> None:
+    def __init__(self, use_real_client: bool = False, action_config: UavActionConfig | None = None) -> None:
         # Keep real UnrealCV optional so unit tests do not need the package.
         self.use_real_client = use_real_client
+        self.action_config = action_config or UavActionConfig()
         self.client: Any | None = None
         self.package: MapPackage | None = None
         self.state = UnrealCvState([0.0, 0.0, 300.0, 0.0, 0.0, 0.0])
@@ -62,28 +64,40 @@ class UnrealCvBackend:
             return ActionResult(True, action, f"UnrealCV {action} treated as no-op")
         if action == "turn_relative":
             pose = self._get_pose()
-            pose[4] += float(args["yaw_deg"])
+            pose[4] += float(args.get("yaw_deg", self.action_config.yaw_step_deg))
             self._set_pose(pose)
             return ActionResult(True, action, "UnrealCV camera yaw updated", {"pose": pose})
+        if action == "set_pose":
+            pose = [
+                float(args["x"]),
+                float(args["y"]),
+                float(args["z"]),
+                float(args.get("pitch_deg", 0.0)),
+                float(args.get("yaw_deg", 0.0)),
+                float(args.get("roll_deg", 0.0)),
+            ]
+            self._set_pose(pose)
+            return ActionResult(True, action, "UnrealCV camera pose set", {"pose": pose})
         if action == "move_body":
             pose = self._get_pose()
             yaw_rad = math.radians(pose[4])
-            duration = float(args.get("duration", 0.0))
-            vx = float(args.get("vx", 0.0))
-            vy = float(args.get("vy", 0.0))
+            duration = float(args.get("duration", self.action_config.move_duration_sec))
+            vx, vy, vz = self._move_velocity(args)
             pose[0] += (vx * math.cos(yaw_rad) - vy * math.sin(yaw_rad)) * duration
             pose[1] += (vx * math.sin(yaw_rad) + vy * math.cos(yaw_rad)) * duration
-            pose[2] += float(args.get("vz", 0.0)) * duration
+            pose[2] += vz * duration
             self._set_pose(pose)
             return ActionResult(True, action, "UnrealCV camera location updated", {"pose": pose})
         if action == "ascend":
             pose = self._get_pose()
-            pose[2] += abs(float(args["meters"]))
+            speed_mps, duration = self._vertical_args(args)
+            pose[2] += speed_mps * duration
             self._set_pose(pose)
             return ActionResult(True, action, "UnrealCV camera ascended", {"pose": pose})
         if action == "descend":
             pose = self._get_pose()
-            pose[2] -= abs(float(args["meters"]))
+            speed_mps, duration = self._vertical_args(args)
+            pose[2] -= speed_mps * duration
             self._set_pose(pose)
             return ActionResult(True, action, "UnrealCV camera descended", {"pose": pose})
         if action == "get_pose":
@@ -96,6 +110,45 @@ class UnrealCvBackend:
                 {"frames": self._get_frames(list(args.get("modalities", ["rgb"])))},
             )
         raise ValueError(f"Unsupported UnrealCV action: {action}")
+
+    def _move_velocity(self, args: dict) -> tuple[float, float, float]:
+        # Resolve semantic direction or explicit velocity for UnrealCV camera motion.
+        direction = str(args.get("direction", "")).lower()
+        if direction:
+            speed = self.action_config.linear_velocity_mps
+            vertical_speed = self.action_config.vertical_velocity_mps
+            direction_map = {
+                "forward": (speed, 0.0, 0.0),
+                "backward": (-speed, 0.0, 0.0),
+                "left": (0.0, -speed, 0.0),
+                "right": (0.0, speed, 0.0),
+                "up": (0.0, 0.0, vertical_speed),
+                "down": (0.0, 0.0, -vertical_speed),
+            }
+            try:
+                return direction_map[direction]
+            except KeyError as exc:
+                raise ValueError(f"Unsupported move_body direction: {direction}") from exc
+        return (
+            float(args.get("vx", self.action_config.linear_velocity_mps)),
+            float(args.get("vy", 0.0)),
+            float(args.get("vz", 0.0)),
+        )
+
+    def _vertical_args(self, args: dict) -> tuple[float, float]:
+        # Resolve meters, speed, and duration into a vertical speed-duration command.
+        speed_mps = abs(float(args.get("speed_mps", self.action_config.vertical_velocity_mps)))
+        if speed_mps <= 0.0:
+            raise ValueError("vertical speed_mps must be greater than 0")
+        if "duration_sec" in args:
+            return speed_mps, float(args["duration_sec"])
+        if "duration" in args:
+            return speed_mps, float(args["duration"])
+        if "meters" in args:
+            return speed_mps, abs(float(args["meters"])) / speed_mps
+        if self.action_config.vertical_duration_sec > 0.0:
+            return speed_mps, self.action_config.vertical_duration_sec
+        return speed_mps, abs(self.action_config.vertical_step_m) / speed_mps
 
     def _connect(self) -> None:
         # Open the UnrealCV client lazily.

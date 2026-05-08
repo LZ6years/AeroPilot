@@ -6,7 +6,9 @@ import json
 
 import pytest
 
-from src.runtime.config import load_map_config
+from src.runtime.config import build_remote_airsim_config, load_map_config
+from src.runtime.action_config import UavActionConfig, load_uav_action_config
+from test_uav_client_demo import load_demo_action_config
 
 
 def test_load_map_config_valid(tmp_path):
@@ -116,3 +118,84 @@ def test_load_map_config_accepts_existing_remote_process(tmp_path):
 
     assert maps[0].root is None
     assert maps[0].unrealcv["host"] == "192.168.1.20"
+
+
+def test_build_remote_airsim_config_defaults():
+    # Verify the temporary remote Linux AirSim config matches the planned smoke test.
+    maps, policy = build_remote_airsim_config("192.168.1.30")
+
+    package = maps[0]
+    assert package.map_id == "remote_linux_airsim"
+    assert package.launch["method"] == "existing_process"
+    assert package.control_protocol == "airsim"
+    assert package.airsim["host"] == "192.168.1.30"
+    assert package.airsim["port"] == 41451
+    assert package.airsim["vehicle_name"] == "Drone_1"
+    assert package.airsim["camera_name"] == "front_0"
+    assert policy.server_port == 30000
+
+
+def test_build_remote_airsim_config_allows_computer_vision_mode():
+    # Verify remote AirVLN observation tests can target ComputerVision scenes.
+    maps, _ = build_remote_airsim_config("127.0.0.1", port=30001, mode="ComputerVision")
+
+    assert maps[0].airsim["port"] == 30001
+    assert maps[0].airsim["mode"] == "ComputerVision"
+
+
+def test_load_uav_action_config_defaults_when_file_missing(tmp_path):
+    # Verify missing action config files use the built-in fixed action scale.
+    config = load_uav_action_config(tmp_path / "missing.json")
+
+    assert config == UavActionConfig()
+
+
+def test_load_uav_action_config_reads_fixed_scale_values(tmp_path):
+    # Verify UAV action scale config controls move speed, duration, vertical step, and yaw step.
+    config_path = tmp_path / "uav_action_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "linear_velocity_mps": 2.0,
+                "vertical_velocity_mps": 0.75,
+                "move_duration_sec": 4.0,
+                "vertical_duration_sec": 2.0,
+                "vertical_step_m": 1.5,
+                "yaw_step_deg": 20.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_uav_action_config(config_path)
+
+    assert config.linear_velocity_mps == 2.0
+    assert config.vertical_velocity_mps == 0.75
+    assert config.move_duration_sec == 4.0
+    assert config.vertical_duration_sec == 2.0
+    assert config.vertical_step_m == 1.5
+    assert config.yaw_step_deg == 20.0
+
+
+def test_demo_move_duration_override_preserves_vertical_duration(tmp_path):
+    # Verify --move-duration only overrides horizontal movement duration.
+    config_path = tmp_path / "uav_action_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "linear_velocity_mps": 2.0,
+                "vertical_velocity_mps": 2.0,
+                "move_duration_sec": 2.0,
+                "vertical_duration_sec": 8.0,
+                "vertical_step_m": 1.0,
+                "yaw_step_deg": 30.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = type("Args", (), {"action_config": str(config_path), "move_duration": 8.0})()
+    config = load_demo_action_config(args)
+
+    assert config.move_duration_sec == 8.0
+    assert config.vertical_duration_sec == 8.0

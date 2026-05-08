@@ -1,0 +1,8 @@
+{
+  "linear_velocity_mps": 2.0,
+  "vertical_velocity_mps": 2.0,
+  "move_duration_sec": 2.0,
+  "vertical_duration_sec": 8.0,
+  "vertical_step_m": 1.0,
+  "yaw_step_deg": 30.0
+}

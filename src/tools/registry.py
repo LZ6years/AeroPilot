@@ -36,12 +36,14 @@ def default_registry() -> ToolRegistry:
         "uav.land",
         "uav.move_body",
         "uav.turn_relative",
+        "uav.set_pose",
         "uav.ascend",
         "uav.descend",
         "uav.get_pose",
         "uav.get_frames",
     ):
         registry.register(ToolSpec(name=name, kind="uav_primitive", description=f"Primitive {name}"))
+
     registry.register(
         ToolSpec(
             name="env.observe",

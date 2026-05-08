@@ -10,6 +10,7 @@ import uuid
 from pathlib import Path
 
 from src.env_client.schemas import ActionResult, MapPackage, Observation, PortPolicy, SceneInstance
+from src.runtime.action_config import UavActionConfig
 from src.sim_server.backends.airvln_backend import AirVlnBackend
 from src.sim_server.backends.base import SimulationBackend
 from src.sim_server.backends.local_ue_backend import LocalUeBackend
@@ -27,6 +28,9 @@ class LocalSimulationServer:
         run_dir: str | Path = "runs/dev",
         launch_processes: bool = False,
         real_control: bool | None = None,
+        show_display: bool | None = None,
+        action_config: UavActionConfig | None = None,
+        save_artifacts: bool = False,
     ) -> None:
         # Initialize scene, process, port, and backend managers.
         self.map_packages = {pkg.map_id: pkg for pkg in map_packages}
@@ -37,6 +41,10 @@ class LocalSimulationServer:
         self.run_dir = Path(run_dir)
         self.launch_processes = launch_processes
         self.real_control = launch_processes if real_control is None else real_control
+        self.show_display = show_display
+        self.action_config = action_config or UavActionConfig()
+        self.save_artifacts = save_artifacts
+        self.artifact_dir = self.run_dir / "artifacts"
         self.backends: dict[str, SimulationBackend] = {}
 
     def health_check(self) -> bool:
@@ -81,13 +89,14 @@ class LocalSimulationServer:
             scene.process_id = self.process_manager.start(
                 instance_id,
                 executable,
-                package.launch.get("args", []),
+                self._launch_args(package),
                 method=launch_method,
                 settings_path=settings_arg,
                 log_path=str(log_path),
             )
             try:
                 self._wait_for_airsim(scene, package)
+                self._post_launch_wait(package)
             except Exception:
                 self.process_manager.stop(instance_id)
                 self.port_manager.release(scene.airsim_port)
@@ -146,11 +155,24 @@ class LocalSimulationServer:
         if backend_key not in self.backends:
             if backend_key == "airsim":
                 if package.provider == "local_ue":
-                    self.backends[backend_key] = LocalUeBackend(use_real_uav=self.real_control)
+                    self.backends[backend_key] = LocalUeBackend(
+                        use_real_uav=self.real_control,
+                        action_config=self.action_config,
+                        artifact_dir=self.artifact_dir,
+                        save_artifacts=self.save_artifacts,
+                    )
                 else:
-                    self.backends[backend_key] = AirVlnBackend(use_real_uav=self.real_control)
+                    self.backends[backend_key] = AirVlnBackend(
+                        use_real_uav=self.real_control,
+                        action_config=self.action_config,
+                        artifact_dir=self.artifact_dir,
+                        save_artifacts=self.save_artifacts,
+                    )
             elif backend_key == "unrealcv":
-                self.backends[backend_key] = UnrealCvBackend(use_real_client=self.real_control)
+                self.backends[backend_key] = UnrealCvBackend(
+                    use_real_client=self.real_control,
+                    action_config=self.action_config,
+                )
             else:
                 raise ValueError(f"Unsupported control protocol: {package.control_protocol}")
         try:
@@ -199,7 +221,7 @@ class LocalSimulationServer:
             "SeeDocsAt": "https://github.com/Microsoft/AirSim/blob/master/docs/settings.md",
             "SettingsVersion": 1.2,
             "SimMode": package.airsim.get("mode", "Multirotor"),
-            "ViewMode": package.airsim.get("view_mode", "NoDisplay"),
+            "ViewMode": self._view_mode(package),
             "ApiServerPort": airsim_port,
             "Vehicles": {vehicle_name: {"VehicleType": "SimpleFlight", "AutoCreate": True}},
         }
@@ -232,6 +254,21 @@ class LocalSimulationServer:
         path = Path(executable)
         return str(path if path.is_absolute() else root / path)
 
+    def _launch_args(self, package: MapPackage) -> list[str]:
+        # Return launch args adjusted for the requested display mode.
+        args = list(package.launch.get("args", []))
+        if self.show_display is True:
+            return [arg for arg in args if str(arg) != "-RenderOffscreen"]
+        return args
+
+    def _view_mode(self, package: MapPackage) -> str:
+        # Choose AirSim ViewMode from runtime override or map config.
+        if self.show_display is True:
+            return "Fpv"
+        if self.show_display is False:
+            return "NoDisplay"
+        return str(package.airsim.get("view_mode", "NoDisplay"))
+
     def _wait_for_airsim(self, scene: SceneInstance, package: MapPackage) -> None:
         # Wait until the AirSim RPC port accepts TCP connections.
         self._wait_for_control(scene, package)
@@ -246,12 +283,44 @@ class LocalSimulationServer:
             host = str(package.airsim.get("host", scene.host))
             port = int(package.airsim.get("port", scene.airsim_port))
             label = "AirSim"
+            self._wait_for_airsim_rpc(
+                host,
+                port,
+                float(package.launch.get("ready_timeout_sec", 90)),
+                scene.settings_path,
+            )
+            return
         self._wait_for_tcp_port(
             host,
             port,
             float(package.launch.get("ready_timeout_sec", 90)),
             scene.settings_path,
             label,
+        )
+
+    def _post_launch_wait(self, package: MapPackage) -> None:
+        # Give newly launched UE scenes a short stabilization window after RPC is ready.
+        wait_sec = float(package.launch.get("post_launch_wait_sec", 5.0))
+        if wait_sec > 0.0:
+            time.sleep(wait_sec)
+
+    def _wait_for_airsim_rpc(self, host: str, port: int, timeout: float, settings_path: str) -> None:
+        # Wait until AirSim accepts RPC calls, not just raw TCP connections.
+        deadline = time.monotonic() + timeout
+        last_error: Exception | None = None
+        while time.monotonic() < deadline:
+            try:
+                import airsim
+
+                client = airsim.VehicleClient(ip=host, port=port, timeout_value=2)
+                if client.ping():
+                    return
+            except Exception as exc:
+                last_error = exc
+                time.sleep(1)
+        raise TimeoutError(
+            f"AirSim RPC did not become ready: {host}:{port} "
+            f"within {timeout:.0f}s; settings={settings_path}; last_error={last_error}"
         )
 
     def _wait_for_tcp_port(
