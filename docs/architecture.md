@@ -129,3 +129,27 @@ backend 不是“地图 backend”，而是“控制协议 backend”。
 ```
 
 后者需要下一阶段补真正的 RPC server。
+
+## 7. Semantic Phase 与模型动作规划链路
+
+`SemanticPlan` 的 phase 是开放语义结构，不是固定枚举动作表。phase name 可以由模型根据当前任务自由生成；程序依赖 `index` / `total` 理解阶段位置，依赖 `meaning` 理解阶段目标。
+
+推荐链路：
+
+```text
+User / CLI
+  -> TaskParser
+    -> SemanticPlan phases(index,total,name,meaning)
+      -> TaskRuntime preflight(connect,takeoff,hover,initial observe)
+        -> ModelActionPlanner
+          -> SafetySupervisor
+            -> ToolDispatcher
+              -> EnvClient
+                -> SimulationServer
+```
+
+`ModelActionPlanner` 的输入应包含当前 phase、MissionState、当前 RGB/depth/pose、最近动作历史、可用 tool registry 和安全约束。它输出短期动作建议，但不能绕过 SafetySupervisor，也不能直接调用底层 SDK。
+
+`connect`、`takeoff`、起飞后 `hover` 和初始观测属于 Runtime preflight，不属于 phase 动作规划；模型动作候选工具不应包含 `uav.connect` / `uav.takeoff` / `uav.land` 这类生命周期动作。
+
+当前 `ShortHorizonPlanner` 只是规则兜底和 dry-run 骨架，保留它是为了离线测试和无模型环境下验证闭环；它不代表最终规划架构。

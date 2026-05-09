@@ -121,6 +121,7 @@ Agent Runtime
 
 - 每轮根据当前状态和语义计划，只输出未来几步原子动作。
 - 每次执行后重新观测并更新状态。
+- `connect`、`takeoff`、起飞后稳定悬停和初始观测属于 Runtime preflight，不属于 phase planner 或模型动作规划。
 
 交付：
 
@@ -131,6 +132,8 @@ Agent Runtime
 
 验收：
 
+- phase 短期窗口不包含 `uav.connect` / `uav.takeoff` / `uav.land` 等生命周期动作。
+- run record 能区分 `control_connected`、`preflight_takeoff_completed`、`initial_observation_updated` 和后续 phase 事件。
 - 不一次性执行长距离 `move_forward`。
 - 动作有速度、角度、时间、距离上限。
 - 每轮执行后重新读取观测。
@@ -297,3 +300,36 @@ src/runtime/lamp_right_turn_demo.py
 - LLM 直接生成动作序列不稳定，必须经过 schema 校验和短期执行器。
 - VLM 视觉判断可能幻觉，必须被 Safety Supervisor 约束。
 - VLM 视觉判断不稳定时，系统不应执行“靠近目标”等危险动作。
+
+## 6. Phase 语义与 M4/M6 目标形态补充
+
+M3 生成的 phase 不再被视为固定枚举。phase name 是模型对当前阶段的语义命名，主要用于后续模型动作规划和人工复盘，而不是让规则代码直接 `if/elif` 分发动作。
+
+phase 结构应包含阶段位置：
+
+```json
+{
+  "index": 1,
+  "total": 4,
+  "name": "turn_to_search_possible_lamp_area",
+  "meaning": "根据用户的右转线索，调整视角去寻找可能出现黑色路灯的区域"
+}
+```
+
+当前 `ShortHorizonPlanner` 是 M4 dry-run 骨架，用于验证 runtime 闭环、日志、Safety 和 ToolDispatcher 调用路径。它不是最终智能规划方式。
+
+最终目标是引入 `ModelActionPlanner`：
+
+```text
+当前 phase（含 index/total/name/meaning）
+  + MissionState
+  + 当前 RGB/depth/pose
+  + 最近动作历史
+  + 可用 tools/skills
+  + Safety 约束
+  -> 模型生成 1-3 个短期动作建议
+  -> SafetySupervisor 校验/裁剪
+  -> ToolDispatcher 执行
+```
+
+因此 M4 当前阶段以“可运行、可复盘、安全兜底”为主；真正复杂场景下的下一步动作选择应交给 M6/ModelActionPlanner，而不是依赖固定 phase 名。

@@ -386,3 +386,36 @@ Mission State
 - 每次短期动作执行后会重新观察并更新计划。
 - 不确定、失败或困惑时悬停。
 - 困惑达到阈值时可以主动向用户提出澄清问题。
+
+## 13. Semantic Phase 与动作规划边界补充
+
+`SemanticPlan.phases` 中的 phase 是任务语义阶段，不是程序里的固定动作分发表。模型可以根据用户任务自由命名 phase，例如 `turn_to_search_possible_lamp_area` 或 `visually_identify_black_streetlight`。程序不应要求 phase name 必须属于固定枚举。
+
+每个 phase 必须包含：
+
+```json
+{
+  "index": 1,
+  "total": 4,
+  "name": "turn_to_search_possible_lamp_area",
+  "meaning": "根据用户的右转线索，调整视角去寻找可能出现黑色路灯的区域"
+}
+```
+
+其中：
+
+- `index` 表示当前阶段是总阶段的第几个部分，从 1 开始。
+- `total` 表示本次任务共有多少个语义阶段。
+- `name` 是模型自由生成的语义标签，用于人类和后续模型理解上下文。
+- `meaning` 是阶段目标说明，后续动作规划需要结合它、当前观测和工具能力决定下一步。
+
+后续动作规划不应由 `if phase.name == ...` 的规则表长期承担。目标形态是：
+
+```text
+SemanticPlan phase + MissionState + RGB/depth/pose + tool registry + safety limits
+  -> ModelActionPlanner
+    -> SafetySupervisor
+      -> ToolDispatcher
+```
+
+当前规则版 `ShortHorizonPlanner` 只作为 dry-run、离线测试和安全兜底；真正任务执行应由模型结合当前阶段、多模态观察、最近动作历史和可用工具列表生成短期动作建议。模型建议仍必须通过 schema 校验和 Safety Supervisor，不能直接控制 UAV。
