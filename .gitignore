@@ -26,6 +26,9 @@ data/state_logs/
 data/rec_videos/
 .external_refs/
 
+# Local visual/demo artifacts
+docs/hyperframes/
+
 # OS and editor files
 .DS_Store
 Thumbs.db

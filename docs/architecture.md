@@ -141,14 +141,16 @@ User / CLI
   -> TaskParser
     -> SemanticPlan phases(index,total,name,meaning)
       -> TaskRuntime preflight(connect,takeoff,hover,initial observe)
-        -> ModelActionPlanner
-          -> SafetySupervisor
-            -> ToolDispatcher
-              -> EnvClient
-                -> SimulationServer
+        -> RawObservation
+          -> ObservationContextBuilder
+            -> ModelActionPlanner
+              -> SafetySupervisor
+                -> ToolDispatcher
+                  -> EnvClient
+                    -> SimulationServer
 ```
 
-`ModelActionPlanner` 的输入应包含当前 phase、MissionState、当前 RGB/depth/pose、最近动作历史、可用 tool registry 和安全约束。它输出短期动作建议，但不能绕过 SafetySupervisor，也不能直接调用底层 SDK。
+`ObservationContextBuilder` 将当前 phase、MissionState、当前 RGB/depth/pose、最近动作历史、可用 tool registry 和安全约束整理成稳定 JSON，作为 M6 `ModelActionPlanner` 的输入。`ModelActionPlanner` 输出短期动作建议，但不能绕过 SafetySupervisor，也不能直接调用底层 SDK。
 
 `connect`、`takeoff`、起飞后 `hover` 和初始观测属于 Runtime preflight，不属于 phase 动作规划；模型动作候选工具不应包含 `uav.connect` / `uav.takeoff` / `uav.land` 这类生命周期动作。
 

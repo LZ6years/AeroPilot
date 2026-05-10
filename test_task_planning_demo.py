@@ -134,7 +134,7 @@ def main() -> None:
     if args.mode == "parse-only":
         print("\nMode parse-only selected, so M4 runtime execution is skipped.")
         return
-    state, run_dir = run_m4_task(args, action_config, model_config)
+    state, run_dir = run_m4_task(args, action_config, model_config, parse_result)
     show_final_state(state)
     explain_run_files(run_dir)
 
@@ -178,6 +178,7 @@ def run_m4_task(
     args: argparse.Namespace,
     action_config: UavActionConfig,
     model_config,
+    parse_result,
 ) -> tuple[MissionState, Path]:
     print_header("M4: Dry-Run Task Runtime")
     print("Now the same instruction runs through TaskRuntime.")
@@ -202,7 +203,7 @@ def run_m4_task(
         safety=SafetySupervisor(action_config),
     )
     try:
-        state = runtime.run_task(package.map_id, args.instruction)
+        state = runtime.run_parsed_task(package.map_id, parse_result)
         logger.info("planning demo completed", run_dir=str(run_dir), completed=state.completed)
         return state, run_dir
     finally:
@@ -259,6 +260,8 @@ def explain_run_files(run_dir: Path) -> None:
     files = {
         "semantic_plan.json": "M3 structured semantic plan generated from the user instruction.",
         "mission_state.json": "Final M4 task state after short-horizon windows finish.",
+        "observations/latest_observation.json": "M5 normalized raw RGB/depth/pose observation snapshot.",
+        "contexts/latest_context.json": "M5 model-ready context for the future M6 action planner.",
         "events.jsonl": "Structured event timeline for replaying every phase, step, action, and observation.",
         "system.log": "Human-readable run log with start, completion, and error records.",
         "config/model_config.json": "Model config summary; API key is never written here.",

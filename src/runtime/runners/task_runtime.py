@@ -4,10 +4,13 @@ from __future__ import annotations
 
 from src.agent.mission_state import MissionState
 from src.agent.safety import SafetySupervisor
+from src.agent.schemas import TaskParseResult
 from src.agent.short_horizon_planner import ShortHorizonPlanner
 from src.agent.task_parser import TaskParser
 from src.env_client.base import EnvClient
 from src.env_client.schemas import SceneInstance
+from src.perception.context_builder import ObservationContextBuilder
+from src.perception.raw_observation import RawObservation
 from src.tools.dispatcher import ToolDispatcher
 
 
@@ -26,15 +29,25 @@ class TaskRuntime:
         self.planner = planner or ShortHorizonPlanner()
         self.safety = safety or SafetySupervisor()
         self.tools = ToolDispatcher(env_client)
+        self.context_builder = ObservationContextBuilder(self.safety.action_config)
 
     def run_task(self, map_id: str, instruction: str, agent_id: str = "uav_1") -> MissionState:
         # Execute one short-horizon window per semantic phase.
         parse_result = self.task_parser.parse(instruction)
+        return self.run_parsed_task(map_id, parse_result, agent_id)
+
+    def run_parsed_task(
+        self,
+        map_id: str,
+        parse_result: TaskParseResult,
+        agent_id: str = "uav_1",
+    ) -> MissionState:
+        # Execute a task from an already-created semantic plan.
         self.recorder.write_json("semantic_plan.json", parse_result.to_dict())
         self.recorder.event("task_parsed", parse_result.to_dict())
         state = MissionState(
             run_id=self.recorder.run_dir.name,
-            user_instruction=instruction,
+            user_instruction=parse_result.instruction,
             semantic_plan=parse_result.plan,
         )
         scene: SceneInstance | None = None
@@ -83,9 +96,13 @@ class TaskRuntime:
         if not hover_result.ok:
             raise RuntimeError(f"Preflight hover failed: {hover_result.message}")
 
-        observation = self.tools.observe(scene.scene_instance_id, agent_id, ["rgb", "depth", "pose"])
-        observation_data = observation.to_dict()
-        state.record_observation(observation_data)
+        observation_data = self._record_observation(
+            scene,
+            agent_id,
+            state,
+            ["rgb", "depth", "pose"],
+            source="preflight",
+        )
         self.recorder.event("initial_observation_updated", observation_data)
         self._write_state(state)
 
@@ -103,9 +120,7 @@ class TaskRuntime:
             payload = {"phase": plan.phase, "step_index": index, "step": step.to_dict()}
             self.recorder.event("step_started", payload)
             if step.kind == "observe":
-                observation = self.tools.observe(scene.scene_instance_id, agent_id, step.modalities)
-                data = observation.to_dict()
-                state.record_observation(data)
+                data = self._record_observation(scene, agent_id, state, step.modalities, source="phase_step")
                 self.recorder.event("observation_updated", data)
                 self.recorder.event("step_completed", {**payload, "result": data})
             else:
@@ -118,6 +133,22 @@ class TaskRuntime:
                 if not result.ok:
                     raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
             self._write_state(state)
+
+    def _record_observation(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+        modalities: list[str],
+        source: str,
+    ) -> dict:
+        observation = self.tools.observe(scene.scene_instance_id, agent_id, modalities)
+        raw = RawObservation.from_env_observation(observation, source=source)
+        data = raw.to_dict()
+        state.record_observation(data)
+        self.recorder.write_json("observations/latest_observation.json", data)
+        self.recorder.write_json("contexts/latest_context.json", self.context_builder.build(state))
+        return data
 
     def _try_hover(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
         try:

@@ -41,6 +41,8 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert state.recent_observations
     assert (run_dir / "semantic_plan.json").exists()
     assert (run_dir / "mission_state.json").exists()
+    assert (run_dir / "observations/latest_observation.json").exists()
+    assert (run_dir / "contexts/latest_context.json").exists()
     events = (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
     event_records = [json.loads(line) for line in events]
     event_names = [record["event"] for record in event_records]
@@ -52,6 +54,8 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
         if step["kind"] == "tool"
     ]
     mission_state = json.loads((run_dir / "mission_state.json").read_text(encoding="utf-8"))
+    latest_observation = json.loads((run_dir / "observations/latest_observation.json").read_text(encoding="utf-8"))
+    latest_context = json.loads((run_dir / "contexts/latest_context.json").read_text(encoding="utf-8"))
 
     assert "control_connected" in event_names
     assert "preflight_takeoff_started" in event_names
@@ -66,3 +70,33 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert mission_state["connected"] is True
     assert mission_state["airborne"] is True
     assert mission_state["recent_observations"]
+    assert mission_state["recent_observations"][-1]["source"] == "phase_step"
+    assert "pose" in mission_state["recent_observations"][-1]
+    assert "frames" in mission_state["recent_observations"][-1]
+    assert latest_observation["source"] == "phase_step"
+    assert latest_context["instruction"]
+    assert latest_context["current_phase"] is not None
+    assert latest_context["latest_observation"]["source"] == "phase_step"
+    assert "uav.takeoff" in latest_context["allowed_action_constraints"]["lifecycle_tools_excluded"]
+
+
+def test_task_runtime_can_reuse_existing_parse_result(tmp_path):
+    class ExplodingParser:
+        def parse(self, instruction: str):
+            raise AssertionError("parser should not be called")
+
+    instruction = "左转寻找建筑入口并停在入口前"
+    parse_result = TaskParser(mode="rule_based").parse(instruction)
+    run_dir = tmp_path / "parsed_task_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(LocalEnvClient(server), recorder, ExplodingParser())
+
+    state = runtime.run_parsed_task("m1", parse_result)
+    recorder.close()
+
+    semantic_plan = json.loads((run_dir / "semantic_plan.json").read_text(encoding="utf-8"))
+    assert state.completed
+    assert state.user_instruction == instruction
+    assert semantic_plan["instruction"] == instruction
+    assert semantic_plan["plan"] == parse_result.plan.to_dict()

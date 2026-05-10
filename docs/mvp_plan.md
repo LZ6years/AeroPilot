@@ -144,17 +144,21 @@ Agent Runtime
 目标：
 
 - 基础感知层只负责原始数据，不做高级语义。
+- 将 EnvClient 返回的 observation 规范化为 `RawObservation`，并构建后续模型动作规划可用的 context。
 - 视觉语义判断暂不拆成独立模块，第一阶段统一交给 VLM 处理。
 
 交付：
 
 - `src/perception/raw_observation.py`
+- `src/perception/context_builder.py`
 - `src/agent/mission_state.py`
 - `src/runtime/record_writer.py`
 
 验收：
 
 - 能保存原始图像、深度、位姿、动作日志。
+- 每轮写入 `observations/latest_observation.json` 和 `contexts/latest_context.json`。
+- context 包含当前 phase、目标、最近观测、最近动作和安全约束。
 - 目标框、目标距离等视觉语义结果不作为必填状态字段。
 - VLM 未确认目标时系统不会假装已经看见目标。
 
