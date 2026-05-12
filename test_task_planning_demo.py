@@ -20,7 +20,7 @@ Real model examples, after configuring .env:
 
     $env:PYTHONIOENCODING='utf-8'
     python test_task_planning_demo.py --parser-mode model --env-path .env --mode parse-only
-    python test_task_planning_demo.py --parser-mode model --env-path .env --mode run-task
+    python test_task_planning_demo.py --parser-mode model --planner-mode model --env-path .env --mode run-task
 
 More instruction examples:
 
@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Any
 
 from src.agent.mission_state import MissionState
+from src.agent.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.agent.short_horizon_planner import ShortHorizonPlanner
 from src.agent.task_parser import TaskParser
@@ -104,6 +105,12 @@ def build_parser() -> argparse.ArgumentParser:
         default="rule_based",
         help="Use rule_based for offline tests or model for the configured real provider.",
     )
+    parser.add_argument(
+        "--planner-mode",
+        choices=["rule_based", "model"],
+        default="rule_based",
+        help="Use rule_based short windows or model action planning.",
+    )
     parser.add_argument("--env-path", default=".env", help="Path to model .env when --parser-mode model is used.")
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--action-config", default="configs/uav_action_config.json")
@@ -119,6 +126,7 @@ def main() -> None:
     print_header("FlyAgent M3/M4 Planning Demo")
     print("This demo explains M3 semantic planning and M4 short-horizon execution.")
     print(f"Parser mode: {args.parser_mode}")
+    print(f"Planner mode: {args.planner_mode}")
     if args.parser_mode == "model":
         print(f"Env path: {args.env_path}")
         print("A configured model API key is required. The key is never printed or written to the run record.")
@@ -130,7 +138,7 @@ def main() -> None:
     print(f"User instruction: {args.instruction}\n")
 
     parse_result = show_m3_parse(args.instruction, task_parser, args.parser_mode)
-    show_short_horizon_preview(parse_result.plan, args.instruction, action_config)
+    show_short_horizon_preview(parse_result.plan, args.instruction, action_config, args.planner_mode)
     if args.mode == "parse-only":
         print("\nMode parse-only selected, so M4 runtime execution is skipped.")
         return
@@ -151,13 +159,22 @@ def show_m3_parse(instruction: str, task_parser: TaskParser, parser_mode: str):
     return parse_result
 
 
-def show_short_horizon_preview(plan, instruction: str, action_config: UavActionConfig) -> None:
+def show_short_horizon_preview(
+    plan,
+    instruction: str,
+    action_config: UavActionConfig,
+    planner_mode: str,
+) -> None:
     print_header("M4 Preview: Short-Horizon Windows")
     print("TaskRuntime performs preflight before these phase windows:")
     print("  uav.connect -> uav.takeoff -> uav.hover -> initial observe")
     print("Those lifecycle steps are not part of model/phase action planning.\n")
     print("M4 consumes the semantic phases one window at a time.")
     print("Each window is reviewed by SafetySupervisor before any tool call can run.\n")
+    if planner_mode == "model":
+        print("Planner mode is model, so this static preview is skipped to avoid duplicate model action calls.")
+        print("The actual run writes model_action_planned and short_horizon_planned events.\n")
+        return
     planner = ShortHorizonPlanner(action_config)
     safety = SafetySupervisor(action_config)
     state = MissionState("preview", instruction, plan)
@@ -192,14 +209,17 @@ def run_m4_task(
         run_dir=run_dir,
         action_config=action_config,
     )
-    logger.write_json("config/model_config.json", {"model_config": model_config.redacted_summary()})
+    logger.write_json(
+        "config/model_config.json",
+        {"model_config": model_config.redacted_summary(), "planner_mode": args.planner_mode},
+    )
     logger.write_json("config/map_package.json", package.to_dict())
     logger.write_json("config/uav_action_config.json", action_config.to_dict())
     runtime = TaskRuntime(
         LocalEnvClient(server),
         logger,
         TaskParser(mode=args.parser_mode, model_config=model_config),
-        planner=ShortHorizonPlanner(action_config),
+        planner=build_planner(args.planner_mode, model_config, action_config),
         safety=SafetySupervisor(action_config),
     )
     try:
@@ -208,6 +228,14 @@ def run_m4_task(
         return state, run_dir
     finally:
         logger.close()
+
+
+def build_planner(planner_mode: str, model_config, action_config: UavActionConfig):
+    if planner_mode == "rule_based":
+        return ShortHorizonPlanner(action_config)
+    if planner_mode == "model":
+        return ModelActionPlanner(model_config)
+    raise ValueError(f"Unsupported planner mode: {planner_mode}")
 
 
 def print_instruction_examples() -> None:

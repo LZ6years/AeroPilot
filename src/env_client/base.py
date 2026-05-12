@@ -12,6 +12,10 @@ class EnvClient(Protocol):
         # Request a scene instance from the simulation service.
         ...
 
+    def get_or_start_scene(self, map_id: str, scene_id: str | None = None) -> SceneInstance:
+        # Reuse a running scene for this map, or start one if needed.
+        ...
+
     def stop_scene(self, scene_instance_id: str) -> None:
         # Stop a running scene instance.
         ...

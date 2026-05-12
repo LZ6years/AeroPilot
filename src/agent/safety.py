@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Any
 
 from src.agent.schemas import PlannedStep, ShortHorizonPlan
 from src.runtime.configs.action_config import UavActionConfig
@@ -28,14 +29,32 @@ class SafetySupervisor:
     def __init__(self, action_config: UavActionConfig | None = None) -> None:
         self.action_config = action_config or UavActionConfig()
 
-    def review(self, plan: ShortHorizonPlan) -> SafetyDecision:
+    def review(self, plan: ShortHorizonPlan, state: Any | None = None) -> SafetyDecision:
         safe_steps: list[PlannedStep] = []
         interventions: list[dict] = []
+        turn_scan_already_used = self._last_successful_tool(state) == "uav.turn_relative"
         for step in plan.steps:
+            if step.kind == "tool" and step.tool == "uav.turn_relative" and turn_scan_already_used:
+                safe_step = PlannedStep.tool_step(
+                    "uav.hover",
+                    {},
+                    "hold position because consecutive yaw scans require fresh visual confirmation",
+                )
+                safe_steps.append(safe_step)
+                interventions.append(
+                    {
+                        "tool": step.tool,
+                        "replacement": "uav.hover",
+                        "reason": "consecutive_yaw_scan_without_visual_confirmation",
+                    }
+                )
+                continue
             safe_step, intervention = self._review_step(step)
             safe_steps.append(safe_step)
             if intervention:
                 interventions.append(intervention)
+            if safe_step.kind == "tool" and safe_step.tool == "uav.turn_relative":
+                turn_scan_already_used = True
         return SafetyDecision(ShortHorizonPlan(plan.phase, safe_steps), interventions)
 
     def _review_step(self, step: PlannedStep) -> tuple[PlannedStep, dict | None]:
@@ -94,3 +113,12 @@ class SafetySupervisor:
                 {"tool": step.tool, "fields": interventions},
             )
         return PlannedStep.tool_step(step.tool or "", args, step.reason), None
+
+    @staticmethod
+    def _last_successful_tool(state: Any | None) -> str | None:
+        if state is None:
+            return None
+        for action in reversed(getattr(state, "recent_actions", [])):
+            if action.get("result", {}).get("ok") is True:
+                return action.get("tool")
+        return None

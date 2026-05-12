@@ -120,6 +120,22 @@ class PlannedStep:
     ) -> "PlannedStep":
         return cls(kind="observe", modalities=list(modalities or ["rgb", "depth", "pose"]), reason=reason)
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PlannedStep":
+        kind = str(data.get("kind", "")).strip()
+        if kind == "observe":
+            return cls.observe_step(
+                modalities=[str(item) for item in data.get("modalities", ["rgb", "depth", "pose"])],
+                reason=str(data.get("reason", "refresh raw observation")),
+            )
+        if kind == "tool":
+            return cls.tool_step(
+                str(data.get("tool", "")).strip(),
+                dict(data.get("args", {})),
+                str(data.get("reason", "")),
+            )
+        raise ValueError(f"Unsupported planned step kind: {kind}")
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
@@ -134,6 +150,13 @@ class PlannedStep:
 class ShortHorizonPlan:
     phase: str
     steps: list[PlannedStep]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ShortHorizonPlan":
+        return cls(
+            phase=str(data.get("phase", "")).strip(),
+            steps=[PlannedStep.from_dict(dict(item)) for item in data.get("steps", [])],
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {"phase": self.phase, "steps": [step.to_dict() for step in self.steps]}

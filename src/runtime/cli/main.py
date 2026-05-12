@@ -7,6 +7,8 @@ import json
 import socket
 from pathlib import Path
 
+from src.agent.model_action_planner import ModelActionPlanner
+from src.agent.short_horizon_planner import ShortHorizonPlanner
 from src.agent.task_parser import TaskParser
 from src.env_client.local_client import LocalEnvClient
 from src.runtime.configs.action_config import load_uav_action_config
@@ -44,6 +46,18 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["model", "rule_based"],
         default=None,
         help="Override FLYAGENT_TASK_PARSER_MODE for parse-task",
+    )
+    parser.add_argument(
+        "--planner-mode",
+        choices=["model", "rule_based"],
+        default="rule_based",
+        help="Short-horizon planner mode for run-task",
+    )
+    parser.add_argument(
+        "--shutdown-policy",
+        choices=["hover", "land", "none"],
+        default="hover",
+        help="Final task shutdown action before stopping the scene",
     )
     parser.add_argument(
         "command",
@@ -175,11 +189,22 @@ def run_task(args: argparse.Namespace) -> None:
     action_config = load_uav_action_config(args.action_config)
     selected_map = next(pkg for pkg in maps if pkg.map_id == map_id)
     try:
-        recorder.info("task run started", map_id=map_id, parser_mode=parser_mode)
+        recorder.info(
+            "task run started",
+            map_id=map_id,
+            parser_mode=parser_mode,
+            planner_mode=args.planner_mode,
+            shutdown_policy=args.shutdown_policy,
+        )
         recorder.write_json("config/map_package.json", selected_map.to_dict())
         recorder.write_json(
             "config/model_config.json",
-            {"model_config": model_config.redacted_summary(), "parser_mode": parser_mode},
+            {
+                "model_config": model_config.redacted_summary(),
+                "parser_mode": parser_mode,
+                "planner_mode": args.planner_mode,
+                "shutdown_policy": args.shutdown_policy,
+            },
         )
         recorder.write_json("config/uav_action_config.json", action_config.to_dict())
         server = LocalSimulationServer(
@@ -194,6 +219,8 @@ def run_task(args: argparse.Namespace) -> None:
             LocalEnvClient(server),
             recorder,
             TaskParser(mode=parser_mode, model_config=model_config),
+            planner=build_planner(args.planner_mode, model_config, action_config),
+            shutdown_policy=args.shutdown_policy,
         )
         state = runtime.run_task(map_id, args.instruction)
         recorder.info("task run completed", run_dir=str(run_dir), completed=state.completed)
@@ -205,6 +232,14 @@ def run_task(args: argparse.Namespace) -> None:
         raise
     finally:
         recorder.close()
+
+
+def build_planner(planner_mode: str, model_config, action_config):
+    if planner_mode == "rule_based":
+        return ShortHorizonPlanner(action_config)
+    if planner_mode == "model":
+        return ModelActionPlanner(model_config)
+    raise ValueError(f"Unsupported planner mode: {planner_mode}")
 
 
 def probe_tcp_endpoint(host: str, port: int, timeout_sec: int) -> dict:

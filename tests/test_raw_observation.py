@@ -22,11 +22,11 @@ def test_raw_observation_from_env_observation_extracts_common_fields():
     assert raw.scene_instance_id == "scene_1"
     assert raw.agent_id == "uav_1"
     assert raw.modalities == ["rgb", "depth", "pose"]
-    assert raw.pose == {"pose": {"x": 1.0, "y": 2.0, "z": -3.0}}
-    assert raw.frames == {"frames": {"rgb": {"artifact": "rgb.png"}}}
+    assert raw.pose == {"x": 1.0, "y": 2.0, "z": -3.0}
+    assert raw.frames == {"rgb": {"artifact": "rgb.png"}}
     assert raw.source == "preflight"
     assert raw.timestamp == "t0"
-    assert raw.to_dict()["data"] == observation.data
+    assert "data" not in raw.to_dict()
 
 
 def test_raw_observation_missing_pose_or_frames_keeps_raw_data():
@@ -42,4 +42,22 @@ def test_raw_observation_missing_pose_or_frames_keeps_raw_data():
 
     assert raw.pose == {}
     assert raw.frames == {}
-    assert raw.data == {"custom": {"ok": True}}
+    assert "data" not in raw.to_dict()
+
+
+def test_raw_observation_keeps_already_flat_pose_and_frames():
+    raw = RawObservation.from_env_observation(
+        {
+            "scene_instance_id": "scene_1",
+            "agent_id": "uav_1",
+            "modalities": ["rgb", "pose"],
+            "data": {
+                "pose": {"x": 1.0, "yaw_deg": 90.0},
+                "frames": {"rgb": {"artifact": "rgb.png", "mock": False}},
+            },
+        },
+        timestamp="t0",
+    )
+
+    assert raw.pose == {"x": 1.0, "yaw_deg": 90.0}
+    assert raw.frames == {"rgb": {"artifact": "rgb.png", "mock": False}}

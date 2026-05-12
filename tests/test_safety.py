@@ -55,3 +55,53 @@ def test_safety_rejects_lifecycle_tools_in_short_horizon_plan():
 
     with pytest.raises(SafetyViolation, match="not allowed"):
         supervisor.review(plan)
+
+
+def test_safety_replaces_consecutive_yaw_scan_with_hover():
+    class State:
+        recent_actions = [{"tool": "uav.turn_relative", "result": {"ok": True}}]
+
+    supervisor = SafetySupervisor(UavActionConfig(yaw_step_deg=30.0))
+    plan = ShortHorizonPlan(
+        "scan_again",
+        [
+            PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 15.0}, "scan again"),
+            PlannedStep.observe_step(),
+        ],
+    )
+
+    decision = supervisor.review(plan, State())
+
+    assert decision.plan.steps[0].tool == "uav.hover"
+    assert decision.interventions[0]["reason"] == "consecutive_yaw_scan_without_visual_confirmation"
+
+
+def test_safety_allows_yaw_scan_after_hover():
+    class State:
+        recent_actions = [{"tool": "uav.hover", "result": {"ok": True}}]
+
+    supervisor = SafetySupervisor(UavActionConfig(yaw_step_deg=30.0))
+    plan = ShortHorizonPlan("scan", [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 15.0})])
+
+    decision = supervisor.review(plan, State())
+
+    assert decision.plan.steps[0].tool == "uav.turn_relative"
+    assert decision.interventions == []
+
+
+def test_safety_replaces_second_yaw_scan_in_same_plan():
+    supervisor = SafetySupervisor(UavActionConfig(yaw_step_deg=30.0))
+    plan = ShortHorizonPlan(
+        "scan_twice",
+        [
+            PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10.0}),
+            PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": -10.0}),
+            PlannedStep.observe_step(),
+        ],
+    )
+
+    decision = supervisor.review(plan)
+
+    assert decision.plan.steps[0].tool == "uav.turn_relative"
+    assert decision.plan.steps[1].tool == "uav.hover"
+    assert decision.interventions[0]["reason"] == "consecutive_yaw_scan_without_visual_confirmation"

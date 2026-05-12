@@ -14,7 +14,6 @@ class RawObservation:
     scene_instance_id: str
     agent_id: str
     modalities: list[str]
-    data: dict[str, Any]
     pose: dict[str, Any] = field(default_factory=dict)
     frames: dict[str, Any] = field(default_factory=dict)
     timestamp: str = ""
@@ -33,9 +32,8 @@ class RawObservation:
             scene_instance_id=str(payload.get("scene_instance_id", "")),
             agent_id=str(payload.get("agent_id", "")),
             modalities=[str(item) for item in payload.get("modalities", [])],
-            data=data,
-            pose=_dict_or_empty(data.get("pose")),
-            frames=_dict_or_empty(data.get("frames")),
+            pose=_unwrap_named_dict(data.get("pose"), "pose"),
+            frames=_unwrap_named_dict(data.get("frames"), "frames"),
             timestamp=timestamp or _utc_now(),
             source=source,
         )
@@ -46,6 +44,12 @@ class RawObservation:
 
 def _dict_or_empty(value: Any) -> dict[str, Any]:
     return dict(value) if isinstance(value, dict) else {}
+
+
+def _unwrap_named_dict(value: Any, key: str) -> dict[str, Any]:
+    data = _dict_or_empty(value)
+    nested = data.get(key)
+    return _dict_or_empty(nested) if isinstance(nested, dict) else data
 
 
 def _utc_now() -> str:

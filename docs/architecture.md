@@ -154,4 +154,36 @@ User / CLI
 
 `connect`、`takeoff`、起飞后 `hover` 和初始观测属于 Runtime preflight，不属于 phase 动作规划；模型动作候选工具不应包含 `uav.connect` / `uav.takeoff` / `uav.land` 这类生命周期动作。
 
-当前 `ShortHorizonPlanner` 只是规则兜底和 dry-run 骨架，保留它是为了离线测试和无模型环境下验证闭环；它不代表最终规划架构。
+当前 `ShortHorizonPlanner` 只是规则兜底和 dry-run 骨架，保留它是为了离线测试和无模型环境下验证闭环；`ModelActionPlanner` 是 M6 的第一版目标，先基于 M5 JSON context 生成 1-3 个短期动作建议，后续再接真实图像输入和更完整的 VLM 判断。
+
+## 8. 后续 Plan-Execute-Repair 链路
+
+当前阶段先把基础 pipeline 和真实引擎链路跑通。后续不应继续把模型输出错误都做成规则归一化补丁，而应引入结构化错误反馈和模型修复链路。
+
+目标链路：
+
+```text
+ModelActionPlanner
+  -> ToolContractValidator
+    -> if invalid: ModelRepairPlanner
+    -> SafetySupervisor
+    -> ToolDispatcher
+    -> if execution/observation failed: ModelRepairPlanner or safe hover
+```
+
+`ToolContractValidator` 负责检查模型输出是否符合工具契约，例如 `uav.move_body` 只能使用明确的 `direction/duration` 或 `vx/vy/vz/duration` schema。当前 `_normalize_move_body_args()` 只是临时兼容层，用于基础动作测试，不应扩展成长期的大型规则映射表。
+
+错误反馈应写成结构化 `repair_context`：
+
+```json
+{
+  "error_type": "tool_argument_schema_error",
+  "phase": "reverse_translation",
+  "invalid_plan": {},
+  "validation_errors": [],
+  "allowed_tools": [],
+  "latest_context": {}
+}
+```
+
+模型修复只能处理计划合法性和下一步规划问题；SafetySupervisor 仍然拥有最终裁剪和拒绝权。真实引擎执行失败时，Runtime 应先进入安全 hover，再决定是否请求模型 repair。第一版 repair 建议只覆盖 action plan schema 错误，等运行闭环稳定后再扩展到执行失败、观测异常、目标未确认和 Safety 拦截。

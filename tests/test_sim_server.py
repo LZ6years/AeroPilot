@@ -87,6 +87,27 @@ def test_start_scene_creates_scene_instance_and_settings(tmp_path):
     assert (tmp_path / "scenes" / scene.scene_instance_id / "settings.json").exists()
 
 
+def test_get_or_start_scene_reuses_running_scene(tmp_path):
+    server = LocalSimulationServer([make_package()], PortPolicy(30000, 30001, 2), tmp_path)
+
+    first = server.get_or_start_scene("m1")
+    second = server.get_or_start_scene("m1")
+    isolated = server.start_scene("m1")
+
+    assert second.scene_instance_id == first.scene_instance_id
+    assert isolated.scene_instance_id != first.scene_instance_id
+
+
+def test_get_or_start_scene_does_not_reuse_stopped_scene(tmp_path):
+    server = LocalSimulationServer([make_package()], PortPolicy(30000, 30001, 2), tmp_path)
+
+    first = server.get_or_start_scene("m1")
+    server.stop_scene(first.scene_instance_id)
+    second = server.get_or_start_scene("m1")
+
+    assert second.scene_instance_id != first.scene_instance_id
+
+
 def test_camera_defaults_settings_profile_avoids_vehicle_camera_block(tmp_path):
     # Verify Windows AirSim maps can use CameraDefaults instead of per-vehicle Cameras.
     server = LocalSimulationServer([make_windows_airsim_package(tmp_path)], PortPolicy(30000, 30001, 2), tmp_path)

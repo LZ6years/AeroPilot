@@ -8,11 +8,13 @@ from src.runtime.configs.action_config import UavActionConfig
 
 
 class ShortHorizonPlanner:
+    planner_mode = "rule_based"
+
     def __init__(self, action_config: UavActionConfig | None = None, auto_takeoff: bool | None = None) -> None:
         self.action_config = action_config or UavActionConfig()
         self.auto_takeoff = auto_takeoff
 
-    def plan_next(self, state: MissionState) -> ShortHorizonPlan:
+    def plan_next(self, state: MissionState, context: dict | None = None) -> ShortHorizonPlan:
         phase = state.current_phase_name
         steps: list[PlannedStep] = []
         if phase == "orient_right":

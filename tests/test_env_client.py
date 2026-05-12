@@ -22,7 +22,9 @@ def test_local_env_client_delegates_through_server(tmp_path):
     client = LocalEnvClient(LocalSimulationServer([package], run_dir=tmp_path))
 
     scene = client.start_scene("m1")
+    reused = client.get_or_start_scene("m1")
     result = client.execute_action(scene.scene_instance_id, "uav_1", "connect", {})
 
+    assert reused.scene_instance_id == scene.scene_instance_id
     assert result.ok
     assert client.health_check()

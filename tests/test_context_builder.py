@@ -27,9 +27,8 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety()
             "scene_instance_id": "scene_1",
             "agent_id": "uav_1",
             "modalities": ["rgb", "depth", "pose"],
-            "pose": {"pose": {"x": 0.0}},
-            "frames": {"frames": {"rgb": {"mock": True}}},
-            "data": {},
+            "pose": {"x": 0.0},
+            "frames": {"rgb": {"mock": True}},
             "timestamp": "t0",
             "source": "phase_step",
         }

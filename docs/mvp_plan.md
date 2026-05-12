@@ -168,21 +168,72 @@ Agent Runtime
 
 - 第一阶段使用多模态大模型处理图像和上下文。
 - VLM 负责“看图理解 + 下一步建议”，但不直接执行控制。
+- 第一版先实现 `ModelActionPlanner`，基于 M5 context JSON 生成保守短期动作建议，真实图像多模态输入后续补齐。
 
 交付：
 
 - `src/cognition/vlm_client.py`
 - `src/cognition/context_builder.py`
 - `src/cognition/schemas.py`
+- `src/agent/model_action_planner.py`
+- `src/agent/prompts/action_planner_system.txt`
 - `configs/models/vlm.json`
 
 验收：
 
 - 能把当前观测和任务上下文发送给 VLM。
+- `--planner-mode model` 能让 runtime 使用模型动作规划，而不是固定 phase 规则表。
 - VLM 输出必须通过 schema 校验。
 - VLM 建议动作必须经过 Safety Supervisor。
 - 低置信度时只允许观察、悬停、小角度扫描或提问。
 - 后续等完整闭环跑通后，再考虑是否做视觉语义能力模块化。
+
+### M6 后续增强：Plan-Execute-Repair 错误自修复闭环
+
+目标：
+
+- 基础 pipeline 和真实引擎链路跑稳后，引入统一的错误反馈与模型修复机制。
+- 当 action plan、tool 参数、Safety、执行或观测出现错误时，将错误结构化为 `repair_context` 返回给模型，让模型重新规划或修复，而不是持续扩展规则补丁。
+- 当前 `_normalize_move_body_args()` 这类规则归一化只作为短期兼容层，用于稳定基础动作测试；它不应继续扩展成大型参数映射表。
+
+未来链路：
+
+```text
+ModelActionPlanner
+  -> ToolContractValidator
+    -> if invalid: ModelRepairPlanner
+    -> SafetySupervisor
+    -> ToolDispatcher
+    -> if execution/observation failed: ModelRepairPlanner or safe hover
+```
+
+`repair_context` 应是结构化数据，而不是只传自然语言错误：
+
+```json
+{
+  "error_type": "tool_argument_schema_error",
+  "phase": "reverse_translation",
+  "invalid_plan": {},
+  "validation_errors": [],
+  "allowed_tools": [],
+  "latest_context": {}
+}
+```
+
+边界：
+
+- 当前阶段不实现完整 repair loop，只记录设计方向。
+- 近期可先只对 action plan schema 错误做一次 repair。
+- 远期再统一处理执行失败、观测异常、目标未确认、Safety 拦截等错误。
+- 模型最多 repair 1-2 次；修复后仍必须通过 schema validation 和 SafetySupervisor。
+- Safety 的硬性安全策略不允许模型绕过；真实引擎执行失败时默认先 hover，再决定是否 repair。
+
+未来验收：
+
+- `rear`、`duration_sec`、`x_m` 等参数错误可由模型修复为合法 schema。
+- 未知 tool 可由模型修复为允许工具或 `hover` / `observe`。
+- Safety 拦截会记录原因，但模型不能覆盖 Safety 决策。
+- repair 多次失败时任务进入安全等待或失败状态。
 
 ### M7：困惑提问与安全中断
 

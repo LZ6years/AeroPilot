@@ -34,6 +34,7 @@ def test_model_config_loads_dotenv_and_redacts_api_key(tmp_path, monkeypatch):
                 "FLYAGENT_MODEL_NAME=test-model",
                 "FLYAGENT_MODEL_API_KEY=secret-key",
                 "FLYAGENT_MODEL_BASE_URL=https://example.test/v1",
+                "FLYAGENT_ACTION_PLANNER_PROMPT_PATH=prompts/action.txt",
             ]
         ),
         encoding="utf-8",
@@ -45,6 +46,7 @@ def test_model_config_loads_dotenv_and_redacts_api_key(tmp_path, monkeypatch):
     assert config.task_parser_mode == "rule_based"
     assert config.model_name == "test-model"
     assert config.api_key == "secret-key"
+    assert config.action_planner_prompt_path == "prompts/action.txt"
     assert summary["has_api_key"] is True
     assert "secret-key" not in str(summary)
 

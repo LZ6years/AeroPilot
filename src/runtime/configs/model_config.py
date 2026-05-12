@@ -16,6 +16,7 @@ class ModelConfig:
     base_url: str = ""
     timeout_sec: float = 60.0
     task_parser_prompt_path: str = ""
+    action_planner_prompt_path: str = ""
 
     @classmethod
     def from_env(cls, env: dict[str, str]) -> "ModelConfig":
@@ -28,6 +29,7 @@ class ModelConfig:
             base_url=env.get("FLYAGENT_MODEL_BASE_URL", "").strip(),
             timeout_sec=float(env.get("FLYAGENT_MODEL_TIMEOUT_SEC", "60")),
             task_parser_prompt_path=env.get("FLYAGENT_TASK_PARSER_PROMPT_PATH", "").strip(),
+            action_planner_prompt_path=env.get("FLYAGENT_ACTION_PLANNER_PROMPT_PATH", "").strip(),
         )
 
     def redacted_summary(self) -> dict[str, str | float | bool]:
@@ -39,6 +41,7 @@ class ModelConfig:
             "has_api_key": bool(self.api_key),
             "timeout_sec": self.timeout_sec,
             "task_parser_prompt_path": self.task_parser_prompt_path,
+            "action_planner_prompt_path": self.action_planner_prompt_path,
         }
 
     def chat_completions_url(self) -> str:

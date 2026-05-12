@@ -109,6 +109,13 @@ class LocalSimulationServer:
         self.scene_manager.add(scene)
         return scene
 
+    def get_or_start_scene(self, map_id: str, scene_id: str | None = None) -> SceneInstance:
+        # Reuse a running scene for this map when one already exists.
+        running_scene = self.scene_manager.find_running(map_id, scene_id)
+        if running_scene is not None:
+            return running_scene
+        return self.start_scene(map_id, scene_id)
+
     def stop_scene(self, scene_instance_id: str) -> None:
         # Stop backend state, process state, and release its allocated port.
         scene = self.scene_manager.remove(scene_instance_id)

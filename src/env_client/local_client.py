@@ -21,6 +21,10 @@ class LocalEnvClient:
         # Forward scene startup to the local simulation server.
         return self.server.start_scene(map_id, scene_id)
 
+    def get_or_start_scene(self, map_id: str, scene_id: str | None = None) -> SceneInstance:
+        # Reuse an existing running scene or start a new one through the server.
+        return self.server.get_or_start_scene(map_id, scene_id)
+
     def stop_scene(self, scene_instance_id: str) -> None:
         # Forward scene shutdown to the local simulation server.
         self.server.stop_scene(scene_instance_id)
