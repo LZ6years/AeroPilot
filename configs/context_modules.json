@@ -1,0 +1,10 @@
+{
+  "modules": {
+    "instruction": "default",
+    "image": "default",
+    "pose": "default",
+    "action": "default",
+    "map": "default"
+  },
+  "custom_modules": {}
+}

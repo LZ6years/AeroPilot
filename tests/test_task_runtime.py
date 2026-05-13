@@ -86,9 +86,10 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert "pose" in mission_state["recent_observations"][-1]
     assert "frames" in mission_state["recent_observations"][-1]
     assert latest_observation["source"] == "phase_step"
-    assert latest_context["instruction"]
+    assert latest_context["active_instruction"]
     assert latest_context["current_phase"] is not None
-    assert latest_context["latest_observation"]["source"] == "phase_step"
+    fragments = {fragment["name"]: fragment for fragment in latest_context["fragments"]}
+    assert fragments["image"]["content"]["recent_observation_sources"][-1] == "phase_step"
     assert "uav.takeoff" in latest_context["allowed_action_constraints"]["lifecycle_tools_excluded"]
 
 
@@ -173,6 +174,7 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert state.completed
     assert planner.contexts
     assert planner.contexts[0]["current_phase"]["name"] == "orient_right"
+    assert "fragments" in planner.contexts[0]
     assert "model_action_planned" in event_names
     assert "safety_intervened" in event_names
     assert planned_records[0]["payload"]["steps"][0]["args"]["yaw_deg"] == 30.0
@@ -199,6 +201,10 @@ def test_task_runtime_reuse_running_scene_does_not_repeat_preflight(tmp_path):
     assert second_state.connected
     assert second_state.airborne
     assert second_state.recent_observations[0]["source"] == "instruction_start"
+    flight_memory = json.loads((run_dir / "flight_memory.json").read_text(encoding="utf-8"))
+    assert len(flight_memory["instruction_history"]) >= 2
+    assert flight_memory["active_instruction"] == ENTRANCE_TASK
+    assert flight_memory["recent_actions"]
     assert event_names.count("control_connected") == 1
     assert event_names.count("preflight_takeoff_completed") == 1
     assert "instruction_start_observation_updated" in event_names

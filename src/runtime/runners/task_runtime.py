@@ -9,6 +9,7 @@ from src.agent.short_horizon_planner import ShortHorizonPlanner
 from src.agent.task_parser import TaskParser
 from src.env_client.base import EnvClient
 from src.env_client.schemas import SceneInstance
+from src.memory.flight_memory import FlightMemory
 from src.perception.context_builder import ObservationContextBuilder
 from src.perception.raw_observation import RawObservation
 from src.tools.dispatcher import ToolDispatcher
@@ -39,6 +40,8 @@ class TaskRuntime:
         self.context_builder = ObservationContextBuilder(self.safety.action_config)
         self._preflight_scene_ids: set[str] = set()
         self._active_reused_scenes: dict[tuple[str, str | None], SceneInstance] = {}
+        self._active_flight_memories: dict[tuple[str, str | None, str], FlightMemory] = {}
+        self._state_flight_memories: dict[str, FlightMemory] = {}
 
     def run_task(
         self,
@@ -82,6 +85,8 @@ class TaskRuntime:
             connected=scene.scene_instance_id in self._preflight_scene_ids,
             airborne=scene.scene_instance_id in self._preflight_scene_ids,
         )
+        flight_memory = self._resolve_flight_memory(map_id, scene, agent_id, scene_policy, parse_result, state)
+        self._state_flight_memories[state.run_id] = flight_memory
         try:
             self._prepare_scene_for_task(scene, agent_id, state)
             self._execute_phase_loop(scene, agent_id, state)
@@ -178,7 +183,7 @@ class TaskRuntime:
     def _run_preflight(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
         connect_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.connect", {})
         connect_data = connect_result.to_dict()
-        state.record_action("uav.connect", {}, connect_data)
+        self._record_action(state, "uav.connect", {}, connect_data)
         self.recorder.event("control_connected", connect_data)
         if not connect_result.ok:
             raise RuntimeError(f"Preflight connect failed: {connect_result.message}")
@@ -186,14 +191,14 @@ class TaskRuntime:
         self.recorder.event("preflight_takeoff_started", {"scene_instance_id": scene.scene_instance_id})
         takeoff_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.takeoff", {})
         takeoff_data = takeoff_result.to_dict()
-        state.record_action("uav.takeoff", {}, takeoff_data)
+        self._record_action(state, "uav.takeoff", {}, takeoff_data)
         self.recorder.event("preflight_takeoff_completed", takeoff_data)
         if not takeoff_result.ok:
             raise RuntimeError(f"Preflight takeoff failed: {takeoff_result.message}")
 
         hover_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
         hover_data = hover_result.to_dict()
-        state.record_action("uav.hover", {}, hover_data)
+        self._record_action(state, "uav.hover", {}, hover_data)
         self.recorder.event("preflight_hover_completed", hover_data)
         if not hover_result.ok:
             raise RuntimeError(f"Preflight hover failed: {hover_result.message}")
@@ -209,7 +214,7 @@ class TaskRuntime:
         self._write_state(state)
 
     def _run_phase_window(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
-        context = self.context_builder.build(state)
+        context = self.context_builder.build(state, self._memory_for_state(state))
         self.recorder.write_json("contexts/latest_context.json", context)
         raw_plan = self.planner.plan_next(state, context)
         if getattr(self.planner, "planner_mode", "") == "model":
@@ -234,7 +239,7 @@ class TaskRuntime:
                     raise ValueError("tool step requires tool name")
                 result = self.tools.call(scene.scene_instance_id, agent_id, step.tool, step.args)
                 data = result.to_dict()
-                state.record_action(step.tool, step.args, data)
+                self._record_action(state, step.tool, step.args, data)
                 self.recorder.event("step_completed", {**payload, "result": data})
                 if not result.ok:
                     raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
@@ -252,14 +257,15 @@ class TaskRuntime:
         raw = RawObservation.from_env_observation(observation, source=source)
         data = raw.to_dict()
         state.record_observation(data)
+        self._memory_for_state(state).append_observation(data)
         self.recorder.write_json("observations/latest_observation.json", data)
-        self.recorder.write_json("contexts/latest_context.json", self.context_builder.build(state))
+        self.recorder.write_json("contexts/latest_context.json", self.context_builder.build(state, self._memory_for_state(state)))
         return data
 
     def _try_hover(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
         try:
             result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
-            state.record_action("uav.hover", {}, result.to_dict())
+            self._record_action(state, "uav.hover", {}, result.to_dict())
             self.recorder.event("safety_hover_completed", result.to_dict())
         except Exception as exc:
             self.recorder.event("safety_hover_failed", {"error_type": type(exc).__name__, "error": str(exc)})
@@ -272,7 +278,7 @@ class TaskRuntime:
         self.recorder.event("shutdown_started", {"policy": self.shutdown_policy})
         hover_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
         hover_data = hover_result.to_dict()
-        state.record_action("uav.hover", {}, hover_data)
+        self._record_action(state, "uav.hover", {}, hover_data)
         self.recorder.event("shutdown_hover_completed", hover_data)
         if not hover_result.ok:
             raise RuntimeError(f"Shutdown hover failed: {hover_result.message}")
@@ -281,7 +287,7 @@ class TaskRuntime:
             self.recorder.event("shutdown_land_started", {"scene_instance_id": scene.scene_instance_id})
             land_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.land", {})
             land_data = land_result.to_dict()
-            state.record_action("uav.land", {}, land_data)
+            self._record_action(state, "uav.land", {}, land_data)
             self.recorder.event("shutdown_land_completed", land_data)
             if not land_result.ok:
                 raise RuntimeError(f"Shutdown land failed: {land_result.message}")
@@ -290,6 +296,7 @@ class TaskRuntime:
 
     def _write_state(self, state: MissionState) -> None:
         self.recorder.write_json("mission_state.json", state.to_dict())
+        self.recorder.write_json("flight_memory.json", self._memory_for_state(state).to_dict())
         self.recorder.event("mission_state_updated", state.to_dict())
 
     @staticmethod
@@ -300,3 +307,40 @@ class TaskRuntime:
         for key, active_scene in list(self._active_reused_scenes.items()):
             if active_scene.scene_instance_id == scene.scene_instance_id:
                 self._active_reused_scenes.pop(key, None)
+        for key, memory in list(self._active_flight_memories.items()):
+            if memory.scene_instance_id == scene.scene_instance_id:
+                self._active_flight_memories.pop(key, None)
+
+    def _resolve_flight_memory(
+        self,
+        map_id: str,
+        scene: SceneInstance,
+        agent_id: str,
+        scene_policy: str,
+        parse_result: TaskParseResult,
+        state: MissionState,
+    ) -> FlightMemory:
+        key = (map_id, scene.scene_id, agent_id)
+        if scene_policy == "reuse_running" and key in self._active_flight_memories:
+            memory = self._active_flight_memories[key]
+        else:
+            memory = FlightMemory(
+                run_id=state.run_id,
+                map_id=map_id,
+                scene_instance_id=scene.scene_instance_id,
+                agent_id=agent_id,
+            )
+            if scene_policy == "reuse_running":
+                self._active_flight_memories[key] = memory
+        memory.update_instruction(parse_result.instruction, parse_result.plan.to_dict())
+        return memory
+
+    def _memory_for_state(self, state: MissionState) -> FlightMemory:
+        memory = self._state_flight_memories.get(state.run_id)
+        if memory is None:
+            raise RuntimeError(f"FlightMemory missing for run: {state.run_id}")
+        return memory
+
+    def _record_action(self, state: MissionState, tool: str, args: dict, result: dict) -> None:
+        state.record_action(tool, args, result)
+        self._memory_for_state(state).append_action(tool, args, result)

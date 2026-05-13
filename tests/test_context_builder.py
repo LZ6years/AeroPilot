@@ -36,15 +36,16 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety()
 
     context = ObservationContextBuilder().build(state)
 
-    assert context["instruction"] == state.user_instruction
-    assert context["goal"] == state.semantic_plan.goal.to_dict()
+    assert context["active_instruction"] == state.user_instruction
+    assert context["semantic_goal"] == state.semantic_plan.goal.to_dict()
     assert context["current_phase"]["name"] == "orient_leftward"
     assert context["current_phase"]["index"] == 1
-    assert context["latest_observation"]["source"] == "phase_step"
-    assert context["recent_actions"][-1]["tool"] == "uav.hover"
-    assert context["safety"] == {"hover_required": False}
+    assert context["safety_constraints"] == {"hover_required": False}
     assert "uav.connect" in context["allowed_action_constraints"]["lifecycle_tools_excluded"]
     assert "uav.hover" in context["allowed_action_constraints"]["planner_tools"]
+    fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
+    assert fragments["image"]["content"]["recent_observation_sources"][-1] == "phase_step"
+    assert fragments["action"]["content"]["recent_actions"][-1]["tool"] == "uav.hover"
 
 
 def test_context_builder_handles_missing_observation():
@@ -52,6 +53,7 @@ def test_context_builder_handles_missing_observation():
 
     context = ObservationContextBuilder().build(state)
 
-    assert context["latest_observation"] is None
-    assert context["recent_actions"] == []
+    fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
+    assert fragments["image"]["warnings"] == ["no_recent_image_frames"]
+    assert fragments["action"]["content"]["recent_actions"] == []
     assert context["current_phase"]["name"] == "orient_leftward"
