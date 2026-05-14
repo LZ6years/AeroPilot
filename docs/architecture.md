@@ -202,3 +202,5 @@ flowchart TD
 ```
 
 `ToolContractViolation` 保留结构化错误信息，例如 `code`、`message`、`step_index`、`tool`、`field`、`expected`、`actual`。repair planner 消费这些结构化信息，而不是解析自然语言错误。当前 repair 只修 contract violation，不修执行失败、视觉失败或 safety intervention。
+
+`ModelActionPlanner` 不再做旧参数归一化。`uav.move_body` 只接受 context contract 中声明的 `direction/duration` 或 `vx/vy/vz/duration` 两种格式；`x_m`、`duration_sec`、`front/back` 等旧写法会先被 validator 拒绝，再交给 repair planner 尝试改成合法格式。

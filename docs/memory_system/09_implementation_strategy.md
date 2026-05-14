@@ -73,6 +73,7 @@ ModelActionPlanner
 - 校验 `uav.hover`、`uav.turn_relative`、`uav.move_body` 参数。
 - `kind="observe"` 直接失败，原因是观察由 runtime 管理。
 - `ModelRepairPlanner` 只修 contract violation，最多尝试 3 次。
+- `ModelActionPlanner` 不再做 `move_body` legacy normalize；旧参数只能通过 repair 改写为合法 contract。
 - repair 成功后仍进入 `SafetySupervisor`。
 - repair 失败后 runtime 维持当前失败路径并 best-effort hover。
 

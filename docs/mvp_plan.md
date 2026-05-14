@@ -148,6 +148,8 @@ ModelActionPlanner
       -> ToolDispatcher
 ```
 
+`ModelActionPlanner` 不再静默兼容旧参数。`uav.move_body` 的旧距离参数、`duration_sec`、方向别名等都不属于合法 contract；模型写错时先进入 validator violation，再由 `ModelRepairPlanner` 最多修正 3 次。
+
 后续可继续扩展执行失败 repair：
 
 ```text

@@ -323,6 +323,65 @@ def test_model_action_planner_accepts_contract_move_body_direction_args():
     assert plan.steps[0].args == {"direction": "backward", "duration": 1.5}
 
 
+def test_model_action_planner_accepts_contract_move_body_velocity_args_without_normalization():
+    state = make_state()
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [
+                {
+                    "kind": "tool",
+                    "tool": "uav.move_body",
+                    "args": {"vx": 1.0, "vy": -0.5, "vz": 0.25, "duration": 1.2},
+                    "reason": "move with body-frame velocity",
+                }
+            ],
+        }
+    )
+
+    plan = planner.plan_next(state, make_context())
+
+    assert plan.steps[0].args == {"vx": 1.0, "vy": -0.5, "vz": 0.25, "duration": 1.2}
+
+
+def test_model_action_planner_rejects_legacy_move_body_alias_args():
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [
+                {
+                    "kind": "tool",
+                    "tool": "uav.move_body",
+                    "args": {"direction": "front", "duration": 1.0},
+                    "reason": "legacy alias should be repaired, not normalized",
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="Unsupported uav.move_body direction"):
+        planner.plan_next(make_state(), make_context())
+
+
+def test_model_action_planner_rejects_legacy_move_body_duration_alias():
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [
+                {
+                    "kind": "tool",
+                    "tool": "uav.move_body",
+                    "args": {"direction": "forward", "duration_sec": 1.0},
+                    "reason": "legacy duration alias should be repaired, not normalized",
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="uav.move_body args must be exactly"):
+        planner.plan_next(make_state(), make_context())
+
+
 def test_model_action_planner_rejects_unknown_move_body_direction():
     planner = StubModelActionPlanner(
         {
