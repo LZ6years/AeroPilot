@@ -25,158 +25,209 @@
 
 - 用户说的“右转”不一定是精确 90 度。
 - 目标不一定转一次就能看到。
-- `面向` 不是一次动作，而是多个小角度调整和观测。
-- `靠近/前进` 的距离不能提前确定。
-- 视觉判断可能失败或目标描述有歧义。
+- “面向目标”不是一个原子动作，而是多轮小角度调整、自动观察和重新规划。
+- 视觉判断可能失败或出现多个候选。
 
-## 3. 推荐的整体语义规划
+## 3. 推荐的语义规划
 
 ```json
 {
   "intent": "navigate_by_visual_landmark",
   "goal": {
     "target_description": "黑色路灯",
-    "final_condition": "UAV 朝向目标并悬停"
+    "final_condition": "UAV 面向目标并悬停"
   },
   "semantic_phases": [
-    {"phase": "orient_right", "goal": "根据用户线索向右侧观察"},
-    {"phase": "search_landmark", "goal": "寻找可能是黑色路灯的目标"},
-    {"phase": "align_to_landmark", "goal": "通过小角度调整让 UAV 朝向目标"},
-    {"phase": "stop", "goal": "悬停结束"}
-  ],
-  "uncertainties": [
-    "目标可能不在首次右转后的视野中",
-    "目标类别需要 VLM 确认",
-    "右转角度需要根据观测滚动修正"
+    {
+      "index": 1,
+      "total": 4,
+      "name": "orient_right",
+      "meaning": "根据用户线索向右侧观察"
+    },
+    {
+      "index": 2,
+      "total": 4,
+      "name": "search_landmark",
+      "meaning": "寻找可能是黑色路灯的目标"
+    },
+    {
+      "index": 3,
+      "total": 4,
+      "name": "align_to_landmark",
+      "meaning": "通过小角度调整让 UAV 面向目标"
+    },
+    {
+      "index": 4,
+      "total": 4,
+      "name": "stop",
+      "meaning": "悬停结束"
+    }
   ]
 }
 ```
 
-## 4. 短期滚动执行示例
+## 4. Round 1: 生成 PlannerContext
 
-### Round 1：先向右观察
+runtime 把当前 phase、记忆 refs、最近 observation、动作历史、规则、用户偏好和安全约束整理成：
+
+```text
+runs/<run_id>/contexts/latest_context.json
+```
+
+模型接收的是这个 JSON context，不直接读取：
+
+- `flight_memory.json`
+- 完整 `memory/*.jsonl`
+- 原始 RGB/depth 文件
+- UAV tool registry 内部对象
+
+`latest_context.json` 会包含：
+
+- `context_schema`
+- `active_instruction`
+- `current_phase`
+- `semantic_goal`
+- `fragments`
+- `allowed_action_constraints`
+- `observation_policy`
+- `phase_transition_policy`
+- `safety_constraints`
+
+## 5. Round 1: 模型动作计划
+
+模型只输出 tool-only action plan：
 
 ```json
 {
   "phase": "orient_right",
-  "next_actions": [
-    {"type": "turn_yaw", "direction": "right", "angle_deg": 30},
-    {"type": "hover", "duration_sec": 0.3},
-    {"type": "observe", "modalities": ["rgb", "depth", "pose"]}
-  ],
-  "replan_after": "observe"
-}
-```
-
-### Round 2：用 VLM 临时理解观测
-
-第一阶段将当前图像、深度摘要、任务目标和最近动作交给多模态大模型。
-
-```json
-{
-  "vlm_input": {
-    "user_instruction": "前面右转会有一个黑色的路灯，右转面向路灯后停下",
-    "phase": "search_landmark",
-    "last_actions": ["turn_yaw_right_30", "hover", "observe"],
-    "rgb_frame_id": "frame_001",
-    "depth_summary": {
-      "min_forward_depth_m": 3.2,
-      "has_close_obstacle": false
-    },
-    "pose": {
-      "yaw_deg": 32.0,
-      "height_m": 3.0
+  "steps": [
+    {
+      "kind": "tool",
+      "tool": "uav.turn_relative",
+      "args": {"yaw_deg": 20},
+      "reason": "turn right slightly to inspect the likely target area"
     }
+  ],
+  "phase_transition": {
+    "decision": "continue_current_phase",
+    "reason": "need automatic RGB/depth/pose observation after this turn"
   }
 }
 ```
 
-VLM 输出：
+模型不能输出：
 
 ```json
 {
-  "scene_summary": "画面中间偏右有一个黑色细长杆状物，可能是路灯",
-  "target_status": "candidate_visible",
-  "confidence": 0.70,
-  "suggested_next_actions": [
-    {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}},
-    {"tool": "uav.hover", "args": {"duration_sec": 0.5}},
-    {"tool": "uav.get_frames", "args": {"modalities": ["rgb", "depth", "pose"]}}
-  ],
-  "ask_user": null
+  "kind": "observe",
+  "modalities": ["rgb", "depth", "pose"]
 }
 ```
 
-注意：
+观察由 runtime 自动执行。
 
-- VLM 输出只是建议。
-- `uav.turn_relative` 等动作必须经过 Safety Supervisor。
-- 如果 VLM 置信度不足，不允许直接前进或靠近。
+## 6. Round 1: Contract Validation
 
-### Round 3：目标候选明确，执行小角度对齐
+`ToolContractValidator` 校验：
+
+- `phase` 是否等于当前 phase。
+- step 数是否为 1-3。
+- step 是否只使用 `kind="tool"`。
+- tool 是否在 `planner_tools` 中。
+- tool 是否不在 `forbidden_tools` 中。
+- `uav.turn_relative` 是否只有 `yaw_deg`。
+- `yaw_deg` 是否在 context limits 内。
+
+如果模型输出旧格式，例如：
 
 ```json
 {
-  "phase": "align_to_landmark",
-  "next_actions": [
-    {"type": "turn_yaw", "direction": "right", "angle_deg": 5},
-    {"type": "hover", "duration_sec": 0.3},
-    {"type": "observe", "modalities": ["rgb", "depth", "pose"]}
-  ],
-  "replan_after": "observe"
+  "kind": "tool",
+  "tool": "uav.move_body",
+  "args": {"x_m": 4.0, "duration_sec": 2.0}
 }
 ```
 
-### Round 4：困惑时主动提问
+validator 会在进入 safety 前拒绝。
 
-如果 VLM 返回多个候选：
+## 7. Round 1: Safety Review 和自动观察
+
+通过 contract 后，`SafetySupervisor` 做最后安全处理：
+
+- 单步 yaw 限幅。
+- move_body 速度和 duration 限幅。
+- yaw scan 累计预算检查。
+- 安全介入时替换为 hover。
+
+动作执行后，runtime 自动采集：
 
 ```json
 {
-  "scene_summary": "画面左侧和中间偏远处都有黑色杆状物，二者都可能是路灯",
-  "target_status": "ambiguous_candidates",
-  "confidence": 0.42,
-  "suggested_next_actions": [
-    {"tool": "uav.hover", "args": {"duration_sec": 1.0}}
-  ],
-  "ask_user": "我看到了两个疑似黑色路灯：左侧较近一个，中间偏远一个。你希望我面向哪一个？"
+  "mode": "automatic",
+  "modalities": ["rgb", "depth", "pose"]
 }
 ```
 
-系统行为：
+这次 observation 写入 `memory/*.jsonl` 和 run artifacts，并进入下一轮 context。
 
-1. 强制 hover。
-2. 将困惑原因写入 run record。
-3. 向用户提问。
-4. 等待用户回复。
-5. 根据用户回复更新 Mission State。
-6. 重新规划。
+## 8. Round 2: 搜索目标
 
-### Round 5：目标已居中，停止
+下一轮 context 会包含右转后的图像 metadata、pose delta 和刚才动作结果。模型可能输出：
+
+```json
+{
+  "phase": "search_landmark",
+  "steps": [
+    {
+      "kind": "tool",
+      "tool": "uav.turn_relative",
+      "args": {"yaw_deg": 10},
+      "reason": "continue a small scan because the target is not confirmed"
+    }
+  ],
+  "phase_transition": {
+    "decision": "continue_current_phase",
+    "reason": "target still needs confirmation"
+  }
+}
+```
+
+如果最新 image fragment 表示目标已经可疑地出现在画面中央，模型可以改为小幅 hover 或进入下一 phase。
+
+## 9. 困惑时的行为
+
+如果上下文显示多个候选目标或证据冲突，模型应保守输出 hover 或小角度安全扫描。后续主动提问模块可以把困惑原因转成用户问题：
+
+```text
+我看到两个疑似黑色路灯：左侧较近一个，中间偏远一个。你希望我面向哪一个？
+```
+
+当前阶段先保证：
+
+- 不直接靠近低置信度目标。
+- 不绕过 validator 和 safety。
+- safety intervention 会压制 `phase_transition` 推进建议。
+
+## 10. 任务完成
+
+当上下文支持“目标已居中且 UAV 已面向目标”时，模型输出：
 
 ```json
 {
   "phase": "stop",
-  "next_actions": [
-    {"type": "hover", "duration_sec": 1.0}
+  "steps": [
+    {
+      "kind": "tool",
+      "tool": "uav.hover",
+      "args": {},
+      "reason": "final state is satisfied"
+    }
   ],
-  "finish_reason": "target_aligned"
+  "phase_transition": {
+    "decision": "complete_task",
+    "reason": "UAV is facing the target and holding position"
+  }
 }
 ```
 
-## 5. 后续能力拆分
-
-当前 MVP 不拆分视觉语义模块。
-先让 VLM 统一完成图像理解、目标候选判断、下一步建议和困惑提问。
-
-等 UAV 在 UE 中完整跑通后，再评估是否需要把某些稳定能力拆出来。
-
-## 6. 安全策略
-
-- 每次只执行短动作。
-- 每次动作后重新观察。
-- 目标不确定时不前进。
-- VLM 低置信度时不执行靠近。
-- 无观测时悬停。
-- 困惑时主动提问。
-- 用户说“停下”解释为 `hover`，不是 `land`。
+runtime 执行 hover、自动观察、写入 run record，然后标记任务完成。

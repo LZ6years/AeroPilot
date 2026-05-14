@@ -3,6 +3,11 @@
 from src.agent.planning.model_action_planner import ModelActionPlanner, ModelActionPlannerConfigError
 from src.agent.planning.phase_transition import PhaseTransition
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.agent.planning.tool_contract_validator import (
+    ToolContractValidationError,
+    ToolContractValidator,
+    ToolContractViolation,
+)
 
 __all__ = [
     "ModelActionPlanner",
@@ -10,4 +15,7 @@ __all__ = [
     "PhaseTransition",
     "PlannedStep",
     "ShortHorizonPlan",
+    "ToolContractValidationError",
+    "ToolContractValidator",
+    "ToolContractViolation",
 ]

@@ -61,4 +61,4 @@ Rules:
 - Do not use any tool listed in allowed_action_constraints.forbidden_tools.
 - Do not use raw env.observe as a tool step.
 - Do not output kind="observe"; observation is automatic and not a model action.
-- The final action plan will be reviewed by SafetySupervisor, so stay within the provided constraints.
+- The final action plan will be checked by ToolContractValidator and then reviewed by SafetySupervisor, so stay within the provided constraints.

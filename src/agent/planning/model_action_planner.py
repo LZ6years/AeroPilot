@@ -10,6 +10,7 @@ from typing import Any
 
 from src.agent.mission_state import MissionState
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.agent.planning.tool_contract_validator import ToolContractValidator
 from src.agent.semantic.task_parser import _loads_json_object
 from src.runtime.configs.model_config import ModelConfig, load_model_config
 
@@ -26,6 +27,7 @@ class ModelActionPlanner:
         self.model_config = model_config or load_model_config()
         self.prompt_path = prompt_path or self.model_config.action_planner_prompt_path
         self.system_prompt = self._load_system_prompt()
+        self.tool_contract_validator = ToolContractValidator(self.ALLOWED_TOOL_STEPS)
 
     def plan_next(self, state: MissionState, context: dict | None = None) -> ShortHorizonPlan:
         if context is None:
@@ -36,7 +38,7 @@ class ModelActionPlanner:
             raise ModelActionPlannerConfigError(f"Unsupported model provider: {self.model_config.provider}")
         response = self._call_openai_compatible(context)
         plan = ShortHorizonPlan.from_dict(response, require_phase_transition=True)
-        self._validate_plan(plan, state.current_phase_name, context)
+        self.tool_contract_validator.validate(plan, state.current_phase_name, context)
         return self._normalize_plan(plan)
 
     def _call_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -72,37 +74,9 @@ class ModelActionPlanner:
         content = data["choices"][0]["message"]["content"]
         return _loads_json_object(content)
 
-    def _validate_plan(self, plan: ShortHorizonPlan, expected_phase: str, context: dict[str, Any]) -> None:
-        if plan.phase != expected_phase:
-            raise ValueError(f"Model action planner phase mismatch: {plan.phase} != {expected_phase}")
-        if not 1 <= len(plan.steps) <= 3:
-            raise ValueError("Model action planner must return 1 to 3 steps")
-        constraints = _action_constraints(context)
-        allowed_tools = _allowed_tools(constraints)
-        forbidden_tools = set(constraints.get("forbidden_tools", []))
-        for step in plan.steps:
-            if step.kind == "observe":
-                raise ValueError("observe steps are managed by runtime perception policy")
-            if step.kind != "tool":
-                raise ValueError(f"Unsupported model planned step kind: {step.kind}")
-            if step.tool in forbidden_tools:
-                raise ValueError(f"Tool is forbidden in model action plan: {step.tool}")
-            if step.tool not in allowed_tools:
-                raise ValueError(f"Tool is not allowed in model action plan: {step.tool}")
-            self._validate_tool_args(step, constraints)
-
-    def _validate_tool_args(self, step: PlannedStep, constraints: dict[str, Any]) -> None:
-        if step.tool == "uav.hover":
-            if step.args:
-                raise ValueError("uav.hover args must be {}")
-            return
-        if step.tool == "uav.turn_relative":
-            _validate_turn_relative_args(step.args, constraints)
-            return
-        if step.tool == "uav.move_body":
-            _validate_move_body_args(step.args, constraints)
-
     def _normalize_plan(self, plan: ShortHorizonPlan) -> ShortHorizonPlan:
+        """Keep a narrow legacy normalization pass after strict contract validation."""
+
         steps = []
         for step in plan.steps:
             if step.kind != "tool" or step.tool != "uav.move_body":
@@ -181,85 +155,3 @@ def _first_number(data: dict[str, Any], keys: tuple[str, ...]) -> float | None:
         if key in data:
             return float(data[key])
     return None
-
-
-def _action_constraints(context: dict[str, Any]) -> dict[str, Any]:
-    constraints = context.get("allowed_action_constraints", {}) if isinstance(context, dict) else {}
-    return constraints if isinstance(constraints, dict) else {}
-
-
-def _allowed_tools(constraints: dict[str, Any]) -> set[str]:
-    tools = constraints.get("planner_tools")
-    if isinstance(tools, list) and tools:
-        return {str(item) for item in tools}
-    return set(ModelActionPlanner.ALLOWED_TOOL_STEPS)
-
-
-def _validate_turn_relative_args(args: dict[str, Any], constraints: dict[str, Any]) -> None:
-    if set(args) != {"yaw_deg"}:
-        raise ValueError("uav.turn_relative args must be exactly {'yaw_deg'}")
-    yaw_deg = _number_arg(args, "yaw_deg", "uav.turn_relative")
-    limits = (
-        constraints.get("action_schemas", {})
-        .get("uav.turn_relative", {})
-        .get("limits", {})
-    )
-    min_yaw = limits.get("yaw_deg_min")
-    max_yaw = limits.get("yaw_deg_max")
-    if min_yaw is not None and yaw_deg < float(min_yaw):
-        raise ValueError(f"uav.turn_relative yaw_deg below limit: {yaw_deg} < {float(min_yaw)}")
-    if max_yaw is not None and yaw_deg > float(max_yaw):
-        raise ValueError(f"uav.turn_relative yaw_deg above limit: {yaw_deg} > {float(max_yaw)}")
-
-
-def _validate_move_body_args(args: dict[str, Any], constraints: dict[str, Any]) -> None:
-    keys = set(args)
-    if keys == {"direction", "duration"}:
-        direction = str(args.get("direction", "")).lower().strip()
-        if direction not in {"forward", "backward", "left", "right", "up", "down"}:
-            raise ValueError(f"Unsupported uav.move_body direction: {args.get('direction')}")
-        _validate_duration(args, constraints)
-        return
-    if keys == {"vx", "vy", "vz", "duration"}:
-        limits = (
-            constraints.get("action_schemas", {})
-            .get("uav.move_body", {})
-            .get("limits", {})
-        )
-        vx = _number_arg(args, "vx", "uav.move_body")
-        vy = _number_arg(args, "vy", "uav.move_body")
-        vz = _number_arg(args, "vz", "uav.move_body")
-        max_xy = limits.get("abs_vx_vy_max")
-        max_z = limits.get("abs_vz_max")
-        if max_xy is not None and (abs(vx) > float(max_xy) or abs(vy) > float(max_xy)):
-            raise ValueError("uav.move_body planar velocity exceeds context limits")
-        if max_z is not None and abs(vz) > float(max_z):
-            raise ValueError("uav.move_body vertical velocity exceeds context limits")
-        _validate_duration(args, constraints)
-        return
-    raise ValueError(
-        "uav.move_body args must be exactly {'direction', 'duration'} or {'vx', 'vy', 'vz', 'duration'}"
-    )
-
-
-def _validate_duration(args: dict[str, Any], constraints: dict[str, Any]) -> None:
-    duration = _number_arg(args, "duration", "uav.move_body")
-    if duration <= 0.0:
-        raise ValueError("uav.move_body duration must be greater than 0")
-    limit = (
-        constraints.get("action_schemas", {})
-        .get("uav.move_body", {})
-        .get("limits", {})
-        .get("duration_max")
-    )
-    if limit is not None and duration > float(limit):
-        raise ValueError(f"uav.move_body duration exceeds context limit: {duration} > {float(limit)}")
-
-
-def _number_arg(args: dict[str, Any], key: str, tool: str) -> float:
-    if key not in args:
-        raise ValueError(f"{tool} requires numeric arg: {key}")
-    try:
-        return float(args[key])
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"{tool} arg must be numeric: {key}") from exc
