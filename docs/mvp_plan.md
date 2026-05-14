@@ -138,21 +138,22 @@ flowchart TD
 
 ### M6 后续增强: Plan-Execute-Repair
 
-当前先拆出 `ToolContractValidator`：
+当前链路已经包含 contract repair v1：
 
 ```text
 ModelActionPlanner
   -> ToolContractValidator
+    -> if invalid: ModelRepairPlanner(max 3 attempts)
     -> SafetySupervisor
       -> ToolDispatcher
 ```
 
-后续再加入 `ModelRepairPlanner`：
+后续可继续扩展执行失败 repair：
 
 ```text
 ModelActionPlanner
   -> ToolContractValidator
-    -> if invalid: ModelRepairPlanner
+    -> if invalid: ModelRepairPlanner(max 3 attempts)
     -> SafetySupervisor
     -> ToolDispatcher
     -> if execution failed: ModelRepairPlanner or safe hover
@@ -200,7 +201,7 @@ ModelActionPlanner
 
 - run store 和轨迹复盘。
 - 主动提问。
-- `ModelRepairPlanner`。
+- 执行失败 repair。
 - 真实 UE / AirSim demo 验证。
 
 低优先级：

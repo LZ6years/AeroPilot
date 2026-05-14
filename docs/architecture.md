@@ -187,19 +187,18 @@ sequenceDiagram
 
 runtime 才能真正修改 `MissionState`。如果 `SafetySupervisor` 发生 intervention，runtime 会压制模型的推进建议并继续当前 phase。若同一 phase 连续执行超过窗口上限，runtime 会触发 loop guard，安全 hover 后推进。
 
-## 8. 后续 Plan-Execute-Repair
+## 8. Plan-Execute-Repair
 
-本阶段先把 `ToolContractValidator` 拆清楚。后续可以在 validator 失败时引入 `ModelRepairPlanner`：
+当前已支持第一版 contract repair：当 `ToolContractValidator` 拒绝模型动作计划时，`ModelActionPlanner` 会构建结构化 `RepairContext`，调用 `ModelRepairPlanner` 最多修正 3 次。任意一次修正通过后，计划继续进入 `SafetySupervisor`；3 次都失败时，runtime 走现有失败路径并 best-effort hover。
 
 ```mermaid
 flowchart TD
     MAP["ModelActionPlanner"] --> TCV["ToolContractValidator"]
     TCV -->|valid| SS["SafetySupervisor"]
-    TCV -->|invalid violation| RP["ModelRepairPlanner"]
+    TCV -->|invalid violation| RP["ModelRepairPlanner<br/>max 3 attempts"]
     RP --> TCV
     SS --> TD["ToolDispatcher"]
-    TD -->|execution failed| RP
     TD -->|ok| OBS["Automatic observation"]
 ```
 
-`ToolContractViolation` 应保留结构化错误信息，例如 `code`、`message`、`step_index`、`tool`、`field`、`expected`、`actual`。repair planner 以后消费这些结构化信息，而不是解析自然语言错误。
+`ToolContractViolation` 保留结构化错误信息，例如 `code`、`message`、`step_index`、`tool`、`field`、`expected`、`actual`。repair planner 消费这些结构化信息，而不是解析自然语言错误。当前 repair 只修 contract violation，不修执行失败、视觉失败或 safety intervention。

@@ -55,6 +55,8 @@ DEMO_OUTPUT_FILES = {
     "raw_model_response.json",
     "raw_model_content.json",
     "validated_plan.json",
+    "repair_attempts.json",
+    "repair_result.json",
     "safety_decision.json",
     "demo_preview.md",
 }
@@ -70,6 +72,8 @@ class DemoArtifacts:
     raw_model_response: dict[str, Any]
     raw_model_content: dict[str, Any]
     validated_plan: ShortHorizonPlan
+    repair_attempts: list[dict[str, Any]]
+    repair_result: dict[str, Any]
     safety_decision: dict[str, Any]
     model_payload: dict[str, Any]
 
@@ -178,6 +182,8 @@ def run_demo(instruction: str, model_config: ModelConfig, run_dir: Path) -> Demo
         raw_model_response=planner.last_raw_response,
         raw_model_content=_loads_json_object(planner.last_content),
         validated_plan=validated_plan,
+        repair_attempts=list(planner.last_repair_attempts),
+        repair_result=dict(planner.last_repair_result),
         safety_decision=safety_decision,
         model_payload=redact_model_payload(planner.last_payload, model_config),
     )
@@ -277,6 +283,8 @@ def write_demo_outputs(artifacts: DemoArtifacts) -> None:
         "raw_model_response.json": artifacts.raw_model_response,
         "raw_model_content.json": artifacts.raw_model_content,
         "validated_plan.json": artifacts.validated_plan.to_dict(),
+        "repair_attempts.json": {"attempts": artifacts.repair_attempts},
+        "repair_result.json": artifacts.repair_result,
         "safety_decision.json": artifacts.safety_decision,
     }
     for name, data in writes.items():
@@ -336,6 +344,18 @@ def build_preview_markdown(artifacts: DemoArtifacts) -> str:
             "## Validated Planner Output",
             "```json",
             json.dumps(artifacts.validated_plan.to_dict(), indent=2, ensure_ascii=False),
+            "```",
+            "",
+            "## Contract Repair",
+            "```json",
+            json.dumps(
+                {
+                    "result": artifacts.repair_result,
+                    "attempts": artifacts.repair_attempts,
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
             "```",
             "",
             "## 模型阶段推进判断",

@@ -6,6 +6,7 @@ import pytest
 
 from src.agent.mission_state import MissionState
 from src.agent.planning.model_action_planner import ModelActionPlanner, ModelActionPlannerConfigError
+from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE
 from src.agent.planning.schemas import ShortHorizonPlan
 from src.agent.semantic.schemas import SemanticPhase
@@ -14,7 +15,14 @@ from src.runtime.configs.model_config import ModelConfig
 
 
 class StubModelActionPlanner(ModelActionPlanner):
-    def __init__(self, response: dict, model_config: ModelConfig | None = None) -> None:
+    def __init__(
+        self,
+        response: dict,
+        model_config: ModelConfig | None = None,
+        *,
+        max_repair_attempts: int = 0,
+        repair_planner=None,
+    ) -> None:
         self.response = dict(response)
         if not self.response.pop("_omit_phase_transition", False):
             self.response.setdefault(
@@ -28,11 +36,25 @@ class StubModelActionPlanner(ModelActionPlanner):
                 model_name="stub",
                 api_key="test-key",
                 base_url="https://example.test/v1",
-            )
+            ),
+            max_repair_attempts=max_repair_attempts,
+            repair_planner=repair_planner,
         )
 
     def _call_openai_compatible(self, context: dict):
         return self.response
+
+
+class StubRepairPlanner:
+    def __init__(self, responses: list[dict]) -> None:
+        self.responses = list(responses)
+        self.contexts = []
+
+    def repair(self, repair_context):
+        self.contexts.append(repair_context)
+        if not self.responses:
+            raise AssertionError("unexpected repair call")
+        return self.responses.pop(0)
 
 
 def make_state() -> MissionState:
@@ -318,3 +340,169 @@ def test_model_action_planner_rejects_unknown_move_body_direction():
 
     with pytest.raises(ValueError, match="Unsupported uav.move_body direction"):
         planner.plan_next(make_state(), make_context())
+
+
+def test_model_action_planner_repairs_contract_violation_on_first_attempt():
+    repair_planner = StubRepairPlanner(
+        [
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "repaired hold"}],
+                "phase_transition": {
+                    "decision": ADVANCE_TO_NEXT_PHASE,
+                    "reason": "repair uses safe hover",
+                },
+            }
+        ]
+    )
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
+        },
+        max_repair_attempts=3,
+        repair_planner=repair_planner,
+    )
+
+    plan = planner.plan_next(make_state(), make_context())
+
+    assert plan.steps[0].tool == "uav.hover"
+    assert repair_planner.contexts[0].attempt == 1
+    assert planner.last_repair_result["status"] == "repaired"
+    assert planner.last_repair_result["successful_attempt"] == 1
+
+
+def test_model_action_planner_repairs_contract_violation_on_third_attempt():
+    repair_planner = StubRepairPlanner(
+        [
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.move_body", "args": {"x_m": 1.0}, "reason": "bad"}],
+                "phase_transition": {
+                    "decision": ADVANCE_TO_NEXT_PHASE,
+                    "reason": "still bad",
+                },
+            },
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "observe", "modalities": ["rgb"], "reason": "bad"}],
+                "phase_transition": {
+                    "decision": ADVANCE_TO_NEXT_PHASE,
+                    "reason": "still bad",
+                },
+            },
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "finally safe"}],
+                "phase_transition": {
+                    "decision": ADVANCE_TO_NEXT_PHASE,
+                    "reason": "third repair succeeds",
+                },
+            },
+        ]
+    )
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
+        },
+        max_repair_attempts=3,
+        repair_planner=repair_planner,
+    )
+
+    plan = planner.plan_next(make_state(), make_context())
+
+    assert plan.steps[0].tool == "uav.hover"
+    assert len(planner.last_repair_attempts) == 3
+    assert planner.last_repair_result["successful_attempt"] == 3
+
+
+def test_model_action_planner_repair_failure_exposes_structured_error():
+    repair_planner = StubRepairPlanner(
+        [
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.move_body", "args": {"x_m": 1.0}, "reason": "bad"}],
+                "phase_transition": {
+                    "decision": ADVANCE_TO_NEXT_PHASE,
+                    "reason": "still bad",
+                },
+            },
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.move_body", "args": {"x_m": 2.0}, "reason": "bad"}],
+                "phase_transition": {
+                    "decision": ADVANCE_TO_NEXT_PHASE,
+                    "reason": "still bad",
+                },
+            },
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.move_body", "args": {"x_m": 3.0}, "reason": "bad"}],
+                "phase_transition": {
+                    "decision": ADVANCE_TO_NEXT_PHASE,
+                    "reason": "still bad",
+                },
+            },
+        ]
+    )
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
+        },
+        max_repair_attempts=3,
+        repair_planner=repair_planner,
+    )
+
+    with pytest.raises(ModelRepairPlannerError, match="exhausted") as exc_info:
+        planner.plan_next(make_state(), make_context())
+
+    data = exc_info.value.to_dict()
+    assert data["reason"] == "max_repair_attempts_exhausted"
+    assert data["max_repair_attempts"] == 3
+    assert len(data["repair_attempts"]) == 3
+
+
+def test_model_action_planner_repair_repeated_same_invalid_plan_fails_early():
+    bad_plan = {
+        "phase": "orient_leftward",
+        "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
+        "phase_transition": {
+            "decision": ADVANCE_TO_NEXT_PHASE,
+            "reason": "bad",
+        },
+    }
+    repair_planner = StubRepairPlanner([bad_plan])
+    planner = StubModelActionPlanner(
+        bad_plan,
+        max_repair_attempts=3,
+        repair_planner=repair_planner,
+    )
+
+    with pytest.raises(ModelRepairPlannerError, match="repeated"):
+        planner.plan_next(make_state(), make_context())
+
+
+def test_model_action_planner_repair_output_missing_phase_transition_fails():
+    repair_planner = StubRepairPlanner(
+        [
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "missing transition"}],
+            }
+        ]
+    )
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
+        },
+        max_repair_attempts=1,
+        repair_planner=repair_planner,
+    )
+
+    with pytest.raises(ModelRepairPlannerError) as exc_info:
+        planner.plan_next(make_state(), make_context())
+
+    assert exc_info.value.violations[-1]["code"] == "repair_plan_parse_error"

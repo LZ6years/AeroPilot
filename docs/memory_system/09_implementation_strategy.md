@@ -54,24 +54,27 @@ flowchart TD
 - `phase_transition` 已进入 `ShortHorizonPlan`。
 - 模型不再输出 observe step。
 
-## 3. 当前阶段：ToolContractValidator
+## 3. 当前阶段：ToolContractValidator + Contract Repair
 
-下一步重点是把动作约束从 planner 内部逻辑拆成独立模块：
+动作约束已经从 planner 内部逻辑拆成独立模块，并接入 contract repair v1：
 
 ```text
 ModelActionPlanner
   -> ToolContractValidator
+    -> if invalid: ModelRepairPlanner(max 3 attempts)
     -> SafetySupervisor
       -> ToolDispatcher
 ```
 
-实现要求：
+实现边界：
 
 - `ToolContractValidator` 从 `PlannerContext.allowed_action_constraints` 读取契约。
 - 校验 phase、step 数、step kind、tool 白名单、forbidden tool。
 - 校验 `uav.hover`、`uav.turn_relative`、`uav.move_body` 参数。
 - `kind="observe"` 直接失败，原因是观察由 runtime 管理。
-- 输出结构化 `ToolContractViolation`，为后续 repair 做准备。
+- `ModelRepairPlanner` 只修 contract violation，最多尝试 3 次。
+- repair 成功后仍进入 `SafetySupervisor`。
+- repair 失败后 runtime 维持当前失败路径并 best-effort hover。
 
 ## 4. StageContextInput
 
@@ -176,8 +179,8 @@ runtime 决定是否应用：
 4. 固定 `ContextComposer` 输出 schema、rules、preferences、constraints。
 5. 拆出 `ToolContractValidator`。
 6. 为 validator 加结构化错误和独立单元测试。
-7. 更新文档和 Mermaid 图。
-8. 后续再考虑 `ModelRepairPlanner`。
+7. 加入 `ModelRepairPlanner` contract repair v1。
+8. 后续再考虑执行失败 repair 或主动提问。
 
 ## 10. 最小验收 Demo
 

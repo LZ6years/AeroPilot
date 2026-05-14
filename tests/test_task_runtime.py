@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from src.agent.planning.model_action_planner import ModelActionPlanner
+from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
 from src.agent.semantic.task_parser import TaskParser
@@ -497,3 +500,103 @@ def test_task_runtime_continue_transition_window_limit_advances_phase(tmp_path):
     mission_state = json.loads((run_dir / "mission_state.json").read_text(encoding="utf-8"))
     assert mission_state["max_phase_window_count"] == 5
     assert mission_state["phase_window_counts"]
+
+
+def test_task_runtime_logs_contract_repair_success_and_continues_to_safety(tmp_path):
+    class RepairSuccessPlanner:
+        planner_mode = "model"
+
+        def __init__(self) -> None:
+            self.last_repair_attempts = []
+
+        def plan_next(self, state, context=None):
+            self.last_repair_attempts = [
+                {
+                    "attempt": 1,
+                    "status": "failed",
+                    "repair_context": {"attempt": 1, "violation": {"code": "forbidden_tool"}},
+                    "repaired_plan": {"phase": state.current_phase_name, "steps": [{"kind": "observe"}]},
+                    "violation": {"code": "observe_managed_by_runtime"},
+                },
+                {
+                    "attempt": 2,
+                    "status": "repaired",
+                    "repair_context": {"attempt": 2, "violation": {"code": "observe_managed_by_runtime"}},
+                    "repaired_plan": {
+                        "phase": state.current_phase_name,
+                        "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}}],
+                    },
+                },
+            ]
+            return ShortHorizonPlan(
+                state.current_phase_name,
+                [PlannedStep.tool_step("uav.hover", {}, "repaired safe hover")],
+                PhaseTransition(COMPLETE_TASK, "repair succeeded"),
+            )
+
+    run_dir = tmp_path / "repair_success"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=RepairSuccessPlanner(),
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_task("m1", LAMP_TASK)
+    recorder.close()
+
+    event_names = [record["event"] for record in load_event_records(run_dir)]
+    assert state.completed
+    assert event_names.count("model_action_contract_repair_requested") == 2
+    assert "model_action_contract_repair_failed" in event_names
+    assert "model_action_contract_repaired" in event_names
+    assert "short_horizon_planned" in event_names
+    assert "automatic_observation_updated" in event_names
+
+
+def test_task_runtime_logs_contract_repair_failure_then_best_effort_hover(tmp_path):
+    class RepairFailPlanner:
+        planner_mode = "model"
+
+        def plan_next(self, state, context=None):
+            attempts = [
+                {
+                    "attempt": 1,
+                    "status": "failed",
+                    "repair_context": {"attempt": 1, "violation": {"code": "forbidden_tool"}},
+                    "violation": {"code": "observe_managed_by_runtime"},
+                }
+            ]
+            raise ModelRepairPlannerError(
+                "repair failed",
+                initial_plan={"phase": state.current_phase_name, "steps": []},
+                final_plan={"phase": state.current_phase_name, "steps": [{"kind": "observe"}]},
+                repair_attempts=attempts,
+                violations=[{"code": "forbidden_tool"}, {"code": "observe_managed_by_runtime"}],
+                max_repair_attempts=3,
+                reason="max_repair_attempts_exhausted",
+            )
+
+    run_dir = tmp_path / "repair_failure"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=RepairFailPlanner(),
+        shutdown_policy="none",
+    )
+
+    with pytest.raises(ModelRepairPlannerError):
+        runtime.run_task("m1", LAMP_TASK)
+    recorder.close()
+
+    event_names = [record["event"] for record in load_event_records(run_dir)]
+    assert "model_action_contract_repair_requested" in event_names
+    assert "model_action_contract_repair_failed" in event_names
+    assert "task_failed" in event_names
+    assert "safety_hover_completed" in event_names

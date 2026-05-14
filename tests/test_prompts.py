@@ -36,3 +36,15 @@ def test_action_planner_prompt_contains_allowed_and_forbidden_tools():
     assert "Do not output kind=\"observe\"" in prompt
     assert "action_schemas" in prompt
     assert "Do not invent alternate argument names" in prompt
+
+
+def test_model_repair_prompt_requires_contract_valid_tool_only_plan():
+    prompt = (
+        Path("src") / "agent" / "planning" / "prompts" / "model_repair_system.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "Return exactly one corrected ShortHorizonPlan" in prompt
+    assert "Use only kind=\"tool\" steps" in prompt
+    assert "Never output kind=\"observe\"" in prompt
+    assert "Do not repeat the previous invalid plan" in prompt
+    assert "phase_transition" in prompt

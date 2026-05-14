@@ -49,6 +49,8 @@ def test_demo_declares_expected_output_files():
         "raw_model_response.json",
         "raw_model_content.json",
         "validated_plan.json",
+        "repair_attempts.json",
+        "repair_result.json",
         "safety_decision.json",
         "demo_preview.md",
     }
@@ -110,6 +112,8 @@ def test_demo_writes_expected_artifact_files(tmp_path):
         raw_model_response={"choices": [{"message": {"content": "{}"}}]},
         raw_model_content=plan.to_dict(),
         validated_plan=plan,
+        repair_attempts=[],
+        repair_result={"repair_triggered": False},
         safety_decision={"plan": plan.to_dict(), "interventions": []},
         model_payload={
             "api_key_present": True,
@@ -133,4 +137,5 @@ def test_demo_writes_expected_artifact_files(tmp_path):
     assert "current_phase" in mission_state
     preview = (tmp_path / "demo_preview.md").read_text(encoding="utf-8")
     assert "Model Action Planner Demo" in preview
+    assert "Contract Repair" in preview
     assert "模型阶段推进判断" in preview

@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.agent.mission_state import MissionState
 from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE
 from src.agent.planning.model_action_planner import ModelActionPlanner
+from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.safety import SafetySupervisor
 from src.agent.safety import SafetyDecision
 from src.agent.planning.schemas import ShortHorizonPlan
@@ -223,7 +224,12 @@ class TaskRuntime:
     def _run_phase_window(self, scene: SceneInstance, agent_id: str, state: MissionState) -> tuple[ShortHorizonPlan, SafetyDecision]:
         context = self.context_builder.build(state, self._memory_for_state(state))
         self.recorder.write_json("contexts/latest_context.json", context)
-        raw_plan = self.planner.plan_next(state, context)
+        try:
+            raw_plan = self.planner.plan_next(state, context)
+        except ModelRepairPlannerError as exc:
+            self._record_model_action_contract_repair_events(exc.repair_attempts)
+            raise
+        self._record_model_action_contract_repair_events(getattr(self.planner, "last_repair_attempts", []))
         if getattr(self.planner, "planner_mode", "") == "model":
             self.recorder.event("model_action_planned", raw_plan.to_dict())
         safety_decision = self.safety.review(raw_plan, state)
@@ -317,6 +323,19 @@ class TaskRuntime:
         data = self._record_observation(scene, agent_id, state, modalities, source="automatic_phase_window")
         self.recorder.event("automatic_observation_updated", data)
         self._write_state(state)
+
+    def _record_model_action_contract_repair_events(self, attempts: list[dict]) -> None:
+        for attempt in attempts:
+            requested_payload = {
+                "attempt": attempt.get("attempt"),
+                "repair_context": attempt.get("repair_context", {}),
+            }
+            self.recorder.event("model_action_contract_repair_requested", requested_payload)
+            status = attempt.get("status")
+            if status == "repaired":
+                self.recorder.event("model_action_contract_repaired", attempt)
+            elif status == "failed":
+                self.recorder.event("model_action_contract_repair_failed", attempt)
 
     def _record_observation(
         self,
