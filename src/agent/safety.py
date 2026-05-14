@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.agent.schemas import PlannedStep, ShortHorizonPlan
-from src.runtime.configs.action_config import UavActionConfig
+from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.runtime.configs.safety_config import UavSafetyConfig
 
 
 class SafetyViolation(ValueError):
@@ -26,35 +26,45 @@ class SafetySupervisor:
         "uav.move_body",
     }
 
-    def __init__(self, action_config: UavActionConfig | None = None) -> None:
-        self.action_config = action_config or UavActionConfig()
+    def __init__(self, safety_config: UavSafetyConfig | None = None) -> None:
+        self.safety_config = safety_config or UavSafetyConfig()
 
     def review(self, plan: ShortHorizonPlan, state: Any | None = None) -> SafetyDecision:
         safe_steps: list[PlannedStep] = []
         interventions: list[dict] = []
-        turn_scan_already_used = self._last_successful_tool(state) == "uav.turn_relative"
+        yaw_scan_accum = float(getattr(state, "yaw_scan_accum_deg", 0.0) or 0.0)
         for step in plan.steps:
-            if step.kind == "tool" and step.tool == "uav.turn_relative" and turn_scan_already_used:
-                safe_step = PlannedStep.tool_step(
-                    "uav.hover",
-                    {},
-                    "hold position because consecutive yaw scans require fresh visual confirmation",
-                )
+            if step.kind == "tool" and step.tool == "uav.turn_relative":
+                safe_step, intervention = self._review_step(step)
+                safe_yaw = abs(float(safe_step.args.get("yaw_deg", 0.0)))
+                if yaw_scan_accum + safe_yaw > self.safety_config.max_yaw_scan_accum_deg:
+                    safe_step = PlannedStep.tool_step(
+                        "uav.hover",
+                        {},
+                        "hold position because yaw scan budget is exhausted",
+                    )
+                    safe_steps.append(safe_step)
+                    interventions.append(
+                        {
+                            "tool": step.tool,
+                            "replacement": "uav.hover",
+                            "reason": "yaw_scan_budget_exceeded",
+                            "yaw_scan_accum_deg": yaw_scan_accum,
+                            "requested_yaw_deg": abs(float(step.args.get("yaw_deg", self.safety_config.max_yaw_step_deg))),
+                            "safe_yaw_deg": safe_yaw,
+                            "max_yaw_scan_accum_deg": self.safety_config.max_yaw_scan_accum_deg,
+                        }
+                    )
+                    continue
+                yaw_scan_accum += abs(float(safe_step.args.get("yaw_deg", 0.0)))
                 safe_steps.append(safe_step)
-                interventions.append(
-                    {
-                        "tool": step.tool,
-                        "replacement": "uav.hover",
-                        "reason": "consecutive_yaw_scan_without_visual_confirmation",
-                    }
-                )
+                if intervention:
+                    interventions.append(intervention)
                 continue
             safe_step, intervention = self._review_step(step)
             safe_steps.append(safe_step)
             if intervention:
                 interventions.append(intervention)
-            if safe_step.kind == "tool" and safe_step.tool == "uav.turn_relative":
-                turn_scan_already_used = True
         return SafetyDecision(ShortHorizonPlan(plan.phase, safe_steps), interventions)
 
     def _review_step(self, step: PlannedStep) -> tuple[PlannedStep, dict | None]:
@@ -72,8 +82,8 @@ class SafetySupervisor:
 
     def _clip_turn(self, step: PlannedStep) -> tuple[PlannedStep, dict | None]:
         args = dict(step.args)
-        original = float(args.get("yaw_deg", self.action_config.yaw_step_deg))
-        limit = abs(self.action_config.yaw_step_deg)
+        original = float(args.get("yaw_deg", self.safety_config.max_yaw_step_deg))
+        limit = abs(self.safety_config.max_yaw_step_deg)
         clipped = max(-limit, min(limit, original))
         args["yaw_deg"] = clipped
         if clipped == original:
@@ -88,21 +98,21 @@ class SafetySupervisor:
         interventions: dict[str, dict] = {}
         if "duration" in args:
             original_duration = float(args["duration"])
-            clipped_duration = min(original_duration, self.action_config.move_duration_sec)
+            clipped_duration = min(original_duration, self.safety_config.max_move_duration_sec)
             args["duration"] = clipped_duration
             if clipped_duration != original_duration:
                 interventions["duration"] = {"original": original_duration, "clipped": clipped_duration}
         for name in ("vx", "vy"):
             if name in args:
                 original = float(args[name])
-                limit = abs(self.action_config.linear_velocity_mps)
+                limit = abs(self.safety_config.max_linear_velocity_mps)
                 clipped = max(-limit, min(limit, original))
                 args[name] = clipped
                 if clipped != original:
                     interventions[name] = {"original": original, "clipped": clipped}
         if "vz" in args:
             original = float(args["vz"])
-            limit = abs(self.action_config.vertical_velocity_mps)
+            limit = abs(self.safety_config.max_vertical_velocity_mps)
             clipped = max(-limit, min(limit, original))
             args["vz"] = clipped
             if clipped != original:
@@ -113,12 +123,3 @@ class SafetySupervisor:
                 {"tool": step.tool, "fields": interventions},
             )
         return PlannedStep.tool_step(step.tool or "", args, step.reason), None
-
-    @staticmethod
-    def _last_successful_tool(state: Any | None) -> str | None:
-        if state is None:
-            return None
-        for action in reversed(getattr(state, "recent_actions", [])):
-            if action.get("result", {}).get("ok") is True:
-                return action.get("tool")
-        return None

@@ -25,10 +25,12 @@ FlyAgent 当前已经具备：
 current_instruction
 instruction_history
 current_rgb / current_depth
-image_history_summary
 current_pose
-pose_history_summary
-action_history_summary
+recent_action_refs
+recent_observation_refs
+recent_pose_refs
+recent_frame_refs
+memory/*.jsonl
 map_memory
 FLYAGENT rules
 USER preferences

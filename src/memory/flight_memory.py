@@ -1,9 +1,16 @@
-"""Continuous per-scene UAV flight memory."""
+"""Continuous per-scene UAV flight memory manifest."""
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from typing import Any
+
+
+MAX_INSTRUCTION_REFS = 50
+MAX_RECENT_OBSERVATION_REFS = 50
+MAX_RECENT_ACTION_REFS = 50
+MAX_RECENT_POSE_REFS = 50
+MAX_RECENT_FRAME_REFS = 100
 
 
 @dataclass
@@ -13,45 +20,72 @@ class FlightMemory:
     scene_instance_id: str
     agent_id: str
     active_instruction: str = ""
+    active_instruction_id: str | None = None
     instruction_history: list[dict[str, Any]] = field(default_factory=list)
-    recent_observations: list[dict[str, Any]] = field(default_factory=list)
-    recent_actions: list[dict[str, Any]] = field(default_factory=list)
+    recent_observation_refs: list[dict[str, Any]] = field(default_factory=list)
+    recent_action_refs: list[dict[str, Any]] = field(default_factory=list)
+    recent_pose_refs: list[dict[str, Any]] = field(default_factory=list)
+    recent_frame_refs: list[dict[str, Any]] = field(default_factory=list)
     reset_epoch: int = 0
     rolling_summary: dict[str, Any] = field(default_factory=dict)
+    memory_reader: Any = field(default=None, repr=False, compare=False)
 
-    def update_instruction(self, instruction: str, semantic_plan: dict[str, Any] | None = None) -> None:
+    def update_instruction_ref(self, ref: dict[str, Any], instruction: str) -> None:
         self.active_instruction = instruction
-        entry = {"instruction": instruction}
-        if semantic_plan is not None:
-            entry["semantic_plan"] = semantic_plan
-        self.instruction_history.append(entry)
-        self.instruction_history = self.instruction_history[-10:]
+        self.active_instruction_id = ref.get("id")
+        self.instruction_history.append(dict(ref))
+        self.instruction_history = self.instruction_history[-MAX_INSTRUCTION_REFS:]
 
-    def append_observation(self, observation: dict[str, Any]) -> None:
-        self.recent_observations.append(dict(observation))
-        self.recent_observations = self.recent_observations[-5:]
+    def append_observation_ref(self, ref: dict[str, Any]) -> None:
+        self.recent_observation_refs.append(dict(ref))
+        self.recent_observation_refs = self.recent_observation_refs[-MAX_RECENT_OBSERVATION_REFS:]
 
-    def append_action(self, tool: str, args: dict[str, Any], result: dict[str, Any]) -> None:
-        self.recent_actions.append({"tool": tool, "args": dict(args), "result": dict(result)})
-        self.recent_actions = self.recent_actions[-10:]
+    def append_action_ref(self, ref: dict[str, Any]) -> None:
+        self.recent_action_refs.append(dict(ref))
+        self.recent_action_refs = self.recent_action_refs[-MAX_RECENT_ACTION_REFS:]
+
+    def append_pose_ref(self, ref: dict[str, Any] | None) -> None:
+        if ref is None:
+            return
+        self.recent_pose_refs.append(dict(ref))
+        self.recent_pose_refs = self.recent_pose_refs[-MAX_RECENT_POSE_REFS:]
+
+    def append_frame_refs(self, refs: list[dict[str, Any]] | None) -> None:
+        for ref in refs or []:
+            self.recent_frame_refs.append(dict(ref))
+        self.recent_frame_refs = self.recent_frame_refs[-MAX_RECENT_FRAME_REFS:]
 
     def reset_pose_epoch(self, active_instruction: str | None = None) -> None:
         self.reset_epoch += 1
         if active_instruction is not None:
             self.active_instruction = active_instruction
-        self.recent_observations = []
-        self.recent_actions = []
+        self.recent_observation_refs = []
+        self.recent_action_refs = []
+        self.recent_pose_refs = []
+        self.recent_frame_refs = []
         self.rolling_summary = {"reset_reason": "pose_reset", "reset_epoch": self.reset_epoch}
 
     @property
-    def latest_observation(self) -> dict[str, Any] | None:
-        return self.recent_observations[-1] if self.recent_observations else None
-
-    @property
     def latest_pose(self) -> dict[str, Any]:
-        latest = self.latest_observation or {}
-        pose = latest.get("pose")
+        if self.memory_reader is None or not self.recent_pose_refs:
+            return {}
+        record = self.memory_reader.read_ref(self.recent_pose_refs[-1])
+        pose = record.get("pose") if isinstance(record, dict) else None
         return dict(pose) if isinstance(pose, dict) else {}
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        return {
+            "run_id": self.run_id,
+            "map_id": self.map_id,
+            "scene_instance_id": self.scene_instance_id,
+            "agent_id": self.agent_id,
+            "active_instruction": self.active_instruction,
+            "active_instruction_id": self.active_instruction_id,
+            "instruction_history": [dict(item) for item in self.instruction_history],
+            "recent_observation_refs": [dict(item) for item in self.recent_observation_refs],
+            "recent_action_refs": [dict(item) for item in self.recent_action_refs],
+            "recent_pose_refs": [dict(item) for item in self.recent_pose_refs],
+            "recent_frame_refs": [dict(item) for item in self.recent_frame_refs],
+            "reset_epoch": self.reset_epoch,
+            "rolling_summary": dict(self.rolling_summary),
+        }

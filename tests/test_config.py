@@ -7,6 +7,7 @@ import json
 import pytest
 
 from src.runtime.configs.action_config import UavActionConfig, load_uav_action_config
+from src.runtime.configs.safety_config import UavSafetyConfig, load_uav_safety_config
 from src.runtime.configs.map_config import build_remote_airsim_config, load_map_config
 from test_uav_client_demo import load_demo_action_config
 
@@ -175,6 +176,36 @@ def test_load_uav_action_config_reads_fixed_scale_values(tmp_path):
     assert config.vertical_duration_sec == 2.0
     assert config.vertical_step_m == 1.5
     assert config.yaw_step_deg == 20.0
+
+
+def test_load_uav_safety_config_defaults_when_file_missing(tmp_path):
+    config = load_uav_safety_config(tmp_path / "missing.json")
+
+    assert config == UavSafetyConfig()
+
+
+def test_load_uav_safety_config_reads_hard_limits(tmp_path):
+    config_path = tmp_path / "uav_safety_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "max_yaw_step_deg": 35.0,
+                "max_linear_velocity_mps": 7.0,
+                "max_vertical_velocity_mps": 4.0,
+                "max_move_duration_sec": 9.0,
+                "max_yaw_scan_accum_deg": 500.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_uav_safety_config(config_path)
+
+    assert config.max_yaw_step_deg == 35.0
+    assert config.max_linear_velocity_mps == 7.0
+    assert config.max_vertical_velocity_mps == 4.0
+    assert config.max_move_duration_sec == 9.0
+    assert config.max_yaw_scan_accum_deg == 500.0
 
 
 def test_demo_move_duration_override_preserves_vertical_duration(tmp_path):

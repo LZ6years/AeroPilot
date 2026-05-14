@@ -1,11 +1,19 @@
-"""Test model-ready observation context building."""
+﻿"""Test model-ready observation context building."""
 
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from src.agent.mission_state import MissionState
-from src.agent.schemas import SemanticPhase
-from src.agent.task_parser import TaskParser
+from src.agent.semantic.schemas import SemanticPhase
+from src.agent.semantic.task_parser import TaskParser
+from src.memory.flight_memory import FlightMemory
+from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
+from src.runtime.configs.action_config import UavActionConfig
+from src.runtime.configs.safety_config import UavSafetyConfig
 
 
 def make_state() -> MissionState:
@@ -19,7 +27,24 @@ def make_state() -> MissionState:
     return MissionState("run_test", result.instruction, result.plan)
 
 
-def test_context_builder_includes_mission_phase_observation_actions_and_safety():
+def make_memory(tmp_path, state: MissionState) -> FlightMemory:
+    writer = MemoryEventWriter(tmp_path)
+    reader = MemoryRecordReader(tmp_path)
+    memory = FlightMemory("run_test", "m1", "scene_1", "uav_1", active_instruction=state.user_instruction, memory_reader=reader)
+    memory.update_instruction_ref(writer.write_instruction(state.user_instruction, state.semantic_plan.to_dict()), state.user_instruction)
+    for action in state.recent_actions:
+        result = writer.write_action(action.get("tool", ""), action.get("args", {}), action.get("result", {}))
+        memory.append_action_ref(result["action_ref"])
+        memory.append_pose_ref(result.get("pose_ref"))
+    for observation in state.recent_observations:
+        result = writer.write_observation(observation)
+        memory.append_observation_ref(result["observation_ref"])
+        memory.append_pose_ref(result.get("pose_ref"))
+        memory.append_frame_refs(result.get("frame_refs"))
+    return memory
+
+
+def test_context_builder_includes_mission_phase_observation_actions_and_safety(tmp_path):
     state = make_state()
     state.record_action("uav.hover", {}, {"ok": True})
     state.record_observation(
@@ -34,26 +59,162 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety()
         }
     )
 
-    context = ObservationContextBuilder().build(state)
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
 
     assert context["active_instruction"] == state.user_instruction
     assert context["semantic_goal"] == state.semantic_plan.goal.to_dict()
     assert context["current_phase"]["name"] == "orient_leftward"
     assert context["current_phase"]["index"] == 1
-    assert context["safety_constraints"] == {"hover_required": False}
-    assert "uav.connect" in context["allowed_action_constraints"]["lifecycle_tools_excluded"]
-    assert "uav.hover" in context["allowed_action_constraints"]["planner_tools"]
+    assert context["safety_constraints"] == {
+        "hover_required": False,
+        "yaw_scan_accum_deg": 0.0,
+        "yaw_scan_remaining_deg": 480.0,
+        "max_yaw_scan_accum_deg": 480.0,
+        "yaw_scan_budget_exceeded": False,
+    }
+    action_constraints = context["allowed_action_constraints"]
+    assert action_constraints["planner_tools"] == ["uav.hover", "uav.turn_relative", "uav.move_body"]
+    assert "observe_step_schema" not in action_constraints
+    assert context["observation_policy"] == {
+        "mode": "automatic",
+        "modalities": ["rgb", "depth", "pose"],
+        "sample_timing": "after_each_phase_window",
+        "note": "Do not output observe steps. The runtime samples observations automatically.",
+    }
+    assert "uav.connect" in action_constraints["lifecycle_tools_excluded"]
+    assert "uav.connect" in action_constraints["forbidden_tools"]
+    assert "uav.set_pose" in action_constraints["forbidden_tools"]
+    assert "env.observe" in action_constraints["forbidden_tools"]
+    assert action_constraints["action_schemas"]["uav.hover"]["args"] == {}
+    assert action_constraints["action_schemas"]["uav.turn_relative"]["args"] == {"yaw_deg": "number"}
+    assert action_constraints["action_schemas"]["uav.move_body"]["args_one_of"][0]["direction"] == (
+        "forward|backward|left|right|up|down"
+    )
+    assert "flight_memory" not in context
+    assert "recent_observations" not in context
+    assert "instruction_history" not in context
+    assert context["metadata"]["run_id"] == state.run_id
+    assert context["metadata"]["current_phase_index"] == state.current_phase_index
     fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
     assert fragments["image"]["content"]["recent_observation_sources"][-1] == "phase_step"
     assert fragments["action"]["content"]["recent_actions"][-1]["tool"] == "uav.hover"
 
 
-def test_context_builder_handles_missing_observation():
+def test_context_builder_handles_missing_observation(tmp_path):
     state = make_state()
 
-    context = ObservationContextBuilder().build(state)
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
 
     fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
     assert fragments["image"]["warnings"] == ["no_recent_image_frames"]
     assert fragments["action"]["content"]["recent_actions"] == []
     assert context["current_phase"]["name"] == "orient_leftward"
+
+
+def test_context_builder_action_limits_come_from_safety_config(tmp_path):
+    state = make_state()
+    action_config = UavActionConfig(
+        linear_velocity_mps=1.5,
+        vertical_velocity_mps=0.75,
+        move_duration_sec=1.25,
+        yaw_step_deg=15.0,
+    )
+    safety_config = UavSafetyConfig(
+        max_yaw_step_deg=25.0,
+        max_linear_velocity_mps=6.0,
+        max_vertical_velocity_mps=3.0,
+        max_move_duration_sec=8.0,
+        max_yaw_scan_accum_deg=480.0,
+    )
+
+    context = ObservationContextBuilder(action_config=action_config, safety_config=safety_config).build(
+        state,
+        make_memory(tmp_path, state),
+    )
+
+    constraints = context["allowed_action_constraints"]
+    turn_limits = constraints["action_schemas"]["uav.turn_relative"]["limits"]
+    move_limits = constraints["action_schemas"]["uav.move_body"]["limits"]
+    assert turn_limits == {"yaw_deg_min": -25.0, "yaw_deg_max": 25.0}
+    assert move_limits == {
+        "abs_vx_vy_max": 6.0,
+        "abs_vz_max": 3.0,
+        "duration_max": 8.0,
+    }
+    assert constraints["yaw_step_deg"] == 25.0
+    assert constraints["linear_velocity_mps"] == 6.0
+    assert constraints["vertical_velocity_mps"] == 3.0
+    assert constraints["move_duration_sec"] == 8.0
+    assert constraints["nominal_action_scale"]["move_duration_sec"] == 1.25
+    assert constraints["safety_limits"] == safety_config.to_dict()
+
+
+def test_context_builder_exposes_yaw_scan_budget(tmp_path):
+    state = make_state()
+    state.yaw_scan_accum_deg = 450.0
+    safety_config = UavSafetyConfig(max_yaw_scan_accum_deg=480.0)
+
+    context = ObservationContextBuilder(safety_config=safety_config).build(state, make_memory(tmp_path, state))
+
+    safety_constraints = context["safety_constraints"]
+    assert safety_constraints["yaw_scan_accum_deg"] == 450.0
+    assert safety_constraints["yaw_scan_remaining_deg"] == 30.0
+    assert safety_constraints["max_yaw_scan_accum_deg"] == 480.0
+    assert safety_constraints["yaw_scan_budget_exceeded"] is False
+
+
+def test_context_builder_loads_default_project_map_memory(tmp_path, monkeypatch):
+    memory_dir = tmp_path / "memory" / "map"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "map_memory.json").write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "map_id": "m1",
+                        "scene_id": "scene_1",
+                        "landmark_description": "black street lamp candidate",
+                        "region_hint": "start_area_right",
+                        "confidence": "medium",
+                        "requires_reconfirmation": True,
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    state = make_state()
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
+    map_fragment = next(fragment for fragment in context["fragments"] if fragment["name"] == "map")
+
+    assert map_fragment["content"]["recalled_map_memories"][0]["landmark_description"] == "black street lamp candidate"
+    assert map_fragment["facts"] == []
+    assert map_fragment["inferences"][0]["type"] == "map_memory_hint"
+    assert map_fragment["risks"][0]["type"] == "map_memory_requires_reconfirmation"
+
+
+def test_context_builder_default_project_map_memory_filters_other_maps(tmp_path, monkeypatch):
+    memory_dir = tmp_path / "memory" / "map"
+    memory_dir.mkdir(parents=True)
+    (memory_dir / "map_memory.json").write_text(
+        json.dumps({"entries": [{"map_id": "m2", "scene_id": "scene_1", "landmark_description": "other map clue"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    state = make_state()
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
+    map_fragment = next(fragment for fragment in context["fragments"] if fragment["name"] == "map")
+
+    assert map_fragment["content"]["recalled_map_memories"] == []
+    assert map_fragment["inferences"] == []
+    assert map_fragment["risks"] == []
+
+
+def test_context_builder_requires_flight_memory_manifest():
+    state = make_state()
+
+    with pytest.raises(ValueError, match="requires a FlightMemory manifest"):
+        ObservationContextBuilder().build(state)

@@ -1,10 +1,10 @@
-"""Test M3 task parsing into semantic plans."""
+﻿"""Test M3 task parsing into semantic plans."""
 
 from __future__ import annotations
 
 import pytest
 
-from src.agent.task_parser import TaskParser, TaskParserConfigError
+from src.agent.semantic.task_parser import TaskParser, TaskParserConfigError
 from src.runtime.configs.model_config import ModelConfig
 
 

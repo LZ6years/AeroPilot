@@ -1,8 +1,7 @@
-# 08 可插拔上下文模块
+﻿# 08 鍙彃鎷斾笂涓嬫枃妯″潡
 
-## 1. 为什么需要插件架构
-
-FlyAgent 面向科研用户。无人机的数据来源相对固定：
+## 1. 涓轰粈涔堥渶瑕佹彃浠舵灦鏋?
+FlyAgent 闈㈠悜绉戠爺鐢ㄦ埛銆傛棤浜烘満鐨勬暟鎹潵婧愮浉瀵瑰浐瀹氾細
 
 ```text
 instruction / instruction history
@@ -12,30 +11,22 @@ action history
 map memory
 ```
 
-但不同研究者可能会用不同方式压缩这些历史。例如有人想使用论文里的图片历史记忆方式，但仍然沿用 FlyAgent 默认的指令历史、动作历史和地图记忆。为了支持这种实验，记忆系统不能把所有压缩逻辑写死在 `ContextComposer` 里。
-
-第一版采用可插拔上下文模块：
+浣嗕笉鍚岀爺绌惰€呭彲鑳戒細鐢ㄤ笉鍚屾柟寮忓帇缂╄繖浜涘巻鍙层€備緥濡傛湁浜烘兂浣跨敤璁烘枃閲岀殑鍥剧墖鍘嗗彶璁板繂鏂瑰紡锛屼絾浠嶇劧娌跨敤 FlyAgent 榛樿鐨勬寚浠ゅ巻鍙层€佸姩浣滃巻鍙插拰鍦板浘璁板繂銆備负浜嗘敮鎸佽繖绉嶅疄楠岋紝璁板繂绯荤粺涓嶈兘鎶婃墍鏈夊帇缂╅€昏緫鍐欐鍦?`ContextComposer` 閲屻€?
+绗竴鐗堥噰鐢ㄥ彲鎻掓嫈涓婁笅鏂囨ā鍧楋細
 
 ```text
-固定数据源 + 可替换模块 + 固定安全边界
+鍥哄畾鏁版嵁婧?+ 鍙浛鎹㈡ā鍧?+ 鍥哄畾瀹夊叏杈圭晫
 ```
 
-## 2. 软件架构选择
+## 2. 杞欢鏋舵瀯閫夋嫨
 
-软件架构采用：
-
+杞欢鏋舵瀯閲囩敤锛?
 ```text
 Ports & Adapters + Pipeline + Strategy/Registry
 ```
 
-含义：
-
-- `FlightMemory`、`MapMemory`、`RunMemory` 是固定数据源。
-- `ContextModuleRegistry` 是注册和加载层。
-- 五类 `ContextModule` 是可替换策略。
-- `ContextComposer` 是固定管线外壳，只合并模块输出。
-- `SafetySupervisor` 仍然是动作安全边界。
-
+鍚箟锛?
+- `FlightMemory`銆乣MapMemory`銆乣RunMemory` 鏄浐瀹氭暟鎹簮銆?- `ContextModuleRegistry` 鏄敞鍐屽拰鍔犺浇灞傘€?- 浜旂被 `ContextModule` 鏄彲鏇挎崲绛栫暐銆?- `ContextComposer` 鏄浐瀹氱绾垮澹筹紝鍙悎骞舵ā鍧楄緭鍑恒€?- `SafetySupervisor` 浠嶇劧鏄姩浣滃畨鍏ㄨ竟鐣屻€?
 ```mermaid
 flowchart TD
     A["FlightMemory / MapMemory / RunMemory"] --> R["ContextModuleRegistry"]
@@ -59,26 +50,17 @@ flowchart TD
 
 ## 3. ContextModuleRegistry
 
-`ContextModuleRegistry` 不保存记忆，也不做飞控。它负责：
-
-- 读取配置文件。
-- 加载默认模块。
-- 加载用户自定义模块。
-- 按数据类型调用模块。
-- 收集各模块输出的 context fragment。
-- 把 fragments 交给 `ContextComposer`。
-
-建议配置文件：
-
+`ContextModuleRegistry` 涓嶄繚瀛樿蹇嗭紝涔熶笉鍋氶鎺с€傚畠璐熻矗锛?
+- 璇诲彇閰嶇疆鏂囦欢銆?- 鍔犺浇榛樿妯″潡銆?- 鍔犺浇鐢ㄦ埛鑷畾涔夋ā鍧椼€?- 鎸夋暟鎹被鍨嬭皟鐢ㄦā鍧椼€?- 鏀堕泦鍚勬ā鍧楄緭鍑虹殑 context fragment銆?- 鎶?fragments 浜ょ粰 `ContextComposer`銆?
+寤鸿閰嶇疆鏂囦欢锛?
 ```text
 configs/context_modules.json
 ```
 
-配置错误时，后续实现建议 fail fast，并给出清晰错误；不要静默加载未知模块。
+閰嶇疆閿欒鏃讹紝鍚庣画瀹炵幇寤鸿 fail fast锛屽苟缁欏嚭娓呮櫚閿欒锛涗笉瑕侀潤榛樺姞杞芥湭鐭ユā鍧椼€?
+## 4. 浜旂被榛樿妯″潡
 
-## 4. 五类默认模块
-
-第一版固定五类模块：
+绗竴鐗堝浐瀹氫簲绫绘ā鍧楋細
 
 ```text
 InstructionContextModule
@@ -88,22 +70,19 @@ ActionContextModule
 MapContextModule
 ```
 
-默认实现：
-
-| 模块 | 默认职责 |
+榛樿瀹炵幇锛?
+| 妯″潡 | 榛樿鑱岃矗 |
 | --- | --- |
-| `DefaultInstructionContextModule` | active instruction + 最近历史指令摘要 |
-| `DefaultImageContextModule` | 最新 RGB/depth metadata、artifact refs、简单图像历史摘要 |
-| `DefaultPoseContextModule` | latest pose、pose delta、velocity、reset_epoch |
-| `DefaultActionContextModule` | 最近动作效果、失败原因、Safety 裁剪摘要 |
-| `DefaultMapContextModule` | 当前 map/scene 相关线索召回、confidence、reconfirmation |
+| `DefaultInstructionContextModule` | active instruction + 鏈€杩戝巻鍙叉寚浠ゆ憳瑕?|
+| `DefaultImageContextModule` | 鏈€鏂?RGB/depth metadata銆乤rtifact refs銆佺畝鍗曞浘鍍忓巻鍙叉憳瑕?|
+| `DefaultPoseContextModule` | latest pose銆乸ose delta銆乿elocity銆乺eset_epoch |
+| `DefaultActionContextModule` | 鏈€杩戝姩浣滄晥鏋溿€佸け璐ュ師鍥犮€丼afety 瑁佸壀鎽樿 |
+| `DefaultMapContextModule` | 褰撳墠 map/scene 鐩稿叧绾跨储鍙洖銆乧onfidence銆乺econfirmation |
 
-默认模块必须始终存在，保证不配置插件也能运行。
+榛樿妯″潡蹇呴』濮嬬粓瀛樺湪锛屼繚璇佷笉閰嶇疆鎻掍欢涔熻兘杩愯銆?
+## 5. 閰嶇疆鏂囦欢娉ㄥ唽鏂瑰紡
 
-## 5. 配置文件注册方式
-
-默认配置示例：
-
+榛樿閰嶇疆绀轰緥锛?
 ```json
 {
   "modules": {
@@ -117,8 +96,7 @@ MapContextModule
 }
 ```
 
-替换图片历史模块示例：
-
+鏇挎崲鍥剧墖鍘嗗彶妯″潡绀轰緥锛?
 ```json
 {
   "modules": {
@@ -130,15 +108,14 @@ MapContextModule
   },
   "custom_modules": {
     "paper_x_image_memory": {
-      "module_path": "src.memory.custom_modules.image_memory.paper_x",
+      "module_path": "src.memory.context.custom_modules.image_memory.paper_x",
       "class_name": "PaperXImageMemoryModule"
     }
   }
 }
 ```
 
-关闭模块示例：
-
+鍏抽棴妯″潡绀轰緥锛?
 ```json
 {
   "modules": {
@@ -152,12 +129,10 @@ MapContextModule
 }
 ```
 
-此时 `image` 和 `map` 不生成 fragment，`ContextComposer` 应把它们记录到 `disabled_fragments`。
+姝ゆ椂 `image` 鍜?`map` 涓嶇敓鎴?fragment锛宍ContextComposer` 搴旀妸瀹冧滑璁板綍鍒?`disabled_fragments`銆?
+## 6. Context Fragment 杈撳嚭瑙勮寖
 
-## 6. Context Fragment 输出规范
-
-每个模块必须输出统一外壳的 `Context Fragment`：
-
+姣忎釜妯″潡蹇呴』杈撳嚭缁熶竴澶栧３鐨?`Context Fragment`锛?
 ```json
 {
   "name": "image",
@@ -179,27 +154,25 @@ MapContextModule
 }
 ```
 
-五类模块的重点：
+浜旂被妯″潡鐨勯噸鐐癸細
 
 ```text
-InstructionContextModule -> goals 为主
-ImageContextModule -> facts / inferences / risks 为主
-PoseContextModule -> facts / risks 为主
-ActionContextModule -> facts / inferences / risks 为主
-MapContextModule -> inferences / risks 为主
+InstructionContextModule -> goals 涓轰富
+ImageContextModule -> facts / inferences / risks 涓轰富
+PoseContextModule -> facts / risks 涓轰富
+ActionContextModule -> facts / inferences / risks 涓轰富
+MapContextModule -> inferences / risks 涓轰富
 ```
 
-用户自定义模块也必须遵守统一 fragment 外壳。模块可以改变 `content` 内部结构，但不能省略 `name`、`enabled`、`source`、`confidence`、`budget`、`metadata` 等外层字段。
-
-## 7. 文件夹放置建议
-
-官方默认实现建议放在 `src/memory` 下：
+鐢ㄦ埛鑷畾涔夋ā鍧椾篃蹇呴』閬靛畧缁熶竴 fragment 澶栧３銆傛ā鍧楀彲浠ユ敼鍙?`content` 鍐呴儴缁撴瀯锛屼絾涓嶈兘鐪佺暐 `name`銆乣enabled`銆乣source`銆乣confidence`銆乣budget`銆乣metadata` 绛夊灞傚瓧娈点€?
+## 7. 鏂囦欢澶规斁缃缓璁?
+瀹樻柟榛樿瀹炵幇寤鸿鏀惧湪 `src/memory` 涓嬶細
 
 ```text
 src/
   memory/
     flight_memory.py
-    context_composer.py
+    context/composer.py
     registry.py
     modules/
       base.py
@@ -213,7 +186,7 @@ src/
       run_memory_store.py
 ```
 
-用户自定义模块建议放在 `src/memory/custom_modules` 下：
+鐢ㄦ埛鑷畾涔夋ā鍧楀缓璁斁鍦?`src/memory/context/custom_modules` 涓嬶細
 
 ```text
 src/
@@ -228,13 +201,12 @@ src/
         custom_action_summary.py
 ```
 
-配置文件放在：
-
+閰嶇疆鏂囦欢鏀惧湪锛?
 ```text
 configs/context_modules.json
 ```
 
-规则和偏好文件建议放在：
+瑙勫垯鍜屽亸濂芥枃浠跺缓璁斁鍦細
 
 ```text
 memory/
@@ -242,7 +214,7 @@ memory/
   USER.md
 ```
 
-长期地图和运行记忆后续可以放在：
+闀挎湡鍦板浘鍜岃繍琛岃蹇嗗悗缁彲浠ユ斁鍦細
 
 ```text
 memory/
@@ -254,31 +226,26 @@ memory/
     cityenviron_forward_undertravel.md
 ```
 
-目录边界：
-
-- `src/memory/modules` 是官方默认模块，不建议科研用户直接改。
-- `src/memory/custom_modules` 是用户实验模块，适合放论文方法、临时对比实验和自定义压缩策略。
+鐩綍杈圭晫锛?
+- `src/memory/context/modules` 是官方默认模块，不建议科研用户直接改。
+- `src/memory/context/custom_modules` 是用户实验模块，适合放论文方法、临时对比实验和自定义压缩策略。
 - `configs/context_modules.json` 是唯一注册入口。
-- `memory/` 下面只放规则、偏好和长期记忆，不放 Python 插件代码。
+- 根目录 `memory/` 下面只放规则、偏好和长期记忆数据，不放 Python 插件代码。
+## 8. 鐢ㄦ埛濡備綍娣诲姞鑷畾涔夋ā鍧?
+浠ユ浛鎹㈠浘鐗囧巻鍙茶蹇嗕负渚嬶細
 
-## 8. 用户如何添加自定义模块
-
-以替换图片历史记忆为例：
-
-1. 新建 Python 模块：
-
+1. 鏂板缓 Python 妯″潡锛?
 ```text
-src/memory/custom_modules/image_memory/paper_x.py
+src/memory/context/custom_modules/image_memory/paper_x.py
 ```
 
-2. 实现约定类：
+2. 瀹炵幇绾﹀畾绫伙細
 
 ```text
 PaperXImageMemoryModule
 ```
 
-3. 在 `configs/context_modules.json` 注册：
-
+3. 鍦?`configs/context_modules.json` 娉ㄥ唽锛?
 ```json
 {
   "modules": {
@@ -290,37 +257,26 @@ PaperXImageMemoryModule
   },
   "custom_modules": {
     "paper_x_image_memory": {
-      "module_path": "src.memory.custom_modules.image_memory.paper_x",
+      "module_path": "src.memory.context.custom_modules.image_memory.paper_x",
       "class_name": "PaperXImageMemoryModule"
     }
   }
 }
 ```
 
-4. 运行时只替换 image 历史记忆处理，其余 instruction、pose、action、map 仍使用默认实现。
+4. 杩愯鏃跺彧鏇挎崲 image 鍘嗗彶璁板繂澶勭悊锛屽叾浣?instruction銆乸ose銆乤ction銆乵ap 浠嶄娇鐢ㄩ粯璁ゅ疄鐜般€?
+鐢ㄦ埛涓嶉渶瑕佷慨鏀?`ContextComposer`锛屼篃涓嶉渶瑕佹敼 `ModelActionPlanner`銆?
+## 9. 妯″潡瀹夊叏杈圭晫
 
-用户不需要修改 `ContextComposer`，也不需要改 `ModelActionPlanner`。
-
-## 9. 模块安全边界
-
-模块只生成 context fragment，不生成 action plan。
-
-模块不能：
-
-- 调用 `ToolDispatcher`。
-- 调用 `EnvClient`。
-- 直接调用 AirSim 或 UnrealCV。
-- 绕过 `SafetySupervisor`。
-- 输出生命周期工具建议。
-- 把未经确认的 map memory 写成事实。
-- 修改原始 run artifacts。
-
-模块输出必须包含来源、置信度或 metadata，便于审计。例如：
+妯″潡鍙敓鎴?context fragment锛屼笉鐢熸垚 action plan銆?
+妯″潡涓嶈兘锛?
+- 璋冪敤 `ToolDispatcher`銆?- 璋冪敤 `EnvClient`銆?- 鐩存帴璋冪敤 AirSim 鎴?UnrealCV銆?- 缁曡繃 `SafetySupervisor`銆?- 杈撳嚭鐢熷懡鍛ㄦ湡宸ュ叿寤鸿銆?- 鎶婃湭缁忕‘璁ょ殑 map memory 鍐欐垚浜嬪疄銆?- 淇敼鍘熷 run artifacts銆?
+妯″潡杈撳嚭蹇呴』鍖呭惈鏉ユ簮銆佺疆淇″害鎴?metadata锛屼究浜庡璁°€備緥濡傦細
 
 ```json
 {
   "image_context": {
-    "summary": "最近 RGB 可用，depth 可用，未确认目标",
+    "summary": "鏈€杩?RGB 鍙敤锛宒epth 鍙敤锛屾湭纭鐩爣",
     "source": "PaperXImageMemoryModule",
     "confidence": "medium",
     "metadata": {
@@ -330,17 +286,14 @@ PaperXImageMemoryModule
 }
 ```
 
-## 10. 科研扩展示例：替换 ImageContextModule
+## 10. 绉戠爺鎵╁睍绀轰緥锛氭浛鎹?ImageContextModule
 
-场景：
-
+鍦烘櫙锛?
 ```text
-用户希望使用某篇论文的图片历史记忆方法；
-但 instruction/action/pose/map 仍使用 FlyAgent 默认策略。
-```
+鐢ㄦ埛甯屾湜浣跨敤鏌愮瘒璁烘枃鐨勫浘鐗囧巻鍙茶蹇嗘柟娉曪紱
+浣?instruction/action/pose/map 浠嶄娇鐢?FlyAgent 榛樿绛栫暐銆?```
 
-流程：
-
+娴佺▼锛?
 ```mermaid
 flowchart LR
     A["Paper method<br/>image history compression"] --> B["PaperXImageMemoryModule"]
@@ -353,23 +306,33 @@ flowchart LR
     G --> H["Planner Context"]
 ```
 
-这让科研用户可以独立实验图片历史压缩，而不破坏 FlyAgent 的飞控、安全和地图记忆边界。
+杩欒绉戠爺鐢ㄦ埛鍙互鐙珛瀹為獙鍥剧墖鍘嗗彶鍘嬬缉锛岃€屼笉鐮村潖 FlyAgent 鐨勯鎺с€佸畨鍏ㄥ拰鍦板浘璁板繂杈圭晫銆?
+## 11. MVP 杈圭晫
 
-## 11. MVP 边界
+MVP 鍋氾細
 
-MVP 做：
+- 瀹氫箟浜旂被妯″潡鎺ュ彛銆?- 瀹氫箟 `ContextModuleRegistry`銆?- 瀹氫箟閰嶇疆娉ㄥ唽鏍煎紡銆?- 鎻愪緵浜旂被榛樿妯″潡銆?- 鏀寔鐢ㄦ埛鏇挎崲鍗曚竴妯″潡銆?
+MVP 涓嶅仛锛?
+- 杩滅▼鎻掍欢銆?- 鍔ㄦ€佺儹鍔犺浇銆?- 鎻掍欢 marketplace銆?- 鎻掍欢鐩存帴鎵ц UAV tool銆?- 鎻掍欢淇敼 SafetySupervisor銆?- 鎻掍欢鑷姩鍐欓暱鏈熺敤鎴疯蹇嗐€?## 10. 鑷畾涔夋ā鍧楀浣曡鍙?JSONL 璁板繂
 
-- 定义五类模块接口。
-- 定义 `ContextModuleRegistry`。
-- 定义配置注册格式。
-- 提供五类默认模块。
-- 支持用户替换单一模块。
+閲囩敤 manifest + jsonl store 鍚庯紝鑷畾涔夋ā鍧椾笉搴旇渚濊禆 `flight_memory.json` 閲屼繚瀛樺畬鏁村巻鍙层€傛帹鑽愭柟寮忔槸锛?
+1. 浠?`MemorySourceBundle.flight_memory` 璇诲彇褰撳墠妯″潡闇€瑕佺殑 refs锛屼緥濡?`recent_observation_refs`銆乣recent_action_refs`銆乣latest_pose_ref`銆?2. 閫氳繃杩愯鏃舵彁渚涚殑 reader 鎴?store 璇诲彇瀵瑰簲 `memory/*.jsonl` 璁板綍銆?3. 瀵规湰妯″潡鐨勬暟鎹仛鍘嬬缉鎴栫爺绌剁畻娉曞鐞嗐€?4. 杈撳嚭缁熶竴 `ContextFragment`銆?
+绀轰緥锛氳嚜瀹氫箟 image module 鍙互璇诲彇锛?
+```text
+flight_memory.json:
+  recent_observation_refs
 
-MVP 不做：
+memory/observations.jsonl:
+  observation -> frame_refs / pose_ref / action_ref
 
-- 远程插件。
-- 动态热加载。
-- 插件 marketplace。
-- 插件直接执行 UAV tool。
-- 插件修改 SafetySupervisor。
-- 插件自动写长期用户记忆。
+memory/frames.jsonl:
+  frame -> modality / artifact path / metadata
+
+memory/artifacts/rgb
+memory/artifacts/depth
+```
+
+杩欐牱鐢ㄦ埛鍙互鏇挎崲鍥剧墖鍘嗗彶璁板繂鏂瑰紡锛岃€?instruction / pose / action / map 妯″潡浠嶇劧浣跨敤榛樿瀹炵幇銆?
+鑷畾涔夋ā鍧楃害鏉燂細
+
+- 鍙互璇诲彇 refs 鎸囧悜鐨?raw records銆?- 鍙互浣跨敤鑷繁鐨勫帇缂╃畻娉曘€?- 杈撳嚭蹇呴』鏄?`ContextFragment`銆?- 涓嶈兘鐩存帴杈撳嚭 action plan銆?- 涓嶈兘缁曡繃 `ContextComposer` 鍜?`SafetySupervisor`銆?

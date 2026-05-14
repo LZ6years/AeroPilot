@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.agent.mission_state import MissionState
-from src.agent.task_parser import TaskParser
+from src.agent.semantic.task_parser import TaskParser
 
 
 def make_state() -> MissionState:

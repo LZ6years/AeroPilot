@@ -7,9 +7,8 @@ import json
 import socket
 from pathlib import Path
 
-from src.agent.model_action_planner import ModelActionPlanner
-from src.agent.short_horizon_planner import ShortHorizonPlanner
-from src.agent.task_parser import TaskParser
+from src.agent.planning.model_action_planner import ModelActionPlanner
+from src.agent.semantic.task_parser import TaskParser
 from src.env_client.local_client import LocalEnvClient
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.map_config import build_remote_airsim_config, load_map_config
@@ -46,12 +45,6 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["model", "rule_based"],
         default=None,
         help="Override FLYAGENT_TASK_PARSER_MODE for parse-task",
-    )
-    parser.add_argument(
-        "--planner-mode",
-        choices=["model", "rule_based"],
-        default="rule_based",
-        help="Short-horizon planner mode for run-task",
     )
     parser.add_argument(
         "--shutdown-policy",
@@ -193,7 +186,7 @@ def run_task(args: argparse.Namespace) -> None:
             "task run started",
             map_id=map_id,
             parser_mode=parser_mode,
-            planner_mode=args.planner_mode,
+            planner="ModelActionPlanner",
             shutdown_policy=args.shutdown_policy,
         )
         recorder.write_json("config/map_package.json", selected_map.to_dict())
@@ -202,7 +195,7 @@ def run_task(args: argparse.Namespace) -> None:
             {
                 "model_config": model_config.redacted_summary(),
                 "parser_mode": parser_mode,
-                "planner_mode": args.planner_mode,
+                "planner": "ModelActionPlanner",
                 "shutdown_policy": args.shutdown_policy,
             },
         )
@@ -219,7 +212,7 @@ def run_task(args: argparse.Namespace) -> None:
             LocalEnvClient(server),
             recorder,
             TaskParser(mode=parser_mode, model_config=model_config),
-            planner=build_planner(args.planner_mode, model_config, action_config),
+            planner=ModelActionPlanner(model_config),
             shutdown_policy=args.shutdown_policy,
         )
         state = runtime.run_task(map_id, args.instruction)
@@ -232,14 +225,6 @@ def run_task(args: argparse.Namespace) -> None:
         raise
     finally:
         recorder.close()
-
-
-def build_planner(planner_mode: str, model_config, action_config):
-    if planner_mode == "rule_based":
-        return ShortHorizonPlanner(action_config)
-    if planner_mode == "model":
-        return ModelActionPlanner(model_config)
-    raise ValueError(f"Unsupported planner mode: {planner_mode}")
 
 
 def probe_tcp_endpoint(host: str, port: int, timeout_sec: int) -> dict:

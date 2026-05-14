@@ -154,7 +154,7 @@ User / CLI
 
 `connect`、`takeoff`、起飞后 `hover` 和初始观测属于 Runtime preflight，不属于 phase 动作规划；模型动作候选工具不应包含 `uav.connect` / `uav.takeoff` / `uav.land` 这类生命周期动作。
 
-当前 `ShortHorizonPlanner` 只是规则兜底和 dry-run 骨架，保留它是为了离线测试和无模型环境下验证闭环；`ModelActionPlanner` 是 M6 的第一版目标，先基于 M5 JSON context 生成 1-3 个短期动作建议，后续再接真实图像输入和更完整的 VLM 判断。
+当前已不保留规则版短期 planner。短期动作规划统一由 `ModelActionPlanner` 基于 `PlannerContext` 生成 1-3 个 `kind="tool"` 动作；RGB/depth/pose 由 runtime 按 `observation_policy` 自动采集，模型不再输出 `observe` step。
 
 ## 8. 后续 Plan-Execute-Repair 链路
 

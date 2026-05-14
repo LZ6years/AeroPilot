@@ -418,4 +418,4 @@ SemanticPlan phase + MissionState + RGB/depth/pose + tool registry + safety limi
       -> ToolDispatcher
 ```
 
-当前规则版 `ShortHorizonPlanner` 只作为 dry-run、离线测试和安全兜底；真正任务执行应由模型结合当前阶段、多模态观察、最近动作历史和可用工具列表生成短期动作建议。模型建议仍必须通过 schema 校验和 Safety Supervisor，不能直接控制 UAV。
+规则版短期 planner 已移除；真正任务执行由 `ModelActionPlanner` 结合当前阶段、自动采集的 RGB/depth/pose、最近动作历史和可用工具列表生成短期动作建议。模型建议仍必须通过 schema 校验和 Safety Supervisor，不能直接控制 UAV。

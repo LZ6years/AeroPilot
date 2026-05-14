@@ -21,6 +21,7 @@
 6. [MVP 计划](./06_mvp_plan.md)
 7. [图示汇总](./07_diagrams.md)
 8. [可插拔上下文模块](./08_pluggable_context_modules.md)
+9. [实现策略](./09_implementation_strategy.md)
 
 ## 与 M4/M5 的关系
 
@@ -56,3 +57,30 @@ ContextModuleRegistry 注册机制
 MapMemory schema
 连续指令与 reset 语义
 ```
+## 最新设计补充：FlightMemory 作为 Manifest / Index
+
+当前设计进一步明确：`FlightMemory` 不应该保存大量完整历史内容，也不应该提前做去重、摘要或压缩。它更适合作为当前 run / scene / UAV 的记忆索引文件，也就是 `flight_memory.json`。
+
+推荐落盘结构：
+
+```text
+runs/<run_id>/
+  flight_memory.json              # 当前飞行记忆 manifest / index
+  memory/
+    instructions.jsonl            # 用户指令历史原始记录
+    actions.jsonl                 # UAV action 调用与结果
+    poses.jsonl                   # pose / attitude / coordinate frame 历史
+    observations.jsonl            # 每次 observation 的总索引
+    frames.jsonl                  # RGB/depth frame 索引
+    artifacts/
+      rgb/                        # RGB 图像文件
+      depth/                      # depth 文件
+```
+
+核心原则：
+
+- `flight_memory.json` 保存 refs、最新状态、窗口指针、`reset_epoch`、`map_id`、`scene_instance_id`、`agent_id`。
+- `memory/*.jsonl` 保存 append-only 原始历史记录。
+- `artifacts/rgb` 和 `artifacts/depth` 保存大文件，`frames.jsonl` 只保存引用。
+- `ContextModule` 通过 `flight_memory.json` 中的索引读取自己需要的数据，再决定如何压缩成 `ContextFragment`。
+- `FlightMemory` 不做 pose 去重、不写 `pose_ref: same_as_previous_observation`、不裁剪 action result 的原始字段。

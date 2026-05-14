@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from src.agent.semantic_plan import SemanticPlanValidationError, semantic_plan_from_dict
+from src.agent.semantic.validator import SemanticPlanValidationError, semantic_plan_from_dict
 
 
 def test_semantic_plan_accepts_valid_plan():

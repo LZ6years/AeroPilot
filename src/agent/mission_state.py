@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.agent.schemas import SemanticPlan
+from src.agent.semantic.schemas import SemanticPlan
 
 
 @dataclass
@@ -20,6 +20,7 @@ class MissionState:
     connected: bool = False
     airborne: bool = False
     hover_required: bool = False
+    yaw_scan_accum_deg: float = 0.0
     completed: bool = False
 
     @property
@@ -46,6 +47,8 @@ class MissionState:
                 self.airborne = True
             if tool == "uav.land":
                 self.airborne = False
+            if tool == "uav.turn_relative":
+                self.yaw_scan_accum_deg += abs(float(args.get("yaw_deg", 0.0)))
 
     def record_observation(self, observation: dict[str, Any]) -> None:
         # Keep a bounded observation history for later VLM/context work.
@@ -67,6 +70,7 @@ class MissionState:
             "recent_observations": list(self.recent_observations),
             "errors": list(self.errors),
             "safety": {"hover_required": self.hover_required},
+            "yaw_scan_accum_deg": self.yaw_scan_accum_deg,
             "connected": self.connected,
             "airborne": self.airborne,
             "completed": self.completed,

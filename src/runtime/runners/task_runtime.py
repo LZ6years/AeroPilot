@@ -1,15 +1,16 @@
-"""Run semantic tasks through short-horizon planning windows."""
+﻿"""Run semantic tasks through short-horizon planning windows."""
 
 from __future__ import annotations
 
 from src.agent.mission_state import MissionState
+from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
-from src.agent.schemas import TaskParseResult
-from src.agent.short_horizon_planner import ShortHorizonPlanner
-from src.agent.task_parser import TaskParser
+from src.agent.semantic.schemas import TaskParseResult
+from src.agent.semantic.task_parser import TaskParser
 from src.env_client.base import EnvClient
 from src.env_client.schemas import SceneInstance
 from src.memory.flight_memory import FlightMemory
+from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.perception.raw_observation import RawObservation
 from src.tools.dispatcher import ToolDispatcher
@@ -33,11 +34,13 @@ class TaskRuntime:
         self.env_client = env_client
         self.recorder = recorder
         self.task_parser = task_parser
-        self.planner = planner or ShortHorizonPlanner()
+        self.planner = planner or ModelActionPlanner()
         self.safety = safety or SafetySupervisor()
         self.shutdown_policy = shutdown_policy
         self.tools = ToolDispatcher(env_client)
-        self.context_builder = ObservationContextBuilder(self.safety.action_config)
+        self.context_builder = ObservationContextBuilder(safety_config=self.safety.safety_config)
+        self.memory_writer = MemoryEventWriter(self.recorder.run_dir)
+        self.memory_reader = MemoryRecordReader(self.recorder.run_dir)
         self._preflight_scene_ids: set[str] = set()
         self._active_reused_scenes: dict[tuple[str, str | None], SceneInstance] = {}
         self._active_flight_memories: dict[tuple[str, str | None, str], FlightMemory] = {}
@@ -231,7 +234,7 @@ class TaskRuntime:
             payload = {"phase": plan.phase, "step_index": index, "step": step.to_dict()}
             self.recorder.event("step_started", payload)
             if step.kind == "observe":
-                data = self._record_observation(scene, agent_id, state, step.modalities, source="phase_step")
+                data = self._record_observation(scene, agent_id, state, step.modalities, source="manual_observe_step")
                 self.recorder.event("observation_updated", data)
                 self.recorder.event("step_completed", {**payload, "result": data})
             else:
@@ -244,6 +247,26 @@ class TaskRuntime:
                 if not result.ok:
                     raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
             self._write_state(state)
+        self._apply_automatic_observation_policy(scene, agent_id, state, plan.phase)
+
+    def _apply_automatic_observation_policy(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+        phase: str,
+    ) -> None:
+        modalities = ["rgb", "depth", "pose"]
+        policy = {
+            "mode": "automatic",
+            "modalities": modalities,
+            "sample_timing": "after_each_phase_window",
+            "phase": phase,
+        }
+        self.recorder.event("automatic_observation_policy_applied", policy)
+        data = self._record_observation(scene, agent_id, state, modalities, source="automatic_phase_window")
+        self.recorder.event("automatic_observation_updated", data)
+        self._write_state(state)
 
     def _record_observation(
         self,
@@ -257,7 +280,11 @@ class TaskRuntime:
         raw = RawObservation.from_env_observation(observation, source=source)
         data = raw.to_dict()
         state.record_observation(data)
-        self._memory_for_state(state).append_observation(data)
+        write_result = self.memory_writer.write_observation(data)
+        memory = self._memory_for_state(state)
+        memory.append_observation_ref(write_result["observation_ref"])
+        memory.append_pose_ref(write_result.get("pose_ref"))
+        memory.append_frame_refs(write_result.get("frame_refs"))
         self.recorder.write_json("observations/latest_observation.json", data)
         self.recorder.write_json("contexts/latest_context.json", self.context_builder.build(state, self._memory_for_state(state)))
         return data
@@ -329,10 +356,12 @@ class TaskRuntime:
                 map_id=map_id,
                 scene_instance_id=scene.scene_instance_id,
                 agent_id=agent_id,
+                memory_reader=self.memory_reader,
             )
             if scene_policy == "reuse_running":
                 self._active_flight_memories[key] = memory
-        memory.update_instruction(parse_result.instruction, parse_result.plan.to_dict())
+        instruction_ref = self.memory_writer.write_instruction(parse_result.instruction, parse_result.plan.to_dict())
+        memory.update_instruction_ref(instruction_ref, parse_result.instruction)
         return memory
 
     def _memory_for_state(self, state: MissionState) -> FlightMemory:
@@ -343,4 +372,7 @@ class TaskRuntime:
 
     def _record_action(self, state: MissionState, tool: str, args: dict, result: dict) -> None:
         state.record_action(tool, args, result)
-        self._memory_for_state(state).append_action(tool, args, result)
+        write_result = self.memory_writer.write_action(tool, args, result)
+        memory = self._memory_for_state(state)
+        memory.append_action_ref(write_result["action_ref"])
+        memory.append_pose_ref(write_result.get("pose_ref"))

@@ -1,0 +1,5 @@
+{
+  "description": "Project-level MapMemory manifest. Entries are reusable map or scene clues, not current flight facts.",
+  "entry_policy": "Keep entries auditable. Prefer requires_reconfirmation=true unless a clue was recently verified by current observations.",
+  "entries": []
+}
