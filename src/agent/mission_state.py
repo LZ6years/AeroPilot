@@ -21,6 +21,8 @@ class MissionState:
     airborne: bool = False
     hover_required: bool = False
     yaw_scan_accum_deg: float = 0.0
+    phase_window_counts: dict[str, int] = field(default_factory=dict)
+    max_phase_window_count: int = 5
     completed: bool = False
 
     @property
@@ -34,6 +36,18 @@ class MissionState:
         self.current_phase_index += 1
         if self.current_phase_index >= len(self.semantic_plan.phases):
             self.completed = True
+
+    @property
+    def current_phase_window_count(self) -> int:
+        return int(self.phase_window_counts.get(self.current_phase_name, 0))
+
+    def record_phase_window_started(self) -> None:
+        # Count windows per semantic phase so runtime can prevent infinite loops.
+        phase = self.current_phase_name
+        self.phase_window_counts[phase] = self.current_phase_window_count + 1
+
+    def mark_completed(self) -> None:
+        self.completed = True
 
     def record_action(self, tool: str, args: dict[str, Any], result: dict[str, Any]) -> None:
         # Keep a bounded action history and update minimal runtime flags.
@@ -71,6 +85,9 @@ class MissionState:
             "errors": list(self.errors),
             "safety": {"hover_required": self.hover_required},
             "yaw_scan_accum_deg": self.yaw_scan_accum_deg,
+            "phase_window_counts": dict(self.phase_window_counts),
+            "current_phase_window_count": self.current_phase_window_count,
+            "max_phase_window_count": self.max_phase_window_count,
             "connected": self.connected,
             "airborne": self.airborne,
             "completed": self.completed,

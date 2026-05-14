@@ -53,6 +53,7 @@ class ObservationContextBuilder:
             safety_constraints=self._safety_constraints(state),
             allowed_action_constraints=self._allowed_action_constraints(),
             observation_policy=self._observation_policy(),
+            phase_transition_policy=self._phase_transition_policy(state),
             metadata={
                 "run_id": state.run_id,
                 "current_phase_index": state.current_phase_index,
@@ -136,4 +137,13 @@ class ObservationContextBuilder:
             "modalities": ["rgb", "depth", "pose"],
             "sample_timing": "after_each_phase_window",
             "note": "Do not output observe steps. The runtime samples observations automatically.",
+        }
+
+    def _phase_transition_policy(self, state: MissionState) -> dict[str, Any]:
+        return {
+            "mode": "model_suggested_runtime_applied",
+            "decisions": ["continue_current_phase", "advance_to_next_phase", "complete_task"],
+            "current_phase_window_count": state.current_phase_window_count,
+            "max_phase_window_count": state.max_phase_window_count,
+            "note": "Output phase_transition in the action plan. Do not output target phase names or indexes.",
         }

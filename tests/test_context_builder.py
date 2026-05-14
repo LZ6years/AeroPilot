@@ -81,6 +81,14 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
         "sample_timing": "after_each_phase_window",
         "note": "Do not output observe steps. The runtime samples observations automatically.",
     }
+    assert context["phase_transition_policy"] == {
+        "mode": "model_suggested_runtime_applied",
+        "decisions": ["continue_current_phase", "advance_to_next_phase", "complete_task"],
+        "current_phase_window_count": 0,
+        "max_phase_window_count": 5,
+        "note": "Output phase_transition in the action plan. Do not output target phase names or indexes.",
+    }
+    assert "phase_transition_policy" in context["context_schema"]["planner_context_fields"]
     assert "uav.connect" in action_constraints["lifecycle_tools_excluded"]
     assert "uav.connect" in action_constraints["forbidden_tools"]
     assert "uav.set_pose" in action_constraints["forbidden_tools"]

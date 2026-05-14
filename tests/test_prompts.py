@@ -29,6 +29,10 @@ def test_action_planner_prompt_contains_allowed_and_forbidden_tools():
     assert "uav.move_body" in prompt
     assert "forbidden_tools" in prompt
     assert "observation_policy" in prompt
+    assert "phase_transition" in prompt
+    assert "continue_current_phase" in prompt
+    assert "advance_to_next_phase" in prompt
+    assert "complete_task" in prompt
     assert "Do not output kind=\"observe\"" in prompt
     assert "action_schemas" in prompt
     assert "Do not invent alternate argument names" in prompt

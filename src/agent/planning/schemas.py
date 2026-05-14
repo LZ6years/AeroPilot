@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.agent.planning.phase_transition import PhaseTransition
+
 
 @dataclass(frozen=True)
 class PlannedStep:
@@ -62,13 +64,27 @@ class PlannedStep:
 class ShortHorizonPlan:
     phase: str
     steps: list[PlannedStep]
+    phase_transition: PhaseTransition = field(default_factory=PhaseTransition.default_advance)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "ShortHorizonPlan":
+    def from_dict(cls, data: dict[str, Any], *, require_phase_transition: bool = False) -> "ShortHorizonPlan":
+        if require_phase_transition and "phase_transition" not in data:
+            raise ValueError("Model action planner response requires phase_transition")
+        transition_data = data.get("phase_transition")
+        transition = (
+            PhaseTransition.from_dict(dict(transition_data))
+            if transition_data is not None
+            else PhaseTransition.default_advance()
+        )
         return cls(
             phase=str(data.get("phase", "")).strip(),
             steps=[PlannedStep.from_dict(dict(item)) for item in data.get("steps", [])],
+            phase_transition=transition,
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"phase": self.phase, "steps": [step.to_dict() for step in self.steps]}
+        return {
+            "phase": self.phase,
+            "steps": [step.to_dict() for step in self.steps],
+            "phase_transition": self.phase_transition.to_dict(),
+        }

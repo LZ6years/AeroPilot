@@ -6,6 +6,8 @@ import pytest
 
 from src.agent.mission_state import MissionState
 from src.agent.planning.model_action_planner import ModelActionPlanner, ModelActionPlannerConfigError
+from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE
+from src.agent.planning.schemas import ShortHorizonPlan
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
 from src.runtime.configs.model_config import ModelConfig
@@ -13,7 +15,12 @@ from src.runtime.configs.model_config import ModelConfig
 
 class StubModelActionPlanner(ModelActionPlanner):
     def __init__(self, response: dict, model_config: ModelConfig | None = None) -> None:
-        self.response = response
+        self.response = dict(response)
+        if not self.response.pop("_omit_phase_transition", False):
+            self.response.setdefault(
+                "phase_transition",
+                {"decision": ADVANCE_TO_NEXT_PHASE, "reason": "phase complete after this action"},
+            )
         super().__init__(
             model_config
             or ModelConfig(
@@ -110,6 +117,56 @@ def test_model_action_planner_accepts_open_phase_name():
     assert plan.steps[0].tool == "uav.turn_relative"
     assert plan.steps[0].args["yaw_deg"] == -15
     assert len(plan.steps) == 1
+    assert plan.phase_transition.decision == ADVANCE_TO_NEXT_PHASE
+
+
+def test_short_horizon_plan_direct_constructor_defaults_to_advance():
+    plan = ShortHorizonPlan("orient_leftward", [])
+
+    assert plan.phase_transition.decision == ADVANCE_TO_NEXT_PHASE
+
+
+def test_model_action_planner_rejects_missing_phase_transition():
+    planner = StubModelActionPlanner(
+        {
+            "_omit_phase_transition": True,
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires phase_transition"):
+        planner.plan_next(make_state(), make_context())
+
+
+def test_model_action_planner_rejects_invalid_phase_transition_decision():
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+            "phase_transition": {"decision": "jump_somewhere", "reason": "bad"},
+        }
+    )
+
+    with pytest.raises(ValueError, match="Unsupported phase_transition decision"):
+        planner.plan_next(make_state(), make_context())
+
+
+def test_model_action_planner_rejects_phase_transition_target_fields():
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+            "phase_transition": {
+                "decision": ADVANCE_TO_NEXT_PHASE,
+                "next_phase": "skip_to_final",
+                "reason": "bad target",
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="must not specify target phase fields"):
+        planner.plan_next(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_unknown_tool():

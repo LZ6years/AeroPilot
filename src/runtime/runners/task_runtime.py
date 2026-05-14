@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from src.agent.mission_state import MissionState
+from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
+from src.agent.safety import SafetyDecision
+from src.agent.planning.schemas import ShortHorizonPlan
 from src.agent.semantic.schemas import TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.env_client.base import EnvClient
@@ -179,8 +182,9 @@ class TaskRuntime:
 
     def _execute_phase_loop(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
         while not state.completed:
-            self._run_phase_window(scene, agent_id, state)
-            state.advance_phase()
+            state.record_phase_window_started()
+            plan, safety_decision = self._run_phase_window(scene, agent_id, state)
+            self._apply_phase_transition(scene, agent_id, state, plan, safety_decision)
             self._write_state(state)
 
     def _run_preflight(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
@@ -216,7 +220,7 @@ class TaskRuntime:
         self.recorder.event("initial_observation_updated", observation_data)
         self._write_state(state)
 
-    def _run_phase_window(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
+    def _run_phase_window(self, scene: SceneInstance, agent_id: str, state: MissionState) -> tuple[ShortHorizonPlan, SafetyDecision]:
         context = self.context_builder.build(state, self._memory_for_state(state))
         self.recorder.write_json("contexts/latest_context.json", context)
         raw_plan = self.planner.plan_next(state, context)
@@ -248,6 +252,52 @@ class TaskRuntime:
                     raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
             self._write_state(state)
         self._apply_automatic_observation_policy(scene, agent_id, state, plan.phase)
+        return plan, safety_decision
+
+    def _apply_phase_transition(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+        plan: ShortHorizonPlan,
+        safety_decision: SafetyDecision,
+    ) -> None:
+        transition = plan.phase_transition
+        payload = {
+            "phase": plan.phase,
+            "decision": transition.decision,
+            "reason": transition.reason,
+            "current_phase_window_count": state.current_phase_window_count,
+            "max_phase_window_count": state.max_phase_window_count,
+        }
+        if safety_decision.interventions:
+            self.recorder.event(
+                "phase_transition_suppressed_by_safety",
+                {**payload, "interventions": safety_decision.interventions},
+            )
+            if state.current_phase_window_count >= state.max_phase_window_count:
+                self.recorder.event("phase_transition_window_limit_reached", {**payload, "reason": "safety_intervention_loop_guard"})
+                self._try_hover(scene, agent_id, state)
+                state.advance_phase()
+                self.recorder.event("phase_transition_applied", {**payload, "applied_decision": ADVANCE_TO_NEXT_PHASE})
+            return
+        if transition.decision == CONTINUE_CURRENT_PHASE:
+            self.recorder.event("phase_transition_continued", payload)
+            if state.current_phase_window_count >= state.max_phase_window_count:
+                self.recorder.event("phase_transition_window_limit_reached", payload)
+                self._try_hover(scene, agent_id, state)
+                state.advance_phase()
+                self.recorder.event("phase_transition_applied", {**payload, "applied_decision": ADVANCE_TO_NEXT_PHASE})
+            return
+        if transition.decision == ADVANCE_TO_NEXT_PHASE:
+            state.advance_phase()
+            self.recorder.event("phase_transition_applied", payload)
+            return
+        if transition.decision == COMPLETE_TASK:
+            state.mark_completed()
+            self.recorder.event("phase_transition_applied", payload)
+            return
+        raise ValueError(f"Unsupported phase transition decision: {transition.decision}")
 
     def _apply_automatic_observation_policy(
         self,

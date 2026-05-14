@@ -35,7 +35,7 @@ class ModelActionPlanner:
         if self.model_config.provider != "openai_compatible":
             raise ModelActionPlannerConfigError(f"Unsupported model provider: {self.model_config.provider}")
         response = self._call_openai_compatible(context)
-        plan = ShortHorizonPlan.from_dict(response)
+        plan = ShortHorizonPlan.from_dict(response, require_phase_transition=True)
         self._validate_plan(plan, state.current_phase_name, context)
         return self._normalize_plan(plan)
 
@@ -115,7 +115,7 @@ class ModelActionPlanner:
                     step.reason,
                 )
             )
-        return ShortHorizonPlan(plan.phase, steps)
+        return ShortHorizonPlan(plan.phase, steps, plan.phase_transition)
 
     def _load_system_prompt(self) -> str:
         path = Path(self.prompt_path) if self.prompt_path else Path(__file__).resolve().parent / "prompts" / "action_planner_system.txt"
