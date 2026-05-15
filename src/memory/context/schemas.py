@@ -48,6 +48,7 @@ class StageContextInput:
     allowed_action_constraints: dict[str, Any] = field(default_factory=dict)
     observation_policy: dict[str, Any] = field(default_factory=dict)
     phase_transition_policy: dict[str, Any] = field(default_factory=dict)
+    phase_execution_summary: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -60,6 +61,7 @@ class StageContextInput:
             "allowed_action_constraints": dict(self.allowed_action_constraints),
             "observation_policy": dict(self.observation_policy),
             "phase_transition_policy": dict(self.phase_transition_policy),
+            "phase_execution_summary": dict(self.phase_execution_summary),
             "metadata": dict(self.metadata),
         }
 
@@ -85,6 +87,7 @@ class PlannerContext:
     allowed_action_constraints: dict[str, Any] = field(default_factory=dict)
     observation_policy: dict[str, Any] = field(default_factory=dict)
     phase_transition_policy: dict[str, Any] = field(default_factory=dict)
+    phase_execution_summary: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -101,5 +104,6 @@ class PlannerContext:
             "allowed_action_constraints": dict(self.allowed_action_constraints),
             "observation_policy": dict(self.observation_policy),
             "phase_transition_policy": dict(self.phase_transition_policy),
+            "phase_execution_summary": dict(self.phase_execution_summary),
             "metadata": dict(self.metadata),
         }

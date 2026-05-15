@@ -15,6 +15,7 @@ from src.agent.planning.model_repair_planner import (
     RepairAttemptRecord,
     RepairContext,
 )
+from src.agent.planning.phase_transition import PhaseTransition
 from src.agent.planning.schemas import ShortHorizonPlan
 from src.agent.planning.tool_contract_validator import (
     ToolContractValidationError,
@@ -44,6 +45,7 @@ class ModelActionPlanner:
         self.model_config = model_config or load_model_config()
         self.prompt_path = prompt_path or self.model_config.action_planner_prompt_path
         self.system_prompt = self._load_system_prompt()
+        self.phase_transition_system_prompt = self._load_phase_transition_system_prompt()
         self.tool_contract_validator = ToolContractValidator(self.ALLOWED_TOOL_STEPS)
         self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.repair_planner = repair_planner or ModelRepairPlanner(self.model_config)
@@ -59,7 +61,7 @@ class ModelActionPlanner:
         if self.model_config.provider != "openai_compatible":
             raise ModelActionPlannerConfigError(f"Unsupported model provider: {self.model_config.provider}")
         response = self._call_openai_compatible(context)
-        plan = ShortHorizonPlan.from_dict(response, require_phase_transition=True)
+        plan = ShortHorizonPlan.from_dict(_without_phase_transition(response), require_phase_transition=False)
         try:
             self.tool_contract_validator.validate(plan, state.current_phase_name, context)
             return plan
@@ -67,12 +69,26 @@ class ModelActionPlanner:
             return self._repair_contract_violation(plan, response, exc, state.current_phase_name, context)
 
     def _call_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
+        return self._call_openai_compatible_json(self.system_prompt, context)
+
+    def judge_phase_transition(self, phase_context: dict[str, Any]) -> PhaseTransition:
+        if not self.model_config.api_key:
+            raise ModelActionPlannerConfigError("Model phase transition judge requires FLYAGENT_MODEL_API_KEY")
+        if self.model_config.provider != "openai_compatible":
+            raise ModelActionPlannerConfigError(f"Unsupported model provider: {self.model_config.provider}")
+        response = self._call_phase_transition_openai_compatible(phase_context)
+        return PhaseTransition.from_dict(response)
+
+    def _call_phase_transition_openai_compatible(self, phase_context: dict[str, Any]) -> dict[str, Any]:
+        return self._call_openai_compatible_json(self.phase_transition_system_prompt, phase_context)
+
+    def _call_openai_compatible_json(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
         endpoint = self.model_config.chat_completions_url()
         payload = {
             "model": self.model_config.model_name,
             "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
             ],
             "temperature": 0,
             "response_format": {"type": "json_object"},
@@ -148,7 +164,7 @@ class ModelActionPlanner:
                 )
 
             try:
-                repaired_plan = ShortHorizonPlan.from_dict(repaired_plan_data, require_phase_transition=True)
+                repaired_plan = ShortHorizonPlan.from_dict(_without_phase_transition(repaired_plan_data), require_phase_transition=False)
                 self.tool_contract_validator.validate(repaired_plan, expected_phase, context)
             except ToolContractValidationError as exc:
                 violation = exc.violation.to_dict()
@@ -162,7 +178,7 @@ class ModelActionPlanner:
                     code="repair_plan_parse_error",
                     message=str(exc),
                     field="plan",
-                    expected="valid ShortHorizonPlan with phase_transition",
+                    expected="valid tool-only ShortHorizonPlan",
                     actual=repaired_plan_data,
                 ).to_dict()
                 violations.append(violation)
@@ -238,9 +254,19 @@ class ModelActionPlanner:
         path = Path(self.prompt_path) if self.prompt_path else Path(__file__).resolve().parent / "prompts" / "action_planner_system.txt"
         return path.read_text(encoding="utf-8").strip()
 
+    def _load_phase_transition_system_prompt(self) -> str:
+        path = Path(__file__).resolve().parent / "prompts" / "phase_transition_judge_system.txt"
+        return path.read_text(encoding="utf-8").strip()
+
 
 def _canonical_plan_signature(plan: dict[str, Any]) -> str:
     return json.dumps(plan, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _without_phase_transition(plan: dict[str, Any]) -> dict[str, Any]:
+    data = dict(plan)
+    data.pop("phase_transition", None)
+    return data
 
 
 def _violation_from_dict(data: dict[str, Any]) -> ToolContractViolation:

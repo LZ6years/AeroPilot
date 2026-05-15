@@ -86,8 +86,9 @@ def test_demo_memory_builds_context_with_schema_fragments_and_action_contract(tm
     assert "allowed_action_constraints" in context
     assert "observation_policy" in context
     assert "phase_transition_policy" in context
+    assert "phase_execution_summary" in context
     assert context["observation_policy"]["mode"] == "automatic"
-    assert context["phase_transition_policy"]["mode"] == "model_suggested_runtime_applied"
+    assert context["phase_transition_policy"]["mode"] == "post_action_model_judged_runtime_applied"
     assert set(context["context_schema"]["module_content_fields"]) == {"instruction", "image", "pose", "action", "map"}
     assert [fragment["name"] for fragment in context["fragments"]] == ["instruction", "pose", "action", "image", "map"]
     assert context["allowed_action_constraints"]["planner_tools"] == ["uav.hover", "uav.turn_relative", "uav.move_body"]
@@ -132,8 +133,9 @@ def test_demo_writes_expected_artifact_files(tmp_path):
     assert {path.name for path in tmp_path.iterdir() if path.is_file()} >= DEMO_OUTPUT_FILES
     assert "context_schema" in json.loads((tmp_path / "latest_context.json").read_text(encoding="utf-8"))
     mission_state = json.loads((tmp_path / "mission_state.json").read_text(encoding="utf-8"))
-    assert "recent_observations" in mission_state
-    assert "recent_actions" in mission_state
+    assert "latest_observation" in mission_state
+    assert "latest_pose" in mission_state
+    assert "current_phase_progress" in mission_state
     assert "current_phase" in mission_state
     preview = (tmp_path / "demo_preview.md").read_text(encoding="utf-8")
     assert "Model Action Planner Demo" in preview

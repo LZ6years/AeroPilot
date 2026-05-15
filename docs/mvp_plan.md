@@ -8,16 +8,15 @@ MVP 只做单机、单 UAV、UE / AirSim 仿真闭环。第一阶段使用 CLI �
 
 ```text
 前面右转会有一个黑色的路灯，右转面向路灯后停下
+向前飞行5米，然后悬停
 ```
 
-这类任务不应该一次性生成很长的固定动作序列，而应拆成：
+这类任务不应一次性生成很长的固定动作序列，而应拆成：
 
-- 语义目标：右转后寻找黑色路灯，并让 UAV 面向它悬停。
+- 语义目标：用户真正想让 UAV 达成的状态。
 - 短期执行窗口：每轮只输出 1-3 个可校验 UAV 原子动作。
 - 自动观察：runtime 在每个 phase window 后自动采集 RGB/depth/pose。
-- 模型规划：`ModelActionPlanner` 读取 `PlannerContext`，生成动作计划和 `phase_transition`。
-- 契约校验：`ToolContractValidator` 检查工具白名单、禁用工具和参数格式。
-- 安全边界：`SafetySupervisor` 做最终限幅、替换和拦截。
+- 执行后阶段判断：基于新的 state、历史和本轮执行结果判断是否推进阶段。
 
 ## 2. 当前主链路
 
@@ -36,8 +35,8 @@ flowchart TD
     UAV --> OBS["Runtime automatic observation<br/>RGB / depth / pose"]
     OBS --> MEM["FlightMemory + memory/*.jsonl"]
     MEM --> CB
-    MAP --> PT["phase_transition suggestion"]
-    PT --> RT["TaskRuntime applies state change"]
+    OBS --> J["Post-action phase transition judge"]
+    J --> MS
 ```
 
 模型只输出 `kind="tool"` 的动作 step，不能输出 observe。观察由 runtime 的 `observation_policy` 管理。
@@ -72,23 +71,25 @@ flowchart TD
 - 将用户自然语言指令解析为稳定的 `SemanticPlan`。
 - 语义规划只描述 intent、goal、phase 和 uncertainty，不展开成长动作序列。
 - phase 使用开放名称，但必须包含 `index`、`total`、`name`、`meaning`。
+- movement-only 指令要保留 `direction`、`distance_m`、`final_state=hover_after_movement` 等信息。
 
 ### M4: 短期滚动执行器
 
 目标：
 
 - runtime 每轮构建 `PlannerContext`。
-- `ModelActionPlanner` 输出短期动作计划。
+- `ModelActionPlanner` 输出短期 tool-only 动作计划。
 - `ToolContractValidator` 拒绝不符合 context contract 的输出。
 - `SafetySupervisor` 做最终安全审查。
-- runtime 执行动作后自动观察，再根据 `phase_transition` 推进或继续 phase。
+- runtime 执行动作后自动 observation，记录当前 phase 的起点、窗口记录和累计执行事实，再调用模型判断 `PhaseTransition`。
 
 当前事实：
 
-- 规则版短期 planner 已移除。
-- `run-task` 固定使用 `ModelActionPlanner`。
+- 规则版 short horizon planner 已移除。
+- `run-task` 和交互式 CLI 使用 `ModelActionPlanner`。
 - 模型不能输出 `kind="observe"`。
-- `phase_transition` 已进入 `ShortHorizonPlan`。
+- `phase_transition` 不再由 action plan 输出，而是在执行后判断。
+- `phase_execution_summary` 进入 planner 和执行后 judge 输入，用于减少重复转向/重复前进。
 
 ### M5: 原始观察与上下文管理
 
@@ -103,11 +104,13 @@ flowchart TD
 
 - 每轮写入 `observations/latest_observation.json`。
 - 每轮写入 `contexts/latest_context.json`。
+- 执行后阶段判断写入 `contexts/latest_phase_transition_context.json`。
+- `mission_state.json` 包含 `phase_start_observations`、`phase_window_records` 和 `phase_execution_summaries`。
 - planner 输入不暴露完整 `FlightMemory` 或完整 jsonl 历史。
 
 ### M6: 模型动作规划
 
-模型输出格式：
+模型动作输出格式：
 
 ```json
 {
@@ -119,11 +122,7 @@ flowchart TD
       "args": {},
       "reason": "hold position"
     }
-  ],
-  "phase_transition": {
-    "decision": "continue_current_phase",
-    "reason": "need more evidence before advancing"
-  }
+  ]
 }
 ```
 
@@ -133,7 +132,7 @@ flowchart TD
 - 不允许 `env.observe` 或 `kind="observe"`。
 - `uav.hover` 参数必须是 `{}`。
 - `uav.turn_relative` 只允许 `{"yaw_deg": number}`。
-- `uav.move_body` 只允许 direction/duration 或 vx/vy/vz/duration 两种格式。
+- `uav.move_body` 只允许 `direction/duration` 或 `vx/vy/vz/duration` 两种格式。
 - limits 来自 `PlannerContext.allowed_action_constraints`，最终安全限幅由 `SafetySupervisor` 执行。
 
 ### M6 后续增强: Plan-Execute-Repair
@@ -150,16 +149,7 @@ ModelActionPlanner
 
 `ModelActionPlanner` 不再静默兼容旧参数。`uav.move_body` 的旧距离参数、`duration_sec`、方向别名等都不属于合法 contract；模型写错时先进入 validator violation，再由 `ModelRepairPlanner` 最多修正 3 次。
 
-后续可继续扩展执行失败 repair：
-
-```text
-ModelActionPlanner
-  -> ToolContractValidator
-    -> if invalid: ModelRepairPlanner(max 3 attempts)
-    -> SafetySupervisor
-    -> ToolDispatcher
-    -> if execution failed: ModelRepairPlanner or safe hover
-```
+后续可以扩展执行失败 repair，但当前先不做。
 
 ### M7: 困惑提问与安全中断
 
@@ -176,7 +166,7 @@ ModelActionPlanner
 - CLI 是第一阶段主入口。
 - 每次任务生成 run id。
 - 每轮保存语义规划、context、模型计划、contract validation、动作结果、观察、安全介入和错误。
-- `demo_model_action_planner_context.py` 展示模型输入、模型输出、校验结果和安全审查结果。
+- 交互式 CLI 入口统一为 `python -m src.runtime.cli.main chat`。
 
 ### M9: Electron 与飞书预留
 
@@ -197,7 +187,7 @@ ModelActionPlanner
 - `ModelActionPlanner` 动作规划。
 - `ToolContractValidator` contract 校验。
 - `SafetySupervisor` 安全裁剪。
-- 自动 observation 和 phase transition。
+- 自动 observation 和执行后 phase transition。
 
 中优先级：
 
@@ -214,29 +204,32 @@ ModelActionPlanner
 - Electron 前端。
 - 飞书接入。
 
-## 5. 第一条 Demo
+## 5. Demo
 
-文件：
+教学 demo：
 
 ```text
 demos/demo_model_action_planner_context.py
 ```
 
-流程：
+真实引擎闭环 demo：
 
-1. 读取用户自然语言指令。
-2. `TaskParser(mode="model")` 生成 `SemanticPlan`。
-3. 写入 demo memory 和 `FlightMemory` manifest refs。
-4. `ObservationContextBuilder` 生成 `PlannerContext`。
-5. `ModelActionPlanner` 调用模型生成动作计划和 `phase_transition`。
-6. `ToolContractValidator` 校验计划契约。
-7. `SafetySupervisor` 审查动作。
-8. 输出 `demo_preview.md` 供人工检查。
+```text
+demos/test_real_engine_basic_instruction_demo.py
+```
+
+CLI：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+F:\conda_env\flyagent\python.exe -m src.runtime.cli.main chat --env-path .env --map-id cityenviron_win64 --save-artifacts
+```
 
 ## 6. 风险
 
 - map memory 和图像推测不能当作当前视觉事实。
 - 模型动作必须先经过 contract 校验，再经过 `SafetySupervisor`。
 - 自动观察目前是 phase-window 后采样，不是真实异步定时线程。
-- `phase_transition` 是模型建议，runtime 才能真正修改 `MissionState`。
+- RGB/depth 当前不会以像素形式直接进入 qwen，模型看到的是 metadata、artifact refs 和结构化 observation 信息。
+- `PhaseTransition` 是执行后的模型判断，runtime 才能真正修改 `MissionState`。
 - 如果阶段完成判断变复杂，再独立抽出 `PhaseCompletionEvaluator`。

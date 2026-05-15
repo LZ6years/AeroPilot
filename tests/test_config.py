@@ -9,7 +9,7 @@ import pytest
 from src.runtime.configs.action_config import UavActionConfig, load_uav_action_config
 from src.runtime.configs.safety_config import UavSafetyConfig, load_uav_safety_config
 from src.runtime.configs.map_config import build_remote_airsim_config, load_map_config
-from test_uav_client_demo import load_demo_action_config
+from demos.test_uav_client_demo import load_demo_action_config
 
 
 def test_load_map_config_valid(tmp_path):

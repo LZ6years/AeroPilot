@@ -10,7 +10,9 @@ Required JSON shape:
       "description": "short natural-language target description",
       "attributes": {
         "color": "optional normalized color",
-        "category": "optional normalized category"
+        "category": "optional normalized category",
+        "direction": "optional movement direction such as forward/backward/left/right/up/down",
+        "distance_m": "optional numeric movement distance in meters"
       }
     },
     "final_state": "short snake_case final state"
@@ -28,6 +30,8 @@ Important boundaries:
 - Do not output primitive UAV tools or action names such as uav.turn_relative, uav.move_body, env.observe, takeoff, land, get_pose, or get_frames.
 - If the user says "向上飞行", "向下飞行", "fly up", or "fly down", describe it semantically as altitude change, climb, descend, or vertical repositioning. These are normal in-air movement requests, not lifecycle actions.
 - For movement-only tasks like forward/backward/left/right/up/down/turn/hover, use semantic phase names such as move_forward, move_backward, strafe_left, strafe_right, adjust_altitude_up, adjust_altitude_down, rotate_right, rotate_left, stabilize_hover. Never use lifecycle words such as takeoff or land in any JSON field.
+- For distance-only movement tasks, preserve the requested direction and distance in goal.target.attributes. For example, "向前走5m" or "向前飞行5米，然后悬停" should produce one movement phase named move_forward, attributes {"direction": "forward", "distance_m": 5.0}, and final_state "hover_after_movement".
+- Do not turn simple movement-only tasks into visual landmark search tasks.
 - Do not expand the task into a long executable action sequence.
 - Phase names are semantic context for downstream model action planning, not fixed program dispatch keys.
 - Phase names may be freely created for the current task, but they must be concise snake_case and must not be tool names.

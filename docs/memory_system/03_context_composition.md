@@ -52,8 +52,9 @@ flowchart TD
 - `FlightMemory` 是 manifest，不生成 `ContextFragment`。
 - `ContextModule` 只处理本类别信息。
 - `ContextComposer` 只合并、排序、裁剪和加入规则。
-- `ModelActionPlanner` 只消费 `PlannerContext`。
+- `ModelActionPlanner` 只消费 `PlannerContext` 并输出 tool-only action plan。
 - `ToolContractValidator` 根据 `PlannerContext.allowed_action_constraints` 校验模型动作。
+- 阶段推进不在 action plan 内输出，而是在执行后由 runtime 构造 post-action context 给模型判断。
 
 ## 3. ContextFragment 外壳
 
@@ -86,7 +87,7 @@ flowchart TD
 | --- | --- |
 | `name` | fragment 类型，例如 `instruction`、`image`、`pose`、`action`、`map` |
 | `content` | module 自己维护的结构化内容 |
-| `facts` | 当前可观察或可核验事实 |
+| `facts` | 当前可观察或可校验事实 |
 | `inferences` | 推测、候选、地图线索或需要确认的判断 |
 | `goals` | 当前 mission / phase 相关目标 |
 | `risks` | 不确定性、安全风险或 reconfirmation 要求 |
@@ -111,7 +112,7 @@ module 不做：
 
 ## 5. PlannerContext 输出
 
-`PlannerContext` 是传给 `ModelActionPlanner` 的唯一结构化输入：
+`PlannerContext` 是传给 `ModelActionPlanner` 的结构化输入：
 
 ```json
 {
@@ -126,6 +127,7 @@ module 不做：
   "allowed_action_constraints": {},
   "observation_policy": {},
   "phase_transition_policy": {},
+  "phase_execution_summary": {},
   "safety_constraints": {},
   "metadata": {}
 }
@@ -139,6 +141,8 @@ module 不做：
 - `context_schema` 解释顶层字段和各 module 输出字段。
 - `allowed_action_constraints` 是 `ToolContractValidator` 的动作契约来源。
 - `observation_policy` 告诉模型观察由 runtime 自动完成。
+- `phase_transition_policy` 告诉模型 action plan 不输出 `phase_transition`，阶段推进在执行后判断。
+- `phase_execution_summary` 告诉模型当前 phase 已累计执行过什么，包含 phase 起点、窗口记录、累计位移、归一化累计 yaw 和累计工具事实。
 
 ## 6. facts / inferences / goals / risks
 
@@ -155,10 +159,16 @@ ContextComposer:
   合并、排序、裁剪，不创造新事实
 
 ModelActionPlanner:
-  基于 PlannerContext 输出 action plan 和 phase_transition
+  基于 PlannerContext 输出 tool-only action plan
+
+TaskRuntime:
+  执行动作、自动观察，然后构造 post-action phase context
+
+PhaseTransition judge:
+  基于执行后的 state + 历史判断 continue / advance / complete
 ```
 
-当前不单独实现 `PhaseCompletionEvaluator`。阶段推进先由 `ModelActionPlanner` 在同一次计划中输出 `phase_transition`，runtime 再决定是否应用。后续如果判断复杂，可以把这部分独立成 evaluator。
+当前不单独实现 `PhaseCompletionEvaluator`。阶段推进先复用 `ModelActionPlanner` 的模型调用能力和 `PhaseTransition` schema；后续如果判断复杂，可以把这部分独立成 evaluator。
 
 ## 7. Reset 语义
 

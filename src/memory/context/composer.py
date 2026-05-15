@@ -53,6 +53,7 @@ class ContextComposer:
             allowed_action_constraints=dict(stage_context.allowed_action_constraints),
             observation_policy=dict(stage_context.observation_policy),
             phase_transition_policy=dict(stage_context.phase_transition_policy),
+            phase_execution_summary=dict(stage_context.phase_execution_summary),
             metadata={
                 "run_id": memory.run_id,
                 "map_id": memory.map_id,
@@ -101,7 +102,8 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
             "safety_constraints": "Current runtime safety state that should guide planning before SafetySupervisor review.",
             "allowed_action_constraints": "The action planning contract: allowed UAV tools, forbidden tools, schemas, and limits.",
             "observation_policy": "Runtime perception policy. When automatic, the planner must not output observe steps.",
-            "phase_transition_policy": "How the planner should suggest continue, advance, or task completion after its steps run.",
+            "phase_transition_policy": "How runtime judges phase progress after tool execution and automatic observation.",
+            "phase_execution_summary": "Measured and executed facts accumulated within the current semantic phase. It includes explicit coordinate frame notes and phase-local forward/right/up projection fields for movement judgment.",
             "metadata": "Run identifiers, map/scene identifiers, budget metadata, and other audit information.",
         },
         "fragment_common_fields": {

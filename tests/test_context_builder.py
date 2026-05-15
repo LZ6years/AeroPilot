@@ -27,16 +27,17 @@ def make_state() -> MissionState:
     return MissionState("run_test", result.instruction, result.plan)
 
 
-def make_memory(tmp_path, state: MissionState) -> FlightMemory:
+def make_memory(tmp_path, state: MissionState, actions=None, observations=None) -> FlightMemory:
     writer = MemoryEventWriter(tmp_path)
     reader = MemoryRecordReader(tmp_path)
     memory = FlightMemory("run_test", "m1", "scene_1", "uav_1", active_instruction=state.user_instruction, memory_reader=reader)
     memory.update_instruction_ref(writer.write_instruction(state.user_instruction, state.semantic_plan.to_dict()), state.user_instruction)
-    for action in state.recent_actions:
+    for action in actions or []:
         result = writer.write_action(action.get("tool", ""), action.get("args", {}), action.get("result", {}))
         memory.append_action_ref(result["action_ref"])
         memory.append_pose_ref(result.get("pose_ref"))
-    for observation in state.recent_observations:
+    default_observations = [state.latest_observation] if state.latest_observation else []
+    for observation in observations if observations is not None else default_observations:
         result = writer.write_observation(observation)
         memory.append_observation_ref(result["observation_ref"])
         memory.append_pose_ref(result.get("pose_ref"))
@@ -59,7 +60,10 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
         }
     )
 
-    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
+    context = ObservationContextBuilder().build(
+        state,
+        make_memory(tmp_path, state, actions=[{"tool": "uav.hover", "args": {}, "result": {"ok": True}}]),
+    )
 
     assert context["active_instruction"] == state.user_instruction
     assert context["semantic_goal"] == state.semantic_plan.goal.to_dict()
@@ -82,13 +86,15 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
         "note": "Do not output observe steps. The runtime samples observations automatically.",
     }
     assert context["phase_transition_policy"] == {
-        "mode": "model_suggested_runtime_applied",
+        "mode": "post_action_model_judged_runtime_applied",
         "decisions": ["continue_current_phase", "advance_to_next_phase", "complete_task"],
         "current_phase_window_count": 0,
         "max_phase_window_count": 5,
-        "note": "Output phase_transition in the action plan. Do not output target phase names or indexes.",
+        "note": "Phase transition is judged after tool execution and automatic observation. Do not output phase_transition in the action plan.",
     }
+    assert context["phase_execution_summary"] == {}
     assert "phase_transition_policy" in context["context_schema"]["planner_context_fields"]
+    assert "phase_execution_summary" in context["context_schema"]["planner_context_fields"]
     assert "uav.connect" in action_constraints["lifecycle_tools_excluded"]
     assert "uav.connect" in action_constraints["forbidden_tools"]
     assert "uav.set_pose" in action_constraints["forbidden_tools"]
@@ -117,6 +123,24 @@ def test_context_builder_handles_missing_observation(tmp_path):
     assert fragments["image"]["warnings"] == ["no_recent_image_frames"]
     assert fragments["action"]["content"]["recent_actions"] == []
     assert context["current_phase"]["name"] == "orient_leftward"
+
+
+def test_context_builder_includes_phase_execution_summary(tmp_path):
+    state = make_state()
+    state.ensure_current_phase_progress({"pose": {"x": 0.0, "y": 0.0, "z": -2.0}})
+    state.update_current_phase_progress(
+        {"pose": {"x": 1.25, "y": 0.0, "z": -2.0}},
+        latest_window_measurements={"planar_displacement_m": 1.25},
+    )
+
+    context = ObservationContextBuilder().build(
+        state,
+        make_memory(tmp_path, state, actions=[{"tool": "uav.hover", "args": {}, "result": {"ok": True}}]),
+    )
+
+    assert context["phase_execution_summary"]["phase"] == "orient_leftward"
+    assert context["phase_execution_summary"]["phase_key"] == "1:orient_leftward"
+    assert context["phase_execution_summary"]["cumulative_measurements"]["planar_displacement_m"] == 1.25
 
 
 def test_context_builder_action_limits_come_from_safety_config(tmp_path):

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import math
+
 from src.agent.mission_state import MissionState
-from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE
+from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.safety import SafetySupervisor
@@ -17,6 +19,7 @@ from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.perception.raw_observation import RawObservation
+from src.runtime.configs.action_config import UavActionConfig
 from src.tools.dispatcher import ToolDispatcher
 
 
@@ -32,6 +35,7 @@ class TaskRuntime:
         planner=None,
         safety: SafetySupervisor | None = None,
         shutdown_policy: str = "hover",
+        action_config: UavActionConfig | None = None,
     ) -> None:
         if shutdown_policy not in self.SHUTDOWN_POLICIES:
             raise ValueError(f"Unsupported shutdown policy: {shutdown_policy}")
@@ -42,7 +46,10 @@ class TaskRuntime:
         self.safety = safety or SafetySupervisor()
         self.shutdown_policy = shutdown_policy
         self.tools = ToolDispatcher(env_client)
-        self.context_builder = ObservationContextBuilder(safety_config=self.safety.safety_config)
+        self.context_builder = ObservationContextBuilder(
+            action_config=action_config,
+            safety_config=self.safety.safety_config,
+        )
         self.memory_writer = MemoryEventWriter(self.recorder.run_dir)
         self.memory_reader = MemoryRecordReader(self.recorder.run_dir)
         self._preflight_scene_ids: set[str] = set()
@@ -147,6 +154,15 @@ class TaskRuntime:
         except Exception as exc:
             self.recorder.event("continuous_error_hover_failed", {"error_type": type(exc).__name__, "error": str(exc)})
 
+    def ensure_reused_scene(self, map_id: str, scene_id: str | None = None) -> SceneInstance:
+        """Start or reuse the interactive scene before the first instruction.
+
+        This only opens/prepares the simulator scene. Preflight connect, takeoff,
+        and initial observation still happen inside the first task instruction.
+        """
+
+        return self._resolve_scene(map_id, "reuse_running", scene_id)
+
     def _resolve_scene(self, map_id: str, scene_policy: str, scene_id: str | None) -> SceneInstance:
         if scene_policy == "reuse_running":
             key = self._scene_key(map_id, scene_id)
@@ -184,8 +200,8 @@ class TaskRuntime:
     def _execute_phase_loop(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
         while not state.completed:
             state.record_phase_window_started()
-            plan, safety_decision = self._run_phase_window(scene, agent_id, state)
-            self._apply_phase_transition(scene, agent_id, state, plan, safety_decision)
+            plan, safety_decision, transition = self._run_phase_window(scene, agent_id, state)
+            self._apply_phase_transition(scene, agent_id, state, plan, safety_decision, transition)
             self._write_state(state)
 
     def _run_preflight(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
@@ -221,7 +237,17 @@ class TaskRuntime:
         self.recorder.event("initial_observation_updated", observation_data)
         self._write_state(state)
 
-    def _run_phase_window(self, scene: SceneInstance, agent_id: str, state: MissionState) -> tuple[ShortHorizonPlan, SafetyDecision]:
+    def _run_phase_window(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+    ) -> tuple[ShortHorizonPlan, SafetyDecision, PhaseTransition]:
+        phase_name = state.current_phase_name
+        phase_key = state.current_phase_key
+        observation_before = dict(state.latest_observation)
+        state.ensure_current_phase_progress(observation_before)
+        state.update_current_phase_progress(observation_before)
         context = self.context_builder.build(state, self._memory_for_state(state))
         self.recorder.write_json("contexts/latest_context.json", context)
         try:
@@ -240,25 +266,51 @@ class TaskRuntime:
                 "safety_intervened",
                 {"phase": plan.phase, "interventions": safety_decision.interventions},
             )
+        executed_steps = []
         for index, step in enumerate(plan.steps):
             payload = {"phase": plan.phase, "step_index": index, "step": step.to_dict()}
             self.recorder.event("step_started", payload)
-            if step.kind == "observe":
-                data = self._record_observation(scene, agent_id, state, step.modalities, source="manual_observe_step")
-                self.recorder.event("observation_updated", data)
-                self.recorder.event("step_completed", {**payload, "result": data})
-            else:
-                if not step.tool:
-                    raise ValueError("tool step requires tool name")
-                result = self.tools.call(scene.scene_instance_id, agent_id, step.tool, step.args)
-                data = result.to_dict()
-                self._record_action(state, step.tool, step.args, data)
-                self.recorder.event("step_completed", {**payload, "result": data})
-                if not result.ok:
-                    raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
+            if step.kind != "tool" or not step.tool:
+                raise ValueError("runtime action plan requires tool steps; observation is automatic")
+            result = self.tools.call(scene.scene_instance_id, agent_id, step.tool, step.args)
+            data = result.to_dict()
+            self._record_action(state, step.tool, step.args, data)
+            self.recorder.event("step_completed", {**payload, "result": data})
+            executed_steps.append({**payload, "result": data})
+            if not result.ok:
+                raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
             self._write_state(state)
-        self._apply_automatic_observation_policy(scene, agent_id, state, plan.phase)
-        return plan, safety_decision
+        observation_after = self._apply_automatic_observation_policy(scene, agent_id, state, plan.phase)
+        window_measurements = self._pose_measurements(
+            self._pose_from_observation(observation_before),
+            self._pose_from_observation(observation_after),
+        )
+        window_record = {
+            "phase_key": phase_key,
+            "phase": phase_name,
+            "window_index": state.current_phase_window_count,
+            "executed_steps": list(executed_steps),
+            "observation_before": observation_before,
+            "observation_after": observation_after,
+            "measurements": window_measurements,
+            "safety_interventions": list(safety_decision.interventions),
+        }
+        self.recorder.event("phase_window_recorded", window_record)
+        state.update_current_phase_progress(
+            observation_after,
+            latest_window_measurements=window_measurements,
+            tool_facts_delta=self._tool_facts_from_executed_steps(executed_steps),
+        )
+        transition = self._judge_phase_transition_after_execution(
+            state,
+            context,
+            plan,
+            safety_decision,
+            observation_before,
+            observation_after,
+            executed_steps,
+        )
+        return plan, safety_decision, transition
 
     def _apply_phase_transition(
         self,
@@ -267,8 +319,8 @@ class TaskRuntime:
         state: MissionState,
         plan: ShortHorizonPlan,
         safety_decision: SafetyDecision,
+        transition: PhaseTransition,
     ) -> None:
-        transition = plan.phase_transition
         payload = {
             "phase": plan.phase,
             "decision": transition.decision,
@@ -305,13 +357,168 @@ class TaskRuntime:
             return
         raise ValueError(f"Unsupported phase transition decision: {transition.decision}")
 
+    def _judge_phase_transition_after_execution(
+        self,
+        state: MissionState,
+        planner_context: dict,
+        plan: ShortHorizonPlan,
+        safety_decision: SafetyDecision,
+        observation_before: dict,
+        observation_after: dict,
+        executed_steps: list[dict],
+    ) -> PhaseTransition:
+        if safety_decision.interventions:
+            return PhaseTransition.continue_current_phase("phase transition suppressed because SafetySupervisor intervened")
+        judge = getattr(self.planner, "judge_phase_transition", None)
+        if not callable(judge):
+            return plan.phase_transition
+        phase_context = self._build_post_action_phase_context(
+            state,
+            planner_context,
+            plan,
+            safety_decision,
+            observation_before,
+            observation_after,
+            executed_steps,
+        )
+        self.recorder.write_json("contexts/latest_phase_transition_context.json", phase_context)
+        self.recorder.event("phase_transition_judge_context_built", phase_context)
+        transition = judge(phase_context)
+        self.recorder.event("model_phase_transition_judged", transition.to_dict())
+        return transition
+
+    def _build_post_action_phase_context(
+        self,
+        state: MissionState,
+        planner_context: dict,
+        plan: ShortHorizonPlan,
+        safety_decision: SafetyDecision,
+        observation_before: dict,
+        observation_after: dict,
+        executed_steps: list[dict],
+    ) -> dict:
+        before_pose = self._pose_from_observation(observation_before)
+        after_pose = self._pose_from_observation(observation_after)
+        memory = self._memory_for_state(state)
+        return {
+            "active_instruction": state.user_instruction,
+            "semantic_goal": state.semantic_plan.goal.to_dict(),
+            "current_phase": planner_context.get("current_phase"),
+            "phase_window_count": state.current_phase_window_count,
+            "max_phase_window_count": state.max_phase_window_count,
+            "planner_context_summary": {
+                "fragment_names": [fragment.get("name") for fragment in planner_context.get("fragments", [])],
+                "safety_constraints": planner_context.get("safety_constraints", {}),
+                "observation_policy": planner_context.get("observation_policy", {}),
+                "phase_transition_policy": planner_context.get("phase_transition_policy", {}),
+            },
+            "phase_execution_summary": state.current_phase_execution_summary,
+            "action_plan": plan.to_dict(),
+            "executed_steps": list(executed_steps),
+            "safety_interventions": list(safety_decision.interventions),
+            "observation_before": observation_before,
+            "observation_after": observation_after,
+            "measurements": self._pose_measurements(before_pose, after_pose),
+            "recent_history": {
+                "recent_action_refs": list(memory.recent_action_refs[-5:]),
+                "recent_observation_refs": list(memory.recent_observation_refs[-3:]),
+                "note": "Full history is stored in memory/*.jsonl; MissionState keeps only latest state.",
+            },
+        }
+
+    def _pose_measurements(self, before: dict, after: dict) -> dict:
+        dx = self._pose_value(after, "x") - self._pose_value(before, "x")
+        dy = self._pose_value(after, "y") - self._pose_value(before, "y")
+        dz = self._pose_value(after, "z") - self._pose_value(before, "z")
+        yaw_delta = self._yaw_deg(after) - self._yaw_deg(before) if before and after else None
+        yaw_rad = math.radians(self._yaw_deg(before))
+        forward = dx * math.cos(yaw_rad) + dy * math.sin(yaw_rad)
+        right = -dx * math.sin(yaw_rad) + dy * math.cos(yaw_rad)
+        return {
+            "world_delta": {"dx": round(dx, 3), "dy": round(dy, 3), "dz": round(dz, 3)},
+            "pose_delta": {"dx": round(dx, 3), "dy": round(dy, 3), "dz": round(dz, 3)},
+            "forward_displacement_m": round(forward, 3),
+            "right_displacement_m": round(right, 3),
+            "up_displacement_m": round(-dz, 3),
+            "planar_displacement_m": round((dx * dx + dy * dy) ** 0.5, 3),
+            "vertical_delta_m": round(dz, 3),
+            "yaw_delta_deg": round(self._normalize_yaw_delta_deg(yaw_delta), 3) if yaw_delta is not None else None,
+        }
+
+    def _tool_facts_from_executed_steps(self, executed_steps: list[dict]) -> dict:
+        facts: dict[str, object] = {
+            "total_steps": 0,
+            "successful_steps": 0,
+            "failed_steps": 0,
+            "turn_relative_yaw_deg_attempted_sum": 0.0,
+            "turn_relative_yaw_deg_success_sum": 0.0,
+            "move_body_duration_attempted_sum": 0.0,
+            "move_body_duration_success_sum": 0.0,
+            "move_body_duration_by_direction_success": {},
+            "tools_executed": {},
+        }
+        directions: dict[str, float] = {}
+        tools: dict[str, int] = {}
+        for executed in executed_steps:
+            step = executed.get("step", {}) if isinstance(executed, dict) else {}
+            result = executed.get("result", {}) if isinstance(executed, dict) else {}
+            tool = str(step.get("tool", ""))
+            args = step.get("args", {}) if isinstance(step.get("args", {}), dict) else {}
+            ok = result.get("ok") is True
+            facts["total_steps"] = int(facts["total_steps"]) + 1
+            facts["successful_steps" if ok else "failed_steps"] = int(facts["successful_steps" if ok else "failed_steps"]) + 1
+            tools[tool] = tools.get(tool, 0) + 1
+            if tool == "uav.turn_relative":
+                yaw = float(args.get("yaw_deg", 0.0) or 0.0)
+                facts["turn_relative_yaw_deg_attempted_sum"] = round(float(facts["turn_relative_yaw_deg_attempted_sum"]) + yaw, 3)
+                if ok:
+                    facts["turn_relative_yaw_deg_success_sum"] = round(float(facts["turn_relative_yaw_deg_success_sum"]) + yaw, 3)
+            if tool == "uav.move_body":
+                duration = float(args.get("duration", 0.0) or 0.0)
+                facts["move_body_duration_attempted_sum"] = round(float(facts["move_body_duration_attempted_sum"]) + duration, 3)
+                if ok:
+                    facts["move_body_duration_success_sum"] = round(float(facts["move_body_duration_success_sum"]) + duration, 3)
+                    direction = str(args.get("direction", "velocity_body"))
+                    directions[direction] = round(directions.get(direction, 0.0) + duration, 3)
+        facts["move_body_duration_by_direction_success"] = directions
+        facts["tools_executed"] = tools
+        return facts
+
+    def _pose_from_observation(self, observation: dict) -> dict:
+        pose = observation.get("pose") if isinstance(observation, dict) else None
+        return dict(pose) if isinstance(pose, dict) else {}
+
+    def _pose_value(self, pose: dict, key: str) -> float:
+        if key in pose:
+            return float(pose.get(key) or 0.0)
+        position = pose.get("position")
+        if isinstance(position, dict):
+            return float(position.get(key) or 0.0)
+        return 0.0
+
+    def _yaw_deg(self, pose: dict) -> float:
+        if "yaw_deg" in pose:
+            return float(pose.get("yaw_deg") or 0.0)
+        orientation = pose.get("orientation")
+        if isinstance(orientation, dict) and "yaw_deg" in orientation:
+            return float(orientation.get("yaw_deg") or 0.0)
+        euler_rad = pose.get("euler_rad")
+        if isinstance(euler_rad, dict) and "yaw" in euler_rad:
+            return float(euler_rad.get("yaw") or 0.0) * 180.0 / 3.141592653589793
+        return 0.0
+
+    def _normalize_yaw_delta_deg(self, delta: float) -> float:
+        # Convert wraparound deltas such as 159 -> -172 from -331 deg to +29 deg.
+        normalized = (float(delta) + 180.0) % 360.0 - 180.0
+        return 180.0 if normalized == -180.0 and delta > 0 else normalized
+
     def _apply_automatic_observation_policy(
         self,
         scene: SceneInstance,
         agent_id: str,
         state: MissionState,
         phase: str,
-    ) -> None:
+    ) -> dict:
         modalities = ["rgb", "depth", "pose"]
         policy = {
             "mode": "automatic",
@@ -323,6 +530,7 @@ class TaskRuntime:
         data = self._record_observation(scene, agent_id, state, modalities, source="automatic_phase_window")
         self.recorder.event("automatic_observation_updated", data)
         self._write_state(state)
+        return data
 
     def _record_model_action_contract_repair_events(self, attempts: list[dict]) -> None:
         for attempt in attempts:
@@ -391,9 +599,11 @@ class TaskRuntime:
         self._write_state(state)
 
     def _write_state(self, state: MissionState) -> None:
-        self.recorder.write_json("mission_state.json", state.to_dict())
+        state_data = state.to_dict()
+        self.recorder.write_json("mission_state.json", state_data)
+        self.recorder.write_json("latest_state.json", state_data)
         self.recorder.write_json("flight_memory.json", self._memory_for_state(state).to_dict())
-        self.recorder.event("mission_state_updated", state.to_dict())
+        self.recorder.event("mission_state_updated", state_data)
 
     @staticmethod
     def _scene_key(map_id: str, scene_id: str | None) -> tuple[str, str | None]:

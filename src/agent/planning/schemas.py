@@ -69,7 +69,7 @@ class ShortHorizonPlan:
     @classmethod
     def from_dict(cls, data: dict[str, Any], *, require_phase_transition: bool = False) -> "ShortHorizonPlan":
         if require_phase_transition and "phase_transition" not in data:
-            raise ValueError("Model action planner response requires phase_transition")
+            raise ValueError("ShortHorizonPlan response requires phase_transition")
         transition_data = data.get("phase_transition")
         transition = (
             PhaseTransition.from_dict(dict(transition_data))

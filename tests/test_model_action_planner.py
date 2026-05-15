@@ -7,7 +7,7 @@ import pytest
 from src.agent.mission_state import MissionState
 from src.agent.planning.model_action_planner import ModelActionPlanner, ModelActionPlannerConfigError
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
-from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE
+from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK
 from src.agent.planning.schemas import ShortHorizonPlan
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
@@ -43,6 +43,9 @@ class StubModelActionPlanner(ModelActionPlanner):
 
     def _call_openai_compatible(self, context: dict):
         return self.response
+
+    def _call_phase_transition_openai_compatible(self, phase_context: dict):
+        return {"decision": COMPLETE_TASK, "reason": "stub post-action phase evidence is complete"}
 
 
 class StubRepairPlanner:
@@ -148,7 +151,7 @@ def test_short_horizon_plan_direct_constructor_defaults_to_advance():
     assert plan.phase_transition.decision == ADVANCE_TO_NEXT_PHASE
 
 
-def test_model_action_planner_rejects_missing_phase_transition():
+def test_model_action_planner_accepts_missing_phase_transition():
     planner = StubModelActionPlanner(
         {
             "_omit_phase_transition": True,
@@ -157,11 +160,12 @@ def test_model_action_planner_rejects_missing_phase_transition():
         }
     )
 
-    with pytest.raises(ValueError, match="requires phase_transition"):
-        planner.plan_next(make_state(), make_context())
+    plan = planner.plan_next(make_state(), make_context())
+
+    assert plan.steps[0].tool == "uav.hover"
 
 
-def test_model_action_planner_rejects_invalid_phase_transition_decision():
+def test_model_action_planner_ignores_invalid_phase_transition_decision():
     planner = StubModelActionPlanner(
         {
             "phase": "orient_leftward",
@@ -170,11 +174,12 @@ def test_model_action_planner_rejects_invalid_phase_transition_decision():
         }
     )
 
-    with pytest.raises(ValueError, match="Unsupported phase_transition decision"):
-        planner.plan_next(make_state(), make_context())
+    plan = planner.plan_next(make_state(), make_context())
+
+    assert plan.steps[0].tool == "uav.hover"
 
 
-def test_model_action_planner_rejects_phase_transition_target_fields():
+def test_model_action_planner_ignores_phase_transition_target_fields():
     planner = StubModelActionPlanner(
         {
             "phase": "orient_leftward",
@@ -187,8 +192,9 @@ def test_model_action_planner_rejects_phase_transition_target_fields():
         }
     )
 
-    with pytest.raises(ValueError, match="must not specify target phase fields"):
-        planner.plan_next(make_state(), make_context())
+    plan = planner.plan_next(make_state(), make_context())
+
+    assert plan.steps[0].tool == "uav.hover"
 
 
 def test_model_action_planner_rejects_unknown_tool():
@@ -321,6 +327,37 @@ def test_model_action_planner_accepts_contract_move_body_direction_args():
     plan = planner.plan_next(state, make_context())
 
     assert plan.steps[0].args == {"direction": "backward", "duration": 1.5}
+
+
+def test_model_action_planner_accepts_forward_5m_duration_from_nominal_scale():
+    state = make_state()
+    context = make_context()
+    context["allowed_action_constraints"]["action_schemas"]["uav.move_body"]["limits"]["duration_max"] = 8.0
+    context["allowed_action_constraints"]["nominal_action_scale"] = {
+        "linear_velocity_mps": 2.0,
+        "vertical_velocity_mps": 1.0,
+        "move_duration_sec": 2.0,
+        "vertical_duration_sec": 2.0,
+        "vertical_step_m": 2.0,
+        "yaw_step_deg": 30.0,
+    }
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [
+                {
+                    "kind": "tool",
+                    "tool": "uav.move_body",
+                    "args": {"direction": "forward", "duration": 2.5},
+                    "reason": "move forward about 5 meters using nominal 2 m/s scale",
+                }
+            ],
+        }
+    )
+
+    plan = planner.plan_next(state, context)
+
+    assert plan.steps[0].args == {"direction": "forward", "duration": 2.5}
 
 
 def test_model_action_planner_accepts_contract_move_body_velocity_args_without_normalization():
@@ -543,7 +580,7 @@ def test_model_action_planner_repair_repeated_same_invalid_plan_fails_early():
         planner.plan_next(make_state(), make_context())
 
 
-def test_model_action_planner_repair_output_missing_phase_transition_fails():
+def test_model_action_planner_repair_output_missing_phase_transition_succeeds():
     repair_planner = StubRepairPlanner(
         [
             {
@@ -561,7 +598,20 @@ def test_model_action_planner_repair_output_missing_phase_transition_fails():
         repair_planner=repair_planner,
     )
 
-    with pytest.raises(ModelRepairPlannerError) as exc_info:
-        planner.plan_next(make_state(), make_context())
+    plan = planner.plan_next(make_state(), make_context())
 
-    assert exc_info.value.violations[-1]["code"] == "repair_plan_parse_error"
+    assert plan.steps[0].tool == "uav.hover"
+
+
+def test_model_action_planner_judges_phase_transition_from_post_action_context():
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+        }
+    )
+
+    transition = planner.judge_phase_transition({"executed_steps": [], "measurements": {}})
+
+    assert transition.decision == COMPLETE_TASK
+    assert "post-action" in transition.reason
