@@ -15,7 +15,7 @@ from src.agent.planning.model_repair_planner import (
     RepairAttemptRecord,
     RepairContext,
 )
-from src.agent.planning.phase_transition import PhaseTransition
+from src.agent.phase import PhaseTransition
 from src.agent.planning.schemas import ShortHorizonPlan
 from src.agent.planning.tool_contract_validator import (
     ToolContractValidationError,
@@ -61,7 +61,11 @@ class ModelActionPlanner:
         if self.model_config.provider != "openai_compatible":
             raise ModelActionPlannerConfigError(f"Unsupported model provider: {self.model_config.provider}")
         response = self._call_openai_compatible(context)
-        plan = ShortHorizonPlan.from_dict(_without_phase_transition(response), require_phase_transition=False)
+        plan = ShortHorizonPlan.from_dict(
+            _without_phase_transition(response),
+            require_phase_transition=False,
+            require_action_window=True,
+        )
         try:
             self.tool_contract_validator.validate(plan, state.current_phase_name, context)
             return plan
@@ -164,7 +168,11 @@ class ModelActionPlanner:
                 )
 
             try:
-                repaired_plan = ShortHorizonPlan.from_dict(_without_phase_transition(repaired_plan_data), require_phase_transition=False)
+                repaired_plan = ShortHorizonPlan.from_dict(
+                    _without_phase_transition(repaired_plan_data),
+                    require_phase_transition=False,
+                    require_action_window=True,
+                )
                 self.tool_contract_validator.validate(repaired_plan, expected_phase, context)
             except ToolContractValidationError as exc:
                 violation = exc.violation.to_dict()

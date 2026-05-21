@@ -54,6 +54,7 @@ class ObservationContextBuilder:
             allowed_action_constraints=self._allowed_action_constraints(),
             observation_policy=self._observation_policy(),
             phase_transition_policy=self._phase_transition_policy(state),
+            phase_completion_criteria=self._phase_completion_criteria(state),
             phase_execution_summary=state.current_phase_execution_summary,
             metadata={
                 "run_id": state.run_id,
@@ -148,3 +149,14 @@ class ObservationContextBuilder:
             "max_phase_window_count": state.max_phase_window_count,
             "note": "Phase transition is judged after tool execution and automatic observation. Do not output phase_transition in the action plan.",
         }
+
+    def _phase_completion_criteria(self, state: MissionState) -> list[dict[str, Any]]:
+        phase = self._current_phase(state)
+        if not phase:
+            return []
+        criteria = phase.get("completion_criteria", [])
+        if isinstance(criteria, list):
+            return [dict(item) for item in criteria if isinstance(item, dict)]
+        if isinstance(criteria, dict):
+            return [dict(criteria)]
+        return []

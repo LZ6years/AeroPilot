@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from src.uav import body_velocity_to_world_delta
+
 
 @dataclass(frozen=True)
 class PrimitiveResult:
@@ -120,9 +122,10 @@ class NullUavPrimitiveAdapter:
         # Integrate body-frame velocity into the simple pose state.
         if not self.connected:
             return PrimitiveResult(False, "UAV is not connected")
-        self.position["x"] += vx * duration
-        self.position["y"] += vy * duration
-        self.position["z"] += vz * duration
+        delta = body_velocity_to_world_delta(vx, vy, vz, duration, self.yaw_deg)
+        self.position["x"] += delta["dx"]
+        self.position["y"] += delta["dy"]
+        self.position["z"] += delta["dz"]
         return PrimitiveResult(True, "null UAV move_body", {"pose": self._pose()})
 
     def turn_relative(self, yaw_deg: float) -> PrimitiveResult:

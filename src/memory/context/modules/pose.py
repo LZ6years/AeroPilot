@@ -6,6 +6,7 @@ from typing import Any
 
 from src.memory.context.modules.base import ContextModule
 from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
+from src.uav import clean_pose_for_model, pose_delta
 
 
 class DefaultPoseContextModule(ContextModule):
@@ -18,18 +19,18 @@ class DefaultPoseContextModule(ContextModule):
         reader = memory.memory_reader
         pose_records = reader.read_refs(memory.recent_pose_refs[-self.max_items :]) if reader else []
         poses = [
-            dict(item.get("pose", {}))
+            clean_pose_for_model(item.get("pose", {}))
             for item in pose_records
             if isinstance(item, dict) and isinstance(item.get("pose"), dict)
         ]
         latest_pose = poses[-1] if poses else {}
-        pose_delta = _pose_delta(poses[-2], poses[-1]) if len(poses) >= 2 else {}
+        recent_delta = pose_delta(poses[-2], poses[-1]) if len(poses) >= 2 else {}
         facts = []
         if latest_pose:
             facts.append({"type": "latest_pose", "value": latest_pose, "source": self.__class__.__name__})
         inferences = []
-        if pose_delta:
-            inferences.append({"type": "recent_pose_delta", "value": pose_delta, "source": self.__class__.__name__})
+        if recent_delta:
+            inferences.append({"type": "recent_pose_delta", "value": recent_delta, "source": self.__class__.__name__})
         return ContextFragment(
             name=self.name,
             enabled=True,
@@ -37,7 +38,7 @@ class DefaultPoseContextModule(ContextModule):
             content={
                 "latest_pose": latest_pose,
                 "recent_pose_history": poses,
-                "recent_pose_delta": pose_delta,
+                "recent_pose_delta": recent_delta,
             },
             facts=facts,
             inferences=inferences,
@@ -51,9 +52,9 @@ class DefaultPoseContextModule(ContextModule):
         return {
             "summary": "Latest UAV pose, short pose history, and recent pose delta.",
             "content_fields": {
-                "latest_pose": "Most recent pose from pose refs; expected fields include x, y, z, and yaw_deg when available.",
-                "recent_pose_history": "Up to three recent pose records in chronological order.",
-                "recent_pose_delta": "Difference between the last two poses for x, y, z, and yaw_deg when available.",
+                "latest_pose": "Most recent model-facing pose from pose refs; raw velocity is intentionally removed.",
+                "recent_pose_history": "Up to three recent model-facing pose records in chronological order; raw velocity is intentionally removed.",
+                "recent_pose_delta": "Difference between the last two poses as dx, dy, dz, and normalized dyaw_deg when available.",
             },
             "fact_fields": {
                 "latest_pose": "Observed latest pose and the strongest pose fact for planning.",
@@ -66,12 +67,3 @@ class DefaultPoseContextModule(ContextModule):
             },
             "coordinate_note": "Pose values follow the runtime environment coordinate convention, currently AirSim NED for map-related context.",
         }
-
-
-def _pose_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, float]:
-    keys = ("x", "y", "z", "yaw_deg")
-    return {
-        key: float(after.get(key, 0.0)) - float(before.get(key, 0.0))
-        for key in keys
-        if key in before or key in after
-    }

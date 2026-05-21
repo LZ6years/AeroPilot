@@ -26,7 +26,7 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    FM["flight_memory.json<br/>manifest refs"] --> MOD["Context Modules"]
+    FM["state/flight_memory.json<br/>manifest refs"] --> MOD["Context Modules"]
     RAW["memory/*.jsonl<br/>append-only history"] --> MOD
     ART["artifacts<br/>rgb/depth/log files"] --> MOD
     MOD --> FR["ContextFragments"]

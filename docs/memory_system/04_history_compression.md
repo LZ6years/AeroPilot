@@ -108,7 +108,7 @@ runtime 根据安全审查和 loop guard 决定是否应用。module 不负责�
 memory/*.jsonl / artifacts:
   保存原始历史、索引和大文件引用
 
-flight_memory.json:
+state/flight_memory.json:
   保存当前 run 的 manifest / index / recent refs
 
 ContextModule:

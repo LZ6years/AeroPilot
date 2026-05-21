@@ -142,7 +142,7 @@ memory/map/map_memory.json
 
 ## 8. 验收标准
 
-- 一次 run 后同时生成 `flight_memory.json` 和 `contexts/latest_context.json`。
+- 一次 run 后同时生成 `state/flight_memory.json` 和 `contexts/latest_context.json`。
 - `latest_context.json` 包含五类 fragments。
 - `latest_context.json.context_schema.module_content_fields` 包含启用 module 的字段说明。
 - `PlannerContext` 不包含完整 `FlightMemory` 或完整 jsonl 历史。

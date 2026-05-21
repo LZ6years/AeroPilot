@@ -16,6 +16,12 @@ Required output shape:
 
 {
   "phase": "copy repair_context.phase",
+  "action_window": {
+    "intent": "short repaired intent for this current-phase action window",
+    "scope": "current_phase_only",
+    "requires_intermediate_observation": false,
+    "expected_effect": "short expected effect after the repaired step(s)"
+  },
   "steps": [
     {
       "kind": "tool",
@@ -29,3 +35,8 @@ Required output shape:
 When unsure, prefer:
 - uav.hover with {}
 - or a small uav.turn_relative within the provided yaw limits.
+
+Action window rules:
+- action_window.scope must be exactly "current_phase_only".
+- action_window.intent and action_window.expected_effect must be non-empty.
+- If action_window.requires_intermediate_observation is true, output exactly 1 step.

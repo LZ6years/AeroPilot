@@ -188,24 +188,24 @@ runtime 决定是否应用：
 运行：
 
 ```text
-python demos/demo_model_action_planner_context.py --env-path .env
+python demos/model_action_planner_context_demo.py --env-path .env
 ```
 
 重点查看：
 
-- `semantic_parse_result.json`
-- `flight_memory.json`
-- `mission_state.json`
-- `latest_context.json`
-- `model_payload.json`
-- `raw_model_response.json`
+- `state/semantic_plan.json`
+- `state/flight_memory.json`
+- `state/latest_state.json`
+- `contexts/latest_context.json`
+- `debug/model_payload.json`
+- `debug/raw_model_response.json`
 - `validated_plan.json`
 - `safety_decision.json`
 - `demo_preview.md`
 
 验收标准：
 
-- `latest_context.json` 包含 `context_schema`、五类 fragments、`allowed_action_constraints`、`observation_policy`。
+- `contexts/latest_context.json` 包含 `context_schema`、五类 fragments、`allowed_action_constraints`、`observation_policy`。
 - 模型输出不包含 observe step。
 - `validated_plan.json` 包含 `phase_transition`。
 - 非法 tool 或非法 args 会被 `ToolContractValidator` 拒绝。

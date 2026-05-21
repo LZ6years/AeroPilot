@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import base64
-import math
 from dataclasses import dataclass
 from typing import Any
 
 from src.env_client.schemas import ActionResult, MapPackage, Observation, SceneInstance
 from src.runtime.configs.action_config import UavActionConfig
+from src.uav import UNREALCV_VERTICAL_SIGN, body_velocity_to_world_delta, move_body_velocity_from_args
 
 
 @dataclass
@@ -80,12 +80,12 @@ class UnrealCvBackend:
             return ActionResult(True, action, "UnrealCV camera pose set", {"pose": pose})
         if action == "move_body":
             pose = self._get_pose()
-            yaw_rad = math.radians(pose[4])
             duration = float(args.get("duration", self.action_config.move_duration_sec))
             vx, vy, vz = self._move_velocity(args)
-            pose[0] += (vx * math.cos(yaw_rad) - vy * math.sin(yaw_rad)) * duration
-            pose[1] += (vx * math.sin(yaw_rad) + vy * math.cos(yaw_rad)) * duration
-            pose[2] += vz * duration
+            delta = body_velocity_to_world_delta(vx, vy, vz, duration, pose[4])
+            pose[0] += delta["dx"]
+            pose[1] += delta["dy"]
+            pose[2] += delta["dz"]
             self._set_pose(pose)
             return ActionResult(True, action, "UnrealCV camera location updated", {"pose": pose})
         if action == "ascend":
@@ -113,27 +113,12 @@ class UnrealCvBackend:
 
     def _move_velocity(self, args: dict) -> tuple[float, float, float]:
         # Resolve semantic direction or explicit velocity for UnrealCV camera motion.
-        direction = str(args.get("direction", "")).lower()
-        if direction:
-            speed = self.action_config.linear_velocity_mps
-            vertical_speed = self.action_config.vertical_velocity_mps
-            direction_map = {
-                "forward": (speed, 0.0, 0.0),
-                "backward": (-speed, 0.0, 0.0),
-                "left": (0.0, -speed, 0.0),
-                "right": (0.0, speed, 0.0),
-                "up": (0.0, 0.0, vertical_speed),
-                "down": (0.0, 0.0, -vertical_speed),
-            }
-            try:
-                return direction_map[direction]
-            except KeyError as exc:
-                raise ValueError(f"Unsupported move_body direction: {direction}") from exc
-        return (
-            float(args.get("vx", self.action_config.linear_velocity_mps)),
-            float(args.get("vy", 0.0)),
-            float(args.get("vz", 0.0)),
+        vx, vy, vz, _duration = move_body_velocity_from_args(
+            args,
+            self.action_config,
+            vertical_sign=UNREALCV_VERTICAL_SIGN,
         )
+        return vx, vy, vz
 
     def _vertical_args(self, args: dict) -> tuple[float, float]:
         # Resolve meters, speed, and duration into a vertical speed-duration command.

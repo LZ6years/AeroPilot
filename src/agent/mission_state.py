@@ -8,10 +8,10 @@ records and are summarized for models by context modules.
 from __future__ import annotations
 
 import copy
-import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.uav import pose_measurements, yaw_deg
 from src.agent.semantic.schemas import SemanticPlan
 
 
@@ -77,14 +77,16 @@ class MissionState:
                 "start": clean_start_pose,
                 "latest": dict(clean_start_pose),
             },
-            "start_pose": clean_start_pose,
-            "latest_pose": dict(clean_start_pose),
-            "phase_origin_yaw_deg": round(_yaw_deg(start_pose), 3),
+            "phase_local_frame": {
+                "origin": "current phase start pose",
+                "origin_yaw_deg": round(yaw_deg(start_pose), 3),
+                "description": "Used to project world dx/dy into phase-local forward/right displacement.",
+            },
             "window_count": self.current_phase_window_count,
             "max_phase_window_count": self.max_phase_window_count,
-            "latest_window_measurements": {},
-            "phase_local_measurements": _pose_measurements(start_pose, start_pose),
-            "cumulative_measurements": _pose_measurements(start_pose, start_pose),
+            "last_window_measurements": {},
+            "phase_local_measurements": pose_measurements(start_pose, start_pose),
+            "cumulative_measurements": pose_measurements(start_pose, start_pose),
             "cumulative_tool_facts": _empty_tool_facts(),
             "note": "Current-phase facts only. Use phase_local_measurements.forward_displacement_m for forward movement progress; history is stored in memory/events.",
         }
@@ -92,23 +94,36 @@ class MissionState:
     def update_current_phase_progress(
         self,
         latest_observation: dict[str, Any],
+        last_window_measurements: dict[str, Any] | None = None,
         latest_window_measurements: dict[str, Any] | None = None,
         tool_facts_delta: dict[str, Any] | None = None,
     ) -> None:
         self.ensure_current_phase_progress(self.latest_observation or latest_observation)
         latest_pose = _pose_from_observation(latest_observation)
         progress = copy.deepcopy(self.current_phase_progress)
-        start_pose = dict(progress.get("world_pose", {}).get("start", progress.get("start_pose", {})))
+        start_pose = dict(progress.get("world_pose", {}).get("start", {}))
         clean_latest_pose = _clean_pose(latest_pose)
-        progress["latest_pose"] = clean_latest_pose
         progress["world_pose"] = {
             "start": _clean_pose(start_pose),
             "latest": clean_latest_pose,
         }
         progress["window_count"] = self.current_phase_window_count
         progress["max_phase_window_count"] = self.max_phase_window_count
-        progress["latest_window_measurements"] = dict(latest_window_measurements or progress.get("latest_window_measurements", {}))
-        measurements = _pose_measurements(start_pose, latest_pose)
+        window_measurements = last_window_measurements
+        if window_measurements is None:
+            window_measurements = latest_window_measurements
+        progress["last_window_measurements"] = dict(window_measurements or progress.get("last_window_measurements", {}))
+        progress.pop("latest_window_measurements", None)
+        progress.pop("start_pose", None)
+        progress.pop("latest_pose", None)
+        if "phase_local_frame" not in progress:
+            progress["phase_local_frame"] = {
+                "origin": "current phase start pose",
+                "origin_yaw_deg": round(yaw_deg(start_pose), 3),
+                "description": "Used to project world dx/dy into phase-local forward/right displacement.",
+            }
+        progress.pop("phase_origin_yaw_deg", None)
+        measurements = pose_measurements(start_pose, latest_pose)
         progress["phase_local_measurements"] = measurements
         progress["cumulative_measurements"] = measurements
         if tool_facts_delta:
@@ -140,7 +155,7 @@ class MissionState:
 
     def record_observation(self, observation: dict[str, Any]) -> None:
         # Keep only the latest observation snapshot; history is written to memory/observations.jsonl.
-        self.latest_observation = copy.deepcopy(observation)
+        self.latest_observation = _clean_observation(observation)
         self.latest_pose = _clean_pose(_pose_from_observation(observation))
 
     def record_error(self, error_type: str, message: str) -> None:
@@ -148,6 +163,9 @@ class MissionState:
         self.hover_required = True
 
     def to_dict(self) -> dict[str, Any]:
+        yaw_scan = {
+            "accum_deg": self.yaw_scan_accum_deg,
+        }
         return {
             "run_id": self.run_id,
             "user_instruction": self.user_instruction,
@@ -156,10 +174,8 @@ class MissionState:
             "current_phase": self.current_phase_name,
             "current_phase_key": self.current_phase_key,
             "latest_observation": copy.deepcopy(self.latest_observation),
-            "latest_pose": copy.deepcopy(self.latest_pose),
             "errors": list(self.errors),
-            "safety": {"hover_required": self.hover_required},
-            "yaw_scan_accum_deg": self.yaw_scan_accum_deg,
+            "safety": {"hover_required": self.hover_required, "yaw_scan": yaw_scan},
             "current_phase_progress": copy.deepcopy(self.current_phase_progress),
             "current_phase_window_count": self.current_phase_window_count,
             "max_phase_window_count": self.max_phase_window_count,
@@ -180,6 +196,13 @@ def _clean_pose(pose: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
+def _clean_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    data = copy.deepcopy(observation) if isinstance(observation, dict) else {}
+    if isinstance(data.get("pose"), dict):
+        data["pose"] = _clean_pose(data["pose"])
+    return data
+
+
 def _coordinate_frames() -> dict[str, Any]:
     return {
         "world_ned": {
@@ -192,52 +215,6 @@ def _coordinate_frames() -> dict[str, Any]:
         "phase_local": {
             "description": "Current-phase local frame. Origin and yaw are captured at this phase start; use forward/right/up displacement to judge this phase.",
         },
-    }
-
-
-def _pose_value(pose: dict[str, Any], key: str) -> float:
-    if key in pose:
-        return float(pose.get(key) or 0.0)
-    position = pose.get("position")
-    if isinstance(position, dict):
-        return float(position.get(key) or 0.0)
-    return 0.0
-
-
-def _yaw_deg(pose: dict[str, Any]) -> float:
-    if "yaw_deg" in pose:
-        return float(pose.get("yaw_deg") or 0.0)
-    orientation = pose.get("orientation")
-    if isinstance(orientation, dict) and "yaw_deg" in orientation:
-        return float(orientation.get("yaw_deg") or 0.0)
-    euler_rad = pose.get("euler_rad")
-    if isinstance(euler_rad, dict) and "yaw" in euler_rad:
-        return float(euler_rad.get("yaw") or 0.0) * 180.0 / 3.141592653589793
-    return 0.0
-
-
-def _normalize_yaw_delta_deg(delta: float) -> float:
-    normalized = (float(delta) + 180.0) % 360.0 - 180.0
-    return 180.0 if normalized == -180.0 and delta > 0 else normalized
-
-
-def _pose_measurements(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
-    dx = _pose_value(after, "x") - _pose_value(before, "x")
-    dy = _pose_value(after, "y") - _pose_value(before, "y")
-    dz = _pose_value(after, "z") - _pose_value(before, "z")
-    yaw_delta = _yaw_deg(after) - _yaw_deg(before) if before and after else None
-    yaw_rad = math.radians(_yaw_deg(before))
-    forward = dx * math.cos(yaw_rad) + dy * math.sin(yaw_rad)
-    right = -dx * math.sin(yaw_rad) + dy * math.cos(yaw_rad)
-    return {
-        "world_delta": {"dx": round(dx, 3), "dy": round(dy, 3), "dz": round(dz, 3)},
-        "pose_delta": {"dx": round(dx, 3), "dy": round(dy, 3), "dz": round(dz, 3)},
-        "forward_displacement_m": round(forward, 3),
-        "right_displacement_m": round(right, 3),
-        "up_displacement_m": round(-dz, 3),
-        "planar_displacement_m": round((dx * dx + dy * dy) ** 0.5, 3),
-        "vertical_delta_m": round(dz, 3),
-        "yaw_delta_deg": round(_normalize_yaw_delta_deg(yaw_delta), 3) if yaw_delta is not None else None,
     }
 
 

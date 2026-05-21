@@ -8,7 +8,7 @@ model plan, and runs SafetySupervisor.
 Recommended PowerShell setup for readable Chinese output:
 
     $env:PYTHONIOENCODING='utf-8'
-    python demos/demo_model_action_planner_context.py --env-path .env
+    python demos/model_action_planner_context_demo.py --env-path .env
 """
 
 from __future__ import annotations
@@ -47,23 +47,31 @@ DEFAULT_MAP_CLUE = "\u8d77\u70b9\u53f3\u4fa7\u533a\u57df\u9644\u8fd1\u53ef\u80fd
 DEFAULT_REGION_HINT = "\u8d77\u70b9\u53f3\u4fa7"
 
 DEMO_OUTPUT_FILES = {
-    "semantic_parse_result.json",
-    "mission_state.json",
-    "flight_memory.json",
-    "latest_context.json",
-    "model_payload.json",
-    "raw_model_response.json",
-    "raw_model_content.json",
-    "validated_plan.json",
-    "repair_attempts.json",
-    "repair_result.json",
-    "safety_decision.json",
-    "demo_preview.md",
+    "state/semantic_plan.json",
+    "state/latest_state.json",
+    "state/flight_memory.json",
+    "contexts/latest_context.json",
+    "debug/model_payload.json",
+    "debug/raw_model_response.json",
+    "debug/raw_model_content.json",
+    "debug/validated_plan.json",
+    "debug/repair_attempts.json",
+    "debug/repair_result.json",
+    "debug/safety_decision.json",
+    "demo/demo_preview.md",
 }
 
 
 @dataclass(frozen=True)
 class DemoArtifacts:
+    """All artifacts produced by one educational planner-context run.
+
+    Keeping the intermediate objects together makes the demo easier to read:
+    each output file below is written from one of these fields, so you can trace
+    how a user instruction becomes semantic plan, memory refs, planner context,
+    raw model JSON, validated plan, and safety decision.
+    """
+
     run_dir: Path
     parse_result: TaskParseResult
     state: MissionState
@@ -79,7 +87,12 @@ class DemoArtifacts:
 
 
 class RecordingModelActionPlanner(ModelActionPlanner):
-    """Capture the exact model request and response for demo inspection."""
+    """Capture the exact model request and response for demo inspection.
+
+    The production planner only needs the parsed JSON plan. This subclass keeps
+    the full HTTP payload and raw response so the demo can answer the practical
+    question: "what exactly did we send to Qwen, and what did Qwen send back?"
+    """
 
     def __init__(self, model_config: ModelConfig) -> None:
         self.last_payload: dict[str, Any] = {}
@@ -89,6 +102,9 @@ class RecordingModelActionPlanner(ModelActionPlanner):
 
     def _call_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
         endpoint = self.model_config.chat_completions_url()
+        # The user message is the complete PlannerContext JSON. The system
+        # prompt explains how to read that JSON and what action contract the
+        # model must obey.
         payload = {
             "model": self.model_config.model_name,
             "messages": [
@@ -100,6 +116,8 @@ class RecordingModelActionPlanner(ModelActionPlanner):
         }
         self.last_payload = payload
 
+        # Only the request body is saved later. The Authorization header is
+        # intentionally kept out of demo artifacts to avoid leaking API keys.
         request = urllib.request.Request(
             endpoint,
             data=json.dumps(payload).encode("utf-8"),
@@ -152,21 +170,31 @@ def main() -> None:
 
 
 def run_demo(instruction: str, model_config: ModelConfig, run_dir: Path) -> DemoArtifacts:
-    # Stage 1: TaskParser uses the configured model to convert user language into SemanticPlan.
+    # Stage 1: TaskParser uses the configured model to convert user language
+    # into SemanticPlan. This is still semantic only: the parser should not emit
+    # UAV tools, because tools are decided later by ModelActionPlanner.
     parser = TaskParser(mode="model", model_config=model_config)
     parse_result = parser.parse(instruction)
 
-    # Stage 2: FlightMemory is only a manifest; JSONL records are written by MemoryEventWriter.
+    # Stage 2: FlightMemory is only a manifest; JSONL records are written by
+    # MemoryEventWriter. This split is important: modules read small refs and
+    # summaries, not a giant raw history object.
     state, flight_memory, map_memory = build_demo_memory(run_dir, parse_result)
 
-    # Stage 3: ObservationContextBuilder runs modules and ContextComposer to create PlannerContext.
+    # Stage 3: ObservationContextBuilder runs the enabled modules, then
+    # ContextComposer merges them into the exact PlannerContext sent to the
+    # action planner.
     context = ObservationContextBuilder(map_memory=map_memory).build(state, flight_memory)
 
-    # Stage 4: ModelActionPlanner calls the model, then validates schema/tool contract locally.
+    # Stage 4: ModelActionPlanner calls the model, then validates schema/tool
+    # contract locally. A valid model response is still only a proposal; it has
+    # not touched the UAV.
     planner = RecordingModelActionPlanner(model_config)
     validated_plan = planner.plan_next(state, context)
 
-    # Stage 5: SafetySupervisor is the final safety gate before any real UAV tool would run.
+    # Stage 5: SafetySupervisor is the final safety gate before any real UAV
+    # tool would run. This demo stops here, so the output is safe to inspect
+    # without a simulator.
     safety = SafetySupervisor().review(validated_plan, state)
     safety_decision = {
         "plan": safety.plan.to_dict(),
@@ -197,10 +225,15 @@ def build_demo_memory(
     writer = MemoryEventWriter(run_dir)
     reader = MemoryRecordReader(run_dir)
 
+    # MissionState is the current runtime control state. It is intentionally
+    # smaller than memory history; historical records live in JSONL files and
+    # are referenced through FlightMemory.
     state = MissionState(str(run_dir.name), parse_result.instruction, parse_result.plan)
     state.connected = True
     state.airborne = True
 
+    # FlightMemory stores refs such as memory/observations.jsonl#1. It lets each
+    # context module decide what to read and summarize.
     flight_memory = FlightMemory(
         run_id=str(run_dir.name),
         map_id="m1",
@@ -220,8 +253,8 @@ def build_demo_memory(
         "modalities": ["rgb", "depth", "pose"],
         "pose": {"x": 0.0, "y": 0.0, "z": -2.0, "yaw_deg": 0.0},
         "frames": {
-            "rgb": {"path": "memory/artifacts/rgb/start_rgb.png", "mock": True},
-            "depth": {"path": "memory/artifacts/depth/start_depth.npy", "mock": True},
+            "rgb": {"path": "artifacts/rgb/start_rgb.png", "mock": True},
+            "depth": {"path": "artifacts/depth/start_depth.npy", "mock": True},
         },
         "source": "instruction_start",
     }
@@ -273,30 +306,38 @@ def redact_model_payload(payload: dict[str, Any], model_config: ModelConfig) -> 
 
 
 def write_demo_outputs(artifacts: DemoArtifacts) -> None:
-    # JSON files are the machine-readable artifacts; demo_preview.md is the main file to read first.
+    # JSON files are the machine-readable artifacts. Read demo_preview.md first
+    # when learning the flow, then open the individual JSON files when you need
+    # exact payloads for debugging.
     writes = {
-        "semantic_parse_result.json": artifacts.parse_result.to_dict(),
-        "mission_state.json": artifacts.state.to_dict(),
-        "flight_memory.json": artifacts.flight_memory.to_dict(),
-        "latest_context.json": artifacts.context,
-        "model_payload.json": artifacts.model_payload,
-        "raw_model_response.json": artifacts.raw_model_response,
-        "raw_model_content.json": artifacts.raw_model_content,
-        "validated_plan.json": artifacts.validated_plan.to_dict(),
-        "repair_attempts.json": {"attempts": artifacts.repair_attempts},
-        "repair_result.json": artifacts.repair_result,
-        "safety_decision.json": artifacts.safety_decision,
+        "state/semantic_plan.json": artifacts.parse_result.to_dict(),
+        "state/latest_state.json": artifacts.state.to_dict(),
+        "state/flight_memory.json": artifacts.flight_memory.to_dict(),
+        "contexts/latest_context.json": artifacts.context,
+        "debug/model_payload.json": artifacts.model_payload,
+        "debug/raw_model_response.json": artifacts.raw_model_response,
+        "debug/raw_model_content.json": artifacts.raw_model_content,
+        "debug/validated_plan.json": artifacts.validated_plan.to_dict(),
+        "debug/repair_attempts.json": {"attempts": artifacts.repair_attempts},
+        "debug/repair_result.json": artifacts.repair_result,
+        "debug/safety_decision.json": artifacts.safety_decision,
     }
     for name, data in writes.items():
         write_json(artifacts.run_dir / name, data)
-    (artifacts.run_dir / "demo_preview.md").write_text(build_preview_markdown(artifacts), encoding="utf-8")
+    preview_path = artifacts.run_dir / "demo" / "demo_preview.md"
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    preview_path.write_text(build_preview_markdown(artifacts), encoding="utf-8")
 
 
 def write_json(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
 def build_preview_markdown(artifacts: DemoArtifacts) -> str:
+    # This Markdown file is intentionally redundant with the JSON artifacts. It
+    # gives a single scrollable teaching view of the pipeline, while JSON keeps
+    # the data available for tests and diffing.
     context = artifacts.context
     payload = artifacts.model_payload["payload"]
     return "\n".join(
@@ -377,6 +418,8 @@ def build_preview_markdown(artifacts: DemoArtifacts) -> str:
 
 
 def context_summary(context: dict[str, Any]) -> dict[str, Any]:
+    # Keep console/Markdown previews compact. The complete PlannerContext is
+    # still written to contexts/latest_context.json.
     return {
         "active_instruction": context["active_instruction"],
         "current_phase": context["current_phase"],
@@ -394,7 +437,7 @@ def context_summary(context: dict[str, Any]) -> dict[str, Any]:
 def _console_summary(artifacts: DemoArtifacts) -> dict[str, Any]:
     return {
         "run_dir": str(artifacts.run_dir),
-        "read_first": str(artifacts.run_dir / "demo_preview.md"),
+        "read_first": str(artifacts.run_dir / "demo" / "demo_preview.md"),
         "validated_plan": artifacts.validated_plan.to_dict(),
         "safety_interventions": artifacts.safety_decision["interventions"],
     }

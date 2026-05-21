@@ -1,4 +1,4 @@
-"""Command line entry point for FlyAgent runtime checks."""
+﻿"""Command line entry point for FlyAgent runtime checks."""
 
 from __future__ import annotations
 
@@ -182,7 +182,7 @@ def run_parse_task(args: argparse.Namespace) -> None:
         parser = TaskParser(mode=parser_mode, model_config=model_config)
         result = parser.parse(args.instruction)
         payload = result.to_dict()
-        recorder.write_json("semantic_plan.json", payload)
+        recorder.write_json("state/semantic_plan.json", payload)
         recorder.event("task_parsed", payload)
         recorder.info("parse task completed", run_dir=str(run_dir))
         print(json.dumps(payload, indent=2, ensure_ascii=False))
@@ -400,9 +400,12 @@ def handle_slash_command(command: str, session: InteractiveTaskSession) -> bool:
             {
                 "latest_context": str(session.run_dir / "contexts" / "latest_context.json"),
                 "latest_phase_transition_context": str(session.run_dir / "contexts" / "latest_phase_transition_context.json"),
-                "latest_state": str(session.run_dir / "latest_state.json"),
-                "mission_state": str(session.run_dir / "mission_state.json"),
-                "flight_memory": str(session.run_dir / "flight_memory.json"),
+                "latest_state": str(session.run_dir / "state" / "latest_state.json"),
+                "flight_memory": str(session.run_dir / "state" / "flight_memory.json"),
+                "semantic_plan": str(session.run_dir / "state" / "semantic_plan.json"),
+                "scene_instance": str(session.run_dir / "state" / "scene_instance.json"),
+                "latest_observation_debug": str(session.run_dir / "debug" / "latest_observation.json"),
+                "debug_events": str(session.run_dir / "debug" / "debug_events.jsonl"),
             }
         )
         return True
@@ -490,3 +493,4 @@ def probe_tcp_endpoint(host: str, port: int, timeout_sec: int) -> dict:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+

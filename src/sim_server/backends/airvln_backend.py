@@ -8,6 +8,7 @@ from src.adapters.airsim_uav import AirSimUavAdapter
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter, UavPrimitiveAdapter
 from src.env_client.schemas import ActionResult, MapPackage, Observation, SceneInstance
 from src.runtime.configs.action_config import UavActionConfig
+from src.uav import AIRSIM_NED_VERTICAL_SIGN, move_body_velocity_from_args
 
 
 class AirVlnBackend:
@@ -110,30 +111,7 @@ class AirVlnBackend:
 
     def _move_body_args(self, args: dict) -> tuple[float, float, float, float]:
         # Resolve semantic direction or explicit body-frame velocity into a fixed-scale move.
-        duration = float(args.get("duration", self.action_config.move_duration_sec))
-        direction = str(args.get("direction", "")).lower()
-        if direction:
-            speed = self.action_config.linear_velocity_mps
-            vertical_speed = self.action_config.vertical_velocity_mps
-            direction_map = {
-                "forward": (speed, 0.0, 0.0),
-                "backward": (-speed, 0.0, 0.0),
-                "left": (0.0, -speed, 0.0),
-                "right": (0.0, speed, 0.0),
-                "up": (0.0, 0.0, -vertical_speed),
-                "down": (0.0, 0.0, vertical_speed),
-            }
-            try:
-                vx, vy, vz = direction_map[direction]
-            except KeyError as exc:
-                raise ValueError(f"Unsupported move_body direction: {direction}") from exc
-            return vx, vy, vz, duration
-        return (
-            float(args.get("vx", self.action_config.linear_velocity_mps)),
-            float(args.get("vy", 0.0)),
-            float(args.get("vz", 0.0)),
-            duration,
-        )
+        return move_body_velocity_from_args(args, self.action_config, vertical_sign=AIRSIM_NED_VERTICAL_SIGN)
 
     def _vertical_args(self, args: dict) -> tuple[float, float]:
         # Resolve meters, speed, and duration into a vertical speed-duration command.

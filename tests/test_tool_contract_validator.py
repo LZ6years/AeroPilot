@@ -5,12 +5,13 @@ from __future__ import annotations
 import pytest
 
 from src.agent.planning import (
+    ActionWindow,
     ShortHorizonPlan,
     ToolContractValidationError,
     ToolContractValidator,
     ToolContractViolation,
 )
-from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE
+from src.agent.phase import ADVANCE_TO_NEXT_PHASE
 from src.agent.planning.schemas import PlannedStep
 
 
@@ -63,6 +64,7 @@ def test_tool_contract_validator_accepts_legal_tool_plan():
 
     assert result is plan
     assert result.phase_transition.decision == ADVANCE_TO_NEXT_PHASE
+    assert result.action_window.scope == "current_phase_only"
 
 
 def test_tool_contract_violation_to_dict_keeps_debug_fields():
@@ -184,3 +186,53 @@ def test_tool_contract_validator_rejects_phase_mismatch():
     data = assert_violation(exc_info, "phase_mismatch")
     assert data["expected"] == "scan_left"
     assert data["actual"] == "wrong_phase"
+
+
+def test_tool_contract_validator_rejects_invalid_action_window_scope():
+    plan = ShortHorizonPlan(
+        "scan_left",
+        [PlannedStep.tool_step("uav.hover", {}, "hold")],
+        action_window=ActionWindow(
+            intent="hold in current phase",
+            scope="whole_task",
+            expected_effect="stay stable",
+        ),
+    )
+
+    with pytest.raises(ToolContractValidationError, match="current_phase_only") as exc_info:
+        ToolContractValidator().validate(plan, "scan_left", make_context())
+
+    assert_violation(exc_info, "action_window_scope_invalid")
+
+
+def test_tool_contract_validator_rejects_empty_action_window_descriptions():
+    plan = ShortHorizonPlan(
+        "scan_left",
+        [PlannedStep.tool_step("uav.hover", {}, "hold")],
+        action_window=ActionWindow(intent="", expected_effect=""),
+    )
+
+    with pytest.raises(ToolContractValidationError, match="intent") as exc_info:
+        ToolContractValidator().validate(plan, "scan_left", make_context())
+
+    assert_violation(exc_info, "action_window_intent_missing")
+
+
+def test_tool_contract_validator_rejects_multi_step_when_intermediate_observation_required():
+    plan = ShortHorizonPlan(
+        "scan_left",
+        [
+            PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": -10.0}, "scan"),
+            PlannedStep.tool_step("uav.move_body", {"direction": "forward", "duration": 1.0}, "move"),
+        ],
+        action_window=ActionWindow(
+            intent="scan then move",
+            requires_intermediate_observation=True,
+            expected_effect="new visual evidence is needed before the move",
+        ),
+    )
+
+    with pytest.raises(ToolContractValidationError, match="exactly one step") as exc_info:
+        ToolContractValidator().validate(plan, "scan_left", make_context())
+
+    assert_violation(exc_info, "action_window_intermediate_observation_requires_single_step")

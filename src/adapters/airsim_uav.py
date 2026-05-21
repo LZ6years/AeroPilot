@@ -7,6 +7,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from src.uav import yaw_deg
+
 from .uav_primitives import PrimitiveResult
 
 
@@ -200,12 +202,11 @@ class AirSimUavAdapter:
 
     def _save_frame_artifact(self, modality: str, response: Any) -> Path | None:
         # Save RGB bytes or depth float arrays for later local inspection.
-        self._frame_index += 1
         normalized = modality.lower()
         if self._is_depth_modality(normalized) and response.image_data_float:
             import numpy as np
 
-            path = self.artifact_dir / "depth" / f"frame_{self._frame_index:06d}.npy"
+            path = self._next_artifact_path("depth", "npy")
             path.parent.mkdir(parents=True, exist_ok=True)
             buffer = BytesIO()
             np.save(buffer, np.array(response.image_data_float, dtype=np.float32))
@@ -214,17 +215,27 @@ class AirSimUavAdapter:
         if response.image_data_uint8:
             suffix = "png" if normalized in {"rgb", "scene", "color"} else "bin"
             folder = "rgb" if normalized in {"rgb", "scene", "color"} else normalized
-            path = self.artifact_dir / folder / f"frame_{self._frame_index:06d}.{suffix}"
+            path = self._next_artifact_path(folder, suffix)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(bytes(response.image_data_uint8))
             return path
         return None
 
+    def _next_artifact_path(self, folder: str, suffix: str) -> Path:
+        # Adapter instances can be recreated inside one run, so never assume an
+        # in-memory frame counter is globally unique for the run directory.
+        if self.artifact_dir is None:
+            raise RuntimeError("artifact_dir is required when saving artifacts")
+        while True:
+            self._frame_index += 1
+            path = self.artifact_dir / folder / f"frame_{self._frame_index:06d}.{suffix}"
+            if not path.exists():
+                return path
+
     def _current_yaw_deg(self) -> float:
         # Read the current yaw in degrees for relative turns.
         pose = self.get_pose()
-        yaw_rad = float(pose.data["euler_rad"]["yaw"]) if pose.data else 0.0
-        return yaw_rad * 180.0 / 3.141592653589793
+        return yaw_deg(pose.data or {})
 
     def _require_client(self) -> Any:
         # Fail early when flight commands are issued before connect.

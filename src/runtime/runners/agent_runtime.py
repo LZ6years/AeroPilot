@@ -19,7 +19,7 @@ class AgentRuntime:
         # Run a minimal environment and UAV primitive verification loop.
         scene = self.env_client.start_scene(map_id)
         try:
-            self.recorder.write_json("scene_instance.json", scene.to_dict())
+            self.recorder.write_json("state/scene_instance.json", scene.to_dict())
             self.recorder.event("scene_started", scene.to_dict())
 
             for action, args in [
@@ -51,7 +51,7 @@ class AgentRuntime:
         # Run a ComputerVision-safe smoke test without flight-control actions.
         scene = self.env_client.start_scene(map_id)
         try:
-            self.recorder.write_json("scene_instance.json", scene.to_dict())
+            self.recorder.write_json("state/scene_instance.json", scene.to_dict())
             self.recorder.event("scene_started", scene.to_dict())
 
             self.recorder.event("action_started", {"action": "connect", "args": {}})

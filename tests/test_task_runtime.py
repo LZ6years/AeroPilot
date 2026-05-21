@@ -8,7 +8,7 @@ import pytest
 
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
-from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
+from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
 from src.agent.semantic.schemas import SemanticGoal, SemanticPhase, SemanticPlan, SemanticTarget, TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
@@ -16,8 +16,10 @@ from src.adapters.uav_primitives import NullUavPrimitiveAdapter
 from src.env_client.local_client import LocalEnvClient
 from src.env_client.schemas import MapPackage
 from src.runtime.configs.action_config import UavActionConfig
+from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.configs.model_config import ModelConfig
+from src.uav import pose_measurements
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.sim_server.backends.airvln_backend import AirVlnBackend
 from src.sim_server.server import LocalSimulationServer
@@ -42,7 +44,11 @@ def make_package() -> MapPackage:
 
 
 def load_event_records(run_dir):
-    return [json.loads(line) for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    events = [json.loads(line) for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    debug_path = run_dir / "debug" / "debug_events.jsonl"
+    if debug_path.exists():
+        events.extend(json.loads(line) for line in debug_path.read_text(encoding="utf-8").splitlines())
+    return sorted(events, key=lambda record: str(record.get("timestamp", "")))
 
 
 class HoverOnlyPlanner:
@@ -68,11 +74,17 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert state.connected
     assert state.airborne
     assert state.latest_observation
-    assert (run_dir / "semantic_plan.json").exists()
-    assert (run_dir / "mission_state.json").exists()
-    assert (run_dir / "observations/latest_observation.json").exists()
+    assert (run_dir / "state/semantic_plan.json").exists()
+    assert not (run_dir / "mission_state.json").exists()
+    assert not (run_dir / "latest_state.json").exists()
+    assert not (run_dir / "flight_memory.json").exists()
+    assert not (run_dir / "semantic_plan.json").exists()
+    assert not (run_dir / "observations").exists()
+    assert not (run_dir / "memory/artifacts").exists()
+    assert (run_dir / "debug/latest_observation.json").exists()
+    assert (run_dir / "debug/debug_events.jsonl").exists()
     assert (run_dir / "contexts/latest_context.json").exists()
-    assert (run_dir / "flight_memory.json").exists()
+    assert (run_dir / "state/flight_memory.json").exists()
     assert (run_dir / "memory/instructions.jsonl").exists()
     assert (run_dir / "memory/actions.jsonl").exists()
     assert (run_dir / "memory/poses.jsonl").exists()
@@ -88,10 +100,10 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
         for step in record["payload"]["steps"]
         if step["kind"] == "tool"
     ]
-    mission_state = json.loads((run_dir / "mission_state.json").read_text(encoding="utf-8"))
-    latest_observation = json.loads((run_dir / "observations/latest_observation.json").read_text(encoding="utf-8"))
+    mission_state = json.loads((run_dir / "state/latest_state.json").read_text(encoding="utf-8"))
+    latest_observation = json.loads((run_dir / "debug/latest_observation.json").read_text(encoding="utf-8"))
     latest_context = json.loads((run_dir / "contexts/latest_context.json").read_text(encoding="utf-8"))
-    flight_memory = json.loads((run_dir / "flight_memory.json").read_text(encoding="utf-8"))
+    flight_memory = json.loads((run_dir / "state/flight_memory.json").read_text(encoding="utf-8"))
 
     assert "control_connected" in event_names
     assert "preflight_takeoff_started" in event_names
@@ -113,7 +125,7 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert mission_state["latest_observation"]["source"] == "automatic_phase_window"
     assert "pose" in mission_state["latest_observation"]
     assert "frames" in mission_state["latest_observation"]
-    assert (run_dir / "latest_state.json").exists()
+    assert (run_dir / "state/latest_state.json").exists()
     assert latest_observation["source"] == "automatic_phase_window"
     assert latest_context["active_instruction"]
     assert latest_context["current_phase"] is not None
@@ -145,7 +157,7 @@ def test_task_runtime_can_land_on_shutdown(tmp_path):
 
     events = load_event_records(run_dir)
     event_names = [record["event"] for record in events]
-    mission_state = json.loads((run_dir / "mission_state.json").read_text(encoding="utf-8"))
+    mission_state = json.loads((run_dir / "state/latest_state.json").read_text(encoding="utf-8"))
 
     assert state.completed
     assert state.connected
@@ -171,7 +183,7 @@ def test_task_runtime_can_reuse_existing_parse_result(tmp_path):
     state = runtime.run_parsed_task("m1", parse_result)
     recorder.close()
 
-    semantic_plan = json.loads((run_dir / "semantic_plan.json").read_text(encoding="utf-8"))
+    semantic_plan = json.loads((run_dir / "state/semantic_plan.json").read_text(encoding="utf-8"))
     assert state.completed
     assert semantic_plan["instruction"] == ENTRANCE_TASK
     assert semantic_plan["plan"] == parse_result.plan.to_dict()
@@ -305,7 +317,7 @@ def test_task_runtime_reuse_running_scene_does_not_repeat_preflight(tmp_path):
     assert second_state.connected
     assert second_state.airborne
     assert second_state.latest_observation["source"] == "automatic_phase_window"
-    flight_memory = json.loads((run_dir / "flight_memory.json").read_text(encoding="utf-8"))
+    flight_memory = json.loads((run_dir / "state/flight_memory.json").read_text(encoding="utf-8"))
     latest_context = json.loads((run_dir / "contexts/latest_context.json").read_text(encoding="utf-8"))
     assert len(flight_memory["instruction_history"]) >= 2
     assert flight_memory["active_instruction"] == ENTRANCE_TASK
@@ -371,6 +383,12 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
             self.contexts.append(context)
             return {
                 "phase": context["current_phase"]["name"],
+                "action_window": {
+                    "intent": "hold while checking context windows",
+                    "scope": "current_phase_only",
+                    "requires_intermediate_observation": False,
+                    "expected_effect": "context remains valid while UAV holds",
+                },
                 "steps": [
                     {"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold for context verification"},
                 ],
@@ -412,7 +430,7 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     recorder.close()
 
     latest_context = json.loads((run_dir / "contexts/latest_context.json").read_text(encoding="utf-8"))
-    flight_memory = json.loads((run_dir / "flight_memory.json").read_text(encoding="utf-8"))
+    flight_memory = json.loads((run_dir / "state/flight_memory.json").read_text(encoding="utf-8"))
     events = load_event_records(run_dir)
     fragments = {fragment["name"]: fragment for fragment in latest_context["fragments"]}
 
@@ -535,7 +553,24 @@ def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_pa
                 target=SemanticTarget("position 5 meters forward", {"direction": "forward", "distance_m": 5.0}),
                 final_state="hover_after_movement",
             ),
-            phases=[SemanticPhase(1, 1, "move_forward", "advance forward by 5 meters")],
+            phases=[
+                SemanticPhase(
+                    1,
+                    1,
+                    "move_forward",
+                    "advance forward by 5 meters",
+                    [
+                        {
+                            "kind": "translation",
+                            "axis": "forward",
+                            "target": 5.0,
+                            "unit": "m",
+                            "tolerance": 1.0,
+                            "correction_allowed": True,
+                        }
+                    ],
+                )
+            ],
         ),
     )
     run_dir = tmp_path / "post_action_continue"
@@ -560,13 +595,19 @@ def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_pa
     assert "phase_transition_judge_context_built" in event_names
     assert "phase_transition_window_limit_reached" in event_names
     assert planner.judge_contexts[0]["executed_steps"][0]["step"]["tool"] == "uav.move_body"
+    assert planner.judge_contexts[0]["action_window"]["scope"] == "current_phase_only"
+    assert planner.judge_contexts[0]["action_window"]["intent"]
     assert "planar_displacement_m" in planner.judge_contexts[0]["measurements"]
     assert "phase_execution_summary" in planner.judge_contexts[0]
+    assert planner.judge_contexts[0]["phase_completion_criteria"][0]["axis"] == "forward"
+    assert planner.judge_contexts[0]["phase_completion_evaluation"]["criteria_count"] == 1
+    assert "velocity" not in planner.judge_contexts[0]["observation_before"].get("pose", {})
+    assert "velocity" not in planner.judge_contexts[0]["observation_after"].get("pose", {})
     summary = planner.judge_contexts[0]["phase_execution_summary"]
     assert summary["phase"] == "move_forward"
     assert summary["window_count"] == 1
     assert summary["cumulative_tool_facts"]["move_body_duration_by_direction_success"]["forward"] == 1.0
-    assert summary["latest_window_measurements"]["planar_displacement_m"] >= 0.0
+    assert summary["last_window_measurements"]["planar_displacement_m"] >= 0.0
 
 
 def test_task_runtime_uses_post_action_model_transition_to_complete_task(tmp_path):
@@ -645,8 +686,8 @@ def test_task_runtime_phase_execution_summary_accumulates_windows(tmp_path):
     assert state.completed
     assert latest_summary["window_count"] == 2
     assert latest_summary["cumulative_tool_facts"]["turn_relative_yaw_deg_success_sum"] == 20.0
-    assert latest_summary["latest_window_measurements"]["yaw_delta_deg"] is not None
-    mission_state = json.loads((run_dir / "mission_state.json").read_text(encoding="utf-8"))
+    assert latest_summary["last_window_measurements"]["yaw_delta_deg"] is not None
+    mission_state = json.loads((run_dir / "state/latest_state.json").read_text(encoding="utf-8"))
     assert "phase_start_observations" not in mission_state
     assert "phase_execution_summaries" not in mission_state
     assert "current_phase_progress" in mission_state
@@ -657,7 +698,7 @@ def test_task_runtime_normalizes_yaw_wraparound_delta(tmp_path):
     server = LocalSimulationServer([make_package()], run_dir=tmp_path / "yaw_wrap")
     runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
 
-    measurements = runtime._pose_measurements(
+    measurements = pose_measurements(
         {"euler_rad": {"yaw": 159.0 * 3.141592653589793 / 180.0}},
         {"euler_rad": {"yaw": -172.0 * 3.141592653589793 / 180.0}},
     )
@@ -695,7 +736,7 @@ def test_task_runtime_continue_transition_window_limit_advances_phase(tmp_path):
     event_names = [record["event"] for record in events]
     assert state.completed
     assert "phase_transition_window_limit_reached" in event_names
-    mission_state = json.loads((run_dir / "mission_state.json").read_text(encoding="utf-8"))
+    mission_state = json.loads((run_dir / "state/latest_state.json").read_text(encoding="utf-8"))
     assert mission_state["max_phase_window_count"] == 5
     assert "phase_window_counts" not in mission_state
     assert "current_phase_window_count" in mission_state
@@ -754,6 +795,54 @@ def test_task_runtime_logs_contract_repair_success_and_continues_to_safety(tmp_p
     assert "model_action_contract_repaired" in event_names
     assert "short_horizon_planned" in event_names
     assert "automatic_observation_updated" in event_names
+
+
+def test_task_runtime_stabilizes_after_each_motion_step_before_observation(tmp_path):
+    class MultiMotionPlanner:
+        planner_mode = "test"
+
+        def plan_next(self, state, context=None):
+            return ShortHorizonPlan(
+                state.current_phase_name,
+                [
+                    PlannedStep.tool_step("uav.move_body", {"direction": "forward", "duration": 1.0}, "move"),
+                    PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10.0}, "turn"),
+                ],
+                PhaseTransition(COMPLETE_TASK, "done"),
+            )
+
+    run_dir = tmp_path / "stabilizes_between_steps"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=MultiMotionPlanner(),
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_task("m1", LAMP_TASK)
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+    phase_summary = next(record["payload"] for record in events if record["event"] == "phase_window_recorded")
+    phase_record = json.loads((run_dir / phase_summary["debug_ref"]).read_text(encoding="utf-8"))
+    stabilization_events = [
+        index for index, name in enumerate(event_names) if name in {"uav_stabilization_completed", "uav_stabilization_skipped", "uav_stabilization_timeout"}
+    ]
+    automatic_observation_index = event_names.index("automatic_observation_policy_applied")
+
+    assert state.completed
+    assert "preflight_stabilization_completed" in event_names
+    assert phase_summary["action_window"]["scope"] == "current_phase_only"
+    assert phase_record["action_window"]["expected_effect"]
+    assert len(phase_record["executed_steps"]) == 2
+    assert all("stabilization" in step for step in phase_record["executed_steps"])
+    assert phase_record["executed_steps"][0]["stabilization"]["tool"] == "uav.move_body"
+    assert phase_record["executed_steps"][1]["stabilization"]["tool"] == "uav.turn_relative"
+    assert max(stabilization_events) < automatic_observation_index
 
 
 def test_task_runtime_logs_contract_repair_failure_then_best_effort_hover(tmp_path):

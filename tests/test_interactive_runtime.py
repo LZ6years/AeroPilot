@@ -51,9 +51,11 @@ class FakeState:
                 "pose": {"position": {"x": 5.0, "y": 0.0, "z": -2.0}},
                 "frames": {"rgb": {"artifact_path": "missing.png"}},
             },
-            "latest_pose": {"position": {"x": 5.0, "y": 0.0, "z": -2.0}},
             "current_phase_progress": {
-                "start_pose": {"position": {"x": 0.0, "y": 0.0, "z": -2.0}},
+                "world_pose": {
+                    "start": {"position": {"x": 0.0, "y": 0.0, "z": -2.0}},
+                    "latest": {"position": {"x": 5.0, "y": 0.0, "z": -2.0}},
+                },
                 "cumulative_tool_facts": {"move_body_duration_success_sum": 2.5},
             },
         }

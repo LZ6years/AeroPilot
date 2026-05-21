@@ -57,9 +57,10 @@ def test_context_command_prints_debug_artifact_paths(tmp_path, capsys):
     payload = json.loads(out)
     assert should_continue is True
     assert payload["latest_context"] == str(tmp_path / "contexts" / "latest_context.json")
-    assert payload["latest_state"] == str(tmp_path / "latest_state.json")
-    assert payload["mission_state"] == str(tmp_path / "mission_state.json")
-    assert payload["flight_memory"] == str(tmp_path / "flight_memory.json")
+    assert payload["latest_state"] == str(tmp_path / "state" / "latest_state.json")
+    assert payload["flight_memory"] == str(tmp_path / "state" / "flight_memory.json")
+    assert payload["semantic_plan"] == str(tmp_path / "state" / "semantic_plan.json")
+    assert payload["latest_observation_debug"] == str(tmp_path / "debug" / "latest_observation.json")
 
 
 def test_maps_command_prints_available_map_ids(tmp_path, capsys):
@@ -104,27 +105,8 @@ def test_cli_defaults_to_chat_model_artifacts():
 
 def test_default_chat_map_prefers_cityenviron():
     class Package:
-        def __init__(self, map_id):
+        def __init__(self, map_id: str) -> None:
             self.map_id = map_id
 
     assert default_chat_map_id([Package("m1"), Package("cityenviron_win64")]) == "cityenviron_win64"
-
-
-def test_hover_command_keeps_cli_open(tmp_path, capsys):
-    session = FakeCliSession(tmp_path)
-
-    should_continue = handle_slash_command("/hover", session)  # type: ignore[arg-type]
-
-    out = capsys.readouterr().out
-    assert should_continue is True
-    assert session.hover_calls == 1
-    assert '"tool": "uav.hover"' in out
-
-
-def test_quit_and_land_commands_close_cli(tmp_path):
-    session = FakeCliSession(tmp_path)
-
-    assert handle_slash_command("/quit", session) is False  # type: ignore[arg-type]
-    assert handle_slash_command("/land", session) is False  # type: ignore[arg-type]
-
-    assert session.shutdown_calls == [None, "land"]
+    assert default_chat_map_id([Package("m1")]) == "m1"

@@ -1,4 +1,4 @@
-"""Manual real-engine UAV primitive smoke demo.
+"""Manual real-engine UAV primitive smoke probe.
 
 This script is intentionally separate from pytest. It launches or connects to a
 configured AirSim scene, runs lifecycle control, performs one bounded vertical
@@ -7,19 +7,24 @@ move, records before/after observations, then hovers/lands.
 Recommended PowerShell:
 
     conda activate flyagent
-    python test_real_uav_primitive_demo.py --map-id cityenviron_win64 --launch --up-meters 5
+    python tests/manual/real_uav_primitive_probe.py --map-id cityenviron_win64 --launch --up-meters 5
 
 Equivalent without persistent shell activation:
 
-    conda run -n flyagent python test_real_uav_primitive_demo.py --map-id cityenviron_win64 --launch --up-meters 5
+    conda run -n flyagent python tests/manual/real_uav_primitive_probe.py --map-id cityenviron_win64 --launch --up-meters 5
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from src.env_client.local_client import LocalEnvClient
 from src.runtime.configs.action_config import load_uav_action_config
@@ -31,7 +36,7 @@ from src.tools.dispatcher import ToolDispatcher
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Real AirSim UAV primitive demo")
+    parser = argparse.ArgumentParser(description="Real AirSim UAV primitive probe")
     parser.add_argument("--config", default="configs/maps/airvln_maps.json")
     parser.add_argument("--action-config", default="configs/uav_action_config.json")
     parser.add_argument("--map-id", default="cityenviron_win64")
@@ -66,7 +71,7 @@ def main() -> None:
         recorder.write_json("config/map_package.json", selected_map.to_dict())
         recorder.write_json("config/uav_action_config.json", action_config.to_dict())
         scene = client.start_scene(args.map_id)
-        recorder.write_json("scene_instance.json", scene.to_dict())
+        recorder.write_json("state/scene_instance.json", scene.to_dict())
         event(recorder, "scene_started", scene.to_dict())
 
         for tool, tool_args in [

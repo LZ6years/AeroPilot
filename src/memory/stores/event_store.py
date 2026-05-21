@@ -12,10 +12,7 @@ class MemoryEventWriter:
     def __init__(self, run_dir: str | Path) -> None:
         self.run_dir = Path(run_dir)
         self.memory_dir = self.run_dir / "memory"
-        self.artifact_rgb_dir = self.memory_dir / "artifacts" / "rgb"
-        self.artifact_depth_dir = self.memory_dir / "artifacts" / "depth"
-        self.artifact_rgb_dir.mkdir(parents=True, exist_ok=True)
-        self.artifact_depth_dir.mkdir(parents=True, exist_ok=True)
+        self.memory_dir.mkdir(parents=True, exist_ok=True)
         self._counters: dict[str, int] = {}
 
     def write_instruction(self, instruction: str, semantic_plan: dict[str, Any] | None = None) -> dict[str, Any]:

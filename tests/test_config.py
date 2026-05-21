@@ -8,8 +8,8 @@ import pytest
 
 from src.runtime.configs.action_config import UavActionConfig, load_uav_action_config
 from src.runtime.configs.safety_config import UavSafetyConfig, load_uav_safety_config
+from src.runtime.configs.stabilization_config import UavStabilizationConfig, load_uav_stabilization_config
 from src.runtime.configs.map_config import build_remote_airsim_config, load_map_config
-from demos.test_uav_client_demo import load_demo_action_config
 
 
 def test_load_map_config_valid(tmp_path):
@@ -208,25 +208,48 @@ def test_load_uav_safety_config_reads_hard_limits(tmp_path):
     assert config.max_yaw_scan_accum_deg == 500.0
 
 
-def test_demo_move_duration_override_preserves_vertical_duration(tmp_path):
-    # Verify --move-duration only overrides horizontal movement duration.
-    config_path = tmp_path / "uav_action_config.json"
+def test_load_uav_stabilization_config_defaults_when_file_missing(tmp_path):
+    config = load_uav_stabilization_config(tmp_path / "missing.json")
+
+    assert config == UavStabilizationConfig()
+
+
+def test_load_uav_stabilization_config_reads_runtime_wait_policy(tmp_path):
+    config_path = tmp_path / "uav_stabilization_config.json"
     config_path.write_text(
         json.dumps(
             {
-                "linear_velocity_mps": 2.0,
-                "vertical_velocity_mps": 2.0,
-                "move_duration_sec": 2.0,
-                "vertical_duration_sec": 8.0,
-                "vertical_step_m": 1.0,
-                "yaw_step_deg": 30.0,
+                "enabled": False,
+                "velocity_threshold_mps": 0.2,
+                "timeout_sec": 4.5,
+                "poll_interval_sec": 0.1,
+                "zero_velocity_brake_duration_sec": 1.5,
+                "hover_after_brake": True,
+                "motion_tools": ["uav.move_body"],
             }
         ),
         encoding="utf-8",
     )
 
-    args = type("Args", (), {"action_config": str(config_path), "move_duration": 8.0})()
-    config = load_demo_action_config(args)
+    config = load_uav_stabilization_config(config_path)
 
-    assert config.move_duration_sec == 8.0
-    assert config.vertical_duration_sec == 8.0
+    assert config.enabled is False
+    assert config.velocity_threshold_mps == 0.2
+    assert config.timeout_sec == 4.5
+    assert config.poll_interval_sec == 0.1
+    assert config.zero_velocity_brake_duration_sec == 1.5
+    assert config.hover_after_brake is True
+    assert config.hover_before_wait is True
+    assert config.motion_tools == {"uav.move_body"}
+    assert config.to_dict()["hover_after_brake"] is True
+    assert config.to_dict()["motion_tools"] == ["uav.move_body"]
+
+
+def test_load_uav_stabilization_config_reads_legacy_hover_key(tmp_path):
+    config_path = tmp_path / "uav_stabilization_config.json"
+    config_path.write_text(json.dumps({"hover_before_wait": True}), encoding="utf-8")
+
+    config = load_uav_stabilization_config(config_path)
+
+    assert config.hover_after_brake is True
+

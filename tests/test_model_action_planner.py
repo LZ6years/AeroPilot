@@ -7,7 +7,7 @@ import pytest
 from src.agent.mission_state import MissionState
 from src.agent.planning.model_action_planner import ModelActionPlanner, ModelActionPlannerConfigError
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
-from src.agent.planning.phase_transition import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK
+from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK
 from src.agent.planning.schemas import ShortHorizonPlan
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
@@ -29,6 +29,8 @@ class StubModelActionPlanner(ModelActionPlanner):
                 "phase_transition",
                 {"decision": ADVANCE_TO_NEXT_PHASE, "reason": "phase complete after this action"},
             )
+        if not self.response.pop("_omit_action_window", False):
+            self.response.setdefault("action_window", make_action_window())
         super().__init__(
             model_config
             or ModelConfig(
@@ -57,7 +59,21 @@ class StubRepairPlanner:
         self.contexts.append(repair_context)
         if not self.responses:
             raise AssertionError("unexpected repair call")
-        return self.responses.pop(0)
+        response = dict(self.responses.pop(0))
+        if not response.pop("_omit_action_window", False):
+            response.setdefault("action_window", make_action_window(intent="repair current phase contract"))
+        return response
+
+
+def make_action_window(**overrides) -> dict:
+    window = {
+        "intent": "make current phase progress",
+        "scope": "current_phase_only",
+        "requires_intermediate_observation": False,
+        "expected_effect": "the current phase should have measurable progress",
+    }
+    window.update(overrides)
+    return window
 
 
 def make_state() -> MissionState:
@@ -149,6 +165,8 @@ def test_short_horizon_plan_direct_constructor_defaults_to_advance():
     plan = ShortHorizonPlan("orient_leftward", [])
 
     assert plan.phase_transition.decision == ADVANCE_TO_NEXT_PHASE
+    assert plan.action_window.scope == "current_phase_only"
+    assert plan.to_dict()["action_window"]["intent"]
 
 
 def test_model_action_planner_accepts_missing_phase_transition():
@@ -163,6 +181,51 @@ def test_model_action_planner_accepts_missing_phase_transition():
     plan = planner.plan_next(make_state(), make_context())
 
     assert plan.steps[0].tool == "uav.hover"
+
+
+def test_model_action_planner_rejects_missing_action_window():
+    planner = StubModelActionPlanner(
+        {
+            "_omit_action_window": True,
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires action_window"):
+        planner.plan_next(make_state(), make_context())
+
+
+def test_model_action_planner_rejects_invalid_action_window_scope():
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "action_window": make_action_window(scope="whole_task"),
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+        }
+    )
+
+    with pytest.raises(ValueError, match="current_phase_only"):
+        planner.plan_next(make_state(), make_context())
+
+
+def test_model_action_planner_rejects_multi_step_window_that_needs_observation():
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "action_window": make_action_window(
+                requires_intermediate_observation=True,
+                expected_effect="need a fresh observation before the second step",
+            ),
+            "steps": [
+                {"kind": "tool", "tool": "uav.turn_relative", "args": {"yaw_deg": -10}, "reason": "scan"},
+                {"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"},
+            ],
+        }
+    )
+
+    with pytest.raises(ValueError, match="exactly one step"):
+        planner.plan_next(make_state(), make_context())
 
 
 def test_model_action_planner_ignores_invalid_phase_transition_decision():
@@ -563,6 +626,7 @@ def test_model_action_planner_repair_failure_exposes_structured_error():
 def test_model_action_planner_repair_repeated_same_invalid_plan_fails_early():
     bad_plan = {
         "phase": "orient_leftward",
+        "action_window": make_action_window(),
         "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
         "phase_transition": {
             "decision": ADVANCE_TO_NEXT_PHASE,
@@ -601,6 +665,32 @@ def test_model_action_planner_repair_output_missing_phase_transition_succeeds():
     plan = planner.plan_next(make_state(), make_context())
 
     assert plan.steps[0].tool == "uav.hover"
+
+
+def test_model_action_planner_repair_output_missing_action_window_fails():
+    repair_planner = StubRepairPlanner(
+        [
+            {
+                "_omit_action_window": True,
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "missing window"}],
+            }
+        ]
+    )
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
+        },
+        max_repair_attempts=1,
+        repair_planner=repair_planner,
+    )
+
+    with pytest.raises(ModelRepairPlannerError) as exc_info:
+        planner.plan_next(make_state(), make_context())
+
+    assert exc_info.value.violations[-1]["code"] == "repair_plan_parse_error"
+    assert "requires action_window" in exc_info.value.violations[-1]["message"]
 
 
 def test_model_action_planner_judges_phase_transition_from_post_action_context():

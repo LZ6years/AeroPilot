@@ -313,7 +313,12 @@ def test_pose_module_keeps_three_recent_pose_refs(tmp_path):
     reader = MemoryRecordReader(tmp_path)
     memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
     for yaw in [0.0, 10.0, 20.0, 30.0]:
-        memory.append_pose_ref(writer.write_pose({"x": 0.0, "y": 0.0, "z": -2.0, "yaw_deg": yaw}, "test"))
+        memory.append_pose_ref(
+            writer.write_pose(
+                {"x": 0.0, "y": 0.0, "z": -2.0, "yaw_deg": yaw, "velocity": {"x": 9.0}},
+                "test",
+            )
+        )
 
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
@@ -322,6 +327,9 @@ def test_pose_module_keeps_three_recent_pose_refs(tmp_path):
     pose = _fragment(context, "pose")
 
     assert [item["yaw_deg"] for item in pose["content"]["recent_pose_history"]] == [10.0, 20.0, 30.0]
+    assert "velocity" not in pose["content"]["latest_pose"]
+    assert all("velocity" not in item for item in pose["content"]["recent_pose_history"])
+    assert "velocity" not in pose["facts"][0]["value"]
 
 
 def test_flight_memory_json_is_manifest_not_raw_history(tmp_path):

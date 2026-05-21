@@ -44,6 +44,7 @@ class SemanticPhase:
     total: int
     name: str
     meaning: str
+    completion_criteria: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], index: int | None = None, total: int | None = None) -> "SemanticPhase":
@@ -52,10 +53,19 @@ class SemanticPhase:
             total=int(data.get("total", total or 0)),
             name=str(data.get("name", "")).strip(),
             meaning=str(data.get("meaning", "")).strip(),
+            completion_criteria=_criteria_from_dict(data.get("completion_criteria")),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _criteria_from_dict(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [dict(value)]
+    return []
 
 
 @dataclass(frozen=True)

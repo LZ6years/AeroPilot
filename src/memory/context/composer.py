@@ -53,6 +53,7 @@ class ContextComposer:
             allowed_action_constraints=dict(stage_context.allowed_action_constraints),
             observation_policy=dict(stage_context.observation_policy),
             phase_transition_policy=dict(stage_context.phase_transition_policy),
+            phase_completion_criteria=[dict(item) for item in stage_context.phase_completion_criteria],
             phase_execution_summary=dict(stage_context.phase_execution_summary),
             metadata={
                 "run_id": memory.run_id,
@@ -103,7 +104,8 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
             "allowed_action_constraints": "The action planning contract: allowed UAV tools, forbidden tools, schemas, and limits.",
             "observation_policy": "Runtime perception policy. When automatic, the planner must not output observe steps.",
             "phase_transition_policy": "How runtime judges phase progress after tool execution and automatic observation.",
-            "phase_execution_summary": "Measured and executed facts accumulated within the current semantic phase. It includes explicit coordinate frame notes and phase-local forward/right/up projection fields for movement judgment.",
+            "phase_completion_criteria": "Current semantic phase completion contract. Phase names are free-form; these criteria define target axis, target value, tolerance, and whether correction is allowed.",
+            "phase_execution_summary": "Clean model-facing alias of latest_state.current_phase_progress. It contains current-phase measured/executed facts, coordinate frame notes, world_pose start/latest, phase_local_frame, last_window_measurements, and phase-local forward/right/up projection fields. Raw velocity and duplicate start_pose/latest_pose fields are intentionally omitted.",
             "metadata": "Run identifiers, map/scene identifiers, budget metadata, and other audit information.",
         },
         "fragment_common_fields": {

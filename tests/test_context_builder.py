@@ -23,6 +23,16 @@ def make_state() -> MissionState:
         total=len(result.plan.phases),
         name="orient_leftward",
         meaning="向左调整视角，寻找入口可能区域",
+        completion_criteria=[
+            {
+                "kind": "rotation",
+                "axis": "yaw",
+                "target": -30.0,
+                "unit": "deg",
+                "tolerance": 8.0,
+                "correction_allowed": True,
+            }
+        ],
     )
     return MissionState("run_test", result.instruction, result.plan)
 
@@ -92,8 +102,19 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
         "max_phase_window_count": 5,
         "note": "Phase transition is judged after tool execution and automatic observation. Do not output phase_transition in the action plan.",
     }
+    assert context["phase_completion_criteria"] == [
+        {
+            "kind": "rotation",
+            "axis": "yaw",
+            "target": -30.0,
+            "unit": "deg",
+            "tolerance": 8.0,
+            "correction_allowed": True,
+        }
+    ]
     assert context["phase_execution_summary"] == {}
     assert "phase_transition_policy" in context["context_schema"]["planner_context_fields"]
+    assert "phase_completion_criteria" in context["context_schema"]["planner_context_fields"]
     assert "phase_execution_summary" in context["context_schema"]["planner_context_fields"]
     assert "uav.connect" in action_constraints["lifecycle_tools_excluded"]
     assert "uav.connect" in action_constraints["forbidden_tools"]
@@ -127,10 +148,11 @@ def test_context_builder_handles_missing_observation(tmp_path):
 
 def test_context_builder_includes_phase_execution_summary(tmp_path):
     state = make_state()
-    state.ensure_current_phase_progress({"pose": {"x": 0.0, "y": 0.0, "z": -2.0}})
+    state.record_observation({"pose": {"x": 0.0, "y": 0.0, "z": -2.0, "velocity": {"x": 9.0}}})
+    state.ensure_current_phase_progress({"pose": {"x": 0.0, "y": 0.0, "z": -2.0, "velocity": {"x": 9.0}}})
     state.update_current_phase_progress(
-        {"pose": {"x": 1.25, "y": 0.0, "z": -2.0}},
-        latest_window_measurements={"planar_displacement_m": 1.25},
+        {"pose": {"x": 1.25, "y": 0.0, "z": -2.0, "velocity": {"x": 8.0}}},
+        last_window_measurements={"planar_displacement_m": 1.25},
     )
 
     context = ObservationContextBuilder().build(
@@ -140,7 +162,16 @@ def test_context_builder_includes_phase_execution_summary(tmp_path):
 
     assert context["phase_execution_summary"]["phase"] == "orient_leftward"
     assert context["phase_execution_summary"]["phase_key"] == "1:orient_leftward"
+    assert context["phase_execution_summary"] == state.to_dict()["current_phase_progress"]
     assert context["phase_execution_summary"]["cumulative_measurements"]["planar_displacement_m"] == 1.25
+    assert context["phase_execution_summary"]["last_window_measurements"]["planar_displacement_m"] == 1.25
+    assert "latest_window_measurements" not in context["phase_execution_summary"]
+    assert "start_pose" not in context["phase_execution_summary"]
+    assert "latest_pose" not in context["phase_execution_summary"]
+    assert "phase_local_frame" in context["phase_execution_summary"]
+    assert "velocity" not in context["phase_execution_summary"]["world_pose"]["start"]
+    assert "velocity" not in context["phase_execution_summary"]["world_pose"]["latest"]
+    assert "velocity" not in state.to_dict()["latest_observation"]["pose"]
 
 
 def test_context_builder_action_limits_come_from_safety_config(tmp_path):

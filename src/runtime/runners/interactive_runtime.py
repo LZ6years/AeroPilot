@@ -12,6 +12,7 @@ from typing import Any
 
 from src.agent.mission_state import MissionState
 from src.runtime.runners.task_runtime import TaskRuntime
+from src.uav import pose_delta, pose_from_observation
 
 
 class InteractiveTaskSession:
@@ -109,7 +110,7 @@ class InteractiveTaskSession:
             "connected": state_data.get("connected"),
             "airborne": state_data.get("airborne"),
             "current_phase": state.current_phase_name if state is not None and not state.completed else None,
-            "latest_pose": state_data.get("latest_pose") or pose_from_observation(latest_observation),
+            "latest_pose": pose_from_observation(latest_observation),
             "last_summary": compact_turn_summary(self.last_summary) if self.last_summary else None,
         }
 
@@ -140,8 +141,9 @@ class InteractiveTaskSession:
 def build_turn_summary(run_dir: Path, instruction: str, state: dict[str, Any]) -> dict[str, Any]:
     latest_observation = state.get("latest_observation", {})
     progress = state.get("current_phase_progress", {}) if isinstance(state.get("current_phase_progress", {}), dict) else {}
-    initial_pose = dict(progress.get("start_pose", {}))
-    final_pose = dict(state.get("latest_pose", {})) or pose_from_observation(latest_observation)
+    world_pose = progress.get("world_pose", {}) if isinstance(progress.get("world_pose", {}), dict) else {}
+    initial_pose = dict(world_pose.get("start", {}))
+    final_pose = dict(world_pose.get("latest", {})) or pose_from_observation(latest_observation)
     tool_facts = progress.get("cumulative_tool_facts", {})
     return {
         "instruction": instruction,
@@ -231,38 +233,3 @@ def artifact_inventory_from_observations(observations: list[dict[str, Any]]) -> 
             )
     return {**inventory, "counts": {name: len(items) for name, items in inventory.items()}}
 
-
-def pose_from_observation(observation: dict[str, Any]) -> dict[str, Any]:
-    pose = observation.get("pose") if isinstance(observation, dict) else None
-    return dict(pose) if isinstance(pose, dict) else {}
-
-
-def pose_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, float | None]:
-    return {
-        "dx": subtract(pose_value(after, "x"), pose_value(before, "x")),
-        "dy": subtract(pose_value(after, "y"), pose_value(before, "y")),
-        "dz": subtract(pose_value(after, "z"), pose_value(before, "z")),
-        "dyaw_deg": subtract(pose_value(after, "yaw_deg"), pose_value(before, "yaw_deg")),
-    }
-
-
-def pose_value(pose: dict[str, Any], key: str) -> Any:
-    if key in pose:
-        return pose.get(key)
-    if key in {"x", "y", "z"}:
-        position = pose.get("position")
-        if isinstance(position, dict):
-            return position.get(key)
-    orientation = pose.get("orientation")
-    if isinstance(orientation, dict):
-        return orientation.get(key)
-    return None
-
-
-def subtract(after: Any, before: Any) -> float | None:
-    if after is None or before is None:
-        return None
-    try:
-        return round(float(after) - float(before), 3)
-    except (TypeError, ValueError):
-        return None

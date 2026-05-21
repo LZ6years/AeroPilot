@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from src.agent.semantic.task_parser import TaskParser, TaskParserConfigError
+from src.agent.semantic.schemas import SemanticPhase
 from src.runtime.configs.model_config import ModelConfig
 
 
@@ -97,3 +98,34 @@ def test_model_parser_requires_api_key():
 
     with pytest.raises(TaskParserConfigError, match="FLYAGENT_MODEL_API_KEY"):
         parser.parse("前面右转会有一个黑色的路灯，右转面向路灯后停下")
+
+
+def test_semantic_phase_accepts_completion_criteria():
+    phase = SemanticPhase.from_dict(
+        {
+            "index": 1,
+            "total": 1,
+            "name": "move_forward",
+            "meaning": "move forward five meters",
+            "completion_criteria": {
+                "kind": "translation",
+                "axis": "forward",
+                "target": 5.0,
+                "unit": "m",
+                "tolerance": 1.0,
+                "correction_allowed": True,
+            },
+        }
+    )
+
+    assert phase.completion_criteria == [
+        {
+            "kind": "translation",
+            "axis": "forward",
+            "target": 5.0,
+            "unit": "m",
+            "tolerance": 1.0,
+            "correction_allowed": True,
+        }
+    ]
+    assert phase.to_dict()["completion_criteria"][0]["axis"] == "forward"

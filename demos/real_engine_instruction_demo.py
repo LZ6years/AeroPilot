@@ -8,19 +8,19 @@ objects around.
 Recommended PowerShell:
 
     $env:PYTHONIOENCODING='utf-8'
-    F:\conda_env\flyagent\python.exe test_real_engine_basic_instruction_demo.py
+    F:\conda_env\flyagent\python.exe demos/real_engine_instruction_demo.py
 
 Pause before every instruction so you can watch the engine window:
 
-    F:\conda_env\flyagent\python.exe test_real_engine_basic_instruction_demo.py --confirm-each
+    F:\conda_env\flyagent\python.exe demos/real_engine_instruction_demo.py --confirm-each
 
 Use one instruction only:
 
-    F:\conda_env\flyagent\python.exe test_real_engine_basic_instruction_demo.py --instruction "向前飞行5米，然后悬停" --save-artifacts --only 1
+    F:\conda_env\flyagent\python.exe demos/real_engine_instruction_demo.py --instruction "向前飞行5米，然后悬停" --save-artifacts --only 1
 
 Restart UE for every instruction, matching the older behavior:
 
-    F:\conda_env\flyagent\python.exe test_real_engine_basic_instruction_demo.py --separate-scenes
+    F:\conda_env\flyagent\python.exe demos/real_engine_instruction_demo.py --separate-scenes
 """
 
 from __future__ import annotations
@@ -47,6 +47,7 @@ from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.sim_server.server import LocalSimulationServer
+from src.uav import pose_delta, pose_from_observation
 
 
 BASIC_INSTRUCTIONS = [
@@ -85,22 +86,44 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--confirm-each", action="store_true", help="Wait for Enter before each instruction")
     parser.add_argument("--only", type=int, default=None, help="Run only the 1-based instruction index")
     parser.add_argument("--instruction", action="append", help="Custom instruction; can be passed multiple times")
+    parser.add_argument("--task-suite", help="Load instructions from an evaluation task suite JSON")
+    parser.add_argument(
+        "--suite-group",
+        choices=["single", "continuous"],
+        default="single",
+        help="Task suite group to run when --task-suite is provided",
+    )
+    parser.add_argument("--task-id", help="Run a specific task id from --task-suite")
     return parser
 
 
 def main() -> None:
     args = build_parser().parse_args()
+    # Instruction selection is separated from execution so the same demo can
+    # run built-in smoke instructions, ad-hoc --instruction values, or a
+    # standard evaluation task suite.
     instructions = select_instructions(args)
+
+    # These configs define the real runtime boundary: map/scene launch,
+    # model-backed parser/planner, nominal action scale, and hard safety limits.
     maps, port_policy = load_map_config(args.config)
     model_config = load_model_config(args.env_path)
     action_config = load_uav_action_config(args.action_config)
     safety_config = load_uav_safety_config(args.safety_config)
+
     selected_map = next(pkg for pkg in maps if pkg.map_id == args.map_id)
     launch_processes = not args.no_launch and not args.connect_existing
     real_control = launch_processes or args.connect_existing
+
+    # A continuous session keeps one UE scene alive for multiple instructions.
+    # Separate-scene mode is better for regression tests that need isolation.
     run_prefix = "real_engine_basic_instruction" if args.separate_scenes else "real_engine_basic_instruction_session"
     run_dir = RunStore(args.run_root).create_run_dir(run_prefix)
     recorder = AsyncRunLogger(run_dir)
+
+    # LocalSimulationServer owns scene lifecycle and the concrete UAV backend.
+    # TaskRuntime talks to it only through LocalEnvClient/ToolDispatcher, which
+    # keeps high-level planning independent from AirSim/UE details.
     server = LocalSimulationServer(
         maps,
         port_policy,
@@ -111,6 +134,11 @@ def main() -> None:
         action_config=action_config,
         save_artifacts=args.save_artifacts,
     )
+
+    # This is the full production pipeline used by the demo:
+    # TaskParser(model) -> context builder -> ModelActionPlanner(model) ->
+    # ToolContractValidator -> SafetySupervisor -> ToolDispatcher/UAV ->
+    # automatic observation -> post-action phase judge.
     runtime = make_runtime(args, LocalEnvClient(server), recorder, model_config, action_config, safety_config)
     summaries: list[dict[str, Any]] = []
     last_state = None
@@ -125,12 +153,17 @@ def main() -> None:
     print()
 
     try:
+        # Write the resolved configuration once at the beginning. These files
+        # make each run reproducible without exposing the raw API key.
         write_common_config(recorder, selected_map, model_config, action_config, safety_config, args)
         for index, instruction in enumerate(instructions, start=1):
             if args.confirm_each:
                 input(f"[{index}/{len(instructions)}] Press Enter to run: {instruction}")
             print(f"\n[{index}/{len(instructions)}] {instruction}")
             try:
+                # run_task is where the real work happens. The demo does not
+                # manually call planner/safety/UAV methods; it lets TaskRuntime
+                # produce the same artifacts as CLI use.
                 state = runtime.run_task(
                     args.map_id,
                     instruction,
@@ -140,6 +173,9 @@ def main() -> None:
                 last_state = state
                 summary = build_state_summary(run_dir, instruction, state.to_dict())
             except Exception as exc:
+                # Continuous sessions should try to leave the UAV in a safe
+                # hover even when one instruction fails, so later analysis can
+                # distinguish runtime failure from unsafe shutdown.
                 recorder.event(
                     "continuous_instruction_failed",
                     {"instruction": instruction, "error_type": type(exc).__name__, "error": str(exc)},
@@ -152,10 +188,14 @@ def main() -> None:
             recorder.event("continuous_instruction_completed", summary)
             print(json.dumps(compact_summary(summary), indent=2, ensure_ascii=False))
     finally:
+        # In continuous mode the scene is intentionally kept open across
+        # instructions, so it must be closed once after the final instruction.
         if not args.separate_scenes:
             runtime.finish_reused_scene(args.map_id, last_state)
         recorder.close()
 
+    # demo/summary.json is the user-facing rollup. Raw events, contexts, memory,
+    # and state files remain in their dedicated run folders for deeper reading.
     if summaries:
         summaries[-1]["shutdown_events"] = read_shutdown_events(run_dir)
     session_summary = build_session_summary(run_dir, summaries)
@@ -168,6 +208,20 @@ def main() -> None:
 
 
 def select_instructions(args: argparse.Namespace) -> list[str]:
+    """Resolve the natural-language instruction list for this run.
+
+    Priority is: task suite -> explicit --instruction values -> built-in smoke
+    list. This keeps the demo convenient for both manual exploration and
+    repeatable evaluation.
+    """
+
+    if args.task_suite:
+        instructions = instructions_from_task_suite(Path(args.task_suite), args.suite_group, args.task_id)
+        if args.only is not None:
+            if args.only < 1 or args.only > len(instructions):
+                raise ValueError(f"--only must be between 1 and {len(instructions)}")
+            return [instructions[args.only - 1]]
+        return instructions
     instructions = args.instruction or BASIC_INSTRUCTIONS
     if args.only is not None:
         if args.only < 1 or args.only > len(instructions):
@@ -176,7 +230,36 @@ def select_instructions(args: argparse.Namespace) -> list[str]:
     return instructions
 
 
+def instructions_from_task_suite(path: Path, group: str, task_id: str | None) -> list[str]:
+    """Load standard task instructions without interpreting their metrics.
+
+    Metrics are consumed later by the evaluator. This demo only needs the
+    natural-language text so the normal runtime pipeline remains unchanged.
+    """
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    key = "continuous_instruction_tasks" if group == "continuous" else "single_instruction_tasks"
+    tasks = list(data.get(key, []))
+    if task_id:
+        tasks = [task for task in tasks if task.get("id") == task_id]
+    if not tasks:
+        raise ValueError(f"No tasks selected from {path} group={group!r} task_id={task_id!r}")
+    instructions: list[str] = []
+    for task in tasks:
+        if group == "continuous":
+            instructions.extend(str(item) for item in task.get("instructions", []))
+        else:
+            instructions.append(str(task.get("instruction", "")))
+    return [instruction for instruction in instructions if instruction]
+
+
 def make_runtime(args: argparse.Namespace, client, recorder, model_config, action_config, safety_config) -> TaskRuntime:
+    """Construct the same runtime stack used by interactive operation.
+
+    The demo injects concrete parser/planner/safety dependencies here so the
+    rest of the file can stay focused on session orchestration and reporting.
+    """
+
     return TaskRuntime(
         client,
         recorder,
@@ -189,6 +272,13 @@ def make_runtime(args: argparse.Namespace, client, recorder, model_config, actio
 
 
 def write_common_config(recorder, selected_map, model_config, action_config, safety_config, args: argparse.Namespace) -> None:
+    """Persist resolved configuration for later debugging.
+
+    Model config is redacted, while map/action/safety configs are written in
+    full because they explain why a particular task used certain durations,
+    limits, ports, and stopping behavior.
+    """
+
     recorder.write_json("config/map_package.json", selected_map.to_dict())
     recorder.write_json(
         "config/model_config.json",
@@ -199,6 +289,9 @@ def write_common_config(recorder, selected_map, model_config, action_config, saf
             "shutdown_policy": args.shutdown_policy,
             "continuous_scene": not args.separate_scenes,
             "save_artifacts": args.save_artifacts,
+            "task_suite": getattr(args, "task_suite", None),
+            "suite_group": getattr(args, "suite_group", None),
+            "task_id": getattr(args, "task_id", None),
         },
     )
     recorder.write_json("config/uav_action_config.json", action_config.to_dict())
@@ -206,19 +299,31 @@ def write_common_config(recorder, selected_map, model_config, action_config, saf
 
 
 def build_state_summary(run_dir: Path, instruction: str, state: dict[str, Any]) -> dict[str, Any]:
+    """Build one compact per-instruction summary from runtime artifacts.
+
+    This summary is for humans reading the demo output. It deliberately points
+    back to the canonical files rather than becoming a second source of truth:
+    latest state comes from state/latest_state.json, history comes from events
+    and memory JSONL, and image/depth files come from artifact refs.
+    """
+
     latest_observation = state.get("latest_observation", {})
     progress = state.get("current_phase_progress", {}) if isinstance(state.get("current_phase_progress", {}), dict) else {}
-    initial_pose = dict(progress.get("start_pose", {}))
-    final_pose = dict(state.get("latest_pose", {})) or pose_from_observation(latest_observation)
+    world_pose = progress.get("world_pose", {}) if isinstance(progress.get("world_pose", {}), dict) else {}
+    initial_pose = dict(world_pose.get("start", {}))
+    final_pose = dict(world_pose.get("latest", {})) or pose_from_observation(latest_observation)
     events = load_events(run_dir / "events.jsonl")
-    observations = observations_from_events(events) or ([latest_observation] if latest_observation else [])
+    debug_events = load_events(run_dir / "debug" / "debug_events.jsonl")
+    segment_events = latest_instruction_events(events + debug_events)
+    observations = observations_from_events(segment_events) or ([latest_observation] if latest_observation else [])
     return {
         "instruction": instruction,
         "run_dir": str(run_dir),
         "completed": state.get("completed"),
         "connected": state.get("connected"),
         "airborne": state.get("airborne"),
-        "tools": action_sequence_from_events(events),
+        "tools": action_sequence_from_events(segment_events),
+        "action_windows": action_windows_from_events(segment_events),
         "initial_pose": initial_pose,
         "final_pose": final_pose,
         "pose_delta": pose_delta(initial_pose, final_pose),
@@ -230,6 +335,8 @@ def build_state_summary(run_dir: Path, instruction: str, state: dict[str, Any]) 
 
 
 def build_error_summary(run_dir: Path, instruction: str, last_state, exc: Exception) -> dict[str, Any]:
+    """Return a summary shape compatible with successful instructions."""
+
     return {
         "instruction": instruction,
         "run_dir": str(run_dir),
@@ -250,16 +357,32 @@ def build_error_summary(run_dir: Path, instruction: str, last_state, exc: Except
 
 
 def compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Trim a full instruction summary for terminal printing.
+
+    The full summary keeps every field needed for debugging. The terminal view
+    should instead answer: what instruction ran, which user-planned tools ran,
+    how far the current phase moved, whether observations/artifacts exist, and
+    where to inspect the canonical files.
+    """
+
     compact = {
         "instruction": summary["instruction"],
         "run_dir": summary["run_dir"],
         "completed": summary["completed"],
-        "airborne_after_shutdown": summary["airborne"],
-        "tools": summary["tools"],
+        "airborne": summary["airborne"],
+        "action_count": len(summary.get("tools", [])),
+        "tools": summarize_tools(summary.get("tools", [])),
+        "action_window": summarize_action_window(latest_action_window(summary.get("action_windows", []))),
         "pose_delta": summary["pose_delta"],
-        "phase_execution_summary": summary.get("phase_execution_summary", {}),
+        "phase_progress": summarize_phase_progress(summary.get("phase_execution_summary", {})),
         "observation_summary": summary.get("observation_summary", {}),
         "artifact_counts": summary.get("artifact_inventory", {}).get("counts", {}),
+        "inspect_files": {
+            "state": str(Path(summary["run_dir"]) / "state" / "latest_state.json"),
+            "planner_context": str(Path(summary["run_dir"]) / "contexts" / "latest_context.json"),
+            "phase_judge_context": str(Path(summary["run_dir"]) / "contexts" / "latest_phase_transition_context.json"),
+            "demo_summary": str(Path(summary["run_dir"]) / "demo" / "summary.json"),
+        },
         "shutdown_events": summary["shutdown_events"],
     }
     if "error" in summary:
@@ -268,24 +391,94 @@ def compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def summarize_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep terminal tool output focused on model-planned user actions."""
+
+    return [
+        {
+            "phase": item.get("phase"),
+            "tool": item.get("tool"),
+            "args": item.get("args", {}),
+            "ok": item.get("ok"),
+        }
+        for item in tools
+    ]
+
+
+def latest_action_window(action_windows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Return the last action window emitted for the current instruction segment."""
+
+    if not action_windows:
+        return {}
+    return action_windows[-1] if isinstance(action_windows[-1], dict) else {}
+
+
+def summarize_action_window(action_window: dict[str, Any]) -> dict[str, Any]:
+    """Keep terminal action-window output focused on intent and observation needs."""
+
+    if not isinstance(action_window, dict) or not action_window:
+        return {}
+    return {
+        "intent": action_window.get("intent"),
+        "requires_intermediate_observation": action_window.get("requires_intermediate_observation"),
+        "expected_effect": action_window.get("expected_effect"),
+    }
+
+
+def summarize_phase_progress(progress: dict[str, Any]) -> dict[str, Any]:
+    """Return the phase progress fields most useful while watching the demo."""
+
+    if not isinstance(progress, dict) or not progress:
+        return {}
+    measurements = progress.get("phase_local_measurements", {})
+    tool_facts = progress.get("cumulative_tool_facts", {})
+    return {
+        "phase": progress.get("phase"),
+        "phase_key": progress.get("phase_key"),
+        "window_count": progress.get("window_count"),
+        "max_phase_window_count": progress.get("max_phase_window_count"),
+        "phase_local_measurements": {
+            "forward_displacement_m": measurements.get("forward_displacement_m"),
+            "right_displacement_m": measurements.get("right_displacement_m"),
+            "up_displacement_m": measurements.get("up_displacement_m"),
+            "yaw_delta_deg": measurements.get("yaw_delta_deg"),
+            "planar_displacement_m": measurements.get("planar_displacement_m"),
+        },
+        "tool_facts": {
+            "successful_steps": tool_facts.get("successful_steps"),
+            "move_body_duration_by_direction_success": tool_facts.get("move_body_duration_by_direction_success", {}),
+            "turn_relative_yaw_deg_success_sum": tool_facts.get("turn_relative_yaw_deg_success_sum"),
+        },
+    }
+
+
 def build_session_summary(run_dir: Path, summaries: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate the session-level artifacts that best explain the pipeline.
+
+    The latest model/parser/safety payloads are copied from events so someone
+    reading demo/summary.json can quickly jump to the relevant full files.
+    """
+
     events = load_events(run_dir / "events.jsonl")
+    debug_events = load_events(run_dir / "debug" / "debug_events.jsonl")
     return {
         "run_dir": str(run_dir),
         "instructions": summaries,
-        "latest_task_parse_result": latest_event_payload(events, "task_parsed"),
-        "latest_model_action_plan": latest_event_payload(events, "model_action_planned"),
-        "latest_validated_plan": latest_event_payload(events, "short_horizon_planned"),
-        "latest_safety_intervention": latest_event_payload(events, "safety_intervened"),
+        "latest_task_parse_result": latest_event_payload(debug_events, "task_parsed"),
+        "latest_model_action_plan": latest_event_payload(debug_events, "model_action_planned"),
+        "latest_validated_plan": latest_event_payload(debug_events, "short_horizon_planned"),
+        "latest_safety_intervention": latest_event_payload(debug_events, "safety_intervened"),
         "latest_phase_transition_context": latest_event_payload(events, "phase_transition_judge_context_built"),
-        "model_plan_recorded": latest_event_payload(events, "model_action_planned") is not None,
-        "validated_plan_recorded": latest_event_payload(events, "short_horizon_planned") is not None,
-        "automatic_observation_recorded": latest_event_payload(events, "automatic_observation_updated") is not None,
-        "action_sequence": action_sequence_from_events(events),
+        "model_plan_recorded": latest_event_payload(debug_events, "model_action_planned") is not None,
+        "validated_plan_recorded": latest_event_payload(debug_events, "short_horizon_planned") is not None,
+        "automatic_observation_recorded": latest_event_payload(debug_events, "automatic_observation_updated") is not None,
+        "action_sequence": action_sequence_from_events(debug_events) or action_sequence_from_events(events),
     }
 
 
 def latest_event_payload(events: list[dict[str, Any]], event_name: str) -> dict[str, Any] | None:
+    """Return the most recent payload for a named event."""
+
     for event in reversed(events):
         if event.get("event") == event_name:
             payload = event.get("payload")
@@ -293,7 +486,27 @@ def latest_event_payload(events: list[dict[str, Any]], event_name: str) -> dict[
     return None
 
 
+def latest_instruction_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return events belonging to the most recent natural-language instruction.
+
+    Continuous runs reuse one run directory, so demo summaries must not count
+    earlier instruction actions as part of the current instruction. The runtime
+    writes `instruction_started` only to the compact event stream, while detailed
+    tool events live in debug events; sorting by timestamp lets us slice both
+    streams together.
+    """
+
+    ordered = sorted(events, key=lambda item: str(item.get("timestamp", "")))
+    start_index = 0
+    for index, event in enumerate(ordered):
+        if event.get("event") in {"instruction_started", "task_parsed"}:
+            start_index = index
+    return ordered[start_index:]
+
+
 def observation_summary(observations: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarize which modalities were captured for the current instruction."""
+
     return {
         "has_pose": any(bool(obs.get("pose")) for obs in observations if isinstance(obs, dict)),
         "has_rgb": any("rgb" in dict(obs.get("frames", {})) for obs in observations if isinstance(obs, dict)),
@@ -303,25 +516,76 @@ def observation_summary(observations: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def action_sequence_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract user-planned tool steps from compact and debug event streams.
+
+    Runtime stabilization writes its own brake/settling events. Those are useful
+    in debug logs but noisy in the user-facing demo summary. When debug
+    `step_completed` records are available, prefer them because they contain the
+    original model-planned args. Fall back to compact `tool_step_completed`
+    records only when the debug stream is not present.
+    """
+
     actions = []
-    for event in events:
-        if event.get("event") != "step_completed":
+    step_events = [event for event in events if event.get("event") == "step_completed"]
+    source_events = step_events or [event for event in events if event.get("event") == "tool_step_completed"]
+    for event in source_events:
+        if event.get("event") == "step_completed":
+            payload = event.get("payload", {})
+            step = payload.get("step", {}) if isinstance(payload, dict) else {}
+            result = payload.get("result", {}) if isinstance(payload, dict) else {}
+            tool = step.get("tool")
+            args = step.get("args", {})
+            ok = result.get("ok") if isinstance(result, dict) else None
+        else:
+            payload = event.get("payload", {})
+            step = {}
+            tool = payload.get("tool") if isinstance(payload, dict) else None
+            args = {}
+            ok = payload.get("ok") if isinstance(payload, dict) else None
+        if not tool:
             continue
-        payload = event.get("payload", {})
-        step = payload.get("step", {}) if isinstance(payload, dict) else {}
-        result = payload.get("result", {}) if isinstance(payload, dict) else {}
         actions.append(
             {
                 "phase": payload.get("phase"),
-                "tool": step.get("tool"),
-                "args": step.get("args", {}),
-                "ok": result.get("ok"),
+                "tool": tool,
+                "args": args,
+                "ok": ok,
             }
         )
     return actions
 
 
+def action_windows_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract action-window declarations from phase plan/window events."""
+
+    windows = []
+    for event in events:
+        if event.get("event") not in {"phase_plan_ready", "phase_window_recorded", "phase_transition_judge_context_built"}:
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        window = payload.get("action_window")
+        if isinstance(window, dict) and window:
+            windows.append(window)
+    return _dedupe_action_windows(windows)
+
+
+def _dedupe_action_windows(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped = []
+    seen = set()
+    for window in windows:
+        signature = json.dumps(window, sort_keys=True, ensure_ascii=False)
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(window)
+    return deduped
+
+
 def observations_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract observation payloads written by preflight and automatic sampling."""
+
     observations = []
     for event in events:
         if event.get("event") not in {"initial_observation_updated", "instruction_start_observation_updated", "automatic_observation_updated"}:
@@ -333,6 +597,8 @@ def observations_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any
 
 
 def artifact_inventory_from_observations(observations: list[dict[str, Any]]) -> dict[str, Any]:
+    """Collect RGB/depth artifact paths and existence checks for demo reports."""
+
     inventory: dict[str, list[dict[str, Any]]] = {"rgb": [], "depth": [], "other": []}
     for obs_index, observation in enumerate(observations):
         frames = observation.get("frames", {}) if isinstance(observation, dict) else {}
@@ -361,50 +627,21 @@ def artifact_inventory_from_observations(observations: list[dict[str, Any]]) -> 
 
 
 def read_shutdown_events(run_dir: Path) -> list[str]:
+    """Return shutdown-related event names from both user and debug logs."""
+
+    events = load_events(run_dir / "events.jsonl") + load_events(run_dir / "debug" / "debug_events.jsonl")
     return [
         event["event"]
-        for event in load_events(run_dir / "events.jsonl")
+        for event in events
         if str(event.get("event", "")).startswith("shutdown_")
     ]
 
 
-def pose_from_observation(observation: dict[str, Any]) -> dict[str, Any]:
-    pose = observation.get("pose") if isinstance(observation, dict) else None
-    return dict(pose) if isinstance(pose, dict) else {}
-
-
-def pose_delta(before: dict[str, Any], after: dict[str, Any]) -> dict[str, float | None]:
-    return {
-        "dx": subtract(pose_value(after, "x"), pose_value(before, "x")),
-        "dy": subtract(pose_value(after, "y"), pose_value(before, "y")),
-        "dz": subtract(pose_value(after, "z"), pose_value(before, "z")),
-        "dyaw_deg": subtract(pose_value(after, "yaw_deg"), pose_value(before, "yaw_deg")),
-    }
-
-
-def pose_value(pose: dict[str, Any], key: str) -> Any:
-    if key in pose:
-        return pose.get(key)
-    if key in {"x", "y", "z"}:
-        position = pose.get("position")
-        if isinstance(position, dict):
-            return position.get(key)
-    orientation = pose.get("orientation")
-    if isinstance(orientation, dict):
-        return orientation.get(key)
-    return None
-
-
-def subtract(after: Any, before: Any) -> float | None:
-    if after is None or before is None:
-        return None
-    try:
-        return round(float(after) - float(before), 3)
-    except (TypeError, ValueError):
-        return None
 
 
 def load_events(path: Path) -> list[dict[str, Any]]:
+    """Read JSONL events defensively; missing logs mean an empty event stream."""
+
     if not path.exists():
         return []
     events = []
@@ -415,6 +652,8 @@ def load_events(path: Path) -> list[dict[str, Any]]:
 
 
 def write_json_file(path: Path, data: dict[str, Any]) -> None:
+    """Write UTF-8 JSON so Chinese instructions and model reasons remain readable."""
+
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 

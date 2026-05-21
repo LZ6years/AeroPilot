@@ -154,7 +154,7 @@ F:\conda_env\flyagent\python.exe -m src.runtime.cli.main chat --env-path .env --
 
 - 不需要用户手动传 `SceneInstance`。
 - 模型输出合法 `uav.move_body`。
-- run 中有 `semantic_plan.json`、`contexts/latest_context.json`、`contexts/latest_phase_transition_context.json`、`mission_state.json`、`flight_memory.json`。
+- run 中有 `state/semantic_plan.json`、`state/latest_state.json`、`state/flight_memory.json`、`contexts/latest_context.json`、`contexts/latest_phase_transition_context.json`。
 - run 中有 RGB/depth artifact。
 - CLI 打印 pose delta 和 artifact count。
 - `/quit` 能安全 hover 或 land，并停止 scene。

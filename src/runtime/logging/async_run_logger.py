@@ -18,7 +18,8 @@ class AsyncRunLogger:
         self.run_dir = Path(run_dir)
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.events_path = self.run_dir / "events.jsonl"
-        self.system_log_path = self.run_dir / "system.log"
+        self.debug_events_path = self.run_dir / "debug" / "debug_events.jsonl"
+        self.system_log_path = self.run_dir / "debug" / "system.log"
         self._queue: queue.Queue[Callable[[], None] | None] = queue.Queue()
         self._closed = False
         self._thread = threading.Thread(target=self._worker, name="flyagent-run-logger", daemon=True)
@@ -33,13 +34,22 @@ class AsyncRunLogger:
         self._log("ERROR", message, fields)
 
     def event(self, event: str, payload: dict[str, Any]) -> None:
-        # Queue a structured event for events.jsonl.
+        # Queue a user-facing structured event for events.jsonl.
         record = {
             "timestamp": self._timestamp(),
             "event": event,
             "payload": payload,
         }
         self._enqueue(lambda: self._append_jsonl(self.events_path, record))
+
+    def debug_event(self, event: str, payload: dict[str, Any]) -> None:
+        # Queue a detailed developer-facing event for debug/debug_events.jsonl.
+        record = {
+            "timestamp": self._timestamp(),
+            "event": event,
+            "payload": payload,
+        }
+        self._enqueue(lambda: self._append_jsonl(self.debug_events_path, record))
 
     def write_json(self, name: str, data: dict[str, Any]) -> Path:
         # Queue a JSON artifact write under the run directory.
@@ -105,7 +115,7 @@ class AsyncRunLogger:
             "event": "artifact_failed",
             "payload": {"error_type": type(exc).__name__, "error": str(exc)},
         }
-        self._append_jsonl(self.events_path, payload)
+        self._append_jsonl(self.debug_events_path, payload)
         self._append_text(
             self.system_log_path,
             json.dumps(

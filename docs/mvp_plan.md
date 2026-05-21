@@ -102,10 +102,11 @@ flowchart TD
 
 验收：
 
-- 每轮写入 `observations/latest_observation.json`。
+- 每轮写入 `debug/latest_observation.json` 作为开发查看快照。
 - 每轮写入 `contexts/latest_context.json`。
 - 执行后阶段判断写入 `contexts/latest_phase_transition_context.json`。
-- `mission_state.json` 包含 `phase_start_observations`、`phase_window_records` 和 `phase_execution_summaries`。
+- `state/latest_state.json` 保存当前 runtime 状态和当前 phase 累计进度。
+- `debug/phase_windows/*.json` 保存完整 phase window 调试记录。
 - planner 输入不暴露完整 `FlightMemory` 或完整 jsonl 历史。
 
 ### M6: 模型动作规划
@@ -209,13 +210,13 @@ ModelActionPlanner
 教学 demo：
 
 ```text
-demos/demo_model_action_planner_context.py
+demos/model_action_planner_context_demo.py
 ```
 
 真实引擎闭环 demo：
 
 ```text
-demos/test_real_engine_basic_instruction_demo.py
+demos/real_engine_instruction_demo.py
 ```
 
 CLI：

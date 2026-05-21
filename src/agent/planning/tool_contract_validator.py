@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, NoReturn
 
-from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.agent.planning.schemas import ACTION_WINDOW_SCOPE_CURRENT_PHASE, PlannedStep, ShortHorizonPlan
 
 
 DEFAULT_ALLOWED_TOOL_STEPS = {"uav.hover", "uav.turn_relative", "uav.move_body"}
@@ -84,6 +84,7 @@ class ToolContractValidator:
                 expected="1..3",
                 actual=len(plan.steps),
             )
+        self._validate_action_window(plan)
 
         constraints = self._action_constraints(context)
         allowed_tools = self._allowed_tools(constraints)
@@ -91,6 +92,41 @@ class ToolContractValidator:
         for index, step in enumerate(plan.steps):
             self._validate_step(step, index, constraints, allowed_tools, forbidden_tools)
         return plan
+
+    def _validate_action_window(self, plan: ShortHorizonPlan) -> None:
+        window = plan.action_window
+        if not window.intent.strip():
+            self._fail(
+                "action_window_intent_missing",
+                "action_window.intent must be a non-empty description",
+                field="action_window.intent",
+                expected="non-empty string",
+                actual=window.intent,
+            )
+        if window.scope != ACTION_WINDOW_SCOPE_CURRENT_PHASE:
+            self._fail(
+                "action_window_scope_invalid",
+                "action_window.scope must be current_phase_only",
+                field="action_window.scope",
+                expected=ACTION_WINDOW_SCOPE_CURRENT_PHASE,
+                actual=window.scope,
+            )
+        if window.requires_intermediate_observation and len(plan.steps) > 1:
+            self._fail(
+                "action_window_intermediate_observation_requires_single_step",
+                "action_window requires an intermediate observation, so the plan must contain exactly one step",
+                field="action_window.requires_intermediate_observation",
+                expected="true only with exactly one step",
+                actual={"requires_intermediate_observation": True, "step_count": len(plan.steps)},
+            )
+        if not window.expected_effect.strip():
+            self._fail(
+                "action_window_expected_effect_missing",
+                "action_window.expected_effect must be a non-empty description",
+                field="action_window.expected_effect",
+                expected="non-empty string",
+                actual=window.expected_effect,
+            )
 
     def _validate_step(
         self,

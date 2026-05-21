@@ -76,7 +76,7 @@ runs/<run_id>/contexts/latest_context.json
 
 模型接收的是这个 JSON context，不直接读取：
 
-- `flight_memory.json`
+- `state/flight_memory.json`
 - 完整 `memory/*.jsonl`
 - 原始 RGB/depth 文件
 - UAV tool registry 内部对象

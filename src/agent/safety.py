@@ -65,7 +65,15 @@ class SafetySupervisor:
             safe_steps.append(safe_step)
             if intervention:
                 interventions.append(intervention)
-        return SafetyDecision(ShortHorizonPlan(plan.phase, safe_steps, plan.phase_transition), interventions)
+        return SafetyDecision(
+            ShortHorizonPlan(
+                plan.phase,
+                safe_steps,
+                phase_transition=plan.phase_transition,
+                action_window=plan.action_window,
+            ),
+            interventions,
+        )
 
     def _review_step(self, step: PlannedStep) -> tuple[PlannedStep, dict | None]:
         if step.kind == "observe":

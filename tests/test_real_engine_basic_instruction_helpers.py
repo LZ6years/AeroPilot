@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
-from demos.test_real_engine_basic_instruction_demo import (
+from demos.real_engine_instruction_demo import (
     action_sequence_from_events,
+    action_windows_from_events,
     artifact_inventory_from_observations,
     build_state_summary,
+    compact_summary,
     write_common_config,
 )
 from src.env_client.schemas import MapPackage
@@ -43,10 +46,12 @@ def test_real_engine_demo_summary_reports_pose_delta_and_artifacts(tmp_path):
                 "depth": {"artifact_path": str(depth_path), "width": 224, "height": 224},
             },
         },
-        "latest_pose": {"position": {"x": 5.0, "y": 0.0, "z": -2.0}, "orientation": {"yaw_deg": 0.0}},
         "current_phase_progress": {
             "phase": "move_forward",
-            "start_pose": {"position": {"x": 0.0, "y": 0.0, "z": -2.0}, "orientation": {"yaw_deg": 0.0}},
+            "world_pose": {
+                "start": {"position": {"x": 0.0, "y": 0.0, "z": -2.0}, "orientation": {"yaw_deg": 0.0}},
+                "latest": {"position": {"x": 5.0, "y": 0.0, "z": -2.0}, "orientation": {"yaw_deg": 0.0}},
+            },
             "cumulative_tool_facts": {"move_body_duration_by_direction_success": {"forward": 2.5}},
         },
     }
@@ -66,6 +71,33 @@ def test_real_engine_demo_summary_reports_pose_delta_and_artifacts(tmp_path):
 def test_real_engine_demo_action_sequence_reads_events():
     events = [
         {
+            "event": "tool_step_completed",
+            "payload": {
+                "phase": "move_forward",
+                "tool": "uav.move_body",
+                "ok": True,
+                "stabilization": {"status": "completed"},
+            },
+        }
+    ]
+
+    assert action_sequence_from_events(events) == [
+        {"phase": "move_forward", "tool": "uav.move_body", "args": {}, "ok": True}
+    ]
+
+
+def test_real_engine_demo_action_sequence_prefers_debug_step_args_over_compact_events():
+    events = [
+        {
+            "event": "tool_step_completed",
+            "payload": {
+                "phase": "move_forward",
+                "tool": "uav.move_body",
+                "ok": True,
+                "stabilization": {"status": "completed"},
+            },
+        },
+        {
             "event": "step_completed",
             "payload": {
                 "phase": "move_forward",
@@ -78,6 +110,56 @@ def test_real_engine_demo_action_sequence_reads_events():
     assert action_sequence_from_events(events) == [
         {"phase": "move_forward", "tool": "uav.move_body", "args": {"direction": "forward", "duration": 1.0}, "ok": True}
     ]
+
+
+def test_real_engine_demo_compact_summary_keeps_terminal_output_readable(tmp_path):
+    summary = {
+        "instruction": "向前飞行5米，然后悬停",
+        "run_dir": str(tmp_path),
+        "completed": True,
+        "airborne": True,
+        "tools": [{"phase": "move_forward", "tool": "uav.move_body", "args": {"duration": 2.5}, "ok": True}],
+        "action_windows": [
+            {
+                "intent": "finish forward motion",
+                "scope": "current_phase_only",
+                "requires_intermediate_observation": False,
+                "expected_effect": "forward displacement increases",
+            }
+        ],
+        "pose_delta": {"dx": 5.0, "dy": 0.0, "dz": 0.0, "dyaw_deg": 0.0},
+        "phase_execution_summary": {
+            "phase": "move_forward",
+            "phase_key": "1:move_forward",
+            "window_count": 1,
+            "max_phase_window_count": 5,
+            "phase_local_measurements": {
+                "forward_displacement_m": 4.9,
+                "right_displacement_m": 0.0,
+                "up_displacement_m": 0.0,
+                "yaw_delta_deg": 0.0,
+                "planar_displacement_m": 4.9,
+            },
+            "cumulative_tool_facts": {
+                "successful_steps": 1,
+                "move_body_duration_by_direction_success": {"forward": 2.5},
+                "turn_relative_yaw_deg_success_sum": 0.0,
+            },
+            "world_pose": {"start": {"large": "hidden"}, "latest": {"large": "hidden"}},
+        },
+        "observation_summary": {"has_pose": True, "has_rgb": True, "has_depth": True, "sources": ["automatic_phase_window"]},
+        "artifact_inventory": {"counts": {"rgb": 1, "depth": 1, "other": 0}},
+        "shutdown_events": [],
+    }
+
+    compact = compact_summary(summary)
+
+    assert compact["action_count"] == 1
+    assert compact["action_window"]["intent"] == "finish forward motion"
+    assert compact["action_window"]["expected_effect"] == "forward displacement increases"
+    assert compact["phase_progress"]["phase_local_measurements"]["forward_displacement_m"] == 4.9
+    assert "world_pose" not in compact["phase_progress"]
+    assert compact["inspect_files"]["planner_context"].endswith(str(Path("contexts") / "latest_context.json"))
 
 
 def test_real_engine_demo_artifact_inventory_ignores_missing_artifact_metadata():
@@ -122,3 +204,41 @@ def test_real_engine_demo_config_summary_redacts_model_api_key():
     assert "secret-key" not in str(recorder.files["config/model_config.json"])
     assert model_summary["has_api_key"] is True
     assert recorder.files["config/model_config.json"]["save_artifacts"] is True
+
+
+def test_real_engine_demo_action_windows_read_phase_events():
+    events = [
+        {
+            "event": "phase_plan_ready",
+            "payload": {
+                "phase": "move_forward",
+                "action_window": {
+                    "intent": "move forward once",
+                    "scope": "current_phase_only",
+                    "requires_intermediate_observation": False,
+                    "expected_effect": "forward displacement increases",
+                },
+            },
+        },
+        {
+            "event": "phase_window_recorded",
+            "payload": {
+                "phase": "move_forward",
+                "action_window": {
+                    "intent": "move forward once",
+                    "scope": "current_phase_only",
+                    "requires_intermediate_observation": False,
+                    "expected_effect": "forward displacement increases",
+                },
+            },
+        },
+    ]
+
+    assert action_windows_from_events(events) == [
+        {
+            "intent": "move forward once",
+            "scope": "current_phase_only",
+            "requires_intermediate_observation": False,
+            "expected_effect": "forward displacement increases",
+        }
+    ]

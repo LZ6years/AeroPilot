@@ -1,4 +1,4 @@
-﻿"""Manual demo for testing the real model-backed M3 task parser.
+"""Manual probe for testing the real model-backed M3 task parser.
 
 This file is not a pytest test. It calls the configured model API and prints
 the parsed semantic JSON for several multilingual instructions.
@@ -17,26 +17,32 @@ Recommended PowerShell setup for readable Chinese output:
 
 Run the default instruction set:
 
-    python test_model_task_parser_demo.py --env-path .env
+    python tests/manual/model_task_parser_probe.py --env-path .env
 
 Run one custom instruction:
 
-    python test_model_task_parser_demo.py --env-path .env --instruction "鍓嶆柟瀵绘壘绾㈣壊杞﹁締锛岄潬杩戜絾淇濇寔瀹夊叏璺濈"
+    python tests/manual/model_task_parser_probe.py --env-path .env --instruction "前方寻找红色车辆，靠近但保持安全距离"
 
 Run several custom instructions in one call:
 
-    python test_model_task_parser_demo.py --env-path .env --instruction "宸﹁浆瀵绘壘寤虹瓚鍏ュ彛锛屽苟鍋滃湪鍏ュ彛鍓? --instruction "瑙傚療鍙充晶鍖哄煙锛屽鏋滅洰鏍囦笉鏄庣‘灏辨偓鍋滅瓑寰呯‘璁?
+    python tests/manual/model_task_parser_probe.py --env-path .env --instruction "左转寻找建筑入口，并停在入口前" --instruction "观察右侧区域，如果目标不明确就悬停等待确认"
 
-Use this demo when you want to compare model semantic JSON stability.
+Use this probe when you want to compare model semantic JSON stability.
 For the full M3+M4 dry-run chain, use:
 
-    python demo_memory_system.py
+    python demos/memory_system_demo.py
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from src.agent.semantic.task_parser import TaskParser
 from src.runtime.configs.model_config import load_model_config
@@ -56,26 +62,29 @@ Operation examples:
 
   Test the default model-backed instruction set:
     $env:PYTHONIOENCODING='utf-8'
-    python test_model_task_parser_demo.py --env-path .env
+    python tests/manual/model_task_parser_probe.py --env-path .env
 
   Test one instruction:
-    python test_model_task_parser_demo.py --env-path .env --instruction "鍓嶆柟瀵绘壘绾㈣壊杞﹁締锛岄潬杩戜絾淇濇寔瀹夊叏璺濈"
+    python tests/manual/model_task_parser_probe.py --env-path .env --instruction "前方寻找红色车辆，靠近但保持安全距离"
 
   Test several instructions in one run:
-    python test_model_task_parser_demo.py --env-path .env --instruction "宸﹁浆瀵绘壘寤虹瓚鍏ュ彛锛屽苟鍋滃湪鍏ュ彛鍓? --instruction "瑙傚療鍙充晶鍖哄煙锛屽鏋滅洰鏍囦笉鏄庣‘灏辨偓鍋滅瓑寰呯‘璁?
+    python tests/manual/model_task_parser_probe.py --env-path .env --instruction "左转寻找建筑入口，并停在入口前" --instruction "观察右侧区域，如果目标不明确就悬停等待确认"
 
 Instruction examples:
-  - 鍓嶉潰鍙宠浆浼氭湁涓€涓粦鑹茬殑璺伅锛屽彸杞潰鍚戣矾鐏悗鍋滀笅
-  - 鍓嶆柟瀵绘壘绾㈣壊杞﹁締锛岄潬杩戜絾淇濇寔瀹夊叏璺濈
-  - 宸﹁浆瀵绘壘寤虹瓚鍏ュ彛锛屽苟鍋滃湪鍏ュ彛鍓?  - 瑙傚療鍙充晶鍖哄煙锛屽鏋滅洰鏍囦笉鏄庣‘灏辨偓鍋滅瓑寰呯‘璁?  - 娌跨潃閬撹矾鍚戝墠瑙傚療锛屾壘鍒拌摑鑹叉寚绀虹墝鍚庨潰鍚戝畠鎮仠
-  - 缁曡繃鍓嶆柟闅滅鐗╋紝瀵绘壘寮€闃斿尯鍩熷苟鎮仠绛夊緟涓嬩竴姝ユ寚浠?  - 鎵惧埌鏈€杩戠殑榛勮壊鏂藉伐鐗岋紝闈㈠悜瀹冧絾涓嶈闈犲緱澶繎
+  - 前面右转会有一个黑色的路灯，右转面向路灯后停下
+  - 前方寻找红色车辆，靠近但保持安全距离
+  - 左转寻找建筑入口，并停在入口前
+  - 观察右侧区域，如果目标不明确就悬停等待确认
+  - 沿着道路向前观察，找到蓝色指示牌后面向它悬停
+  - 绕过前方障碍物，寻找开阔区域并悬停等待下一步指令
+  - 找到最近的黄色施工牌，面向它但不要靠得太近
   - Search ahead for a white delivery truck, face it, and hover.
 """
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="FlyAgent real model task parser demo",
+        description="FlyAgent real model task parser probe",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=HELP_EPILOG,
     )

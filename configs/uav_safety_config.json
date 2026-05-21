@@ -1,5 +1,5 @@
 {
-  "max_yaw_step_deg": 30.0,
+  "max_yaw_step_deg": 90.0,
   "max_linear_velocity_mps": 6.0,
   "max_vertical_velocity_mps": 3.0,
   "max_move_duration_sec": 8.0,

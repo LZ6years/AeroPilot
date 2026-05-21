@@ -5,7 +5,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.agent.planning.phase_transition import PhaseTransition
+from src.agent.phase import PhaseTransition
+
+ACTION_WINDOW_SCOPE_CURRENT_PHASE = "current_phase_only"
 
 
 @dataclass(frozen=True)
@@ -61,25 +63,78 @@ class PlannedStep:
 
 
 @dataclass(frozen=True)
+class ActionWindow:
+    """Model declaration for why a group of steps may run before the next observation."""
+
+    intent: str
+    scope: str = ACTION_WINDOW_SCOPE_CURRENT_PHASE
+    requires_intermediate_observation: bool = False
+    expected_effect: str = ""
+
+    @classmethod
+    def default(cls) -> "ActionWindow":
+        return cls(
+            intent="execute one short action window for the current phase",
+            scope=ACTION_WINDOW_SCOPE_CURRENT_PHASE,
+            requires_intermediate_observation=False,
+            expected_effect="produce measurable progress for the current phase",
+        )
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "ActionWindow":
+        return cls(
+            intent=str(data.get("intent", "")).strip(),
+            scope=str(data.get("scope", ACTION_WINDOW_SCOPE_CURRENT_PHASE)).strip()
+            or ACTION_WINDOW_SCOPE_CURRENT_PHASE,
+            requires_intermediate_observation=bool(data.get("requires_intermediate_observation", False)),
+            expected_effect=str(data.get("expected_effect", "")).strip(),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "intent": self.intent,
+            "scope": self.scope,
+            "requires_intermediate_observation": self.requires_intermediate_observation,
+            "expected_effect": self.expected_effect,
+        }
+
+
+@dataclass(frozen=True)
 class ShortHorizonPlan:
     phase: str
     steps: list[PlannedStep]
     phase_transition: PhaseTransition = field(default_factory=PhaseTransition.default_advance)
+    action_window: ActionWindow = field(default_factory=ActionWindow.default)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any], *, require_phase_transition: bool = False) -> "ShortHorizonPlan":
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        *,
+        require_phase_transition: bool = False,
+        require_action_window: bool = False,
+    ) -> "ShortHorizonPlan":
         if require_phase_transition and "phase_transition" not in data:
             raise ValueError("ShortHorizonPlan response requires phase_transition")
+        if require_action_window and "action_window" not in data:
+            raise ValueError("ShortHorizonPlan response requires action_window")
         transition_data = data.get("phase_transition")
         transition = (
             PhaseTransition.from_dict(dict(transition_data))
             if transition_data is not None
             else PhaseTransition.default_advance()
         )
+        action_window_data = data.get("action_window")
+        action_window = (
+            ActionWindow.from_dict(dict(action_window_data))
+            if action_window_data is not None
+            else ActionWindow.default()
+        )
         return cls(
             phase=str(data.get("phase", "")).strip(),
             steps=[PlannedStep.from_dict(dict(item)) for item in data.get("steps", [])],
             phase_transition=transition,
+            action_window=action_window,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -87,4 +142,5 @@ class ShortHorizonPlan:
             "phase": self.phase,
             "steps": [step.to_dict() for step in self.steps],
             "phase_transition": self.phase_transition.to_dict(),
+            "action_window": self.action_window.to_dict(),
         }

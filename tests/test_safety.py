@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 from src.agent.safety import SafetySupervisor, SafetyViolation
-from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.agent.planning.schemas import ActionWindow, PlannedStep, ShortHorizonPlan
 from src.runtime.configs.safety_config import UavSafetyConfig
 
 
@@ -17,6 +17,26 @@ def test_safety_clips_large_turn():
 
     assert decision.plan.steps[0].args["yaw_deg"] == 30.0
     assert decision.interventions[0]["field"] == "yaw_deg"
+
+
+def test_safety_preserves_action_window_metadata():
+    supervisor = SafetySupervisor(UavSafetyConfig(max_yaw_step_deg=30.0))
+    window = ActionWindow(
+        intent="turn toward the phase target",
+        scope="current_phase_only",
+        requires_intermediate_observation=False,
+        expected_effect="yaw changes toward the target",
+    )
+    plan = ShortHorizonPlan(
+        "orient_right",
+        [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 90.0})],
+        action_window=window,
+    )
+
+    decision = supervisor.review(plan)
+
+    assert decision.plan.action_window is window
+    assert decision.plan.action_window.expected_effect == "yaw changes toward the target"
 
 
 def test_safety_clips_long_or_fast_move_body():

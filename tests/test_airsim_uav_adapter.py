@@ -60,6 +60,14 @@ class FakeAirSimClient:
         return None
 
 
+class FakeImageResponse:
+    def __init__(self, image_data_uint8: bytes = b"", image_data_float: list[float] | None = None) -> None:
+        self.width = 2
+        self.height = 2
+        self.image_data_uint8 = image_data_uint8
+        self.image_data_float = image_data_float or []
+
+
 def test_set_pose_calls_airsim_sim_set_vehicle_pose(monkeypatch):
     # Verify set_pose translates FlyAgent x/y/z/yaw inputs into an AirSim pose call.
     adapter = AirSimUavAdapter(vehicle_name="Drone1")
@@ -107,3 +115,24 @@ def test_ascend_and_descend_use_speed_and_duration():
         "duration": 2.0,
         "vehicle_name": "Drone1",
     }
+
+
+def test_frame_artifacts_do_not_overwrite_existing_files(tmp_path):
+    # Separate-scene real runs recreate adapters, so artifact naming must scan
+    # the run directory instead of trusting the in-memory frame counter.
+    adapter = AirSimUavAdapter(artifact_dir=tmp_path / "artifacts", save_artifacts=True)
+    existing_rgb = tmp_path / "artifacts" / "rgb" / "frame_000001.png"
+    existing_depth = tmp_path / "artifacts" / "depth" / "frame_000001.npy"
+    existing_rgb.parent.mkdir(parents=True)
+    existing_depth.parent.mkdir(parents=True)
+    existing_rgb.write_bytes(b"old-rgb")
+    existing_depth.write_bytes(b"old-depth")
+
+    rgb_path = adapter._save_frame_artifact("rgb", FakeImageResponse(image_data_uint8=b"new-rgb"))
+    adapter._frame_index = 0
+    depth_path = adapter._save_frame_artifact("depth", FakeImageResponse(image_data_float=[1.0, 2.0, 3.0, 4.0]))
+
+    assert rgb_path == tmp_path / "artifacts" / "rgb" / "frame_000002.png"
+    assert depth_path == tmp_path / "artifacts" / "depth" / "frame_000002.npy"
+    assert existing_rgb.read_bytes() == b"old-rgb"
+    assert existing_depth.read_bytes() == b"old-depth"

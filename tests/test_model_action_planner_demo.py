@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from demos.demo_model_action_planner_context import (
+from demos.model_action_planner_context_demo import (
     DEMO_OUTPUT_FILES,
     DemoArtifacts,
     build_demo_memory,
@@ -41,18 +41,18 @@ def make_parse_result() -> TaskParseResult:
 
 def test_demo_declares_expected_output_files():
     assert DEMO_OUTPUT_FILES == {
-        "semantic_parse_result.json",
-        "mission_state.json",
-        "flight_memory.json",
-        "latest_context.json",
-        "model_payload.json",
-        "raw_model_response.json",
-        "raw_model_content.json",
-        "validated_plan.json",
-        "repair_attempts.json",
-        "repair_result.json",
-        "safety_decision.json",
-        "demo_preview.md",
+        "state/semantic_plan.json",
+        "state/latest_state.json",
+        "state/flight_memory.json",
+        "contexts/latest_context.json",
+        "debug/model_payload.json",
+        "debug/raw_model_response.json",
+        "debug/raw_model_content.json",
+        "debug/validated_plan.json",
+        "debug/repair_attempts.json",
+        "debug/repair_result.json",
+        "debug/safety_decision.json",
+        "demo/demo_preview.md",
     }
 
 
@@ -130,14 +130,14 @@ def test_demo_writes_expected_artifact_files(tmp_path):
 
     write_demo_outputs(artifacts)
 
-    assert {path.name for path in tmp_path.iterdir() if path.is_file()} >= DEMO_OUTPUT_FILES
-    assert "context_schema" in json.loads((tmp_path / "latest_context.json").read_text(encoding="utf-8"))
-    mission_state = json.loads((tmp_path / "mission_state.json").read_text(encoding="utf-8"))
+    assert all((tmp_path / name).exists() for name in DEMO_OUTPUT_FILES)
+    assert "context_schema" in json.loads((tmp_path / "contexts/latest_context.json").read_text(encoding="utf-8"))
+    mission_state = json.loads((tmp_path / "state/latest_state.json").read_text(encoding="utf-8"))
     assert "latest_observation" in mission_state
-    assert "latest_pose" in mission_state
+    assert "latest_pose" not in mission_state
     assert "current_phase_progress" in mission_state
     assert "current_phase" in mission_state
-    preview = (tmp_path / "demo_preview.md").read_text(encoding="utf-8")
+    preview = (tmp_path / "demo/demo_preview.md").read_text(encoding="utf-8")
     assert "Model Action Planner Demo" in preview
     assert "Contract Repair" in preview
     assert "模型阶段推进判断" in preview

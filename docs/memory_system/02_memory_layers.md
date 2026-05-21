@@ -93,7 +93,7 @@ flowchart TD
 
 它不是最终给 `ModelActionPlanner` 的上下文。`FlightMemory` 保存历史数据，`ContextModule` 从中抽取和压缩信息，`ContextComposer` 再把模块输出合并成 `PlannerContext`。
 
-运行时落盘的 `flight_memory.json` 是快照、调试和审计 artifact，用来检查当前记忆状态；planner 的结构化输入应是 `contexts/latest_context.json` 中的 `PlannerContext`。
+运行时落盘的 `state/flight_memory.json` 是快照、调试和审计 artifact，用来检查当前记忆状态；planner 的结构化输入应是 `contexts/latest_context.json` 中的 `PlannerContext`。
 
 生命周期：
 
@@ -208,18 +208,18 @@ MapContextModule
 | `ContextComposer` | 不保存记忆 | 具体压缩算法 | 合并模块输出为 `PlannerContext` |
 ## 10. FlightMemory Manifest / JSONL Store 边界
 
-`FlightMemory` 的最终定位是“飞行连续记忆索引”，而不是“大 JSON 历史数据库”。`flight_memory.json` 应该让开发者快速知道当前 run 中有哪些历史数据、最近窗口指向哪里、当前 UAV 状态是什么；具体历史内容放到独立 append-only 日志中。
+`FlightMemory` 的最终定位是“飞行连续记忆索引”，而不是“大 JSON 历史数据库”。`state/flight_memory.json` 应该让开发者快速知道当前 run 中有哪些历史数据、最近窗口指向哪里、当前 UAV 状态是什么；具体历史内容放到独立 append-only 日志中。
 
 推荐边界：
 
 | 层 | 保存内容 | 不保存内容 | 使用者 |
 | --- | --- | --- | --- |
-| `flight_memory.json` | 当前 active instruction ref、最近 instruction/action/observation/pose/frame refs、latest pose ref、reset_epoch、scene/map/uav identity | 完整 RGB/depth、大量 action result、重复 pose 压缩结果、复杂摘要 | `ContextModuleRegistry` / 调试审计 |
+| `state/flight_memory.json` | 当前 active instruction ref、最近 instruction/action/observation/pose/frame refs、latest pose ref、reset_epoch、scene/map/uav identity | 完整 RGB/depth、大量 action result、重复 pose 压缩结果、复杂摘要 | `ContextModuleRegistry` / 调试审计 |
 | `memory/instructions.jsonl` | 每条用户指令、semantic plan、timestamp | 图像、动作结果 | `InstructionContextModule` |
 | `memory/actions.jsonl` | tool、args、result、timestamp、phase/action id | 最终 planner context | `ActionContextModule` / 后续 evaluator |
 | `memory/poses.jsonl` | pose、坐标系、来源 observation/action ref | 图像文件内容 | `PoseContextModule` |
 | `memory/observations.jsonl` | 一次 observation 的总索引，连接 pose/frame/action/phase | RGB/depth 大文件 | `ImageContextModule` / `PoseContextModule` / `MapContextModule` |
 | `memory/frames.jsonl` | RGB/depth frame metadata、artifact path、observation ref | 图片二进制或 depth 矩阵 | `ImageContextModule` / 自定义 image module |
-| `memory/artifacts/rgb` / `depth` | 真实图像和 depth 文件 | 上下文摘要 | 需要视觉历史的 module |
+| `artifacts/rgb` / `depth` | 真实图像和 depth 文件 | 上下文摘要 | 需要视觉历史的 module |
 
 `observations.jsonl` 需要保留，因为它负责对齐同一次观测中的 RGB、depth、pose、timestamp、phase 和 preceding action。没有它时，后续 module 只能靠时间戳或命名规则把多模态数据重新拼回一次观测，容易产生歧义。

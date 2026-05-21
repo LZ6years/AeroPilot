@@ -1,0 +1,187 @@
+{
+  "version": 1,
+  "defaults": {
+    "tolerances": {
+      "forward_displacement_m": 1.0,
+      "right_displacement_m": 0.8,
+      "up_displacement_m": 0.8,
+      "yaw_delta_deg": 8.0,
+      "planar_displacement_m": 0.6
+    },
+    "min_artifacts": {
+      "rgb": 3,
+      "depth": 3
+    },
+    "max_phase_windows": 5
+  },
+  "single_instruction_tasks": [
+    {
+      "id": "single_forward_5m_turn_right_40_forward_2m",
+      "instruction": "向前飞行5米后向右转40度，最后再向前走2米",
+      "expected": {
+        "phases": ["move_forward", "rotate_right", "move_forward_again"],
+        "tool_sequence_contains": ["uav.move_body", "uav.turn_relative", "uav.move_body"],
+        "phase_metrics": [
+          {"phase": "move_forward", "field": "forward_displacement_m", "target": 5.0, "tolerance": 1.0},
+          {"phase": "rotate_right", "field": "yaw_delta_deg", "target": 40.0, "tolerance": 8.0, "prefer_tool_fact": "turn_relative_yaw_deg_success_sum"},
+          {"phase": "move_forward_again", "field": "forward_displacement_m", "target": 2.0, "tolerance": 1.0}
+        ],
+        "min_artifacts": {"rgb": 3, "depth": 3}
+      }
+    },
+    {
+      "id": "single_forward_3m_turn_left_30_forward_3m",
+      "instruction": "向前飞行3米后向左转30度，然后继续向前飞行3米并悬停",
+      "expected": {
+        "phases": ["move_forward", "rotate_left", "move_forward_again"],
+        "tool_sequence_contains": ["uav.move_body", "uav.turn_relative", "uav.move_body"],
+        "phase_metrics": [
+          {"phase": "move_forward", "field": "forward_displacement_m", "target": 3.0, "tolerance": 1.0},
+          {"phase": "rotate_left", "field": "yaw_delta_deg", "target": -30.0, "tolerance": 8.0, "prefer_tool_fact": "turn_relative_yaw_deg_success_sum"},
+          {"phase": "move_forward_again", "field": "forward_displacement_m", "target": 3.0, "tolerance": 1.0}
+        ],
+        "min_artifacts": {"rgb": 3, "depth": 3}
+      }
+    },
+    {
+      "id": "single_forward_4m_up_2m_turn_right_30",
+      "instruction": "向前飞行4米后上升2米，再向右转30度并悬停",
+      "expected": {
+        "phases": ["move_forward", "move_up", "rotate_right"],
+        "tool_sequence_contains": ["uav.move_body", "uav.move_body", "uav.turn_relative"],
+        "phase_metrics": [
+          {"phase": "move_forward", "field": "forward_displacement_m", "target": 4.0, "tolerance": 1.0},
+          {"phase": "move_up", "field": "up_displacement_m", "target": 2.0, "tolerance": 0.8},
+          {"phase": "rotate_right", "field": "yaw_delta_deg", "target": 30.0, "tolerance": 8.0, "prefer_tool_fact": "turn_relative_yaw_deg_success_sum"}
+        ],
+        "min_artifacts": {"rgb": 3, "depth": 3}
+      }
+    },
+    {
+      "id": "single_strafe_left_2m_forward_3m_turn_right_30",
+      "instruction": "向左平移2米后向前飞行3米，再向右转30度并悬停",
+      "expected": {
+        "phases": ["move_left", "move_forward", "rotate_right"],
+        "tool_sequence_contains": ["uav.move_body", "uav.move_body", "uav.turn_relative"],
+        "phase_metrics": [
+          {"phase": "move_left", "field": "right_displacement_m", "target": -2.0, "tolerance": 0.8},
+          {"phase": "move_forward", "field": "forward_displacement_m", "target": 3.0, "tolerance": 1.0},
+          {"phase": "rotate_right", "field": "yaw_delta_deg", "target": 30.0, "tolerance": 8.0, "prefer_tool_fact": "turn_relative_yaw_deg_success_sum"}
+        ],
+        "min_artifacts": {"rgb": 3, "depth": 3}
+      }
+    },
+    {
+      "id": "single_strafe_right_2m_forward_3m_turn_left_30",
+      "instruction": "向右平移2米后向前飞行3米，再向左转30度并悬停",
+      "expected": {
+        "phases": ["move_right", "move_forward", "rotate_left"],
+        "tool_sequence_contains": ["uav.move_body", "uav.move_body", "uav.turn_relative"],
+        "phase_metrics": [
+          {"phase": "move_right", "field": "right_displacement_m", "target": 2.0, "tolerance": 0.8},
+          {"phase": "move_forward", "field": "forward_displacement_m", "target": 3.0, "tolerance": 1.0},
+          {"phase": "rotate_left", "field": "yaw_delta_deg", "target": -30.0, "tolerance": 8.0, "prefer_tool_fact": "turn_relative_yaw_deg_success_sum"}
+        ],
+        "min_artifacts": {"rgb": 3, "depth": 3}
+      }
+    },
+    {
+      "id": "single_up_2m_forward_3m_down_1m",
+      "instruction": "先上升2米，再向前飞行3米，最后下降1米并悬停",
+      "expected": {
+        "phases": ["move_up", "move_forward", "move_down"],
+        "tool_sequence_contains": ["uav.move_body", "uav.move_body", "uav.move_body"],
+        "phase_metrics": [
+          {"phase": "move_up", "field": "up_displacement_m", "target": 2.0, "tolerance": 0.8},
+          {"phase": "move_forward", "field": "forward_displacement_m", "target": 3.0, "tolerance": 1.0},
+          {"phase": "move_down", "field": "up_displacement_m", "target": -1.0, "tolerance": 0.8}
+        ],
+        "min_artifacts": {"rgb": 3, "depth": 3}
+      }
+    },
+    {
+      "id": "single_turn_right_40_forward_4m_turn_left_20",
+      "instruction": "先向右转40度，再向前飞行4米，最后向左转20度并悬停",
+      "expected": {
+        "phases": ["rotate_right", "move_forward", "rotate_left"],
+        "tool_sequence_contains": ["uav.turn_relative", "uav.move_body", "uav.turn_relative"],
+        "phase_metrics": [
+          {"phase": "rotate_right", "field": "yaw_delta_deg", "target": 40.0, "tolerance": 8.0, "prefer_tool_fact": "turn_relative_yaw_deg_success_sum"},
+          {"phase": "move_forward", "field": "forward_displacement_m", "target": 4.0, "tolerance": 1.0},
+          {"phase": "rotate_left", "field": "yaw_delta_deg", "target": -20.0, "tolerance": 8.0, "prefer_tool_fact": "turn_relative_yaw_deg_success_sum"}
+        ],
+        "min_artifacts": {"rgb": 3, "depth": 3}
+      }
+    },
+    {
+      "id": "single_forward_4m_hover_turn_right_30_forward_2m",
+      "instruction": "向前飞行4米后短暂悬停，再向右转30度，最后向前飞行2米并悬停",
+      "expected": {
+        "phases": ["move_forward", "hover", "rotate_right", "move_forward_again"],
+        "tool_sequence_contains": ["uav.move_body", "uav.hover", "uav.turn_relative", "uav.move_body"],
+        "phase_metrics": [
+          {"phase": "move_forward", "field": "forward_displacement_m", "target": 4.0, "tolerance": 1.0},
+          {"phase": "hover", "field": "planar_displacement_m", "target": 0.0, "tolerance": 0.6},
+          {"phase": "rotate_right", "field": "yaw_delta_deg", "target": 30.0, "tolerance": 8.0, "prefer_tool_fact": "turn_relative_yaw_deg_success_sum"},
+          {"phase": "move_forward_again", "field": "forward_displacement_m", "target": 2.0, "tolerance": 1.0}
+        ],
+        "min_artifacts": {"rgb": 4, "depth": 4}
+      }
+    },
+    {
+      "id": "single_landmark_orientation_after_scan_smoke",
+      "instruction": "先缓慢向右扫描寻找前方可见的路灯，面向路灯方向后悬停",
+      "expected": {
+        "phases": ["scan_right", "orient_to_landmark", "hover"],
+        "tool_sequence_contains": ["uav.turn_relative", "uav.hover"],
+        "phase_metrics": [],
+        "min_artifacts": {"rgb": 3, "depth": 3},
+        "smoke_only": true
+      }
+    }
+  ],
+  "continuous_instruction_tasks": [
+    {
+      "id": "continuous_compound_navigation_set",
+      "instructions": [
+        "向前飞行5米后向右转40度，最后再向前走2米",
+        "向前飞行3米后向左转30度，然后继续向前飞行3米并悬停",
+        "向前飞行4米后上升2米，再向右转30度并悬停"
+      ],
+      "expected": {
+        "min_instruction_count": 3,
+        "min_context_updates": 9,
+        "min_action_count": 9,
+        "min_artifacts": {"rgb": 9, "depth": 9}
+      }
+    },
+    {
+      "id": "continuous_lateral_vertical_set",
+      "instructions": [
+        "向左平移2米后向前飞行3米，再向右转30度并悬停",
+        "向右平移2米后向前飞行3米，再向左转30度并悬停",
+        "先上升2米，再向前飞行3米，最后下降1米并悬停"
+      ],
+      "expected": {
+        "min_instruction_count": 3,
+        "min_context_updates": 9,
+        "min_action_count": 9,
+        "min_artifacts": {"rgb": 9, "depth": 9}
+      }
+    },
+    {
+      "id": "continuous_mixed_long_context_probe",
+      "instructions": [
+        "先向右转40度，再向前飞行4米，最后向左转20度并悬停",
+        "向前飞行4米后短暂悬停，再向右转30度，最后向前飞行2米并悬停",
+        "先缓慢向右扫描寻找前方可见的路灯，面向路灯方向后悬停"
+      ],
+      "expected": {
+        "min_instruction_count": 3,
+        "min_context_updates": 8,
+        "min_action_count": 8,
+        "min_artifacts": {"rgb": 8, "depth": 8}
+      }
+    }
+  ]
+}

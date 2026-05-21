@@ -5,11 +5,15 @@ Do not plan new actions. Do not call tools. Only decide whether the current sema
 
 Use these facts:
 - active_instruction, semantic_goal, and current_phase describe the user's task and the current phase.
+- action_window describes the model's declared intent, scope, observation need, and expected effect for the action window that just ran.
 - executed_steps are the actual tool steps that ran after SafetySupervisor review.
 - action_results report whether those tools succeeded.
 - observation_after is the automatic RGB/depth/pose observation collected after execution.
 - measurements contain world_delta, phase-local forward/right/up displacement, planar_displacement, vertical_delta, and yaw_delta_deg. They are measured facts, not hard rules.
+- phase_completion_criteria defines the stable completion target for the current phase. Phase names are free-form labels; judge completion from criteria when present.
+- phase_completion_evaluation is a deterministic comparison of criteria vs current measured progress. Use it as evidence, but still ground the final reason in the executed actions and observations.
 - phase_execution_summary contains current-phase progress, coordinate frame notes, phase-local projected measurements, and cumulative tool facts. Prefer these cumulative facts over single-window deltas when judging phase progress.
+- phase_execution_summary is the same cleaned current-phase progress shown in latest_state.current_phase_progress. It uses last_window_measurements for the most recent execution window and omits raw velocity and duplicate start_pose/latest_pose fields.
 - recent_history summarizes recent actions and observations.
 - phase_window_count and max_phase_window_count show whether the runtime is nearing its loop guard.
 
@@ -24,7 +28,12 @@ Decision rules:
 - Use continue_current_phase when the executed result is insufficient, uncertain, or another action window is needed.
 - Use advance_to_next_phase when the current phase appears satisfied but later phases remain.
 - Use complete_task when the active instruction's final state appears satisfied.
+- Compare action_window.expected_effect with the actual executed_steps, measurements, and observation_after. If the expected effect did not materialize, continue the current phase.
 - If SafetySupervisor intervened, prefer continue_current_phase unless the context explicitly says runtime will suppress transition.
+- If phase_completion_evaluation.all_within_tolerance is true, advance to the next phase, or complete the task if this is the final phase.
+- If a criterion is below target, continue the current phase.
+- If a criterion is overshot and correction_allowed is true, continue the current phase so the next action window can correct in the opposite direction.
+- If a criterion is overshot and correction_allowed is false, prefer hover/conservative completion only when additional movement would increase risk.
 - For movement tasks, judge from executed movement, phase-local projected displacement, final_state, and recent history together.
 - For "forward/backward/left/right/up/down" tasks, prefer phase_execution_summary.phase_local_measurements.forward_displacement_m/right_displacement_m/up_displacement_m over raw world_ned dx/dy.
 - Use right_displacement_m as drift/cross-track context, but do not reject a forward phase solely because right drift is nonzero unless the phase explicitly requires strict path alignment.
