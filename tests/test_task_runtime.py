@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from src.agent.messages import AgentMessage
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
@@ -254,6 +255,118 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert planned_records[0]["payload"]["steps"][0]["args"]["yaw_deg"] == 30.0
 
 
+def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path):
+    class MessagePlanner:
+        planner_mode = "test"
+
+        def plan_next(self, state, context=None):
+            return ShortHorizonPlan(
+                state.current_phase_name,
+                [PlannedStep.tool_step("uav.hover", {}, "hold")],
+                agent_messages=[
+                    AgentMessage("progress", "我会先悬停并采集新的观察结果。", confidence="medium"),
+                ],
+            )
+
+        def judge_phase_transition(self, phase_context):
+            return PhaseTransition(
+                COMPLETE_TASK,
+                "final state reached",
+                agent_messages=[
+                    AgentMessage("final", "任务完成，我已保持悬停。", confidence="high"),
+                ],
+            )
+
+    run_dir = tmp_path / "agent_message_events"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    live_events = []
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=MessagePlanner(),
+        shutdown_policy="none",
+        event_sink=live_events.append,
+    )
+
+    state = runtime.run_task("m1", LAMP_TASK)
+    turn_messages = runtime.latest_turn_agent_messages()
+    recorder.close()
+
+    events = [json.loads(line) for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    event_names = [record["event"] for record in events]
+    message_records = [record for record in events if record["event"] == "agent_message"]
+
+    assert state.completed
+    assert [message["type"] for message in turn_messages] == ["progress", "final"]
+    assert turn_messages[-1]["content"] == "任务完成，我已保持悬停。"
+    assert [record["payload"]["message"]["type"] for record in message_records] == ["progress", "final"]
+    assert [event["kind"] for event in live_events if event["kind"] == "agent_message"] == [
+        "agent_message",
+        "agent_message",
+    ]
+    assert any(event["kind"] == "instruction_started" for event in live_events)
+    assert any(event["kind"] == "phase_plan_ready" for event in live_events)
+    assert any(event["kind"] == "tool_step_completed" for event in live_events)
+    assert any(event["kind"] == "observation_updated" for event in live_events)
+    assert any(event["kind"] == "phase_transition_applied" for event in live_events)
+    assert event_names.index("agent_message") < event_names.index("phase_plan_ready")
+    automatic_observation_indexes = [
+        index
+        for index, record in enumerate(events)
+        if record["event"] == "observation_updated"
+        and record.get("payload", {}).get("source") == "automatic_phase_window"
+    ]
+    assert automatic_observation_indexes[-1] < max(
+        index for index, name in enumerate(event_names) if name == "agent_message"
+    )
+
+
+def test_task_runtime_agent_message_cache_resets_between_instructions(tmp_path):
+    class InstructionMessagePlanner:
+        planner_mode = "test"
+
+        def plan_next(self, state, context=None):
+            return ShortHorizonPlan(
+                state.current_phase_name,
+                [PlannedStep.tool_step("uav.hover", {}, "hold")],
+                agent_messages=[
+                    AgentMessage("progress", f"开始执行：{state.user_instruction}", confidence="medium"),
+                ],
+            )
+
+        def judge_phase_transition(self, phase_context):
+            return PhaseTransition(
+                COMPLETE_TASK,
+                "done",
+                agent_messages=[
+                    AgentMessage("final", "本轮完成。", confidence="high"),
+                ],
+            )
+
+    run_dir = tmp_path / "agent_message_cache_reset"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=InstructionMessagePlanner(),
+        shutdown_policy="none",
+    )
+
+    runtime.run_task("m1", LAMP_TASK, scene_policy="reuse_running", stop_scene_on_finish=False)
+    first_messages = runtime.latest_turn_agent_messages()
+    runtime.run_task("m1", ENTRANCE_TASK, scene_policy="reuse_running", stop_scene_on_finish=False)
+    second_messages = runtime.latest_turn_agent_messages()
+    recorder.close()
+
+    assert any(LAMP_TASK in message["content"] for message in first_messages)
+    assert not any(LAMP_TASK in message["content"] for message in second_messages)
+    assert any(ENTRANCE_TASK in message["content"] for message in second_messages)
+
+
 def test_task_runtime_passes_action_config_to_planner_context(tmp_path):
     class ContextCapturePlanner:
         planner_mode = "test"
@@ -389,6 +502,15 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
                     "requires_intermediate_observation": False,
                     "expected_effect": "context remains valid while UAV holds",
                 },
+                "agent_messages": [
+                    {
+                        "type": "progress",
+                        "content": "我会先悬停，用于检查上下文窗口。",
+                        "evidence_refs": [],
+                        "confidence": "medium",
+                        "requires_user_reply": False,
+                    }
+                ],
                 "steps": [
                     {"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold for context verification"},
                 ],

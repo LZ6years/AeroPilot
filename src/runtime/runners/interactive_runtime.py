@@ -7,6 +7,7 @@ best-effort safety commands, and compact per-turn status data.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +27,7 @@ class InteractiveTaskSession:
         agent_id: str = "uav_1",
         scene_id: str | None = None,
         available_map_ids: list[str] | None = None,
+        event_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.runtime = runtime
         self.recorder = runtime.recorder
@@ -33,6 +35,9 @@ class InteractiveTaskSession:
         self.agent_id = agent_id
         self.scene_id = scene_id
         self.available_map_ids = list(available_map_ids or [map_id])
+        # Kept on the session so future TUI shells can inspect or replace the
+        # live event consumer without reaching into TaskRuntime internals.
+        self.event_sink = event_sink
         self.last_state: MissionState | None = None
         self.last_summary: dict[str, Any] | None = None
         self.closed = False
@@ -71,14 +76,25 @@ class InteractiveTaskSession:
                 scene_id=self.scene_id,
             )
             self.last_state = state
-            summary = build_turn_summary(self.run_dir, clean_instruction, state.to_dict())
+            summary = build_turn_summary(
+                self.run_dir,
+                clean_instruction,
+                state.to_dict(),
+                agent_messages=self.runtime.latest_turn_agent_messages(),
+            )
         except Exception as exc:
             self.recorder.event(
                 "interactive_instruction_failed",
                 {"instruction": clean_instruction, "error_type": type(exc).__name__, "error": str(exc)},
             )
             self.runtime.safe_hover_reused_scene(self.map_id, self.agent_id, self.scene_id)
-            summary = build_error_summary(self.run_dir, clean_instruction, self.last_state, exc)
+            summary = build_error_summary(
+                self.run_dir,
+                clean_instruction,
+                self.last_state,
+                exc,
+                agent_messages=self.runtime.latest_turn_agent_messages(),
+            )
 
         self.last_summary = summary
         self.recorder.write_json("interactive/latest_summary.json", summary)
@@ -138,13 +154,22 @@ class InteractiveTaskSession:
             self.closed = True
 
 
-def build_turn_summary(run_dir: Path, instruction: str, state: dict[str, Any]) -> dict[str, Any]:
+def build_turn_summary(
+    run_dir: Path,
+    instruction: str,
+    state: dict[str, Any],
+    *,
+    agent_messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     latest_observation = state.get("latest_observation", {})
     progress = state.get("current_phase_progress", {}) if isinstance(state.get("current_phase_progress", {}), dict) else {}
     world_pose = progress.get("world_pose", {}) if isinstance(progress.get("world_pose", {}), dict) else {}
     initial_pose = dict(world_pose.get("start", {}))
     final_pose = dict(world_pose.get("latest", {})) or pose_from_observation(latest_observation)
     tool_facts = progress.get("cumulative_tool_facts", {})
+    events = load_events(run_dir / "events.jsonl")
+    segment_events = latest_instruction_events(events)
+    messages = list(agent_messages) if agent_messages is not None else agent_messages_from_events(segment_events)
     return {
         "instruction": instruction,
         "run_dir": str(run_dir),
@@ -158,10 +183,23 @@ def build_turn_summary(run_dir: Path, instruction: str, state: dict[str, Any]) -
         "phase_execution_summary": progress,
         "observation_summary": observation_summary([latest_observation] if latest_observation else []),
         "artifact_inventory": artifact_inventory_from_observations([latest_observation] if latest_observation else []),
+        "agent_messages": messages,
     }
 
 
-def build_error_summary(run_dir: Path, instruction: str, last_state: MissionState | None, exc: Exception) -> dict[str, Any]:
+def build_error_summary(
+    run_dir: Path,
+    instruction: str,
+    last_state: MissionState | None,
+    exc: Exception,
+    *,
+    agent_messages: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    messages = (
+        list(agent_messages)
+        if agent_messages is not None
+        else agent_messages_from_events(latest_instruction_events(load_events(run_dir / "events.jsonl")))
+    )
     return {
         "instruction": instruction,
         "run_dir": str(run_dir),
@@ -175,6 +213,7 @@ def build_error_summary(run_dir: Path, instruction: str, last_state: MissionStat
         "phase_execution_summary": {},
         "observation_summary": {"has_pose": False, "has_rgb": False, "has_depth": False, "sources": []},
         "artifact_inventory": {"rgb": [], "depth": [], "other": [], "counts": {"rgb": 0, "depth": 0, "other": 0}},
+        "agent_messages": messages,
         "error_type": type(exc).__name__,
         "error": str(exc),
     }
@@ -192,6 +231,7 @@ def compact_turn_summary(summary: dict[str, Any] | None) -> dict[str, Any]:
         "phase_execution_summary": summary.get("phase_execution_summary", {}),
         "observation_summary": summary.get("observation_summary", {}),
         "artifact_counts": summary.get("artifact_inventory", {}).get("counts", {}),
+        "agent_messages": summary.get("agent_messages", []),
         "run_dir": summary.get("run_dir"),
     }
     if "error" in summary:
@@ -233,3 +273,45 @@ def artifact_inventory_from_observations(observations: list[dict[str, Any]]) -> 
             )
     return {**inventory, "counts": {name: len(items) for name, items in inventory.items()}}
 
+
+def agent_messages_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Extract public agent messages from an instruction-scoped event segment."""
+
+    messages: list[dict[str, Any]] = []
+    for event in events:
+        if event.get("event") != "agent_message":
+            continue
+        payload = event.get("payload", {}) if isinstance(event.get("payload", {}), dict) else {}
+        message = payload.get("message", {}) if isinstance(payload.get("message", {}), dict) else {}
+        if message:
+            messages.append(
+                {
+                    "source": payload.get("source"),
+                    "phase": payload.get("phase"),
+                    **message,
+                }
+            )
+    return messages
+
+
+def latest_instruction_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return events for the latest instruction in an interactive run."""
+
+    ordered = sorted(events, key=lambda item: str(item.get("timestamp", "")))
+    start_index = 0
+    for index, event in enumerate(ordered):
+        if event.get("event") == "instruction_started":
+            start_index = index
+    return ordered[start_index:]
+
+
+def load_events(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    import json
+
+    events = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            events.append(json.loads(line))
+    return events

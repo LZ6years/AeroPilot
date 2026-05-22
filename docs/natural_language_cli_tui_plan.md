@@ -21,16 +21,16 @@ CLI 只负责交互外壳；飞行任务仍由 `TaskRuntime`、`ModelActionPlann
 
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
-F:\conda_env\flyagent\python.exe -m src.runtime.cli.main chat --env-path .env --map-id cityenviron_win64 --save-artifacts
+flyagent start
 ```
 
-旧入口仍保留为极薄兼容层：
+开发兜底入口：
 
-```text
-src/cli/flyagent_chat.py
+```powershell
+F:\conda_env\flyagent\python.exe -m src.cli
 ```
 
-它只转发到 `src.runtime.cli.main chat`，不再放业务逻辑。后续文档、测试和日常使用都应优先使用 runtime CLI。
+CLI 正式实现位于 `src/cli/main.py`。`runtime` 只保留执行层，不再拥有用户命令行入口。
 
 ## 3. CLI v1 已有能力
 
@@ -42,10 +42,9 @@ src/cli/flyagent_chat.py
 
 核心代码：
 
-- `src/runtime/cli/main.py`：命令行入口，包含 `chat / smoke-test / parse-task / run-task`。
+- `src/cli/main.py`：命令行入口，包含 `start / chat / smoke-test / parse-task / run-task`。
 - `src/runtime/runners/interactive_runtime.py`：连续自然语言会话层，负责 scene 复用、turn summary、best-effort hover 和 shutdown。
-- `src/cli/flyagent_chat.py`：旧入口兼容转发。
-- `tests/test_flyagent_chat_cli.py`：CLI 和 slash command 测试。
+- `tests/test_cli_main.py`：CLI 和 slash command 测试。
 - `tests/test_interactive_runtime.py`：不启动 UE 的 session 行为测试。
 
 ## 4. 当前规划链路
@@ -110,7 +109,7 @@ src/runtime/runners/interactive_runtime.py
 第二层：CLI shell，已统一到：
 
 ```text
-src/runtime/cli/main.py
+src/cli/main.py
 ```
 
 职责：
@@ -141,7 +140,7 @@ src/tui/
 
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
-F:\conda_env\flyagent\python.exe -m src.runtime.cli.main chat --env-path .env --map-id cityenviron_win64 --save-artifacts
+flyagent start
 ```
 
 输入：

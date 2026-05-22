@@ -22,6 +22,15 @@ Required output shape:
     "requires_intermediate_observation": false,
     "expected_effect": "short expected effect after the repaired step(s)"
   },
+  "agent_messages": [
+    {
+      "type": "progress",
+      "content": "我会改用符合动作约束的安全动作继续执行。",
+      "evidence_refs": [],
+      "confidence": "medium",
+      "requires_user_reply": false
+    }
+  ],
   "steps": [
     {
       "kind": "tool",
@@ -40,3 +49,8 @@ Action window rules:
 - action_window.scope must be exactly "current_phase_only".
 - action_window.intent and action_window.expected_effect must be non-empty.
 - If action_window.requires_intermediate_observation is true, output exactly 1 step.
+
+Agent message rules:
+- agent_messages must be present and non-empty.
+- Use concise user-facing language. Do not expose raw thinking, chain-of-thought, repair internals, API names, or hidden reasoning.
+- Do not claim visual recognition unless the repair context contains explicit visual evidence.

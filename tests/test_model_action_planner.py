@@ -31,6 +31,8 @@ class StubModelActionPlanner(ModelActionPlanner):
             )
         if not self.response.pop("_omit_action_window", False):
             self.response.setdefault("action_window", make_action_window())
+        if not self.response.pop("_omit_agent_messages", False):
+            self.response.setdefault("agent_messages", make_agent_messages())
         super().__init__(
             model_config
             or ModelConfig(
@@ -47,7 +49,11 @@ class StubModelActionPlanner(ModelActionPlanner):
         return self.response
 
     def _call_phase_transition_openai_compatible(self, phase_context: dict):
-        return {"decision": COMPLETE_TASK, "reason": "stub post-action phase evidence is complete"}
+        return {
+            "decision": COMPLETE_TASK,
+            "reason": "stub post-action phase evidence is complete",
+            "agent_messages": make_agent_messages(message_type="final", content="任务完成，我已稳定悬停。"),
+        }
 
 
 class StubRepairPlanner:
@@ -62,6 +68,8 @@ class StubRepairPlanner:
         response = dict(self.responses.pop(0))
         if not response.pop("_omit_action_window", False):
             response.setdefault("action_window", make_action_window(intent="repair current phase contract"))
+        if not response.pop("_omit_agent_messages", False):
+            response.setdefault("agent_messages", make_agent_messages(content="我会改用符合约束的动作继续。"))
         return response
 
 
@@ -74,6 +82,18 @@ def make_action_window(**overrides) -> dict:
     }
     window.update(overrides)
     return window
+
+
+def make_agent_messages(message_type: str = "progress", content: str = "我准备执行当前阶段的安全动作。") -> list[dict]:
+    return [
+        {
+            "type": message_type,
+            "content": content,
+            "evidence_refs": [],
+            "confidence": "medium",
+            "requires_user_reply": False,
+        }
+    ]
 
 
 def make_state() -> MissionState:
@@ -159,6 +179,7 @@ def test_model_action_planner_accepts_open_phase_name():
     assert plan.steps[0].args["yaw_deg"] == -15
     assert len(plan.steps) == 1
     assert plan.phase_transition.decision == ADVANCE_TO_NEXT_PHASE
+    assert plan.agent_messages[0].type == "progress"
 
 
 def test_short_horizon_plan_direct_constructor_defaults_to_advance():
@@ -193,6 +214,19 @@ def test_model_action_planner_rejects_missing_action_window():
     )
 
     with pytest.raises(ValueError, match="requires action_window"):
+        planner.plan_next(make_state(), make_context())
+
+
+def test_model_action_planner_rejects_missing_agent_messages():
+    planner = StubModelActionPlanner(
+        {
+            "_omit_agent_messages": True,
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+        }
+    )
+
+    with pytest.raises(ValueError, match="requires agent_messages"):
         planner.plan_next(make_state(), make_context())
 
 
@@ -627,6 +661,7 @@ def test_model_action_planner_repair_repeated_same_invalid_plan_fails_early():
     bad_plan = {
         "phase": "orient_leftward",
         "action_window": make_action_window(),
+        "agent_messages": make_agent_messages(),
         "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
         "phase_transition": {
             "decision": ADVANCE_TO_NEXT_PHASE,
@@ -693,6 +728,32 @@ def test_model_action_planner_repair_output_missing_action_window_fails():
     assert "requires action_window" in exc_info.value.violations[-1]["message"]
 
 
+def test_model_action_planner_repair_output_missing_agent_messages_fails():
+    repair_planner = StubRepairPlanner(
+        [
+            {
+                "_omit_agent_messages": True,
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "missing messages"}],
+            }
+        ]
+    )
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
+        },
+        max_repair_attempts=1,
+        repair_planner=repair_planner,
+    )
+
+    with pytest.raises(ModelRepairPlannerError) as exc_info:
+        planner.plan_next(make_state(), make_context())
+
+    assert exc_info.value.violations[-1]["code"] == "repair_plan_parse_error"
+    assert "requires agent_messages" in exc_info.value.violations[-1]["message"]
+
+
 def test_model_action_planner_judges_phase_transition_from_post_action_context():
     planner = StubModelActionPlanner(
         {
@@ -705,3 +766,4 @@ def test_model_action_planner_judges_phase_transition_from_post_action_context()
 
     assert transition.decision == COMPLETE_TASK
     assert "post-action" in transition.reason
+    assert transition.agent_messages[0].type == "final"

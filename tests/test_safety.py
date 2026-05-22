@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.agent.messages import AgentMessage
 from src.agent.safety import SafetySupervisor, SafetyViolation
 from src.agent.planning.schemas import ActionWindow, PlannedStep, ShortHorizonPlan
 from src.runtime.configs.safety_config import UavSafetyConfig
@@ -37,6 +38,20 @@ def test_safety_preserves_action_window_metadata():
 
     assert decision.plan.action_window is window
     assert decision.plan.action_window.expected_effect == "yaw changes toward the target"
+
+
+def test_safety_preserves_agent_messages():
+    supervisor = SafetySupervisor(UavSafetyConfig(max_yaw_step_deg=30.0))
+    message = AgentMessage("progress", "我会先安全转向。")
+    plan = ShortHorizonPlan(
+        "orient_right",
+        [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 90.0})],
+        agent_messages=[message],
+    )
+
+    decision = supervisor.review(plan)
+
+    assert decision.plan.agent_messages == [message]
 
 
 def test_safety_clips_long_or_fast_move_body():

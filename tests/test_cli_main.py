@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from src.cli.flyagent_chat import handle_slash_command
-from src.runtime.cli.main import build_parser, default_chat_map_id
+from src.cli.display import CliNarrativePanel, print_summary
+from src.cli.main import build_parser, default_chat_map_id, handle_slash_command
 
 
 class FakeCliSession:
@@ -21,7 +21,18 @@ class FakeCliSession:
         self.run_dir = run_dir
         self.map_id = "m1"
         self.available_map_ids = ["m1", "cityenviron_win64"]
-        self.last_summary = {"instruction": "向前飞行5米", "completed": True}
+        self.last_summary = {
+            "instruction": "向前飞行5米",
+            "completed": True,
+            "agent_messages": [
+                {
+                    "type": "progress",
+                    "content": "我准备向前移动并保持安全悬停。",
+                    "confidence": "medium",
+                    "requires_user_reply": False,
+                }
+            ],
+        }
         self.shutdown_calls: list[str | None] = []
         self.hover_calls = 0
 
@@ -85,6 +96,96 @@ def test_help_command_describes_clear_command(tmp_path, capsys):
     assert "向前飞行5米" in out
 
 
+def test_summary_command_prints_agent_messages(tmp_path, capsys):
+    session = FakeCliSession(tmp_path)
+
+    should_continue = handle_slash_command("/summary", session)  # type: ignore[arg-type]
+
+    out = capsys.readouterr().out
+    assert should_continue is True
+    assert "我准备向前移动并保持安全悬停。" in out
+    assert '"agent_messages"' in out
+
+
+def test_default_summary_is_compact_after_live_messages(tmp_path, capsys):
+    session = FakeCliSession(tmp_path)
+
+    print_summary(session.last_summary)
+
+    out = capsys.readouterr().out
+    assert "我准备向前移动并保持安全悬停。" not in out
+    assert '"agent_messages"' not in out
+    assert '"completed": true' in out
+
+
+def test_cli_narrative_panel_prints_steps_status_and_final(capsys):
+    panel = CliNarrativePanel()
+
+    summary = {
+        "completed": True,
+        "run_dir": "runs/interactive_cli_test",
+        "agent_messages": [{"type": "final", "content": "任务已完成。"}],
+    }
+
+    panel({"kind": "instruction_started", "payload": {"phase_names": ["move_forward", "rotate_right"]}})
+    panel(
+        {
+            "kind": "agent_message",
+            "source": "action_planner",
+            "phase": "move_forward",
+            "message": {
+                "type": "progress",
+                "content": "我准备向前飞行。",
+                "confidence": "medium",
+                "requires_user_reply": False,
+            },
+        }
+    )
+    panel(
+        {
+            "kind": "tool_step_completed",
+            "payload": {
+                "phase": "move_forward",
+                "tool": "uav.move_body",
+                "ok": True,
+                "stabilization": {"status": "completed"},
+            },
+        }
+    )
+    panel(
+        {
+            "kind": "observation_updated",
+            "payload": {
+                "source": "automatic_phase_window",
+                "frame_refs": {"rgb": "memory/frames.jsonl#1", "depth": "memory/frames.jsonl#2"},
+                "has_pose": True,
+            },
+        }
+    )
+    panel({"kind": "phase_transition_applied", "payload": {"phase": "move_forward", "decision": "complete_task"}})
+    panel(
+        {
+            "kind": "agent_message",
+            "message": {
+                "type": "final",
+                "content": "任务已完成。",
+                "confidence": "high",
+                "requires_user_reply": False,
+            },
+        }
+    )
+    panel.finish_turn(summary)
+
+    out = capsys.readouterr().out
+    assert "任务步骤：" in out
+    assert "1. 向前飞行" in out
+    assert "状态：我准备向前飞行。" in out
+    assert "状态：动作完成 1/2：向前飞行；已完成移动，已稳定。" in out
+    assert "状态：观察完成：已更新图像、深度、位姿。" in out
+    assert "FlyAgent: 任务已完成。" in out
+    assert "运行记录：runs/interactive_cli_test" in out
+
+
 def test_clear_command_keeps_cli_open(tmp_path, capsys):
     session = FakeCliSession(tmp_path)
 
@@ -101,6 +202,12 @@ def test_cli_defaults_to_chat_model_artifacts():
     assert args.env_path == ".env"
     assert args.parser_mode is None
     assert args.save_artifacts is True
+
+
+def test_cli_start_alias_enters_chat():
+    args = build_parser().parse_args(["start"])
+
+    assert args.command == "start"
 
 
 def test_default_chat_map_prefers_cityenviron():

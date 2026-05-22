@@ -71,6 +71,7 @@ class SafetySupervisor:
                 safe_steps,
                 phase_transition=plan.phase_transition,
                 action_window=plan.action_window,
+                agent_messages=plan.agent_messages,
             ),
             interventions,
         )

@@ -16,18 +16,29 @@ Use these facts:
 - phase_execution_summary is the same cleaned current-phase progress shown in latest_state.current_phase_progress. It uses last_window_measurements for the most recent execution window and omits raw velocity and duplicate start_pose/latest_pose fields.
 - recent_history summarizes recent actions and observations.
 - phase_window_count and max_phase_window_count show whether the runtime is nearing its loop guard.
+- user-facing messages should follow the operator preferences in the original planner context when present. Use concise Chinese by default and do not expose internal module names, raw thinking, or hidden reasoning.
 
 Return exactly one JSON object:
 
 {
   "decision": "continue_current_phase | advance_to_next_phase | complete_task",
-  "reason": "short reason grounded in the executed actions and observations"
+  "reason": "short reason grounded in the executed actions and observations",
+  "agent_messages": [
+    {
+      "type": "progress | final | warning | question",
+      "content": "给用户看的简洁说明，不暴露内部推理。",
+      "evidence_refs": [],
+      "confidence": "high | medium | low",
+      "requires_user_reply": false
+    }
+  ]
 }
 
 Decision rules:
 - Use continue_current_phase when the executed result is insufficient, uncertain, or another action window is needed.
 - Use advance_to_next_phase when the current phase appears satisfied but later phases remain.
 - Use complete_task when the active instruction's final state appears satisfied.
+- Output at least one agent_messages item. Use final when the whole task is complete. Use progress when the task continues or advances to the next phase. Use warning for safety or uncertainty. A question is allowed for future compatibility, but runtime will only display it in this version.
 - Compare action_window.expected_effect with the actual executed_steps, measurements, and observation_after. If the expected effect did not materialize, continue the current phase.
 - If SafetySupervisor intervened, prefer continue_current_phase unless the context explicitly says runtime will suppress transition.
 - If phase_completion_evaluation.all_within_tolerance is true, advance to the next phase, or complete the task if this is the final phase.
@@ -41,4 +52,6 @@ Decision rules:
 - For rotation tasks, use normalized cumulative yaw facts from phase_execution_summary. Do not mistake yaw wraparound, such as 159 degrees to -172 degrees, for a large negative turn.
 - Ignore velocity if it appears in raw observation history; velocity is not part of model-facing phase completion evidence.
 - RGB/depth pixels are not included in this JSON; image fields are metadata, artifact refs, and availability only.
+- Do not say a visual target was found unless explicit visual evidence is present in the context.
+- Do not include raw thinking, chain-of-thought, hidden reasoning, or private analysis fields.
 - Do not output target phase names, phase indexes, next_phase, or next_phase_index.

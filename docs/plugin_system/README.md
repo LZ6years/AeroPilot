@@ -13,6 +13,7 @@
 - 先给模型一个轻量 skills 目录，而不是把所有知识常驻 prompt。
 - 模型或 runtime 判断需要时，再展开完整 skill 内容。
 - 用户第一版只在上下文层自定义记忆如何呈现，不直接改底层 memory writer 和索引生命周期。
+- 回复协议未来先作为 communication knowledge/skill 注入，稳定后再抽成 `ResponseProtocol` 插件贡献。
 
 ## 为什么暂时不立即实现完整插件市场
 
@@ -37,6 +38,6 @@
 1. [05_requirements.md](05_requirements.md)：插件系统要解决什么问题、MVP 边界和记忆自定义策略。
 2. [01_architecture.md](01_architecture.md)：整体架构和插件贡献类型。
 3. [04_skill_discovery_and_injection.md](04_skill_discovery_and_injection.md)：参考 Claude Code 的轻量发现与按需注入模式。
-4. [02_code_layout.md](02_code_layout.md)：未来代码目录如何体现插件系统。
-5. [03_mvp_plan.md](03_mvp_plan.md)：从当前项目状态到插件系统的 MVP 演进计划。
-
+4. [06_communication_layer.md](06_communication_layer.md)：通信智能层、`AgentMessage` 和 communication skill 的关系。
+5. [02_code_layout.md](02_code_layout.md)：未来代码目录如何体现插件系统。
+6. [03_mvp_plan.md](03_mvp_plan.md)：从当前项目状态到插件系统的 MVP 演进计划。

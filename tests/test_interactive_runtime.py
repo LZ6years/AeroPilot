@@ -69,6 +69,17 @@ class FakeRuntime:
         self.hover_calls = []
         self.finish_calls = []
         self.ensure_calls = []
+        self.messages = [
+            {
+                "source": "phase_judge",
+                "phase": "move_forward",
+                "type": "final",
+                "content": "已完成本轮指令。",
+                "evidence_refs": [],
+                "confidence": "high",
+                "requires_user_reply": False,
+            }
+        ]
 
     def run_task(self, *args, **kwargs):
         self.run_calls.append((args, kwargs))
@@ -84,6 +95,9 @@ class FakeRuntime:
         self.ensure_calls.append(args)
         return FakeScene()
 
+    def latest_turn_agent_messages(self):
+        return [dict(item) for item in self.messages]
+
 
 def test_build_turn_summary_reports_pose_delta_and_artifact_counts(tmp_path):
     summary = build_turn_summary(tmp_path, "向前飞行5米", FakeState().to_dict())
@@ -95,18 +109,40 @@ def test_build_turn_summary_reports_pose_delta_and_artifact_counts(tmp_path):
     assert compact_turn_summary(summary)["artifact_counts"]["rgb"] == 1
 
 
+def test_build_turn_summary_prefers_in_memory_agent_messages(tmp_path):
+    messages = [
+        {
+            "source": "phase_judge",
+            "phase": "move_forward",
+            "type": "final",
+            "content": "已完成本轮指令。",
+            "evidence_refs": [],
+            "confidence": "high",
+            "requires_user_reply": False,
+        }
+    ]
+
+    summary = build_turn_summary(tmp_path, "向前飞行5米", FakeState().to_dict(), agent_messages=messages)
+
+    assert summary["agent_messages"] == messages
+
+
 def test_interactive_session_reuses_scene_for_natural_language_turn(tmp_path):
     recorder = FakeRecorder(tmp_path)
     runtime = FakeRuntime(recorder)
-    session = InteractiveTaskSession(runtime, "m1", agent_id="uav_1", scene_id="scene_a")
+    live_events = []
+    live_sink = live_events.append
+    session = InteractiveTaskSession(runtime, "m1", agent_id="uav_1", scene_id="scene_a", event_sink=live_sink)
 
     summary = session.submit_instruction("向前飞行5米")
 
     assert summary["completed"] is True
+    assert summary["agent_messages"][0]["content"] == "已完成本轮指令。"
     assert runtime.run_calls[0][0][:2] == ("m1", "向前飞行5米")
     assert runtime.run_calls[0][1]["scene_policy"] == "reuse_running"
     assert runtime.run_calls[0][1]["stop_scene_on_finish"] is False
     assert runtime.run_calls[0][1]["scene_id"] == "scene_a"
+    assert session.event_sink is live_sink
     assert "interactive/latest_summary.json" in recorder.json_files
     assert recorder.events[-1][0] == "interactive_instruction_completed"
 

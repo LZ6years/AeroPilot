@@ -87,7 +87,7 @@ runtime/
 CLI 统一使用新入口：
 
 ```bash
-python -m src.runtime.cli.main smoke-test --map-id cityenviron_win64 --launch
+flyagent smoke-test --map-id cityenviron_win64 --launch
 ```
 
 ## 6. 远程机器模式

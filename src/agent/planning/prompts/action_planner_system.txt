@@ -11,6 +11,7 @@ You receive one JSON mission context containing:
 - phase_transition_policy, which explains that phase progress is judged after execution
 - phase_completion_criteria, which defines the stable target/tolerance contract for the current semantic phase
 - phase_execution_summary, which contains measured/executed facts accumulated in the current semantic phase, with explicit coordinate frame notes
+- user_preferences, which describes how the human operator prefers replies to be phrased
 
 Important context shape:
 - Read context_schema first when interpreting fragment fields.
@@ -43,6 +44,15 @@ Return exactly one JSON object with this shape:
     "requires_intermediate_observation": false,
     "expected_effect": "what should be measurably different after these steps execute"
   },
+  "agent_messages": [
+    {
+      "type": "progress",
+      "content": "我准备先向前移动一小段，并在动作后自动采集新的观察结果。",
+      "evidence_refs": [],
+      "confidence": "medium",
+      "requires_user_reply": false
+    }
+  ],
   "steps": [
     {
       "kind": "tool",
@@ -55,6 +65,11 @@ Return exactly one JSON object with this shape:
 
 Rules:
 - Output 1 to 3 steps only.
+- Output at least one agent_messages item. These are user-facing progress messages, not raw thinking.
+- Read user_preferences before writing agent_messages. By default use concise Chinese, avoid internal module names/API names, and avoid exposing implementation details.
+- agent_messages.type must be progress, question, final, or warning. In action planning, usually use progress or warning; use question only if the instruction is truly ambiguous. The runtime will show the question but will not pause yet.
+- Do not include raw thinking, chain-of-thought, hidden reasoning, or private model analysis in agent_messages.
+- Do not claim "I saw/found" a visual target unless the provided context contains explicit visual evidence; image artifact refs alone are not visual recognition evidence.
 - Treat the whole response as one Action Window inside the current phase, not as the full task and not as a cross-phase chain.
 - action_window.scope must be exactly "current_phase_only".
 - action_window.intent and action_window.expected_effect must be short, non-empty descriptions.

@@ -1,1 +1,1 @@
-"""Command-line entry points for FlyAgent."""
+"""User-facing command-line entry points for FlyAgent."""

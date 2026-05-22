@@ -1,4 +1,9 @@
-﻿"""Command line entry point for FlyAgent runtime checks."""
+"""Command line entry point for FlyAgent.
+
+This module is the user-facing shell for FlyAgent. It owns command parsing and
+interactive terminal behavior, while the runtime package owns task execution,
+scene control, memory updates, action planning, safety, and observation.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +12,11 @@ import json
 import socket
 import sys
 from pathlib import Path
-from typing import Any
 
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.agent.semantic.task_parser import TaskParser
+from src.cli.display import ANSI_BLUE, ANSI_DIM, CliNarrativePanel, clear_screen, color_text, print_json, print_summary
 from src.env_client.local_client import LocalEnvClient
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.map_config import build_remote_airsim_config, load_map_config
@@ -25,13 +30,9 @@ from src.runtime.runners.task_runtime import TaskRuntime
 from src.sim_server.server import LocalSimulationServer
 
 
-ANSI_BLUE = "\033[34m"
-ANSI_DIM = "\033[2m"
-ANSI_RESET = "\033[0m"
-
-
 def build_parser() -> argparse.ArgumentParser:
-    # Build the CLI argument parser for smoke-test commands.
+    # Keep one parser for the user-facing chat command and engineering checks so
+    # `flyagent`, `flyagent start`, and `python -m src.cli ...` share behavior.
     parser = argparse.ArgumentParser(description="FlyAgent CLI")
     parser.add_argument("--config", default="configs/maps/airvln_maps.json")
     parser.add_argument("--env-path", default=".env", help="Environment file for model configuration")
@@ -76,6 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default="chat",
         choices=[
+            "start",
             "smoke-test",
             "remote-airsim-smoke-test",
             "remote-airsim-cv-smoke-test",
@@ -90,7 +92,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     # Compose config, local C/S objects, and runtime command execution.
     args = build_parser().parse_args(argv)
-    if args.command == "chat":
+    if args.command in {"chat", "start"}:
         return run_chat(args)
     if args.command == "parse-task":
         run_parse_task(args)
@@ -283,6 +285,7 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
     parser_mode = args.parser_mode or "model"
     run_dir = RunStore(args.run_root).create_run_dir("interactive_cli")
     recorder = AsyncRunLogger(run_dir)
+    live_printer = CliNarrativePanel()
     server = LocalSimulationServer(
         maps,
         port_policy,
@@ -315,6 +318,7 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
         safety=SafetySupervisor(safety_config),
         shutdown_policy=args.shutdown_policy,
         action_config=action_config,
+        event_sink=live_printer,
     )
     return InteractiveTaskSession(
         runtime,
@@ -322,6 +326,7 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
         agent_id=args.agent_id,
         scene_id=args.scene_id,
         available_map_ids=[pkg.map_id for pkg in maps],
+        event_sink=live_printer,
     )
 
 
@@ -372,7 +377,11 @@ def chat_repl(args: argparse.Namespace, session: InteractiveTaskSession) -> int:
                 return 0
             continue
         summary = session.submit_instruction(command)
-        print_summary(summary)
+        event_sink = getattr(session, "event_sink", None)
+        if hasattr(event_sink, "finish_turn"):
+            event_sink.finish_turn(summary)
+        else:
+            print_summary(summary)
         if args.stop_on_error and summary.get("error"):
             session.shutdown()
             return 1
@@ -393,7 +402,7 @@ def handle_slash_command(command: str, session: InteractiveTaskSession) -> bool:
         print_json(session.status())
         return True
     if name == "/summary":
-        print_json(compact_turn_summary(session.last_summary))
+        print_summary(session.last_summary or {}, include_messages=True)
         return True
     if name == "/context":
         print_json(
@@ -448,32 +457,10 @@ def print_chat_help() -> None:
         "  /hover    send a best-effort hover command",
         "  /land     land and exit",
         "  /quit     exit with the configured shutdown policy",
-        "Natural language example: 向前飞行5米，然后悬停",
+        "Natural language example: \u5411\u524d\u98de\u884c5\u7c73\uff0c\u7136\u540e\u60ac\u505c",
     ]
     for line in lines:
         print(color_text(line, ANSI_DIM))
-
-
-def print_summary(summary: dict[str, Any]) -> None:
-    print_json(compact_turn_summary(summary))
-
-
-def print_json(data: dict[str, Any]) -> None:
-    print(json.dumps(data, indent=2, ensure_ascii=False))
-
-
-def color_text(text: str, color: str) -> str:
-    # Keep redirected output and tests plain while making the interactive shell easier to scan.
-    if not sys.stdout.isatty():
-        return text
-    return f"{color}{text}{ANSI_RESET}"
-
-
-def clear_screen() -> None:
-    if sys.stdout.isatty():
-        print("\033[2J\033[H", end="")
-        return
-    print("")
 
 
 def probe_tcp_endpoint(host: str, port: int, timeout_sec: int) -> dict:

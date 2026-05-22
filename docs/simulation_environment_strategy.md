@@ -99,7 +99,7 @@ backend 负责：
 运行：
 
 ```powershell
-conda run -n flyagent python -m src.runtime.cli.main smoke-test --map-id remote_unrealzoo_collection --config configs/maps/airvln_maps.json --connect-existing
+flyagent smoke-test --map-id remote_unrealzoo_collection --config configs/maps/airvln_maps.json --connect-existing
 ```
 
 要求：
@@ -123,7 +123,7 @@ AgentRuntime on PC A
 远端 Linux AirSim 快速测试可以不写正式 map config，直接使用临时配置命令：
 
 ```powershell
-conda run -n flyagent python -m src.runtime.cli.main remote-airsim-smoke-test --remote-host <LINUX_IP>
+flyagent remote-airsim-smoke-test --remote-host <LINUX_IP>
 ```
 
 默认参数：
@@ -137,7 +137,7 @@ camera_name: front_0
 如果 Linux 端使用了其他端口或名称，可以覆盖：
 
 ```powershell
-conda run -n flyagent python -m src.runtime.cli.main remote-airsim-smoke-test --remote-host <LINUX_IP> --remote-port 41452 --vehicle-name Drone_1 --camera-name front_0
+flyagent remote-airsim-smoke-test --remote-host <LINUX_IP> --remote-port 41452 --vehicle-name Drone_1 --camera-name front_0
 ```
 
 该命令会先做 TCP 连通性检查，并把临时 `map_package.json` 和 `remote_probe.json` 写入 run record。
@@ -145,7 +145,7 @@ conda run -n flyagent python -m src.runtime.cli.main remote-airsim-smoke-test --
 如果远端 AirVLN 只能以 `ComputerVision` 模式启动，应使用观测 smoke test。这个命令不会调用 `enableApiControl`、`takeoff`、`hover` 或 `getMultirotorState`，只验证连接、pose、RGB 和 depth：
 
 ```powershell
-conda run -n flyagent python -m src.runtime.cli.main remote-airsim-cv-smoke-test --remote-host <LINUX_IP> --remote-port 30001
+flyagent remote-airsim-cv-smoke-test --remote-host <LINUX_IP> --remote-port 30001
 ```
 
 ## 5. Windows AirSim Packaged Map
@@ -177,7 +177,7 @@ airsim.settings_profile: camera_defaults
 验证命令：
 
 ```powershell
-conda run -n flyagent python -m src.runtime.cli.main smoke-test --map-id cityenviron_win64 --config configs/maps/airvln_maps.json --launch
+flyagent smoke-test --map-id cityenviron_win64 --config configs/maps/airvln_maps.json --launch
 ```
 
 ## 6. AirNavigation 和 AirVLN 的使用原则

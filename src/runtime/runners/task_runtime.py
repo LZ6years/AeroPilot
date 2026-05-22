@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+from typing import Any
 
 from src.agent.mission_state import MissionState
+from src.agent.messages import AgentMessage
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition, evaluate_phase_completion
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
@@ -40,6 +43,7 @@ class TaskRuntime:
         shutdown_policy: str = "hover",
         action_config: UavActionConfig | None = None,
         stabilization_config: UavStabilizationConfig | None = None,
+        event_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         if shutdown_policy not in self.SHUTDOWN_POLICIES:
             raise ValueError(f"Unsupported shutdown policy: {shutdown_policy}")
@@ -51,6 +55,9 @@ class TaskRuntime:
         self.shutdown_policy = shutdown_policy
         self.tools = ToolDispatcher(env_client)
         self.stabilizer = UavStabilizer(self.tools, recorder, stabilization_config)
+        # Optional synchronous stream for CLI/TUI frontends. The recorder remains
+        # the historical source of truth; this sink is only for live user display.
+        self.event_sink = event_sink
         self.context_builder = ObservationContextBuilder(
             action_config=action_config,
             safety_config=self.safety.safety_config,
@@ -61,6 +68,10 @@ class TaskRuntime:
         self._active_reused_scenes: dict[tuple[str, str | None], SceneInstance] = {}
         self._active_flight_memories: dict[tuple[str, str | None, str], FlightMemory] = {}
         self._state_flight_memories: dict[str, FlightMemory] = {}
+        # In-memory user-facing messages for the current instruction. Public
+        # events are still written for history, but CLI/TUI summaries should not
+        # depend on the async logger flushing before they can show the final reply.
+        self._current_turn_agent_messages: list[dict] = []
 
     def run_task(
         self,
@@ -72,6 +83,7 @@ class TaskRuntime:
         scene_id: str | None = None,
     ) -> MissionState:
         # Execute one short-horizon window per semantic phase.
+        self._current_turn_agent_messages = []
         parse_result = self.task_parser.parse(instruction)
         return self.run_parsed_task(
             map_id,
@@ -94,6 +106,7 @@ class TaskRuntime:
         # Execute a task from an already-created semantic plan.
         if scene_policy not in self.SCENE_POLICIES:
             raise ValueError(f"Unsupported scene policy: {scene_policy}")
+        self._current_turn_agent_messages = []
         self.recorder.write_json("state/semantic_plan.json", parse_result.to_dict())
         self._debug_event("task_parsed", parse_result.to_dict())
         self._event(
@@ -292,6 +305,7 @@ class TaskRuntime:
         safety_decision = self.safety.review(raw_plan, state)
         plan = safety_decision.plan
         self._debug_event("short_horizon_planned", plan.to_dict())
+        self._agent_messages(plan.agent_messages, source="action_planner", phase=plan.phase)
         self._event(
             "phase_plan_ready",
             {
@@ -305,6 +319,17 @@ class TaskRuntime:
             self._debug_event(
                 "safety_intervened",
                 {"phase": plan.phase, "interventions": safety_decision.interventions},
+            )
+            self._agent_message(
+                AgentMessage(
+                    type="warning",
+                    content="为保证安全，我调整了本轮动作。",
+                    evidence_refs=[{"kind": "event", "event": "safety_intervened"}],
+                    confidence="high",
+                    requires_user_reply=False,
+                ),
+                source="safety",
+                phase=plan.phase,
             )
         executed_steps = []
         for index, step in enumerate(plan.steps):
@@ -397,6 +422,7 @@ class TaskRuntime:
             "current_phase_window_count": state.current_phase_window_count,
             "max_phase_window_count": state.max_phase_window_count,
         }
+        self._agent_messages(transition.agent_messages, source="phase_judge", phase=plan.phase)
         if safety_decision.interventions:
             self._debug_event(
                 "phase_transition_suppressed_by_safety",
@@ -505,6 +531,7 @@ class TaskRuntime:
                 "observation_policy": planner_context.get("observation_policy", {}),
                 "phase_transition_policy": planner_context.get("phase_transition_policy", {}),
             },
+            "user_preferences": planner_context.get("user_preferences", {}),
             "phase_execution_summary": state.current_phase_execution_summary,
             "action_plan": plan.to_dict(),
             "executed_steps": list(executed_steps),
@@ -664,6 +691,16 @@ class TaskRuntime:
 
     def _event(self, event: str, payload: dict) -> None:
         self.recorder.event(event, payload)
+        if event in {
+            "instruction_started",
+            "phase_plan_ready",
+            "tool_step_completed",
+            "observation_updated",
+            "phase_transition_applied",
+            "phase_transition_continued",
+            "phase_transition_window_limit_reached",
+        }:
+            self._emit_runtime_event({"kind": event, "payload": dict(payload)})
 
     def _debug_event(self, event: str, payload: dict) -> None:
         debug_event = getattr(self.recorder, "debug_event", None)
@@ -671,6 +708,61 @@ class TaskRuntime:
             debug_event(event, payload)
         else:
             self.recorder.event(event, payload)
+
+    def _agent_messages(self, messages: list[AgentMessage], *, source: str, phase: str | None = None) -> None:
+        for message in messages:
+            self._agent_message(message, source=source, phase=phase)
+
+    def _agent_message(self, message: AgentMessage, *, source: str, phase: str | None = None) -> None:
+        payload = {
+            "source": source,
+            "phase": phase,
+            "message": message.to_dict(),
+        }
+        self._current_turn_agent_messages.append(
+            {
+                "source": source,
+                "phase": phase,
+                **payload["message"],
+            }
+        )
+        self._emit_runtime_event(
+            {
+                "kind": "agent_message",
+                "source": source,
+                "phase": phase,
+                "message": payload["message"],
+            }
+        )
+        self._event("agent_message", payload)
+
+    def latest_turn_agent_messages(self) -> list[dict]:
+        """Return user-facing messages produced during the current instruction.
+
+        This is the synchronous counterpart to the public ``agent_message``
+        events. Interactive shells use it for immediate summaries, while
+        offline tools continue to read events.jsonl.
+        """
+
+        return [dict(item) for item in self._current_turn_agent_messages]
+
+    def _emit_runtime_event(self, event: dict[str, Any]) -> None:
+        """Push a live event to CLI/TUI consumers without changing run history.
+
+        The sink is deliberately best-effort: user interface rendering should not
+        be able to fail a flight task. Durable replay and debugging still use the
+        recorder-backed public/debug events.
+        """
+
+        if self.event_sink is None:
+            return
+        try:
+            self.event_sink(dict(event))
+        except Exception as exc:  # pragma: no cover - defensive UI boundary
+            self._debug_event(
+                "runtime_event_sink_failed",
+                {"error_type": type(exc).__name__, "error": str(exc), "event_kind": event.get("kind")},
+            )
 
     def _write_phase_window_debug_artifact(self, phase_key: str, window_index: int, payload: dict) -> str:
         name = f"debug/phase_windows/{self._safe_file_part(phase_key)}_window_{window_index:03d}.json"

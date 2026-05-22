@@ -167,7 +167,7 @@ ModelActionPlanner
 - CLI 是第一阶段主入口。
 - 每次任务生成 run id。
 - 每轮保存语义规划、context、模型计划、contract validation、动作结果、观察、安全介入和错误。
-- 交互式 CLI 入口统一为 `python -m src.runtime.cli.main chat`。
+- 交互式 CLI 入口统一为 `flyagent` / `flyagent start`，开发兜底入口为 `python -m src.cli`。
 
 ### M9: Electron 与飞书预留
 
@@ -223,7 +223,7 @@ CLI：
 
 ```powershell
 $env:PYTHONIOENCODING='utf-8'
-F:\conda_env\flyagent\python.exe -m src.runtime.cli.main chat --env-path .env --map-id cityenviron_win64 --save-artifacts
+flyagent start
 ```
 
 ## 6. 风险

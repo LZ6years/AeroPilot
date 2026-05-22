@@ -65,6 +65,7 @@ class ModelActionPlanner:
             _without_phase_transition(response),
             require_phase_transition=False,
             require_action_window=True,
+            require_agent_messages=True,
         )
         try:
             self.tool_contract_validator.validate(plan, state.current_phase_name, context)
@@ -172,6 +173,7 @@ class ModelActionPlanner:
                     _without_phase_transition(repaired_plan_data),
                     require_phase_transition=False,
                     require_action_window=True,
+                    require_agent_messages=True,
                 )
                 self.tool_contract_validator.validate(repaired_plan, expected_phase, context)
             except ToolContractValidationError as exc:

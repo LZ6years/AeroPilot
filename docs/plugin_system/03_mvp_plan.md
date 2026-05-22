@@ -15,6 +15,8 @@
 
 这个阶段会自然沉淀出未来的 `ResponseProtocol` 和 `AgentMessage`。
 
+阶段 1 只做 `AgentMessage` 协议和基础输出，不做完整通信插件。`report`、`ask_user`、`alert` 暂时不作为 `ToolDispatcher` 工具，而是沉淀为后续 `communication_protocol` 知识。
+
 ## 阶段 2：简单视觉信息接入
 
 目标：让模型能基于图片上下文继续规划和回答。
@@ -29,6 +31,8 @@
 - 最终回答可以引用图片证据。
 
 这个阶段会自然沉淀出未来的 `CapabilitySkill`、`KnowledgeSkill` 和 `ContextContribution`。
+
+视觉 evidence 稳定后，`final`、`progress`、`question` 才能更可靠地附带图片、pose 和观察证据。完整通信智能层应在视觉 evidence 和 question 回流跑通后再抽象。
 
 ## 阶段 3：SkillCatalog + skill_listing
 
@@ -70,6 +74,8 @@
 
 这个阶段对应 Claude Code 中 `SkillTool` 展开完整 skill 的思想，但 UAV 第一版可以由 runtime 自动注入，不必先暴露模型可调用的 SkillTool。
 
+`communication_protocol` 可以在这一阶段作为内置 `KnowledgeSkill` 进入 skills 注入系统，用来指导模型什么时候输出 `progress`、`question`、`warning` 和 `final`。
+
 ## 阶段 6：完整 PluginRegistry
 
 只有当前面边界稳定后，再抽象完整插件贡献：
@@ -81,4 +87,3 @@
 - `ResponseProtocol`：过程回复、澄清提问、最终回答。
 
 外部 skills/plugin 包加载、版本约束、启用/禁用和 schema 校验不属于当前 MVP。
-

@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flyagent-uav"
+version = "0.1.0"
+description = "Natural-language UAV agent runtime for UE/AirSim environments."
+requires-python = ">=3.10"
+
+[project.scripts]
+flyagent = "src.cli.main:main"
+
+[tool.setuptools.packages.find]
+include = ["src*"]

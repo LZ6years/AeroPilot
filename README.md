@@ -54,6 +54,27 @@ FlyAgent 是一个面向 UAV/UE 仿真环境的轻量级 Agent 项目。目标�
 - 多模态感知与决策先统一由 VLM 处理，不在第一阶段拆分视觉语义模块。
 - 地图资源先参考 AirVLN 的 scene 管理方式：`MapPackage + SceneInstance + SimulationServer`。
 
+## CLI 启动
+
+开发环境首次使用时，在项目根目录安装可编辑入口：
+
+```powershell
+F:\conda_env\flyagent\python.exe -m pip install -e .
+```
+
+之后可以直接进入自然语言交互：
+
+```powershell
+flyagent
+flyagent start
+```
+
+未安装入口时，也可以使用开发兜底命令：
+
+```powershell
+F:\conda_env\flyagent\python.exe -m src.cli
+```
+
 ## 建议目录
 
 ```text

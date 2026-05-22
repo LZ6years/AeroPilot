@@ -36,6 +36,9 @@ def test_action_planner_prompt_contains_allowed_and_forbidden_tools():
     assert "current_phase_only" in prompt
     assert "requires_intermediate_observation" in prompt
     assert "Action Window" in prompt
+    assert "agent_messages" in prompt
+    assert "user_preferences" in prompt
+    assert "raw thinking" in prompt
     assert "Do not output phase_transition" in prompt
     assert "Do not output kind=\"observe\"" in prompt
     assert "action_schemas" in prompt
@@ -53,6 +56,17 @@ def test_model_repair_prompt_requires_contract_valid_tool_only_plan():
     assert "Never output kind=\"observe\"" in prompt
     assert "Do not repeat the previous invalid plan" in prompt
     assert "action_window" in prompt
+    assert "agent_messages" in prompt
+    assert "raw thinking" in prompt
     assert "current_phase_only" in prompt
     assert "requires_intermediate_observation" in prompt
     assert "phase_transition" not in prompt
+
+
+def test_phase_transition_judge_prompt_requires_agent_messages():
+    prompt = (Path("src") / "agent" / "planning" / "prompts" / "phase_transition_judge_system.txt").read_text(encoding="utf-8")
+
+    assert "agent_messages" in prompt
+    assert "final" in prompt
+    assert "raw thinking" in prompt
+    assert "Do not say a visual target was found" in prompt

@@ -7,8 +7,10 @@ mutates MissionState.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from src.agent.messages import AgentMessage
 
 
 CONTINUE_CURRENT_PHASE = "continue_current_phase"
@@ -37,6 +39,7 @@ class PhaseTransition:
 
     decision: str
     reason: str = ""
+    agent_messages: list[AgentMessage] = field(default_factory=list)
 
     @classmethod
     def default_advance(cls, reason: str = "legacy short-horizon plan advances after one window") -> "PhaseTransition":
@@ -58,10 +61,23 @@ class PhaseTransition:
         decision = str(payload.get("decision", "")).strip()
         if decision not in VALID_PHASE_TRANSITIONS:
             raise ValueError(f"Unsupported phase_transition decision: {decision}")
-        return cls(decision=decision, reason=str(payload.get("reason", "")).strip())
+        messages_data = payload.get("agent_messages", [])
+        if messages_data is None:
+            messages_data = []
+        if not isinstance(messages_data, list):
+            raise ValueError("phase_transition agent_messages must be a list")
+        return cls(
+            decision=decision,
+            reason=str(payload.get("reason", "")).strip(),
+            agent_messages=[AgentMessage.from_dict(dict(item)) for item in messages_data],
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {"decision": self.decision, "reason": self.reason}
+        return {
+            "decision": self.decision,
+            "reason": self.reason,
+            "agent_messages": [message.to_dict() for message in self.agent_messages],
+        }
 
 
 def criteria_measurement_field(criteria: dict[str, Any]) -> str | None:
