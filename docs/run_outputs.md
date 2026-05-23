@@ -11,12 +11,15 @@ runs/<run_id>/
   events.jsonl
   state/
     latest_state.json
+    latest_agent_message.json
+    final_answer.json
     flight_memory.json
     semantic_plan.json
     scene_instance.json
   memory/
     instructions.jsonl
     actions.jsonl
+    agent_messages.jsonl
     observations.jsonl
     poses.jsonl
     frames.jsonl
@@ -44,10 +47,13 @@ runs/<run_id>/
 | --- | --- | --- |
 | `events.jsonl` | 简版事件流 | 给用户和 CLI/TUI 展示关键流程：指令开始、阶段规划、工具完成、观察更新、阶段推进。 |
 | `state/latest_state.json` | 当前状态快照 | 当前 runtime 控制状态，只保存最新状态和当前 phase 进度。 |
+| `state/latest_agent_message.json` | 最新回复快照 | 最近一条用户可见 `AgentMessage`，供 CLI/TUI/复盘直接读取。 |
+| `state/final_answer.json` | 最终回复快照 | 最近一条 `type="final"` 的 `AgentMessage`，表示当前 run 最近一次最终答复。 |
 | `state/flight_memory.json` | 记忆 manifest | 保存 `memory/*.jsonl` 的 refs，供 context modules 查历史。 |
 | `state/semantic_plan.json` | 语义解析结果 | 当前或最近一条自然语言指令解析出的阶段计划。 |
 | `state/scene_instance.json` | 场景信息 | 当前 UE/AirSim scene 的实例信息。 |
 | `memory/*.jsonl` | 上下文历史 | append-only 结构化历史。ContextModule 从这里读取，不保存 RGB/depth 大文件。 |
+| `memory/agent_messages.jsonl` | 回复历史 | append-only 用户可见回复历史，`state/flight_memory.json` 只保存对应 refs。 |
 | `artifacts/rgb` / `artifacts/depth` | 原始感知文件 | 真实 RGB/depth 文件唯一保存位置。 |
 | `contexts/latest_context.json` | 模型动作输入 | `ModelActionPlanner` 使用的最终 PlannerContext。 |
 | `contexts/latest_phase_transition_context.json` | 阶段判断输入 | 执行动作和自动观察后，给 phase judge 的上下文。 |

@@ -111,6 +111,24 @@ class MemoryEventWriter:
             },
         )
 
+    def write_agent_message(
+        self,
+        source: str,
+        phase: str | None,
+        message: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Append one user-facing AgentMessage record to run memory."""
+
+        return self._append(
+            "agent_messages.jsonl",
+            "msg",
+            {
+                "source": source,
+                "phase": phase,
+                "message": dict(message),
+            },
+        )
+
     def _append(self, filename: str, prefix: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self._append_with_id(filename, self._next_id(prefix), payload)
 

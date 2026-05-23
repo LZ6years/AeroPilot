@@ -6,6 +6,7 @@ import json
 
 import pytest
 
+from src.agent.messages import AgentMessage
 from src.agent.semantic.task_parser import TaskParser
 from src.memory.context.composer import ContextComposer
 from src.memory.flight_memory import FlightMemory
@@ -81,6 +82,26 @@ def test_memory_event_writer_and_reader_round_trip(tmp_path):
     observation = reader.read_ref(observation_write["observation_ref"])
     assert observation["pose_ref"]["id"].startswith("pose_")
     assert len(observation["frame_refs"]) == 2
+
+
+def test_memory_event_writer_records_agent_messages_as_refs(tmp_path):
+    writer = MemoryEventWriter(tmp_path)
+    reader = MemoryRecordReader(tmp_path)
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
+    message = AgentMessage("final", "任务完成，我已保持悬停。", confidence="high")
+
+    message_ref = writer.write_agent_message("phase_judge", "hover", message.to_dict())
+    memory.append_agent_message_ref(message_ref)
+
+    record = reader.read_ref(message_ref)
+    data = memory.to_dict()
+
+    assert record["id"] == "msg_0001"
+    assert record["source"] == "phase_judge"
+    assert record["phase"] == "hover"
+    assert record["message"]["type"] == "final"
+    assert data["recent_agent_message_refs"] == [message_ref]
+    assert "任务完成" not in json.dumps(data, ensure_ascii=False)
 
 
 def test_stage_context_input_to_dict_has_expected_fields():

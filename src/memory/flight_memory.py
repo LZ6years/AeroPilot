@@ -11,6 +11,7 @@ MAX_RECENT_OBSERVATION_REFS = 50
 MAX_RECENT_ACTION_REFS = 50
 MAX_RECENT_POSE_REFS = 50
 MAX_RECENT_FRAME_REFS = 100
+MAX_RECENT_AGENT_MESSAGE_REFS = 50
 
 
 @dataclass
@@ -26,6 +27,7 @@ class FlightMemory:
     recent_action_refs: list[dict[str, Any]] = field(default_factory=list)
     recent_pose_refs: list[dict[str, Any]] = field(default_factory=list)
     recent_frame_refs: list[dict[str, Any]] = field(default_factory=list)
+    recent_agent_message_refs: list[dict[str, Any]] = field(default_factory=list)
     reset_epoch: int = 0
     rolling_summary: dict[str, Any] = field(default_factory=dict)
     memory_reader: Any = field(default=None, repr=False, compare=False)
@@ -54,6 +56,10 @@ class FlightMemory:
         for ref in refs or []:
             self.recent_frame_refs.append(dict(ref))
         self.recent_frame_refs = self.recent_frame_refs[-MAX_RECENT_FRAME_REFS:]
+
+    def append_agent_message_ref(self, ref: dict[str, Any]) -> None:
+        self.recent_agent_message_refs.append(dict(ref))
+        self.recent_agent_message_refs = self.recent_agent_message_refs[-MAX_RECENT_AGENT_MESSAGE_REFS:]
 
     def reset_pose_epoch(self, active_instruction: str | None = None) -> None:
         self.reset_epoch += 1
@@ -86,6 +92,7 @@ class FlightMemory:
             "recent_action_refs": [dict(item) for item in self.recent_action_refs],
             "recent_pose_refs": [dict(item) for item in self.recent_pose_refs],
             "recent_frame_refs": [dict(item) for item in self.recent_frame_refs],
+            "recent_agent_message_refs": [dict(item) for item in self.recent_agent_message_refs],
             "reset_epoch": self.reset_epoch,
             "rolling_summary": dict(self.rolling_summary),
         }

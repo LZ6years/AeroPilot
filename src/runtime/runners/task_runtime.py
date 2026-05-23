@@ -714,10 +714,25 @@ class TaskRuntime:
             self._agent_message(message, source=source, phase=phase)
 
     def _agent_message(self, message: AgentMessage, *, source: str, phase: str | None = None) -> None:
+        message_data = message.to_dict()
+        message_ref = self.memory_writer.write_agent_message(source, phase, message_data)
+        memory = self._state_flight_memories.get(self.recorder.run_dir.name)
+        if memory is not None:
+            memory.append_agent_message_ref(message_ref)
+        snapshot = {
+            "source": source,
+            "phase": phase,
+            "message": message_data,
+            "message_ref": dict(message_ref),
+        }
+        self.recorder.write_json("state/latest_agent_message.json", snapshot)
+        if message.type == "final":
+            self.recorder.write_json("state/final_answer.json", snapshot)
         payload = {
             "source": source,
             "phase": phase,
-            "message": message.to_dict(),
+            "message": message_data,
+            "message_ref": dict(message_ref),
         }
         self._current_turn_agent_messages.append(
             {

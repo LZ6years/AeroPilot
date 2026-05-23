@@ -253,6 +253,16 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert "phase_transition_suppressed_by_safety" in event_names
     assert "phase_transition_window_limit_reached" in event_names
     assert planned_records[0]["payload"]["steps"][0]["args"]["yaw_deg"] == 30.0
+    latest_agent_message = json.loads((run_dir / "state/latest_agent_message.json").read_text(encoding="utf-8"))
+    agent_message_lines = [
+        json.loads(line)
+        for line in (run_dir / "memory/agent_messages.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert latest_agent_message["message"]["type"] == "warning"
+    assert latest_agent_message["message_ref"]["ref"].startswith("memory/agent_messages.jsonl#")
+    assert agent_message_lines
+    assert {record["message"]["type"] for record in agent_message_lines} == {"warning"}
+    assert not (run_dir / "state/final_answer.json").exists()
 
 
 def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path):
@@ -297,11 +307,30 @@ def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path
     events = [json.loads(line) for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     event_names = [record["event"] for record in events]
     message_records = [record for record in events if record["event"] == "agent_message"]
+    agent_message_lines = [
+        json.loads(line)
+        for line in (run_dir / "memory/agent_messages.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    latest_agent_message = json.loads((run_dir / "state/latest_agent_message.json").read_text(encoding="utf-8"))
+    final_answer = json.loads((run_dir / "state/final_answer.json").read_text(encoding="utf-8"))
+    flight_memory = json.loads((run_dir / "state/flight_memory.json").read_text(encoding="utf-8"))
 
     assert state.completed
     assert [message["type"] for message in turn_messages] == ["progress", "final"]
     assert turn_messages[-1]["content"] == "任务完成，我已保持悬停。"
     assert [record["payload"]["message"]["type"] for record in message_records] == ["progress", "final"]
+    assert [record["message"]["type"] for record in agent_message_lines] == ["progress", "final"]
+    assert [record["id"] for record in agent_message_lines] == ["msg_0001", "msg_0002"]
+    assert all(record["payload"]["message_ref"]["ref"].startswith("memory/agent_messages.jsonl#") for record in message_records)
+    assert latest_agent_message["message"]["type"] == "final"
+    assert latest_agent_message["message"]["content"] == "任务完成，我已保持悬停。"
+    assert latest_agent_message["message_ref"]["ref"] == "memory/agent_messages.jsonl#2"
+    assert final_answer == latest_agent_message
+    assert [ref["ref"] for ref in flight_memory["recent_agent_message_refs"]] == [
+        "memory/agent_messages.jsonl#1",
+        "memory/agent_messages.jsonl#2",
+    ]
+    assert "任务完成" not in json.dumps(flight_memory, ensure_ascii=False)
     assert [event["kind"] for event in live_events if event["kind"] == "agent_message"] == [
         "agent_message",
         "agent_message",
