@@ -1,0 +1,60 @@
+{
+  "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000007.png",
+  "model": "qwen-plus",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "has_api_key": true,
+  "visual_processing": {
+    "strategy": "qwen_vl_phase_caption_v3",
+    "status": "captioned",
+    "input": {
+      "source_path": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000007.png",
+      "artifact_ref": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000007.png",
+      "modality": "rgb",
+      "processing": "phase_aware_caption",
+      "mock": false
+    },
+    "outputs": [
+      {
+        "type": "text",
+        "role": "visual_caption",
+        "metadata": {
+          "source_path": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000007.png",
+          "schema_version": "phase_visual_summary_v1",
+          "strategy": "qwen_vl_phase_caption_v3",
+          "duration_sec": 14.015,
+          "usage": {
+            "prompt_tokens": 502,
+            "completion_tokens": 610,
+            "total_tokens": 1112,
+            "raw": {
+              "total_tokens": 1112,
+              "completion_tokens": 610,
+              "prompt_tokens": 502,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            }
+          }
+        }
+      }
+    ],
+    "caption_metrics": {
+      "duration_sec": 14.015,
+      "usage": {
+        "prompt_tokens": 502,
+        "completion_tokens": 610,
+        "total_tokens": 1112,
+        "raw": {
+          "total_tokens": 1112,
+          "completion_tokens": 610,
+          "prompt_tokens": 502,
+          "prompt_tokens_details": {
+            "cached_tokens": 0
+          }
+        }
+      }
+    }
+  },
+  "has_visual_description": true,
+  "model_input_count": 1
+}

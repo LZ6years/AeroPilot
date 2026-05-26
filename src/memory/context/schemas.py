@@ -22,6 +22,7 @@ class ContextFragment:
     enabled: bool
     source: str
     content: dict[str, Any] = field(default_factory=dict)
+    model_inputs: list[dict[str, Any]] = field(default_factory=list)
     facts: list[dict[str, Any]] = field(default_factory=list)
     inferences: list[dict[str, Any]] = field(default_factory=list)
     goals: list[dict[str, Any]] = field(default_factory=list)

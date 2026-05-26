@@ -1,0 +1,1 @@
+{"id": "obs_0001", "timestamp": "2026-05-24T10:12:02.723323+00:00", "source": "visual_instruction_eval", "scene_instance_id": null, "agent_id": null, "modalities": ["rgb"], "pose_ref": null, "frame_refs": [{"id": "frame_0001", "ref": "memory/frames.jsonl#1", "timestamp": "2026-05-24T10:12:02.723323+00:00"}]}

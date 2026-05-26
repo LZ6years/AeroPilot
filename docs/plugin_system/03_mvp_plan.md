@@ -21,13 +21,15 @@
 
 目标：让模型能基于图片上下文继续规划和回答。
 
-第一版不做固定 `ObjectDetector`，也不写死目标搜索策略。默认方式仍然是让模型看图片，并把图片引用、观察摘要、不确定性和证据关系放进上下文。
+第一版不做固定 `ObjectDetector`，也不写死目标搜索策略。默认 image module 保持轻量，但会把最近 1 张真实 RGB 作为 encoded image model input 交给 planner；custom image module 负责更复杂的图片处理，例如读取、融合、caption 或压缩。当前 `multimodal_image` 会结合真实 phase 生成 `visual_description`，再通过 `ContextFragment.model_inputs` 把文字摘要交给 planner。
+
+视觉上下文只提供处理后的画面证据、轻量 metadata 和可选 encoded model inputs，不输出 `recommended_next_observation`、转向、扫描或移动建议。导航动作仍由 planner 结合 phase、pose/history 和安全约束决定。
 
 最小能力：
 
 - 观察动作能产生可引用图片证据。
-- planner context 能看到最近图片和相关元数据。
-- 模型可以基于图片继续生成语义计划。
+- planner context 能看到最近图片 metadata、artifact refs、默认 image module 产出的最近 RGB image input，以及 custom module 产出的视觉摘要。
+- 模型可以基于视觉摘要或显式 image model input 继续生成语义计划。
 - 最终回答可以引用图片证据。
 
 这个阶段会自然沉淀出未来的 `CapabilitySkill`、`KnowledgeSkill` 和 `ContextContribution`。

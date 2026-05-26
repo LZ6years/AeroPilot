@@ -9,10 +9,13 @@ import pytest
 from src.agent.mission_state import MissionState
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
+from src.memory.context.custom_modules.multimodal_image import MultimodalImageContextModule
+from src.memory.context.registry import ContextModuleRegistry
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.runtime.configs.action_config import UavActionConfig
+from src.runtime.configs.model_config import ModelConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
 
 
@@ -132,6 +135,9 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert context["metadata"]["current_phase_index"] == state.current_phase_index
     fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
     assert fragments["image"]["content"]["recent_observation_sources"][-1] == "phase_step"
+    assert fragments["image"]["model_inputs"] == []
+    assert fragments["image"]["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
+    assert "visual_processing" not in fragments["image"]["content"]
     assert fragments["action"]["content"]["recent_actions"][-1]["tool"] == "uav.hover"
 
 
@@ -142,8 +148,109 @@ def test_context_builder_handles_missing_observation(tmp_path):
 
     fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
     assert fragments["image"]["warnings"] == ["no_recent_image_frames"]
+    assert fragments["image"]["model_inputs"] == []
+    assert fragments["image"]["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
+    assert "visual_processing" not in fragments["image"]["content"]
     assert fragments["action"]["content"]["recent_actions"] == []
     assert context["current_phase"]["name"] == "orient_leftward"
+
+
+def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_path):
+    state = make_state()
+    rgb_path = tmp_path / "frame.png"
+    rgb_path.write_bytes(b"fake-png")
+    state.record_observation(
+        {
+            "scene_instance_id": "scene_1",
+            "agent_id": "uav_1",
+            "modalities": ["rgb"],
+            "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+            "source": "phase_step",
+        }
+    )
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
+
+    fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
+    image = fragments["image"]
+    assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
+    assert image["content"]["latest_frame_metadata"]["rgb"]["path"] == str(rgb_path)
+    assert image["model_inputs"][0]["type"] == "image"
+    assert image["model_inputs"][0]["encoding"] == "data_url"
+    assert image["model_inputs"][0]["metadata"]["source_path"] == str(rgb_path)
+    assert "visual_processing" not in image["content"]
+    assert "visual_description" not in image["content"]
+
+
+def test_context_builder_runs_custom_multimodal_image_only_when_configured(tmp_path):
+    state = make_state()
+    rgb_path = tmp_path / "frame.png"
+    rgb_path.write_bytes(b"fake-png")
+    state.record_observation(
+        {
+            "scene_instance_id": "scene_1",
+            "agent_id": "uav_1",
+            "modalities": ["rgb"],
+            "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+            "source": "phase_step",
+        }
+    )
+    seen_phases = []
+
+    def caption_client(config, payload):
+        prompt_context = json.loads(payload["messages"][1]["content"][0]["text"])
+        seen_phases.append(prompt_context["current_phase"])
+        return {
+            "parsed": {
+                "visual_description": {
+                    "phase": prompt_context["current_phase"],
+                    "phase_relevance": "入口候选可见。",
+                    "scene_summary": "建筑底层入口候选位于画面中景。",
+                    "spatial_overview": "midground-center: 建筑底层开口。",
+                    "relevant_objects": [
+                        {
+                            "name": "建筑底层开口",
+                            "position": "midground-center",
+                            "role": "target_candidate",
+                            "phase_relevance": "与入口目标同类。",
+                            "description": "矩形开口位于建筑底层。",
+                            "confidence": "high",
+                        }
+                    ],
+                    "free_space": [],
+                    "landmarks": [],
+                    "phase_relevant_cues": ["建筑底层存在矩形开口"],
+                    "uncertainty": [],
+                    "confidence": "medium",
+                }
+            },
+            "duration_sec": 0.1,
+            "usage": {"total_tokens": 12},
+        }
+
+    registry = ContextModuleRegistry(
+        {
+            "image": MultimodalImageContextModule(
+                model_config=ModelConfig(
+                    model_name="qwen3-vl-flash",
+                    api_key="secret-key",
+                    base_url="https://example.test/v1",
+                ),
+                caption_client=caption_client,
+            )
+        }
+    )
+
+    context = ObservationContextBuilder(registry=registry).build(state, make_memory(tmp_path, state))
+
+    image = context["fragments"][0]
+    assert image["name"] == "image"
+    assert seen_phases[0]["name"] == "orient_leftward"
+    assert image["content"]["visual_processing"]["status"] == "captioned"
+    assert image["content"]["visual_description"]["phase"]["name"] == "orient_leftward"
+    assert image["model_inputs"][0]["type"] == "text"
+    assert image["model_inputs"][0]["role"] == "visual_caption"
+    assert "data:image/png;base64," not in image["model_inputs"][0]["text"]
 
 
 def test_context_builder_includes_phase_execution_summary(tmp_path):

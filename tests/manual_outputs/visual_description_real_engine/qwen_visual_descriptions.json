@@ -1,0 +1,585 @@
+{
+  "schema_version": "phase_visual_summary_v1",
+  "strategy": "qwen_vl_phase_caption_v3",
+  "model": "qwen-plus",
+  "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  "assessment": {
+    "overall": "The probe summarizes phase-relevant visual facts instead of generic scene descriptions. Relevant objects include positions and roles so planner can use them as visual context.",
+    "strengths": [
+      "Relevant objects carry position, role, and phase relevance.",
+      "Free-space and landmark fields are separated from general object lists.",
+      "Latency and token usage are recorded per image and in aggregate."
+    ],
+    "risks": [
+      "Single-frame phase relevance is still visual evidence, not an action decision.",
+      "Object position is approximate and should be fused with pose/history later.",
+      "Obstacle role only means visible occupancy, not collision safety."
+    ],
+    "result_count": 5,
+    "average_relevant_object_count": 4.0,
+    "average_phase_cue_count": 2.0,
+    "unknown_position_count": 0,
+    "unknown_position_rate": 0.0,
+    "total_duration_sec": 73.408,
+    "average_duration_sec": 14.682,
+    "average_prompt_tokens": 502.0,
+    "average_completion_tokens": 637.4,
+    "token_usage": {
+      "prompt_tokens": 2510,
+      "completion_tokens": 3187,
+      "total_tokens": 5697
+    },
+    "target_candidate_misuse_count": 0,
+    "soft_action_phrase_count": 0,
+    "english_layout_text_count": 0,
+    "format_consistency": {
+      "schema": "phase_visual_summary_v1",
+      "all_relevant_objects_valid": true,
+      "all_list_fields_are_strings": true,
+      "no_target_candidate_misuse": true,
+      "no_soft_action_phrases": true,
+      "all_layout_text_is_chinese": true,
+      "no_action_suggestion_terms": true
+    },
+    "sample_summaries": [
+      "中景至背景呈现一栋多层浅色外墙建筑，立面规整，有连续水平窗带；前景为平坦灰褐色硬化地面，无遮挡物。",
+      "中远景俯视视角，呈现一栋浅灰色矩形建筑主体，屋顶平整，外墙简洁，无明显装饰；建筑前方为开阔硬质铺装地面，无植被遮挡。"
+    ]
+  },
+  "results": [
+    {
+      "image_name": "frame_000001.png",
+      "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000001.png",
+      "model_input": {
+        "type": "text",
+        "role": "visual_caption",
+        "text_chars": 1532,
+        "metadata": {
+          "source_path": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000001.png",
+          "schema_version": "phase_visual_summary_v1",
+          "strategy": "qwen_vl_phase_caption_v3",
+          "duration_sec": 15.605,
+          "usage": {
+            "prompt_tokens": 502,
+            "completion_tokens": 671,
+            "total_tokens": 1173,
+            "raw": {
+              "total_tokens": 1173,
+              "completion_tokens": 671,
+              "prompt_tokens": 502,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            }
+          }
+        }
+      },
+      "call_metrics": {
+        "duration_sec": 15.605,
+        "usage": {
+          "prompt_tokens": 502,
+          "completion_tokens": 671,
+          "total_tokens": 1173,
+          "raw": {
+            "total_tokens": 1173,
+            "completion_tokens": 671,
+            "prompt_tokens": 502,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+      },
+      "visual_description": {
+        "schema_version": "phase_visual_summary_v1",
+        "strategy": "qwen_vl_phase_caption_v3",
+        "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000001.png",
+        "phase": {
+          "name": "search_visual_target",
+          "meaning": "寻找建筑入口、门廊、入口标识或建筑底层开口。"
+        },
+        "phase_relevance": "高：当前任务为寻找建筑入口，图像中存在多个符合定义的入口候选结构。",
+        "scene_summary": "中景至背景呈现一栋多层浅色外墙建筑，立面规整，有连续水平窗带；前景为平坦灰褐色硬化地面，无遮挡物。",
+        "spatial_overview": "前景空旷，中景建筑居中偏右，背景天空明亮；建筑底层沿水平方向分布多个开口结构。",
+        "relevant_objects": [
+          {
+            "name": "门洞",
+            "position": "midground-center",
+            "role": "target_candidate",
+            "phase_relevance": "直接匹配入口定义：矩形开口，内侧可见通道阴影，两侧有垂直门框结构。",
+            "description": "宽约2米、高约2.5米的矩形门洞，边缘为深灰色金属框，内部呈暗色，有纵深感。",
+            "confidence": "medium"
+          },
+          {
+            "name": "入口标识",
+            "position": "midground-right",
+            "role": "target_candidate",
+            "phase_relevance": "直接匹配入口定义：悬挂于门洞上方的白色方形标牌，含建筑功能文字。",
+            "description": "白色方形标牌悬于右侧门洞正上方，表面印有黑色简体中文‘入口’二字。",
+            "confidence": "medium"
+          },
+          {
+            "name": "门廊",
+            "position": "midground-left",
+            "role": "target_candidate",
+            "phase_relevance": "直接匹配入口定义：带顶棚的凸出结构，下方有台阶与可见空隙。",
+            "description": "左侧突出建筑立面的混凝土门廊，顶部有平顶遮檐，下方设两级浅色台阶，通向地面。",
+            "confidence": "medium"
+          },
+          {
+            "name": "建筑底层开口",
+            "position": "background-center",
+            "role": "target_candidate",
+            "phase_relevance": "符合入口定义：建筑底层连续横向开口群，其中一处宽度显著大于相邻窗，具门洞特征。",
+            "description": "背景建筑中央区域有一组横向排列的矩形开口，中间一处宽约1.8米，无玻璃填充，边缘平整。",
+            "confidence": "medium"
+          }
+        ],
+        "free_space": [
+          "前景地面开阔平坦，无障碍物",
+          "中景建筑前方约3米内无障碍"
+        ],
+        "landmarks": [
+          "建筑浅米色外墙与深灰窗框形成高对比",
+          "水平连续窗带构成建筑立面主要节奏"
+        ],
+        "phase_relevant_cues": [
+          "门洞内侧阴影指示空间纵深",
+          "入口标识文字明确指向功能"
+        ],
+        "uncertainty": [
+          "最右侧开口是否为真实入口尚无法确认，因视角偏斜导致结构细节模糊"
+        ],
+        "confidence": "medium"
+      }
+    },
+    {
+      "image_name": "frame_000003.png",
+      "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000003.png",
+      "model_input": {
+        "type": "text",
+        "role": "visual_caption",
+        "text_chars": 1408,
+        "metadata": {
+          "source_path": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000003.png",
+          "schema_version": "phase_visual_summary_v1",
+          "strategy": "qwen_vl_phase_caption_v3",
+          "duration_sec": 14.051,
+          "usage": {
+            "prompt_tokens": 502,
+            "completion_tokens": 612,
+            "total_tokens": 1114,
+            "raw": {
+              "total_tokens": 1114,
+              "completion_tokens": 612,
+              "prompt_tokens": 502,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            }
+          }
+        }
+      },
+      "call_metrics": {
+        "duration_sec": 14.051,
+        "usage": {
+          "prompt_tokens": 502,
+          "completion_tokens": 612,
+          "total_tokens": 1114,
+          "raw": {
+            "total_tokens": 1114,
+            "completion_tokens": 612,
+            "prompt_tokens": 502,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+      },
+      "visual_description": {
+        "schema_version": "phase_visual_summary_v1",
+        "strategy": "qwen_vl_phase_caption_v3",
+        "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000003.png",
+        "phase": {
+          "name": "search_visual_target",
+          "meaning": "寻找建筑入口、门廊、入口标识或建筑底层开口。"
+        },
+        "phase_relevance": "高",
+        "scene_summary": "中远景俯视视角，呈现一栋浅灰色矩形建筑主体，屋顶平整，外墙简洁，无明显装饰；建筑前方为开阔硬质铺装地面，无植被遮挡。",
+        "spatial_overview": "建筑位于画面中下部，呈横向延展；前方空地占据画面中下前景，背景为低矮模糊的其他建筑轮廓与灰蓝天际线。",
+        "relevant_objects": [
+          {
+            "name": "主入口门洞",
+            "position": "midground-center",
+            "role": "target_candidate",
+            "phase_relevance": "极高",
+            "description": "建筑正立面中央一处宽约2米、高约2.5米的矩形开口，内侧可见深色门框与浅色内墙，无门扇遮挡，符合建筑底层开口定义。",
+            "confidence": "medium"
+          },
+          {
+            "name": "入口标识牌",
+            "position": "midground-center",
+            "role": "target_candidate",
+            "phase_relevance": "高",
+            "description": "悬挂在主入口门洞正上方约0.5米处的白色长方形标牌，印有黑色‘入口’二字，字体清晰可辨。",
+            "confidence": "medium"
+          },
+          {
+            "name": "左侧玻璃幕墙立柱",
+            "position": "midground-left",
+            "role": "boundary",
+            "phase_relevance": "中",
+            "description": "入口区域左侧垂直金属立柱，表面覆盖透明玻璃，界定入口左侧边界。",
+            "confidence": "medium"
+          },
+          {
+            "name": "右侧消防栓",
+            "position": "midground-right",
+            "role": "landmark",
+            "phase_relevance": "低",
+            "description": "红色圆柱形消防栓，位于入口右侧约1.5米处，固定于地面，表面反光明显。",
+            "confidence": "medium"
+          }
+        ],
+        "free_space": [
+          "入口门前约3米范围内地面平整无遮挡",
+          "入口两侧各约1米宽度通道未被障碍物占据"
+        ],
+        "landmarks": [
+          "入口上方‘入口’标识牌",
+          "建筑正立面中央对称结构"
+        ],
+        "phase_relevant_cues": [
+          "门洞无遮挡且尺寸符合可见空隙入口特征",
+          "标识牌文字直指功能属性"
+        ],
+        "uncertainty": [
+          "门洞内部是否安装自动门无法确认",
+          "入口地面材质（地砖/水泥）细节不可辨"
+        ],
+        "confidence": "medium"
+      }
+    },
+    {
+      "image_name": "frame_000005.png",
+      "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000005.png",
+      "model_input": {
+        "type": "text",
+        "role": "visual_caption",
+        "text_chars": 1374,
+        "metadata": {
+          "source_path": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000005.png",
+          "schema_version": "phase_visual_summary_v1",
+          "strategy": "qwen_vl_phase_caption_v3",
+          "duration_sec": 13.664,
+          "usage": {
+            "prompt_tokens": 502,
+            "completion_tokens": 588,
+            "total_tokens": 1090,
+            "raw": {
+              "total_tokens": 1090,
+              "completion_tokens": 588,
+              "prompt_tokens": 502,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            }
+          }
+        }
+      },
+      "call_metrics": {
+        "duration_sec": 13.664,
+        "usage": {
+          "prompt_tokens": 502,
+          "completion_tokens": 588,
+          "total_tokens": 1090,
+          "raw": {
+            "total_tokens": 1090,
+            "completion_tokens": 588,
+            "prompt_tokens": 502,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+      },
+      "visual_description": {
+        "schema_version": "phase_visual_summary_v1",
+        "strategy": "qwen_vl_phase_caption_v3",
+        "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000005.png",
+        "phase": {
+          "name": "search_visual_target",
+          "meaning": "寻找建筑入口、门廊、入口标识或建筑底层开口。"
+        },
+        "phase_relevance": "高",
+        "scene_summary": "中低视角拍摄的现代建筑立面，灰白色外立面平整，无明显装饰，整体结构对称。",
+        "spatial_overview": "建筑占据画面中上部，底部为浅色铺装地面；左侧有矮灌木丛，右侧为空旷区域；天空明亮但无云。",
+        "relevant_objects": [
+          {
+            "name": "主入口门洞",
+            "position": "midground-center",
+            "role": "target_candidate",
+            "phase_relevance": "极高",
+            "description": "宽约2.5米、高约3米的矩形开口，内侧可见深色自动推拉门轮廓，上方有嵌入式长条形LED灯带。",
+            "confidence": "medium"
+          },
+          {
+            "name": "入口标识牌",
+            "position": "midground-center",
+            "role": "target_candidate",
+            "phase_relevance": "高",
+            "description": "位于门洞正上方约0.5米处的横向金属标牌，白底黑字，文字不可辨，但形状与常见入口标识一致。",
+            "confidence": "medium"
+          },
+          {
+            "name": "右侧玻璃幕墙",
+            "position": "midground-right",
+            "role": "boundary",
+            "phase_relevance": "低",
+            "description": "垂直连续玻璃面，反射部分天空，与主入口区域相邻但无可见空隙功能。",
+            "confidence": "medium"
+          },
+          {
+            "name": "左侧花坛边缘",
+            "position": "foreground-left",
+            "role": "boundary",
+            "phase_relevance": "低",
+            "description": "浅灰色矮石砌边沿，呈直线延伸，界定人行区域左边界。",
+            "confidence": "medium"
+          }
+        ],
+        "free_space": [
+          "门洞前方约1.2米宽的浅色地砖区域无遮挡",
+          "入口右侧2米内地面平坦开阔"
+        ],
+        "landmarks": [
+          "建筑顶部平直女儿墙线条清晰",
+          "入口两侧立柱为浅灰混凝土材质，高度一致"
+        ],
+        "phase_relevant_cues": [
+          "门洞具备典型入口尺度与结构特征",
+          "上方标识牌位置和朝向符合入口引导惯例"
+        ],
+        "uncertainty": [
+          "标识牌文字内容无法识别，但形态支持其为入口标识",
+          "自动门当前开合状态不可见"
+        ],
+        "confidence": "medium"
+      }
+    },
+    {
+      "image_name": "frame_000007.png",
+      "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000007.png",
+      "model_input": {
+        "type": "text",
+        "role": "visual_caption",
+        "text_chars": 1426,
+        "metadata": {
+          "source_path": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000007.png",
+          "schema_version": "phase_visual_summary_v1",
+          "strategy": "qwen_vl_phase_caption_v3",
+          "duration_sec": 14.015,
+          "usage": {
+            "prompt_tokens": 502,
+            "completion_tokens": 610,
+            "total_tokens": 1112,
+            "raw": {
+              "total_tokens": 1112,
+              "completion_tokens": 610,
+              "prompt_tokens": 502,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            }
+          }
+        }
+      },
+      "call_metrics": {
+        "duration_sec": 14.015,
+        "usage": {
+          "prompt_tokens": 502,
+          "completion_tokens": 610,
+          "total_tokens": 1112,
+          "raw": {
+            "total_tokens": 1112,
+            "completion_tokens": 610,
+            "prompt_tokens": 502,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+      },
+      "visual_description": {
+        "schema_version": "phase_visual_summary_v1",
+        "strategy": "qwen_vl_phase_caption_v3",
+        "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000007.png",
+        "phase": {
+          "name": "search_visual_target",
+          "meaning": "寻找建筑入口、门廊、入口标识或建筑底层开口。"
+        },
+        "phase_relevance": "高",
+        "scene_summary": "中远景俯视视角，呈现一栋矩形浅色建筑主体，屋顶平整，外墙无明显装饰，周围为开阔水泥地面，无遮挡植被或临时构筑物。",
+        "spatial_overview": "建筑位于画面中下部，占据中景至近景区域；背景为空旷天空，无其他建筑；地面平整延伸至画面边缘。",
+        "relevant_objects": [
+          {
+            "name": "门洞",
+            "position": "midground-center",
+            "role": "target_candidate",
+            "phase_relevance": "极高",
+            "description": "建筑正立面中央有一处矩形开口，宽度约建筑立面的三分之一，内部呈暗色，无门扇，上下边缘有浅色门框结构。",
+            "confidence": "medium"
+          },
+          {
+            "name": "入口标识",
+            "position": "midground-center",
+            "role": "target_candidate",
+            "phase_relevance": "高",
+            "description": "门洞正上方嵌入式安装一块横向长方形白色标牌，表面有深色文字轮廓，字形清晰可辨但内容不可读。",
+            "confidence": "medium"
+          },
+          {
+            "name": "台阶",
+            "position": "foreground-center",
+            "role": "boundary",
+            "phase_relevance": "中",
+            "description": "门洞正前方延伸出三级浅灰色混凝土台阶，与门洞轴线对齐，宽度覆盖门洞底部。",
+            "confidence": "medium"
+          },
+          {
+            "name": "右侧玻璃幕墙",
+            "position": "midground-right",
+            "role": "landmark",
+            "phase_relevance": "低",
+            "description": "建筑右侧立面局部为竖向条纹玻璃幕墙，反光均匀，与左侧实墙形成材质对比。",
+            "confidence": "medium"
+          }
+        ],
+        "free_space": [
+          "门洞前方台阶前约两米范围地面平整无障碍",
+          "建筑左侧中景区域为连续空旷水泥地"
+        ],
+        "landmarks": [
+          "建筑正立面中央门洞为最显著结构特征",
+          "入口标识位于门洞正上方，构成视觉锚点"
+        ],
+        "phase_relevant_cues": [
+          "门洞具备典型入口空间形态与尺度",
+          "入口标识位置与门洞垂直对齐，强化其功能指向性"
+        ],
+        "uncertainty": [
+          "入口标识文字内容无法识别，无法确认是否为‘入口’字样",
+          "门洞内部深度及是否可见空隙状态不可见"
+        ],
+        "confidence": "medium"
+      }
+    },
+    {
+      "image_name": "frame_000009.png",
+      "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000009.png",
+      "model_input": {
+        "type": "text",
+        "role": "visual_caption",
+        "text_chars": 1548,
+        "metadata": {
+          "source_path": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000009.png",
+          "schema_version": "phase_visual_summary_v1",
+          "strategy": "qwen_vl_phase_caption_v3",
+          "duration_sec": 16.073,
+          "usage": {
+            "prompt_tokens": 502,
+            "completion_tokens": 706,
+            "total_tokens": 1208,
+            "raw": {
+              "total_tokens": 1208,
+              "completion_tokens": 706,
+              "prompt_tokens": 502,
+              "prompt_tokens_details": {
+                "cached_tokens": 0
+              }
+            }
+          }
+        }
+      },
+      "call_metrics": {
+        "duration_sec": 16.073,
+        "usage": {
+          "prompt_tokens": 502,
+          "completion_tokens": 706,
+          "total_tokens": 1208,
+          "raw": {
+            "total_tokens": 1208,
+            "completion_tokens": 706,
+            "prompt_tokens": 502,
+            "prompt_tokens_details": {
+              "cached_tokens": 0
+            }
+          }
+        }
+      },
+      "visual_description": {
+        "schema_version": "phase_visual_summary_v1",
+        "strategy": "qwen_vl_phase_caption_v3",
+        "source_image": "C:\\Users\\HP\\Desktop\\UAV-Agent\\tests\\fixtures\\visual_description_images\\frame_000009.png",
+        "phase": {
+          "name": "search_visual_target",
+          "meaning": "寻找建筑入口、门廊、入口标识或建筑底层开口。"
+        },
+        "phase_relevance": "高：当前任务为寻找建筑入口，图像中存在多个符合定义的入口相关结构。",
+        "scene_summary": "中景至背景呈现一栋浅灰色多层建筑，立面规整，含多个矩形窗和水平线条；前景为平坦浅色铺装地面，无遮挡物。",
+        "spatial_overview": "前景空旷，中景建筑主体居中偏右，背景延伸至天际线；建筑底层与地面平接，无台阶或坡道明显可见。",
+        "relevant_objects": [
+          {
+            "name": "门洞",
+            "position": "midground-center",
+            "role": "target_candidate",
+            "phase_relevance": "直接对应建筑入口定义，为底层贯通式开口，宽度约两人并行，顶部有浅色门楣。",
+            "description": "矩形竖向开口，内侧可见暗色门框轮廓，无门扇，底部与地面齐平。",
+            "confidence": "medium"
+          },
+          {
+            "name": "入口标识",
+            "position": "midground-left",
+            "role": "target_candidate",
+            "phase_relevance": "位于门洞左侧上方约1.5米处，白色方形标牌，内含黑色简体中文‘入口’二字。",
+            "description": "标牌表面平整，文字清晰可辨，无遮挡或反光干扰。",
+            "confidence": "medium"
+          },
+          {
+            "name": "门廊",
+            "position": "midground-right",
+            "role": "target_candidate",
+            "phase_relevance": "右侧相邻区域有突出屋檐结构，下方设两根浅色立柱，形成半围合过渡空间，符合门廊定义。",
+            "description": "屋檐边缘平直，立柱垂直，地面无台阶，与主入口动线逻辑连贯。",
+            "confidence": "medium"
+          },
+          {
+            "name": "建筑底层开口",
+            "position": "background-center",
+            "role": "target_candidate",
+            "phase_relevance": "背景中央区域可见另一处相似尺寸矩形开口，位置略高于中景门洞，但结构特征一致。",
+            "description": "开口边缘清晰，内侧无遮挡，与中景门洞构型相似，疑似次要入口。",
+            "confidence": "medium"
+          }
+        ],
+        "free_space": [
+          "前景铺装区域开阔平坦，无障碍物",
+          "中景门洞及门廊下方区域无遮挡，可视作可见空隙"
+        ],
+        "landmarks": [
+          "浅灰色建筑主体为显著视觉锚点",
+          "水平檐口线贯穿中景至背景，强化建筑横向延展感"
+        ],
+        "phase_relevant_cues": [
+          "‘入口’标牌提供明确语义提示",
+          "门洞与门廊的空间组合符合典型入口构型"
+        ],
+        "uncertainty": [
+          "门洞内侧是否安装隐形门扇无法确认",
+          "背景中心开口与主入口的从属关系不明确"
+        ],
+        "confidence": "medium"
+      }
+    }
+  ]
+}

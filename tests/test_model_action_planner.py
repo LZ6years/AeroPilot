@@ -2,10 +2,17 @@
 
 from __future__ import annotations
 
+import base64
+import json
+
 import pytest
 
 from src.agent.mission_state import MissionState
-from src.agent.planning.model_action_planner import ModelActionPlanner, ModelActionPlannerConfigError
+from src.agent.planning.model_action_planner import (
+    ModelActionPlanner,
+    ModelActionPlannerConfigError,
+)
+from src.agent.planning.model_inputs import build_model_user_content
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK
 from src.agent.planning.schemas import ShortHorizonPlan
@@ -147,6 +154,75 @@ def make_context() -> dict:
             ],
         },
     }
+
+
+def test_model_user_content_stays_text_without_model_inputs():
+    content = build_model_user_content(make_context())
+
+    assert isinstance(content, str)
+    assert json.loads(content)["current_phase"]["name"] == "orient_leftward"
+
+
+def test_model_user_content_attaches_encoded_image_from_any_fragment():
+    image_data = "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
+    context = make_context()
+    context["fragments"] = [
+        {
+            "name": "custom_visual",
+            "content": {"visual_processing": {"strategy": "select_latest_rgb"}},
+            "model_inputs": [
+                {
+                    "type": "image",
+                    "role": "latest_observation",
+                    "mime_type": "image/png",
+                    "encoding": "data_url",
+                    "data": image_data,
+                    "metadata": {"source_path": "does-not-need-to-exist.png", "modality": "rgb"},
+                }
+            ],
+        }
+    ]
+
+    content = build_model_user_content(context)
+
+    assert isinstance(content, list)
+    assert content[0]["type"] == "text"
+    text_context = json.loads(content[0]["text"])
+    assert text_context["current_phase"]["name"] == "orient_leftward"
+    assert image_data not in content[0]["text"]
+    assert text_context["fragments"][0]["model_inputs"][0]["data"].startswith("<omitted encoded model input data")
+    assert content[1] == {"type": "image_url", "image_url": {"url": image_data}}
+
+
+def test_model_user_content_ignores_unencoded_image_path():
+    context = make_context()
+    context["fragments"] = [
+        {
+            "name": "image",
+            "model_inputs": [{"type": "image", "path": "missing.png", "metadata": {"modality": "rgb"}}],
+        }
+    ]
+
+    content = build_model_user_content(context)
+
+    assert isinstance(content, str)
+    assert json.loads(content)["current_phase"]["name"] == "orient_leftward"
+
+
+def test_model_user_content_adds_text_model_inputs():
+    context = make_context()
+    context["fragments"] = [
+        {
+            "name": "visual_caption",
+            "model_inputs": [{"type": "text", "role": "visual_caption", "text": "画面中疑似入口位于右前方。"}],
+        }
+    ]
+
+    content = build_model_user_content(context)
+
+    assert isinstance(content, list)
+    assert json.loads(content[0]["text"])["current_phase"]["name"] == "orient_leftward"
+    assert content[1] == {"type": "text", "text": "画面中疑似入口位于右前方。"}
 
 
 def test_model_action_planner_requires_api_key():

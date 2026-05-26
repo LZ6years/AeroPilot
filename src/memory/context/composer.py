@@ -113,6 +113,7 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
             "enabled": "Whether this fragment's module was enabled when the fragment was produced.",
             "source": "The module class that produced this fragment.",
             "content": "Module-specific structured content; see module_content_fields for the matching fragment name.",
+            "model_inputs": "Provider-ready inputs prepared by context modules, such as encoded image data URLs or text visual descriptions. Large encoded data may be omitted from the JSON text before model submission and sent as separate provider content parts.",
             "facts": "Observed or verifiable facts. Prefer these over inferences when planning.",
             "inferences": "Hints, guesses, derived values, or map-memory clues that require caution or confirmation.",
             "goals": "Mission or phase goals contributed by this fragment.",

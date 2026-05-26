@@ -1,0 +1,1 @@
+{"id": "inst_0001", "timestamp": "2026-05-24T10:12:02.731433+00:00", "instruction": "请描述右侧白色车辆、红色车辆和后方建筑底层之间的画面位置关系，用于判断入口候选是否被车辆干扰。", "semantic_plan": {"phase": {"name": "relate_vehicle_to_building_base", "meaning": "理解车辆与建筑底层候选区域的相对位置"}}}

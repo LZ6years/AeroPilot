@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import base64
+import mimetypes
+from pathlib import Path
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
@@ -54,6 +57,10 @@ class DefaultImageContextModule(ContextModule):
             ),
             "latest_observation_source": latest_rgb.get("observation_source") if latest_rgb else None,
         }
+        model_inputs = _latest_rgb_model_inputs(latest_rgb)
+        visual_evidence["interpretation_status"] = (
+            "image_attached_not_interpreted" if model_inputs else "metadata_only_not_interpreted"
+        )
         return ContextFragment(
             name=self.name,
             enabled=True,
@@ -64,6 +71,7 @@ class DefaultImageContextModule(ContextModule):
                 "recent_observation_sources": [item.get("source") for item in observations if isinstance(item, dict)],
                 "visual_evidence": visual_evidence,
             },
+            model_inputs=model_inputs,
             facts=facts,
             risks=risks,
             artifact_refs=artifact_refs,
@@ -80,8 +88,12 @@ class DefaultImageContextModule(ContextModule):
                 "latest_frame_metadata": "Latest available frame metadata grouped by modality; currently contains latest RGB metadata when present.",
                 "recent_rgb_frame_metadata": "Up to three recent RGB frame metadata records, including path/artifact reference and frame metadata.",
                 "recent_observation_sources": "Sources of the observations used to build this image context.",
-                "visual_evidence": "Boolean availability summary such as has_rgb, has_depth, has_mock_frames, and latest_observation_source.",
+                "visual_evidence": "Boolean availability summary such as has_rgb, has_depth, has_mock_frames, latest_observation_source, and interpretation_status.",
             },
+            "model_inputs": (
+                "At most one encoded latest real RGB image for planner multimodal input. "
+                "Mock, missing, or unreadable images are not attached."
+            ),
             "fact_fields": {
                 "available_modalities": "Modalities currently available as observed evidence.",
             },
@@ -119,3 +131,58 @@ def _artifact_ref(record: dict[str, Any], frame_ref: dict[str, Any] | None) -> s
         return path
     ref = frame_ref.get("ref") if isinstance(frame_ref, dict) else None
     return ref if isinstance(ref, str) and ref else None
+
+
+def _latest_rgb_model_inputs(latest_rgb: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not latest_rgb or latest_rgb.get("mock") is True:
+        return []
+    path = _frame_path(latest_rgb)
+    if path is None:
+        return []
+    data_url = _image_data_url(path)
+    if data_url is None:
+        return []
+    mime_type = data_url.split(";", 1)[0].removeprefix("data:")
+    artifact_ref = latest_rgb.get("artifact_ref") if isinstance(latest_rgb.get("artifact_ref"), str) else str(path)
+    return [
+        {
+            "type": "image",
+            "source": "image",
+            "role": "latest_observation",
+            "mime_type": mime_type,
+            "encoding": "data_url",
+            "data": data_url,
+            "metadata": {
+                "source_path": str(path),
+                "artifact_ref": artifact_ref,
+                "modality": "rgb",
+                "processing": "select_latest_rgb",
+                "mock": False,
+            },
+        }
+    ]
+
+
+def _frame_path(frame: dict[str, Any]) -> Path | None:
+    raw_path = frame.get("path") or frame.get("artifact_path") or frame.get("artifact_ref")
+    if not isinstance(raw_path, str) or not raw_path.strip():
+        return None
+    path = Path(raw_path)
+    if path.exists():
+        return path
+    cwd_path = Path.cwd() / path
+    if cwd_path.exists():
+        return cwd_path
+    return None
+
+
+def _image_data_url(path: Path) -> str | None:
+    try:
+        data = path.read_bytes()
+    except OSError:
+        return None
+    mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
+    if not mime_type.startswith("image/"):
+        return None
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"

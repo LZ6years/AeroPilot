@@ -1,0 +1,9 @@
+cases=6
+context_config=C:\Users\HP\Desktop\UAV-Agent\configs\context_modules.json
+call_model=False
+[1/6] entrance_candidate_glass_building: image_input=True, image_part=True, score=1.0
+[2/6] yellow_bus_tree_landmarks: image_input=True, image_part=True, score=1.0
+[3/6] open_foreground_paving: image_input=True, image_part=True, score=1.0
+[4/6] no_clear_entrance_sign: image_input=True, image_part=True, score=1.0
+[5/6] vehicles_are_not_entrance_targets: image_input=True, image_part=True, score=1.0
+[6/6] right_side_vehicle_and_building_context: image_input=True, image_part=True, score=1.0

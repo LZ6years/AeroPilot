@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.agent.mission_state import MissionState
+from src.agent.planning.model_inputs import build_model_user_content
 from src.agent.planning.model_repair_planner import (
     ModelRepairPlanner,
     ModelRepairPlannerError,
@@ -93,7 +94,7 @@ class ModelActionPlanner:
             "model": self.model_config.model_name,
             "messages": [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+                {"role": "user", "content": build_model_user_content(user_payload)},
             ],
             "temperature": 0,
             "response_format": {"type": "json_object"},

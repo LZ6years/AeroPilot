@@ -1,0 +1,1 @@
+{"id": "inst_0001", "timestamp": "2026-05-24T10:12:02.727351+00:00", "instruction": "当前阶段目标是建筑入口，请区分车辆和入口候选，不要把黄色车或白紫车辆当作入口目标。", "semantic_plan": {"phase": {"name": "separate_target_from_landmarks", "meaning": "区分入口目标候选与车辆类视觉参照物"}}}

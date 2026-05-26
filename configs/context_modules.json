@@ -6,5 +6,10 @@
     "action": "default",
     "map": "default"
   },
-  "custom_modules": {}
+  "custom_modules": {
+    "multimodal_image": {
+      "module_path": "src.memory.context.custom_modules.multimodal_image",
+      "class_name": "MultimodalImageContextModule"
+    }
+  }
 }

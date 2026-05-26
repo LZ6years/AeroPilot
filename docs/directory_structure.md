@@ -48,6 +48,10 @@ configs/
   uav_action_config.json      # UAV primitive 动作尺度配置
   uav_safety_config.json      # UAV 安全限制配置
 
+evaluation/
+  benchmarks/                 # 外部 benchmark harness，不属于主 runtime
+    uav_flow/                 # UAV-Flow task/UnrealCV/reference path 评估适配
+
 memory/                       # 项目级规则、用户偏好、地图记忆数据；不是源码包
 docs/                         # 架构和开发策略文档
 tests/                        # 单元测试和集成测试
@@ -67,3 +71,10 @@ runs/                         # 本地运行记录，通常不提交
 - `memory.context` 负责 planner context 的 schema、组装、模块注册和 fragment 生成。
 - `memory.stores` 只负责持久化读写，不参与上下文排序和压缩策略。
 - 根目录 `memory/` 保存运行时数据和规则，例如 `FLYAGENT.md`、`USER.md`、`map/map_memory.json`。
+
+## Evaluation 边界
+
+- `evaluation/benchmarks/` 放外部 benchmark 的 case loader、runner、metric adapter 和报告生成。
+- benchmark 代码默认不被 CLI/runtime 导入，不应该影响主运行链路。
+- UAV-Flow 这类任务集评估放在 `evaluation/benchmarks/uav_flow/`，而不是 `src/integrations/`。
+- 如果某个 benchmark 中沉淀出通用环境能力，再单独下沉到 `src/env_client/` 或 `src/sim_server/backends/`。

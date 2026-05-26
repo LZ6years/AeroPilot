@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -9,11 +10,13 @@ import pytest
 from src.agent.messages import AgentMessage
 from src.agent.semantic.task_parser import TaskParser
 from src.memory.context.composer import ContextComposer
+from src.memory.context.custom_modules.multimodal_image import MultimodalImageContextModule
 from src.memory.flight_memory import FlightMemory
 from src.memory.context.modules.base import ContextModule
 from src.memory.context.registry import ContextModuleConfigError, ContextModuleRegistry
 from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
 from src.memory.stores import MapMemoryStore, MemoryEventWriter, MemoryRecordReader
+from src.runtime.configs.model_config import ModelConfig
 
 
 def make_parse_result():
@@ -292,6 +295,47 @@ def test_pose_and_image_modules_read_jsonl_refs(tmp_path):
     assert image["content"]["latest_frame_metadata"]["rgb"]["path"] == "rgb.png"
     assert image["content"]["recent_rgb_frame_metadata"][0]["path"] == "rgb.png"
     assert image["artifact_refs"] == ["rgb.png"]
+    assert image["model_inputs"] == []
+    assert image["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
+
+
+def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
+    rgb_path = tmp_path / "frame.png"
+    rgb_path.write_bytes(b"fake-png")
+    writer = MemoryEventWriter(tmp_path)
+    reader = MemoryRecordReader(tmp_path)
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
+    observation_write = writer.write_observation(
+        {
+            "source": "automatic_phase_window",
+            "modalities": ["rgb", "pose"],
+            "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+        }
+    )
+    memory.append_observation_ref(observation_write["observation_ref"])
+    memory.append_frame_refs(observation_write["frame_refs"])
+
+    context = ContextComposer().compose(
+        MemorySourceBundle(memory, MapMemoryStore()),
+        make_stage_context(current_phase={"name": "search_visual_target"}),
+    )
+    image = _fragment(context, "image")
+    model_input = image["model_inputs"][0]
+
+    assert model_input["type"] == "image"
+    assert model_input["source"] == "image"
+    assert model_input["role"] == "latest_observation"
+    assert model_input["encoding"] == "data_url"
+    assert model_input["data"] == "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
+    assert model_input["metadata"] == {
+        "source_path": str(rgb_path),
+        "artifact_ref": str(rgb_path),
+        "modality": "rgb",
+        "processing": "select_latest_rgb",
+        "mock": False,
+    }
+    assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
+    assert "visual_description" not in image["content"]
 
 
 def test_image_module_keeps_three_recent_rgb_frames_only(tmp_path):
@@ -327,6 +371,139 @@ def test_image_module_keeps_three_recent_rgb_frames_only(tmp_path):
     ]
     assert image["artifact_refs"] == ["rgb_1.png", "rgb_2.png", "rgb_3.png"]
     assert all("depth" not in ref for ref in image["artifact_refs"])
+
+
+def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
+    rgb_path = tmp_path / "frame.png"
+    rgb_path.write_bytes(b"fake-png")
+    seen_payloads = []
+
+    def caption_client(config, payload):
+        seen_payloads.append(payload)
+        user_content = payload["messages"][1]["content"]
+        prompt_context = json.loads(user_content[0]["text"])
+        assert prompt_context["current_phase"]["name"] == "search_landmark"
+        assert user_content[1]["image_url"]["url"] == "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
+        return {
+            "parsed": {
+                "visual_description": {
+                    "phase": {"name": "search_landmark", "meaning": "寻找入口候选"},
+                    "phase_relevance": "可见建筑底层入口候选。",
+                    "scene_summary": "建筑底层入口候选位于画面中景。",
+                    "spatial_overview": "midground-center: 建筑底层开口。",
+                    "relevant_objects": [
+                        {
+                            "name": "建筑底层开口",
+                            "position": "midground-center",
+                            "role": "target_candidate",
+                            "phase_relevance": "与当前入口目标同类。",
+                            "description": "矩形开口位于建筑底层。",
+                            "confidence": "high",
+                        }
+                    ],
+                    "free_space": ["前景铺装区域开阔"],
+                    "landmarks": ["背景高层建筑"],
+                    "phase_relevant_cues": ["建筑底层存在矩形开口"],
+                    "uncertainty": ["未见明确入口标识"],
+                    "confidence": "medium",
+                }
+            },
+            "duration_sec": 0.25,
+            "usage": {"prompt_tokens": 100, "completion_tokens": 40, "total_tokens": 140},
+        }
+
+    writer = MemoryEventWriter(tmp_path)
+    reader = MemoryRecordReader(tmp_path)
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
+    observation_write = writer.write_observation(
+        {
+            "source": "automatic_phase_window",
+            "modalities": ["rgb", "pose"],
+            "pose": {"x": 0.0, "y": 0.0, "z": -2.0},
+            "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+        }
+    )
+    memory.append_observation_ref(observation_write["observation_ref"])
+    memory.append_pose_ref(observation_write["pose_ref"])
+    memory.append_frame_refs(observation_write["frame_refs"])
+
+    fragment = MultimodalImageContextModule(
+        model_config=ModelConfig(model_name="qwen3-vl-flash", api_key="secret-key", base_url="https://example.test/v1"),
+        caption_client=caption_client,
+    ).build(
+        MemorySourceBundle(memory),
+        make_stage_context(current_phase={"name": "search_landmark", "meaning": "寻找入口候选"}),
+    ).to_dict()
+
+    model_input = fragment["model_inputs"][0]
+    assert seen_payloads
+    assert model_input["type"] == "text"
+    assert model_input["role"] == "visual_caption"
+    assert model_input["metadata"]["source_path"] == str(rgb_path)
+    assert model_input["metadata"]["strategy"] == "qwen_vl_phase_caption_v3"
+    assert "data:image/png;base64," not in model_input["text"]
+    assert fragment["content"]["visual_description"]["phase"]["name"] == "search_landmark"
+    assert fragment["content"]["visual_processing"]["strategy"] == "qwen_vl_phase_caption_v3"
+    assert fragment["content"]["visual_processing"]["status"] == "captioned"
+    assert fragment["content"]["visual_evidence"]["interpretation_status"] == "captioned"
+    assert fragment["content"]["recent_rgb_frame_metadata"][0]["path"] == str(rgb_path)
+    assert fragment["artifact_refs"] == [str(rgb_path)]
+
+
+def test_multimodal_image_module_falls_back_for_mock_or_missing_rgb(tmp_path):
+    writer = MemoryEventWriter(tmp_path)
+    reader = MemoryRecordReader(tmp_path)
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
+    observation_write = writer.write_observation(
+        {
+            "source": "automatic_phase_window",
+            "modalities": ["rgb"],
+            "frames": {"rgb": {"path": str(tmp_path / "missing.png"), "mock": True}},
+        }
+    )
+    memory.append_observation_ref(observation_write["observation_ref"])
+    memory.append_frame_refs(observation_write["frame_refs"])
+
+    fragment = MultimodalImageContextModule().build(
+        MemorySourceBundle(memory),
+        make_stage_context(current_phase={"name": "search_landmark"}),
+    ).to_dict()
+
+    assert fragment["model_inputs"] == []
+    assert fragment["content"]["visual_processing"]["strategy"] == "phase_aware_caption"
+    assert fragment["content"]["visual_processing"]["status"] == "metadata_only_not_interpreted"
+    assert fragment["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
+
+
+def test_multimodal_image_module_falls_back_when_caption_unavailable(tmp_path):
+    rgb_path = tmp_path / "frame.png"
+    rgb_path.write_bytes(b"fake-png")
+    writer = MemoryEventWriter(tmp_path)
+    reader = MemoryRecordReader(tmp_path)
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
+    observation_write = writer.write_observation(
+        {
+            "source": "automatic_phase_window",
+            "modalities": ["rgb"],
+            "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+        }
+    )
+    memory.append_observation_ref(observation_write["observation_ref"])
+    memory.append_frame_refs(observation_write["frame_refs"])
+
+    fragment = MultimodalImageContextModule(
+        model_config=ModelConfig(model_name="qwen3-vl-flash", api_key="", base_url="https://example.test/v1"),
+        caption_client=lambda *_: pytest.fail("caption client should not be called without an API key"),
+    ).build(
+        MemorySourceBundle(memory),
+        make_stage_context(current_phase={"name": "search_landmark"}),
+    ).to_dict()
+
+    assert fragment["model_inputs"] == []
+    assert "visual_description" not in fragment["content"]
+    assert fragment["content"]["visual_processing"]["status"] == "metadata_only_caption_skipped"
+    assert fragment["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_caption_skipped"
+    assert "visual_caption_skipped:no_model_api_key" in fragment["warnings"]
 
 
 def test_pose_module_keeps_three_recent_pose_refs(tmp_path):

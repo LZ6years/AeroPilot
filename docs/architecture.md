@@ -159,7 +159,7 @@ sequenceDiagram
 `ContextModule` 按类别读取短窗口历史并输出 `ContextFragment`：
 
 - `InstructionModule`：当前指令、历史指令、目标和 phase goal。
-- `ImageModule`：最新 RGB/depth metadata、artifact refs 和图像可用性。
+- `ImageModule`：最新 RGB/depth metadata、artifact refs、图像可用性，以及最近 1 张真实 RGB 的 encoded image model input。
 - `PoseModule`：latest pose、最近 pose 窗口和 pose delta。
 - `ActionModule`：最近动作、执行结果、失败记录。
 - `MapModule`：地图线索、召回过滤条件和 reconfirmation 风险。
@@ -214,13 +214,15 @@ flowchart TD
 
 ## 9. 视觉输入边界
 
-当前 qwen 模型调用仍是文本 JSON 输入。RGB/depth 会被 runtime 真实采集并保存为 artifacts，但不会把图片像素或 depth 数组直接发送给 qwen。
+RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image context module 保持轻量：不 caption、不调用模型，但会把最近 1 张真实 RGB 编码为 `ContextFragment.model_inputs[type=image]`，同时继续提供图像 metadata、artifact refs 和可用性。项目可以通过 custom image module 替换默认处理方式，例如融合多图、压缩、caption，或只输出文字摘要。
 
-PlannerContext 中的 image 信息只包括：
+第一版多模态接入遵守这些边界：
 
-- 图像是否存在。
-- artifact path / memory ref。
-- 宽高、bytes、frame metadata。
-- observation source。
+- `src/memory/context/modules/image.py` 默认选择最近 1 张真实 RGB 并编码为 provider-ready image input；mock、缺失或不可读图片只保留 metadata。
+- custom image module 负责读取、筛选、融合、caption 或压缩图片，并产出 planner-ready 信息；当前 `multimodal_image` 实现会把最近真实 RGB 转成 `visual_description` 文本。
+- `ModelActionPlanner` 不读取图片 path，不理解图片策略，只消费 `model_inputs` 中已经编码好的输入。
+- `ModelInputAssembler` 会把 `model_inputs` 转成 openai-compatible content parts，并在 JSON 文本里脱敏大块 encoded data；caption 模式下 planner 收到的是 text model input。
+- 视觉层不输出 `recommended_next_observation`、转向、扫描或移动建议。
+- 模型只有在实际收到图片，或 context 中存在明确视觉证据时，才能声称看到了目标。
 
-因此当前阶段不是视觉多模态闭环。后续要让模型理解图像，需要接入多模态模型输入，或先通过视觉 skill/检测器把图像转成结构化结果再进入 context。
+当前 custom caption 只处理最近 1 张真实 RGB，不传 depth 数组给视觉模型。Depth 仍作为 artifact 和 metadata 保留，后续再决定是否进入多模态请求或单独解释。

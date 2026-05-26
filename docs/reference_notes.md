@@ -120,8 +120,10 @@ https://github.com/buaa-colalab/UAV-Flow
 定位：
 
 - 不作为第一阶段地图资源主模型。
-- 后续主要参考 UnrealCV / `gym_unrealcv` 的对象级环境操作能力。
+- 作为后续外部 benchmark 来源，用于评估 UAV-Agent 在 Flow-style 指令上的闭环效果。
+- 参考 UnrealCV / `gym_unrealcv` 的对象级环境操作能力，但不让 UAV-Flow runner 主导本项目 runtime。
 - 当前地图资源主线改为 AirVLN 风格 scene 管理。
+- 需求与实现影响文档见 `docs/evaluation/uav_flow/`。
 
 关键参考：
 
@@ -169,7 +171,8 @@ https://github.com/buaa-colalab/UAV-Flow
 
 - 第一阶段不要让 `gym_unrealcv` 主导地图资源模型。
 - 先实现 AirVLN 风格的 `MapPackage + SceneInstance + SimulationServer`。
-- 等 AirVLN-style scene 启动和观测闭环跑通后，再把 `gym_unrealcv` 接成 `SimulationServer` 的一个 backend。
+- 对 UAV-Flow 的任务集评估代码放在 `evaluation/benchmarks/uav_flow/`，不放在 `src/integrations/`。
+- 等 AirVLN-style scene 启动和观测闭环跑通后，如果需要正式支持 UnrealCV 环境，再把通用能力沉淀为 `src/sim_server/backends/` 或 `src/env_client/` 的实现。
 
 ## 4. QiClaw
 
@@ -234,5 +237,5 @@ CLI 输入
 | --- | --- | --- |
 | AirNavigation | UAV 基础操作、RGB/depth/pose 获取、多模态调用方式参考 | 整体架构、UI、任务循环 |
 | AirVLN | C/S、场景进程管理、多 scene/machine/client 扩展 | 训练框架、大模型 baseline |
-| UAV-Flow | 后续 UnrealCV/gym_unrealcv 对象操作能力 | 第一阶段地图主模型、OpenVLA 训练主链路 |
+| UAV-Flow | 外部 Flow benchmark、UnrealCV/gym_unrealcv 对象操作能力参考 | 第一阶段地图主模型、OpenVLA 训练主链路、主 runtime loop |
 | QiClaw | Agent runtime、planner、gateway、records、Electron 预留 | 具体业务 Agent、微信/企微/抖音技能 |
