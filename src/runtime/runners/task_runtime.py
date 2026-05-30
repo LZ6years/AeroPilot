@@ -19,6 +19,7 @@ from src.agent.semantic.task_parser import TaskParser
 from src.env_client.base import EnvClient
 from src.env_client.schemas import SceneInstance
 from src.memory.flight_memory import FlightMemory
+from src.memory.context.modules.image import latest_rgb_model_inputs_from_frame
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.perception.raw_observation import RawObservation
@@ -44,15 +45,19 @@ class TaskRuntime:
         action_config: UavActionConfig | None = None,
         stabilization_config: UavStabilizationConfig | None = None,
         event_sink: Callable[[dict[str, Any]], None] | None = None,
+        runtime_loop_guard_windows: int = 100,
     ) -> None:
         if shutdown_policy not in self.SHUTDOWN_POLICIES:
             raise ValueError(f"Unsupported shutdown policy: {shutdown_policy}")
+        if int(runtime_loop_guard_windows) <= 0:
+            raise ValueError("runtime_loop_guard_windows must be positive")
         self.env_client = env_client
         self.recorder = recorder
         self.task_parser = task_parser
         self.planner = planner or ModelActionPlanner()
         self.safety = safety or SafetySupervisor()
         self.shutdown_policy = shutdown_policy
+        self.runtime_loop_guard_windows = int(runtime_loop_guard_windows)
         self.tools = ToolDispatcher(env_client)
         self.stabilizer = UavStabilizer(self.tools, recorder, stabilization_config)
         # Optional synchronous stream for CLI/TUI frontends. The recorder remains
@@ -124,6 +129,7 @@ class TaskRuntime:
             semantic_plan=parse_result.plan,
             connected=scene.scene_instance_id in self._preflight_scene_ids,
             airborne=scene.scene_instance_id in self._preflight_scene_ids,
+            max_phase_window_count=self.runtime_loop_guard_windows,
         )
         flight_memory = self._resolve_flight_memory(map_id, scene, agent_id, scene_policy, parse_result, state)
         self._state_flight_memories[state.run_id] = flight_memory
@@ -137,6 +143,9 @@ class TaskRuntime:
                 {
                     "instruction": state.user_instruction,
                     "completed": state.completed,
+                    "stopped": state.stopped,
+                    "stopped_reason": state.stopped_reason,
+                    "stop_source": state.stop_source,
                     "current_phase": state.current_phase_name,
                     "current_phase_index": state.current_phase_index,
                 },
@@ -235,7 +244,7 @@ class TaskRuntime:
         self._write_state(state)
 
     def _execute_phase_loop(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
-        while not state.completed:
+        while not state.completed and not state.stopped:
             state.record_phase_window_started()
             plan, safety_decision, transition = self._run_phase_window(scene, agent_id, state)
             self._apply_phase_transition(scene, agent_id, state, plan, safety_decision, transition)
@@ -421,6 +430,12 @@ class TaskRuntime:
             "reason": transition.reason,
             "current_phase_window_count": state.current_phase_window_count,
             "max_phase_window_count": state.max_phase_window_count,
+            "phase_completion_evaluation": evaluate_phase_completion(
+                state.semantic_plan.phases[state.current_phase_index].completion_criteria
+                if state.current_phase_index < len(state.semantic_plan.phases)
+                else [],
+                state.current_phase_execution_summary,
+            ),
         }
         self._agent_messages(transition.agent_messages, source="phase_judge", phase=plan.phase)
         if safety_decision.interventions:
@@ -429,28 +444,52 @@ class TaskRuntime:
                 {**payload, "interventions": safety_decision.interventions},
             )
             if state.current_phase_window_count >= state.max_phase_window_count:
-                self._event("phase_transition_window_limit_reached", {**payload, "reason": "safety_intervention_loop_guard"})
-                self._try_hover(scene, agent_id, state)
-                state.advance_phase()
-                self._event("phase_transition_applied", {**payload, "applied_decision": ADVANCE_TO_NEXT_PHASE})
+                self._stop_for_runtime_loop_guard(scene, agent_id, state, payload, "safety_intervention_loop_guard")
             return
         if transition.decision == CONTINUE_CURRENT_PHASE:
             self._event("phase_transition_continued", payload)
             if state.current_phase_window_count >= state.max_phase_window_count:
-                self._event("phase_transition_window_limit_reached", payload)
-                self._try_hover(scene, agent_id, state)
-                state.advance_phase()
-                self._event("phase_transition_applied", {**payload, "applied_decision": ADVANCE_TO_NEXT_PHASE})
+                self._stop_for_runtime_loop_guard(scene, agent_id, state, payload, "continue_current_phase_loop_guard")
             return
         if transition.decision == ADVANCE_TO_NEXT_PHASE:
             state.advance_phase()
             self._event("phase_transition_applied", payload)
             return
         if transition.decision == COMPLETE_TASK:
+            if not state.is_final_phase:
+                downgraded_payload = {
+                    **payload,
+                    "original_decision": COMPLETE_TASK,
+                    "applied_decision": ADVANCE_TO_NEXT_PHASE,
+                    "guard_reason": "complete_task_before_final_phase",
+                }
+                self._debug_event("phase_complete_task_downgraded", downgraded_payload)
+                state.advance_phase()
+                self._event("phase_transition_applied", downgraded_payload)
+                return
             state.mark_completed()
             self._event("phase_transition_applied", payload)
             return
         raise ValueError(f"Unsupported phase transition decision: {transition.decision}")
+
+    def _stop_for_runtime_loop_guard(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+        payload: dict[str, Any],
+        reason: str,
+    ) -> None:
+        guard_payload = {
+            **payload,
+            "reason": reason,
+            "runtime_loop_guard_windows": state.max_phase_window_count,
+            "applied_decision": "stop_task_incomplete",
+        }
+        self._event("runtime_loop_guard_reached", guard_payload)
+        self._event("phase_transition_window_limit_reached", guard_payload)
+        self._try_hover(scene, agent_id, state)
+        state.mark_stopped("runtime_loop_guard_reached", source=reason)
 
     def _judge_phase_transition_after_execution(
         self,
@@ -512,6 +551,12 @@ class TaskRuntime:
         after_pose = self._pose_from_observation(observation_after)
         clean_observation_before = self._clean_observation_for_model(observation_before)
         clean_observation_after = self._clean_observation_for_model(observation_after)
+        phase_judge_fragments = self._post_action_phase_fragments(clean_observation_after)
+        phase_judge_model_input_count = sum(
+            len(fragment.get("model_inputs", []))
+            for fragment in phase_judge_fragments
+            if isinstance(fragment, dict)
+        )
         memory = self._memory_for_state(state)
         return {
             "active_instruction": state.user_instruction,
@@ -527,10 +572,12 @@ class TaskRuntime:
             "action_window": plan.action_window.to_dict(),
             "planner_context_summary": {
                 "fragment_names": [fragment.get("name") for fragment in planner_context.get("fragments", [])],
+                "phase_judge_model_input_count": phase_judge_model_input_count,
                 "safety_constraints": planner_context.get("safety_constraints", {}),
                 "observation_policy": planner_context.get("observation_policy", {}),
                 "phase_transition_policy": planner_context.get("phase_transition_policy", {}),
             },
+            "fragments": phase_judge_fragments,
             "user_preferences": planner_context.get("user_preferences", {}),
             "phase_execution_summary": state.current_phase_execution_summary,
             "action_plan": plan.to_dict(),
@@ -545,6 +592,64 @@ class TaskRuntime:
                 "note": "Full history is stored in memory/*.jsonl; MissionState keeps only latest state.",
             },
         }
+
+    def _post_action_phase_fragments(self, observation_after: dict) -> list[dict[str, Any]]:
+        frames = observation_after.get("frames") if isinstance(observation_after, dict) else {}
+        rgb_frame = frames.get("rgb") if isinstance(frames, dict) else None
+        latest_rgb = dict(rgb_frame) if isinstance(rgb_frame, dict) else None
+        model_inputs = latest_rgb_model_inputs_from_frame(latest_rgb)
+        has_rgb = latest_rgb is not None
+        has_mock_frames = bool(latest_rgb and latest_rgb.get("mock") is True)
+        return [
+            {
+                "name": "image",
+                "enabled": True,
+                "source": "PostActionObservationImageContext",
+                "content": {
+                    "latest_frame_metadata": {"rgb": latest_rgb} if latest_rgb else {},
+                    "recent_rgb_frame_metadata": [latest_rgb] if latest_rgb else [],
+                    "recent_observation_sources": [observation_after.get("source")]
+                    if observation_after.get("source")
+                    else [],
+                    "visual_evidence": {
+                        "has_rgb": has_rgb,
+                        "has_depth": False,
+                        "has_mock_frames": has_mock_frames,
+                        "latest_observation_source": observation_after.get("source"),
+                        "interpretation_status": (
+                            "image_attached_for_direct_judge_inspection"
+                            if model_inputs
+                            else "metadata_only_not_interpreted"
+                        ),
+                    },
+                },
+                "model_inputs": model_inputs,
+                "facts": [
+                    {
+                        "type": "available_modalities",
+                        "value": ["rgb"],
+                        "source": "PostActionObservationImageContext",
+                    }
+                ]
+                if has_rgb
+                else [],
+                "risks": [
+                    {
+                        "type": "visual_evidence_is_mock",
+                        "value": "rgb",
+                        "source": "PostActionObservationImageContext",
+                    }
+                ]
+                if has_mock_frames
+                else [],
+                "artifact_refs": [latest_rgb.get("artifact_ref") or latest_rgb.get("path")]
+                if latest_rgb and (latest_rgb.get("artifact_ref") or latest_rgb.get("path"))
+                else [],
+                "confidence": "medium" if has_rgb else "low",
+                "warnings": ["rgb_frame_is_mock"] if has_mock_frames else [],
+                "metadata": {"observation_source": observation_after.get("source")},
+            }
+        ]
 
     def _tool_facts_from_executed_steps(self, executed_steps: list[dict]) -> dict:
         facts: dict[str, object] = {
@@ -699,6 +804,7 @@ class TaskRuntime:
             "phase_transition_applied",
             "phase_transition_continued",
             "phase_transition_window_limit_reached",
+            "runtime_loop_guard_reached",
         }:
             self._emit_runtime_event({"kind": event, "payload": dict(payload)})
 
@@ -833,6 +939,9 @@ class TaskRuntime:
             "current_phase": state.current_phase_name,
             "current_phase_index": state.current_phase_index,
             "completed": state.completed,
+            "stopped": state.stopped,
+            "stopped_reason": state.stopped_reason,
+            "stop_source": state.stop_source,
             "connected": state.connected,
             "airborne": state.airborne,
             "phase_window_count": state.current_phase_window_count,

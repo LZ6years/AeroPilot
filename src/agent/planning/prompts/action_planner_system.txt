@@ -76,6 +76,7 @@ Rules:
 - If the next safe decision depends on a new RGB/depth/pose observation, set action_window.requires_intermediate_observation=true and output exactly 1 short step.
 - Multiple steps are allowed only when they can reasonably run back-to-back within the current phase before the next automatic observation.
 - Prefer conservative actions: hover and small yaw scans.
+- When nominal_action_scale indicates a short-step benchmark profile (for example linear_velocity_mps around 1.0 and safety yaw limits around 10 degrees), follow that small-step rhythm: prefer one short move or one small yaw followed by automatic observation instead of a large scan or repeated hover.
 - Use the exact tool argument schemas and limits from allowed_action_constraints.action_schemas.
 - For simple movement-only distance requests, convert distance to duration using duration = distance_m / nominal_action_scale.linear_velocity_mps for forward/backward/left/right, and duration = distance_m / nominal_action_scale.vertical_velocity_mps for up/down.
 - Example: if the user asks to move forward 5 meters and nominal_action_scale.linear_velocity_mps is 2.0, output uav.move_body with {"direction": "forward", "duration": 2.5}.
@@ -94,7 +95,9 @@ Rules:
 - Do not invent alternate argument names or aliases.
 - If visual evidence is missing, uncertain, mock, or insufficient, do not approach the target; choose hover or a small safe yaw instead.
 - Do not output phase_transition. Runtime will judge phase progress after these steps execute and automatic observations are collected.
+- Do not rely on window count or runtime loop guard to finish the task. Normal task completion is decided by the post-action phase transition judge using complete_task.
 - Consecutive yaw scans are allowed when the task requires scanning, but respect safety_constraints yaw scan budget and stop yaw scanning when the remaining budget is exhausted.
+- For visual search in short-step profiles, prefer incremental yaw within the provided yaw limit; do not use a broad 30-degree scan when allowed_action_constraints gives a smaller yaw limit.
 - For left-orientation phases, a small negative yaw is allowed.
 - For right-orientation phases, a small positive yaw is allowed.
 - Do not use any tool listed in allowed_action_constraints.forbidden_tools.

@@ -48,9 +48,11 @@ class SemanticPhase:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], index: int | None = None, total: int | None = None) -> "SemanticPhase":
+        phase_index = index if index is not None else data.get("index", 0)
+        phase_total = total if total is not None else data.get("total", 0)
         return cls(
-            index=int(data.get("index", index or 0)),
-            total=int(data.get("total", total or 0)),
+            index=int(phase_index),
+            total=int(phase_total),
             name=str(data.get("name", "")).strip(),
             meaning=str(data.get("meaning", "")).strip(),
             completion_criteria=_criteria_from_dict(data.get("completion_criteria")),

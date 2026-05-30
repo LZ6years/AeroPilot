@@ -1,5 +1,7 @@
 # UAV-Flow Benchmark 文档索引
 
+> Update: UAV-Flow 使用 UAV-Agent 主 runtime 的结束语义：`complete_task` 表示正常完成；`runtime_loop_guard_reached` 表示异常兜底停止并标记 incomplete/stopped，不会自动推进 phase。评估图现在需要同时查看 reference path 和 actual path。
+
 本目录记录 UAV-Flow 作为外部 benchmark 接入 UAV-Agent 的需求、边界和实现影响。
 
 UAV-Flow 在这里不是 runtime integration。它的角色是提供任务集、UnrealCV 场景、参考轨迹和评估口径，用来评估 UAV-Agent 原生闭环在 Flow-style 指令上的效果。

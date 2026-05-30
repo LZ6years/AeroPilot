@@ -6,6 +6,7 @@ from pathlib import Path
 
 from src.runtime.runners.interactive_runtime import (
     InteractiveTaskSession,
+    agent_messages_for_summary,
     build_turn_summary,
     compact_turn_summary,
 )
@@ -125,6 +126,44 @@ def test_build_turn_summary_prefers_in_memory_agent_messages(tmp_path):
     summary = build_turn_summary(tmp_path, "向前飞行5米", FakeState().to_dict(), agent_messages=messages)
 
     assert summary["agent_messages"] == messages
+
+
+def test_build_turn_summary_compacts_agent_messages_to_latest_reply(tmp_path):
+    messages = [
+        {
+            "source": "action_planner",
+            "phase": "phase_a",
+            "type": "progress",
+            "content": "working on phase a",
+            "evidence_refs": [],
+            "confidence": "medium",
+            "requires_user_reply": False,
+        },
+        {
+            "source": "phase_judge",
+            "phase": "phase_b",
+            "type": "final",
+            "content": "task complete",
+            "evidence_refs": [],
+            "confidence": "high",
+            "requires_user_reply": False,
+        },
+    ]
+
+    summary = build_turn_summary(tmp_path, "two phase task", FakeState().to_dict(), agent_messages=messages)
+
+    assert summary["agent_messages"] == [messages[-1]]
+    assert summary["agent_message_count"] == 2
+    assert summary["agent_message_history_ref"] == "memory/agent_messages.jsonl"
+
+
+def test_agent_messages_for_summary_uses_latest_non_final_when_no_final():
+    messages = [
+        {"type": "progress", "content": "old"},
+        {"type": "warning", "content": "latest"},
+    ]
+
+    assert agent_messages_for_summary(messages) == [messages[-1]]
 
 
 def test_interactive_session_reuses_scene_for_natural_language_turn(tmp_path):

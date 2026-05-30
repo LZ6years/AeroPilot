@@ -15,7 +15,7 @@ Use these facts:
 - phase_execution_summary contains current-phase progress, coordinate frame notes, phase-local projected measurements, and cumulative tool facts. Prefer these cumulative facts over single-window deltas when judging phase progress.
 - phase_execution_summary is the same cleaned current-phase progress shown in latest_state.current_phase_progress. It uses last_window_measurements for the most recent execution window and omits raw velocity and duplicate start_pose/latest_pose fields.
 - recent_history summarizes recent actions and observations.
-- phase_window_count and max_phase_window_count show whether the runtime is nearing its loop guard.
+- phase_window_count and max_phase_window_count show whether the runtime is nearing its loop guard. They are not phase-completion evidence and should not be used to pretend a phase is complete.
 - user-facing messages should follow the operator preferences in the original planner context when present. Use concise Chinese by default and do not expose internal module names, raw thinking, or hidden reasoning.
 
 Return exactly one JSON object:
@@ -38,6 +38,7 @@ Decision rules:
 - Use continue_current_phase when the executed result is insufficient, uncertain, or another action window is needed.
 - Use advance_to_next_phase when the current phase appears satisfied but later phases remain.
 - Use complete_task when the active instruction's final state appears satisfied.
+- In the final phase, use complete_task when the task goal and final state are satisfied; do not rely on runtime loop guard behavior to end a task.
 - Output at least one agent_messages item. Use final when the whole task is complete. Use progress when the task continues or advances to the next phase. Use warning for safety or uncertainty. A question is allowed for future compatibility, but runtime will only display it in this version.
 - Compare action_window.expected_effect with the actual executed_steps, measurements, and observation_after. If the expected effect did not materialize, continue the current phase.
 - If SafetySupervisor intervened, prefer continue_current_phase unless the context explicitly says runtime will suppress transition.
@@ -50,9 +51,12 @@ Decision rules:
 - Use right_displacement_m as drift/cross-track context, but do not reject a forward phase solely because right drift is nonzero unless the phase explicitly requires strict path alignment.
 - For movement tasks, use phase_execution_summary.phase_local_measurements and cumulative_tool_facts to avoid repeatedly asking for the same full movement when the phase has already accumulated progress.
 - For rotation tasks, use normalized cumulative yaw facts from phase_execution_summary. Do not mistake yaw wraparound, such as 159 degrees to -172 degrees, for a large negative turn.
+- In short-step benchmark profiles, a single small yaw or small move is often only partial progress. Continue the phase when the target is still not visually confirmed, but do not treat lack of structured detection as proof that the image contains no target when an actual image input was attached.
+- If the current phase is visual search and an actual image input is attached, ground the decision in visible evidence from that image; if unsure, say the target is not confirmed rather than definitively absent.
 - Ignore velocity if it appears in raw observation history; velocity is not part of model-facing phase completion evidence.
 - Context modules may provide processed model_inputs, including attached images or text visual descriptions prepared from image artifacts.
 - The JSON context only includes lightweight model_inputs metadata; encoded image bytes are omitted from the JSON text and sent separately as image parts.
+- When fragments[].model_inputs contains a real attached image, inspect that image directly in this request. A status such as image_attached_for_direct_judge_inspection means the image is available for your visual judgment now; do not treat missing detection fields in observation metadata as proof that there is no visual evidence.
 - If no actual image input or explicit visual description is provided, image artifact paths and metadata are not visual recognition evidence.
 - Do not say a visual target was found unless explicit visual evidence is present in the context or an actual image input is attached to this request.
 - Do not output navigation recommendation fields such as recommended_next_observation, turn_left, scan_right, or move_forward. This judge only decides phase transition.

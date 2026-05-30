@@ -48,6 +48,22 @@ def test_agent_message_question_can_require_user_reply():
     assert message.requires_user_reply is True
 
 
+def test_agent_message_normalizes_lightweight_evidence_refs():
+    message = AgentMessage.from_dict(
+        {
+            "type": "progress",
+            "content": "observed the latest frame",
+            "evidence_refs": ["artifacts/rgb/frame_000001.png", 42],
+            "confidence": "medium",
+        }
+    )
+
+    assert message.evidence_refs == [
+        {"kind": "model_reference", "ref": "artifacts/rgb/frame_000001.png"},
+        {"kind": "model_reference", "ref": "42"},
+    ]
+
+
 def test_agent_message_rejects_empty_content_and_raw_thinking():
     with pytest.raises(ValueError, match="content"):
         AgentMessage.from_dict({"type": "progress", "content": "   ", "confidence": "medium"})

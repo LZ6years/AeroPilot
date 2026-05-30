@@ -183,7 +183,9 @@ def build_turn_summary(
         "phase_execution_summary": progress,
         "observation_summary": observation_summary([latest_observation] if latest_observation else []),
         "artifact_inventory": artifact_inventory_from_observations([latest_observation] if latest_observation else []),
-        "agent_messages": messages,
+        "agent_messages": agent_messages_for_summary(messages),
+        "agent_message_count": len(messages),
+        "agent_message_history_ref": "memory/agent_messages.jsonl",
     }
 
 
@@ -213,7 +215,9 @@ def build_error_summary(
         "phase_execution_summary": {},
         "observation_summary": {"has_pose": False, "has_rgb": False, "has_depth": False, "sources": []},
         "artifact_inventory": {"rgb": [], "depth": [], "other": [], "counts": {"rgb": 0, "depth": 0, "other": 0}},
-        "agent_messages": messages,
+        "agent_messages": agent_messages_for_summary(messages),
+        "agent_message_count": len(messages),
+        "agent_message_history_ref": "memory/agent_messages.jsonl",
         "error_type": type(exc).__name__,
         "error": str(exc),
     }
@@ -232,12 +236,30 @@ def compact_turn_summary(summary: dict[str, Any] | None) -> dict[str, Any]:
         "observation_summary": summary.get("observation_summary", {}),
         "artifact_counts": summary.get("artifact_inventory", {}).get("counts", {}),
         "agent_messages": summary.get("agent_messages", []),
+        "agent_message_count": summary.get("agent_message_count"),
+        "agent_message_history_ref": summary.get("agent_message_history_ref"),
         "run_dir": summary.get("run_dir"),
     }
     if "error" in summary:
         compact["error_type"] = summary.get("error_type")
         compact["error"] = summary.get("error")
     return compact
+
+
+def agent_messages_for_summary(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Keep interactive summaries display-sized while preserving durable history.
+
+    ``memory/agent_messages.jsonl`` remains the append-only source of truth.
+    The interactive summary is a UI artifact, so it should behave like the
+    latest reply snapshot: prefer the final answer, otherwise show the newest
+    available message.
+    """
+
+    normalized = [dict(message) for message in messages if isinstance(message, dict)]
+    for message in reversed(normalized):
+        if message.get("type") == "final":
+            return [message]
+    return normalized[-1:] if normalized else []
 
 
 def observation_summary(observations: list[dict[str, Any]]) -> dict[str, Any]:

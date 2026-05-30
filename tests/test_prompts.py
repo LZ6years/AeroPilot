@@ -44,6 +44,7 @@ def test_action_planner_prompt_contains_allowed_and_forbidden_tools():
     assert "action_schemas" in prompt
     assert "Do not invent alternate argument names" in prompt
     assert "nominal_action_scale" in prompt
+    assert "short-step benchmark profile" in prompt
     assert "duration = distance_m / nominal_action_scale.linear_velocity_mps" in prompt
     assert '{"direction": "forward", "duration": 2.5}' in prompt
     assert "model_inputs" in prompt
@@ -74,4 +75,5 @@ def test_phase_transition_judge_prompt_requires_agent_messages():
     assert "raw thinking" in prompt
     assert "Do not say a visual target was found" in prompt
     assert "actual image input is attached" in prompt
+    assert "short-step benchmark profiles" in prompt
     assert "recommended_next_observation" in prompt

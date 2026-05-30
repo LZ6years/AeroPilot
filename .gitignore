@@ -26,6 +26,7 @@ runs/
 data/state_logs/
 data/rec_videos/
 .external_refs/
+outputs/
 
 # Local visual/demo artifacts
 docs/hyperframes/

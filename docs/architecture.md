@@ -1,5 +1,7 @@
 # FlyAgent 架构说明
 
+> Update: Runtime stop now distinguishes semantic completion from abnormal loop-guard stop. A task normally ends when the post-action phase judge returns `complete_task`, or when all semantic phases naturally advance. If a phase exceeds the runtime loop guard, runtime writes `runtime_loop_guard_reached`, hovers, and marks the mission `stopped/incomplete`; it does not auto-advance the phase. `SafetySupervisor` remains a hard safety layer for tool whitelist, yaw/velocity/duration clipping, and yaw scan budget, not a semantic stop rule.
+
 ## 1. 总体思路
 
 FlyAgent 不让模型直接操作 UE、AirSim 或底层 SDK。模型只读取结构化上下文并输出短期 UAV 动作；runtime 负责执行、安全审查、自动观察、记忆写入和阶段推进。
@@ -191,7 +193,7 @@ sequenceDiagram
 }
 ```
 
-runtime 才能真正修改 `MissionState`。如果 `SafetySupervisor` 有 intervention，runtime 会压制阶段推进判断并继续当前 phase。若同一 phase 连续执行超过窗口上限，runtime 触发 loop guard，安全 hover 后推进下一 phase。
+runtime 才能真正修改 `MissionState`。如果 `SafetySupervisor` 有 intervention，runtime 会压制阶段推进判断并继续当前 phase。`complete_task` 只在最后一个 semantic phase 生效；如果模型在中间 phase 误报 `complete_task`，runtime 会记录降级事件并推进到下一 phase。若同一 phase 连续执行超过窗口上限，runtime 触发 loop guard，安全 hover 后标记 `stopped/incomplete`，不会自动推进下一 phase。
 
 ## 8. Plan-Execute-Repair
 

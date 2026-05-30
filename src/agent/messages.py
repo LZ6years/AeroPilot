@@ -40,11 +40,7 @@ class AgentMessage:
         if not content:
             raise ValueError("AgentMessage content must not be empty")
 
-        evidence_refs = payload.get("evidence_refs", [])
-        if evidence_refs is None:
-            evidence_refs = []
-        if not isinstance(evidence_refs, list) or not all(isinstance(item, dict) for item in evidence_refs):
-            raise ValueError("AgentMessage evidence_refs must be a list of objects")
+        evidence_refs = _normalize_evidence_refs(payload.get("evidence_refs", []))
 
         return cls(
             type=message_type,
@@ -62,3 +58,26 @@ class AgentMessage:
             "confidence": self.confidence,
             "requires_user_reply": self.requires_user_reply,
         }
+
+
+def _normalize_evidence_refs(value: Any) -> list[dict[str, Any]]:
+    """Accept model-friendly evidence refs while keeping the persisted shape stable.
+
+    The public AgentMessage schema stores evidence refs as objects. Real model
+    responses sometimes provide lightweight string refs such as frame paths; those
+    should not abort an otherwise valid runtime step, so we wrap them into a
+    neutral object form before persistence.
+    """
+
+    if value is None:
+        return []
+    raw_items = value if isinstance(value, list) else [value]
+    refs: list[dict[str, Any]] = []
+    for item in raw_items:
+        if isinstance(item, dict):
+            refs.append(dict(item))
+            continue
+        ref = str(item).strip()
+        if ref:
+            refs.append({"kind": "model_reference", "ref": ref})
+    return refs

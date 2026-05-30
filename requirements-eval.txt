@@ -1,0 +1,7 @@
+# Optional dependencies for external benchmark reports and plots.
+#
+# Core UAV-Agent runtime does not depend on this file. Install only when running
+# benchmark utilities that need plotting or external simulator wrappers.
+
+matplotlib>=3.8,<4.0
+

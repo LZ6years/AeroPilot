@@ -32,6 +32,9 @@ class MissionState:
     current_phase_window_count_value: int = 0
     max_phase_window_count: int = 5
     completed: bool = False
+    stopped: bool = False
+    stopped_reason: str | None = None
+    stop_source: str | None = None
 
     @property
     def current_phase_name(self) -> str:
@@ -45,6 +48,20 @@ class MissionState:
             return "completed"
         phase = self.semantic_plan.phases[self.current_phase_index]
         return f"{phase.index}:{phase.name}"
+
+    @property
+    def is_final_phase(self) -> bool:
+        """Return whether the active phase is the last semantic phase.
+
+        Runtime completion is semantic: a model may request ``complete_task``
+        only when the final phase is active. Earlier phases can be complete,
+        but that should advance the mission rather than end the whole task.
+        """
+
+        phase_count = len(self.semantic_plan.phases)
+        if phase_count == 0:
+            return True
+        return self.current_phase_index >= phase_count - 1
 
     def advance_phase(self) -> None:
         # Move to the next semantic phase after one short window has completed.
@@ -141,6 +158,14 @@ class MissionState:
     def mark_completed(self) -> None:
         self.completed = True
 
+    def mark_stopped(self, reason: str, source: str = "runtime") -> None:
+        # Stopped means the runtime hit an abnormal guard. It is intentionally
+        # separate from completed so eval/reporting can treat the task as
+        # incomplete instead of semantic success.
+        self.stopped = True
+        self.stopped_reason = str(reason)
+        self.stop_source = str(source)
+
     def record_action(self, tool: str, args: dict[str, Any], result: dict[str, Any]) -> None:
         # Update only live control flags; action history is written to memory/actions.jsonl.
         if result.get("ok") is True:
@@ -182,6 +207,9 @@ class MissionState:
             "connected": self.connected,
             "airborne": self.airborne,
             "completed": self.completed,
+            "stopped": self.stopped,
+            "stopped_reason": self.stopped_reason,
+            "stop_source": self.stop_source,
         }
 
 

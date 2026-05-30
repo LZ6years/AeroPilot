@@ -147,7 +147,7 @@ class ObservationContextBuilder:
             "decisions": ["continue_current_phase", "advance_to_next_phase", "complete_task"],
             "current_phase_window_count": state.current_phase_window_count,
             "max_phase_window_count": state.max_phase_window_count,
-            "note": "Phase transition is judged after tool execution and automatic observation. Do not output phase_transition in the action plan.",
+            "note": "Phase transition is judged after tool execution and automatic observation. Do not output phase_transition in the action plan. Window counts are runtime loop guard diagnostics, not phase-completion evidence.",
         }
 
     def _phase_completion_criteria(self, state: MissionState) -> list[dict[str, Any]]:

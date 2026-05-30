@@ -1,5 +1,7 @@
 # Run 输出目录约定
 
+> Update: Runtime loop guard stops are now recorded as abnormal `stopped/incomplete` outcomes instead of fake phase advances. Check `state/latest_state.json` for `stopped`, `stopped_reason`, and `stop_source`; check `events.jsonl` for `runtime_loop_guard_reached`. UAV-Flow reports also include reference-vs-actual trajectory plots.
+
 本文档定义 `runs/<run_id>/` 的落盘结构。目标是把系统状态、上下文记忆、原始大文件、调试材料和 demo/eval 输出分开，避免同一份 RGB/depth、state 或事件在多个目录重复保存。
 
 开发脚本放置规则见 [development_conventions.md](development_conventions.md)：底层诊断和真实引擎探针优先放 `tests/manual/`，`demos/` 只放用户可体验的完整流程。
@@ -50,6 +52,7 @@ runs/<run_id>/
 | `state/latest_agent_message.json` | 最新回复快照 | 最近一条用户可见 `AgentMessage`，供 CLI/TUI/复盘直接读取。 |
 | `state/final_answer.json` | 最终回复快照 | 最近一条 `type="final"` 的 `AgentMessage`，表示当前 run 最近一次最终答复。 |
 | `state/flight_memory.json` | 记忆 manifest | 保存 `memory/*.jsonl` 的 refs，供 context modules 查历史。 |
+| `interactive/latest_summary.json` | CLI 轮次摘要 | 覆盖写入最近一轮 CLI 摘要；其中 `agent_messages` 只保留用于展示的最新/最终回复，完整回复历史看 `memory/agent_messages.jsonl`。 |
 | `state/semantic_plan.json` | 语义解析结果 | 当前或最近一条自然语言指令解析出的阶段计划。 |
 | `state/scene_instance.json` | 场景信息 | 当前 UE/AirSim scene 的实例信息。 |
 | `memory/*.jsonl` | 上下文历史 | append-only 结构化历史。ContextModule 从这里读取，不保存 RGB/depth 大文件。 |

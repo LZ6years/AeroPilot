@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
+from src.cli import display as cli_display
 from src.cli.display import CliNarrativePanel, print_summary
 from src.cli.main import build_parser, default_chat_map_id, handle_slash_command
 
@@ -184,6 +187,80 @@ def test_cli_narrative_panel_prints_steps_status_and_final(capsys):
     assert "状态：观察完成：已更新图像、深度、位姿。" in out
     assert "FlyAgent: 任务已完成。" in out
     assert "运行记录：runs/interactive_cli_test" in out
+
+
+def test_cli_narrative_panel_prints_persistent_phase_completion(capsys):
+    panel = CliNarrativePanel()
+    panel({"kind": "instruction_started", "payload": {"phase_names": ["move_forward", "rotate_right"]}})
+
+    panel(
+        {
+            "kind": "phase_transition_applied",
+            "payload": {
+                "phase": "move_forward",
+                "decision": "advance_to_next_phase",
+                "phase_completion_evaluation": {
+                    "evaluations": [
+                        {
+                            "criteria": {"unit": "m"},
+                            "target": 50.0,
+                            "actual": 49.841,
+                            "error": -0.159,
+                        }
+                    ]
+                },
+            },
+        }
+    )
+    panel(
+        {
+            "kind": "phase_transition_applied",
+            "payload": {
+                "phase": "rotate_right",
+                "decision": "complete_task",
+                "phase_completion_evaluation": {
+                    "evaluations": [
+                        {
+                            "criteria": {"unit": "deg"},
+                            "target": 90.0,
+                            "actual": 87.294,
+                            "error": -2.706,
+                        }
+                    ]
+                },
+            },
+        }
+    )
+
+    out = capsys.readouterr().out
+    assert "完成 1/2：向前飞行" in out
+    assert "完成 2/2：向右旋转" in out
+    assert "49.84/50 m" in out
+    assert "误差 -0.16m" in out
+    assert "87.29/90 deg" in out
+    assert "误差 -2.71deg" in out
+
+
+def test_cli_narrative_panel_truncates_tty_status_to_one_line(monkeypatch, capsys):
+    panel = CliNarrativePanel()
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(cli_display.shutil, "get_terminal_size", lambda fallback: os.terminal_size((24, 20)))
+
+    panel._set_status("继续当前步骤：" + "向前飞行" * 20)
+
+    out = capsys.readouterr().out
+    assert "\n" not in out
+    assert "..." in out
+
+
+def test_cli_narrative_panel_preserves_non_tty_status_output(capsys):
+    panel = CliNarrativePanel()
+
+    panel._set_status("继续当前步骤：" + "向前飞行" * 3)
+
+    out = capsys.readouterr().out
+    assert "状态：" in out
+    assert "向前飞行" * 3 in out
 
 
 def test_clear_command_keeps_cli_open(tmp_path, capsys):

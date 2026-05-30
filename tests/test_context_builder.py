@@ -103,7 +103,7 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
         "decisions": ["continue_current_phase", "advance_to_next_phase", "complete_task"],
         "current_phase_window_count": 0,
         "max_phase_window_count": 5,
-        "note": "Phase transition is judged after tool execution and automatic observation. Do not output phase_transition in the action plan.",
+        "note": "Phase transition is judged after tool execution and automatic observation. Do not output phase_transition in the action plan. Window counts are runtime loop guard diagnostics, not phase-completion evidence.",
     }
     assert context["phase_completion_criteria"] == [
         {

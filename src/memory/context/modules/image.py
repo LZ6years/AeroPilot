@@ -57,7 +57,7 @@ class DefaultImageContextModule(ContextModule):
             ),
             "latest_observation_source": latest_rgb.get("observation_source") if latest_rgb else None,
         }
-        model_inputs = _latest_rgb_model_inputs(latest_rgb)
+        model_inputs = latest_rgb_model_inputs_from_frame(latest_rgb)
         visual_evidence["interpretation_status"] = (
             "image_attached_not_interpreted" if model_inputs else "metadata_only_not_interpreted"
         )
@@ -133,7 +133,13 @@ def _artifact_ref(record: dict[str, Any], frame_ref: dict[str, Any] | None) -> s
     return ref if isinstance(ref, str) and ref else None
 
 
-def _latest_rgb_model_inputs(latest_rgb: dict[str, Any] | None) -> list[dict[str, Any]]:
+def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Encode one latest real RGB frame for model multimodal input.
+
+    The action planner and post-action phase judge both use this helper so
+    unreadable or mock frames follow the same conservative no-image behavior.
+    """
+
     if not latest_rgb or latest_rgb.get("mock") is True:
         return []
     path = _frame_path(latest_rgb)

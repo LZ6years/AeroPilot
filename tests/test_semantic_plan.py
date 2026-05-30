@@ -55,36 +55,38 @@ def test_semantic_plan_accepts_free_model_phase_names():
     assert plan.phases[0].name == "turn_to_search_possible_lamp_area"
 
 
-def test_semantic_plan_rejects_wrong_phase_total():
-    with pytest.raises(SemanticPlanValidationError, match="total"):
-        semantic_plan_from_dict(
-            {
-                "intent": "navigate_by_visual_landmark",
-                "goal": {
-                    "target": {"description": "black streetlight"},
-                    "final_state": "facing_target_and_hovering",
-                },
-                "phases": [
-                    {"index": 1, "total": 9, "name": "free_phase", "meaning": "semantic stage"}
-                ],
-            }
-        )
+def test_semantic_plan_canonicalizes_model_phase_total():
+    plan = semantic_plan_from_dict(
+        {
+            "intent": "navigate_by_visual_landmark",
+            "goal": {
+                "target": {"description": "black streetlight"},
+                "final_state": "facing_target_and_hovering",
+            },
+            "phases": [
+                {"index": 1, "total": 9, "name": "free_phase", "meaning": "semantic stage"}
+            ],
+        }
+    )
+
+    assert [phase.total for phase in plan.phases] == [1]
 
 
-def test_semantic_plan_rejects_non_consecutive_phase_index():
-    with pytest.raises(SemanticPlanValidationError, match="index"):
-        semantic_plan_from_dict(
-            {
-                "intent": "navigate_by_visual_landmark",
-                "goal": {
-                    "target": {"description": "black streetlight"},
-                    "final_state": "facing_target_and_hovering",
-                },
-                "phases": [
-                    {"index": 2, "total": 1, "name": "free_phase", "meaning": "semantic stage"}
-                ],
-            }
-        )
+def test_semantic_plan_canonicalizes_model_phase_index():
+    plan = semantic_plan_from_dict(
+        {
+            "intent": "navigate_by_visual_landmark",
+            "goal": {
+                "target": {"description": "black streetlight"},
+                "final_state": "facing_target_and_hovering",
+            },
+            "phases": [
+                {"index": 2, "total": 1, "name": "free_phase", "meaning": "semantic stage"}
+            ],
+        }
+    )
+
+    assert [phase.index for phase in plan.phases] == [1]
 
 
 def test_semantic_plan_rejects_missing_target():

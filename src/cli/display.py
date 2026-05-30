@@ -8,7 +8,9 @@ do not depend on the active Windows or PowerShell code page.
 from __future__ import annotations
 
 import json
+import shutil
 import sys
+import unicodedata
 from typing import Any
 
 from src.runtime.runners.interactive_runtime import compact_turn_summary
@@ -110,11 +112,16 @@ class CliNarrativePanel:
             phase = str(payload.get("phase") or self.current_phase or "")
             self._set_status(self._phase_status(_ZH["window_limit"], phase, _ZH["safe_next"]))
             return
+        if kind == "runtime_loop_guard_reached":
+            phase = str(payload.get("phase") or self.current_phase or "")
+            self._print_persistent(self._phase_status(_ZH["window_limit"], phase, _ZH["safe_next"]), color=ANSI_YELLOW)
+            return
         if kind == "phase_transition_applied":
             decision = str(payload.get("applied_decision") or payload.get("decision") or "")
             if decision == "advance_to_next_phase":
-                self._set_status(_ZH["advance"])
+                self._print_persistent(self._phase_completion_line(payload, fallback=_ZH["advance"]))
             elif decision == "complete_task":
+                self._print_persistent(self._phase_completion_line(payload, fallback=_ZH["complete整理"]))
                 self._set_status(_ZH["complete整理"])
             else:
                 self._set_status(_ZH["phase_updated"])
@@ -174,7 +181,8 @@ class CliNarrativePanel:
             return
         self._last_status = clean
         if sys.stdout.isatty():
-            print(f"\r\033[2K{color_text(clean, ANSI_DIM)}", end="", flush=True)
+            display_text = _truncate_display_width(clean, max(20, shutil.get_terminal_size((100, 24)).columns - 1))
+            print(f"\r\033[2K{color_text(display_text, ANSI_DIM)}", end="", flush=True)
             self._status_visible = True
             return
         print(color_text(f'{_ZH["status"]}{clean}', ANSI_DIM))
@@ -190,6 +198,39 @@ class CliNarrativePanel:
         name = self._humanize_phase(phase)
         detail_text = f'{_ZH["semicolon"]}{detail}' if detail else ""
         return f'{prefix}{index_text}{_ZH["colon"]}{name}{detail_text}'
+
+    def _print_persistent(self, text: str, *, color: str = ANSI_DIM) -> None:
+        clean = " ".join(str(text).split())
+        if not clean:
+            return
+        self._clear_status()
+        print(color_text(clean, color))
+
+    def _phase_completion_line(self, payload: dict[str, Any], *, fallback: str) -> str:
+        phase = str(payload.get("phase") or self.current_phase or "")
+        index_text = self._phase_index_text(phase).strip()
+        phase_name = self._humanize_phase(phase)
+        prefix = f'{_ZH["phase_done"]} {index_text}{_ZH["colon"]}{phase_name}' if index_text else f'{_ZH["phase_done"]}{_ZH["colon"]}{phase_name}'
+        metric = self._phase_completion_metric(payload)
+        return f"{prefix}{metric}{_ZH['period']}" if metric else fallback
+
+    @staticmethod
+    def _phase_completion_metric(payload: dict[str, Any]) -> str:
+        evaluation = payload.get("phase_completion_evaluation", {})
+        evaluations = evaluation.get("evaluations", []) if isinstance(evaluation, dict) else []
+        if not evaluations or not isinstance(evaluations[0], dict):
+            return ""
+        item = evaluations[0]
+        criteria = item.get("criteria", {}) if isinstance(item.get("criteria", {}), dict) else {}
+        actual = _format_number(item.get("actual"))
+        target = _format_number(item.get("target"))
+        error = _format_number(item.get("error"), signed=True)
+        unit = str(criteria.get("unit") or "").strip()
+        if actual is None or target is None:
+            return ""
+        unit_text = f" {unit}" if unit else ""
+        error_text = f"{_ZH['comma']}{_ZH['error']} {error}{unit}" if error is not None else ""
+        return f"{_ZH['left_paren']}{actual}/{target}{unit_text}{error_text}{_ZH['right_paren']}"
 
     def _phase_index_text(self, phase: str) -> str:
         if not self.phase_names or not phase:
@@ -250,6 +291,40 @@ class CliNarrativePanel:
         return lowered
 
 
+def _format_number(value: Any, *, signed: bool = False) -> str | None:
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    text = f"{number:+.2f}" if signed else f"{number:.2f}"
+    return text.rstrip("0").rstrip(".")
+
+
+def _display_width(text: str) -> int:
+    width = 0
+    for char in text:
+        width += 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+    return width
+
+
+def _truncate_display_width(text: str, max_width: int) -> str:
+    if max_width <= 0 or _display_width(text) <= max_width:
+        return text
+    suffix = "..."
+    suffix_width = _display_width(suffix)
+    result = []
+    width = 0
+    for char in text:
+        char_width = 2 if unicodedata.east_asian_width(char) in {"F", "W"} else 1
+        if width + char_width + suffix_width > max_width:
+            break
+        result.append(char)
+        width += char_width
+    return "".join(result).rstrip() + suffix
+
+
 _ZH = {
     "action_done": "\u52a8\u4f5c\u5b8c\u6210",
     "advance": "\u9636\u6bb5\u5b8c\u6210\uff1a\u51c6\u5907\u8fdb\u5165\u4e0b\u4e00\u6b65\u3002",
@@ -260,23 +335,27 @@ _ZH = {
     "continue_fill": "\u7ee7\u7eed\u8865\u8db3\u5f53\u524d\u76ee\u6807\u3002",
     "continue_step": "\u7ee7\u7eed\u5f53\u524d\u6b65\u9aa4",
     "depth": "\u6df1\u5ea6",
+    "error": "\u8bef\u5dee",
     "executed": "\u5df2\u6267\u884c",
     "executing": "\u6b63\u5728\u6267\u884c",
     "generic_done": "\u52a8\u4f5c\u5df2\u5b8c\u6210",
     "hover_done": "\u5df2\u60ac\u505c",
     "image": "\u56fe\u50cf",
+    "left_paren": "\uff08",
     "list_sep": "\u3001",
     "move_done": "\u5df2\u5b8c\u6210\u79fb\u52a8",
     "not_completed": "\u672a\u5b8c\u6210",
     "observation_done": "\u89c2\u5bdf\u5b8c\u6210\uff1a\u5df2\u66f4\u65b0",
     "observation_result": "\u89c2\u5bdf\u7ed3\u679c",
     "period": "\u3002",
+    "phase_done": "\u5b8c\u6210",
     "phase_updated": "\u9636\u6bb5\u72b6\u6001\u5df2\u66f4\u65b0\u3002",
     "pose": "\u4f4d\u59ff",
     "prepare": "\u51c6\u5907\u6267\u884c",
     "question": "\u9700\u8981\u786e\u8ba4\uff1a",
+    "right_paren": "\uff09",
     "run_record": "\u8fd0\u884c\u8bb0\u5f55\uff1a",
-    "safe_next": "\u5c06\u5b89\u5168\u8fdb\u5165\u4e0b\u4e00\u6b65\u3002",
+    "safe_next": "\u5c06\u5b89\u5168\u60ac\u505c\u5e76\u505c\u6b62\u672c\u8f6e\u3002",
     "semicolon": "\uff1b",
     "stable": "\u5df2\u7a33\u5b9a",
     "status": "\u72b6\u6001\uff1a",

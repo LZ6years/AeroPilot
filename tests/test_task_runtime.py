@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
 
+from src.agent.mission_state import MissionState
 from src.agent.messages import AgentMessage
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.agent.safety import SafetyDecision
 from src.agent.semantic.schemas import SemanticGoal, SemanticPhase, SemanticPlan, SemanticTarget, TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter
@@ -22,6 +25,7 @@ from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.configs.model_config import ModelConfig
 from src.uav import pose_measurements
 from src.runtime.runners.task_runtime import TaskRuntime
+from src.memory.flight_memory import FlightMemory
 from src.sim_server.backends.airvln_backend import AirVlnBackend
 from src.sim_server.server import LocalSimulationServer
 
@@ -44,12 +48,38 @@ def make_package() -> MapPackage:
     )
 
 
+def make_single_phase_parse_result(
+    instruction: str = "single phase task",
+    phase_name: str = "final_phase",
+) -> TaskParseResult:
+    return TaskParseResult(
+        instruction=instruction,
+        parser_mode="test",
+        plan=SemanticPlan(
+            intent="test_single_phase",
+            goal=SemanticGoal(
+                target=SemanticTarget("single phase target", {}),
+                final_state="done",
+            ),
+            phases=[SemanticPhase(1, 1, phase_name, "complete the single test phase", [])],
+        ),
+    )
+
+
 def load_event_records(run_dir):
     events = [json.loads(line) for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     debug_path = run_dir / "debug" / "debug_events.jsonl"
     if debug_path.exists():
         events.extend(json.loads(line) for line in debug_path.read_text(encoding="utf-8").splitlines())
     return sorted(events, key=lambda record: str(record.get("timestamp", "")))
+
+
+def write_tiny_png(path):
+    path.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+        )
+    )
 
 
 class HoverOnlyPlanner:
@@ -210,7 +240,13 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     recorder = AsyncRunLogger(run_dir)
     server = LocalSimulationServer([make_package()], run_dir=run_dir)
     planner = FakeModelPlanner()
-    runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=planner)
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        runtime_loop_guard_windows=2,
+    )
 
     state = runtime.run_task("m1", LAMP_TASK)
     recorder.close()
@@ -219,7 +255,9 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     event_names = [record["event"] for record in events]
     planned_records = [record for record in events if record["event"] == "short_horizon_planned"]
 
-    assert state.completed
+    assert not state.completed
+    assert state.stopped
+    assert state.stopped_reason == "runtime_loop_guard_reached"
     assert planner.contexts
     assert planner.contexts[0]["current_phase"]["name"] == "orient_right"
     assert "fragments" in planner.contexts[0]
@@ -251,6 +289,7 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert "safety_intervened" in event_names
     assert "automatic_observation_updated" in event_names
     assert "phase_transition_suppressed_by_safety" in event_names
+    assert "runtime_loop_guard_reached" in event_names
     assert "phase_transition_window_limit_reached" in event_names
     assert planned_records[0]["payload"]["steps"][0]["args"]["yaw_deg"] == 30.0
     latest_agent_message = json.loads((run_dir / "state/latest_agent_message.json").read_text(encoding="utf-8"))
@@ -300,7 +339,7 @@ def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path
         event_sink=live_events.append,
     )
 
-    state = runtime.run_task("m1", LAMP_TASK)
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("agent message task", "hold_position"))
     turn_messages = runtime.latest_turn_agent_messages()
     recorder.close()
 
@@ -340,6 +379,12 @@ def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path
     assert any(event["kind"] == "tool_step_completed" for event in live_events)
     assert any(event["kind"] == "observation_updated" for event in live_events)
     assert any(event["kind"] == "phase_transition_applied" for event in live_events)
+    transition_payload = next(event["payload"] for event in live_events if event["kind"] == "phase_transition_applied")
+    transition_payload_text = json.dumps(transition_payload, ensure_ascii=False)
+    assert transition_payload["phase_completion_evaluation"]["criteria_count"] == 0
+    assert "planner_context" not in transition_payload
+    assert "data:image" not in transition_payload_text
+    assert "base64" not in transition_payload_text
     assert event_names.index("agent_message") < event_names.index("phase_plan_ready")
     automatic_observation_indexes = [
         index
@@ -633,7 +678,7 @@ def test_task_runtime_continue_transition_keeps_same_phase_for_next_window(tmp_p
         shutdown_policy="none",
     )
 
-    state = runtime.run_task("m1", LAMP_TASK)
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("complete now", "final_phase"))
     recorder.close()
 
     event_names = [record["event"] for record in load_event_records(run_dir)]
@@ -670,12 +715,68 @@ def test_task_runtime_complete_transition_finishes_without_advancing_phase(tmp_p
         shutdown_policy="none",
     )
 
-    state = runtime.run_task("m1", LAMP_TASK)
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("post action complete", "final_phase"))
     recorder.close()
 
     assert state.completed
     assert state.current_phase_index == 0
     assert planner.calls == 1
+
+
+def test_task_runtime_complete_task_before_final_phase_advances_instead_of_finishing(tmp_path):
+    class EarlyCompletePlanner:
+        planner_mode = "test"
+
+        def __init__(self) -> None:
+            self.seen_phases = []
+
+        def plan_next(self, state, context=None):
+            self.seen_phases.append(state.current_phase_name)
+            return ShortHorizonPlan(
+                state.current_phase_name,
+                [PlannedStep.tool_step("uav.hover", {}, "hold")],
+                PhaseTransition(COMPLETE_TASK, "model tried to finish the task"),
+            )
+
+    parse_result = TaskParseResult(
+        instruction="move, then turn",
+        parser_mode="test",
+        plan=SemanticPlan(
+            intent="test_multi_phase_completion_guard",
+            goal=SemanticGoal(
+                target=SemanticTarget("two phase target", {}),
+                final_state="turned",
+            ),
+            phases=[
+                SemanticPhase(1, 1, "move_forward", "move forward", []),
+                SemanticPhase(2, 2, "rotate_right", "turn right", []),
+            ],
+        ),
+    )
+    run_dir = tmp_path / "early_complete_guard"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = EarlyCompletePlanner()
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task("m1", parse_result)
+    recorder.close()
+
+    event_records = load_event_records(run_dir)
+    event_names = [record["event"] for record in event_records]
+    applied_events = [record["payload"] for record in event_records if record["event"] == "phase_transition_applied"]
+    assert state.completed
+    assert state.current_phase_index == 1
+    assert planner.seen_phases == ["move_forward", "rotate_right"]
+    assert "phase_complete_task_downgraded" in event_names
+    assert applied_events[0]["original_decision"] == COMPLETE_TASK
+    assert applied_events[0]["applied_decision"] == ADVANCE_TO_NEXT_PHASE
 
 
 def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_path):
@@ -734,6 +835,7 @@ def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_pa
         TaskParser(mode="rule_based"),
         planner=planner,
         shutdown_policy="none",
+        runtime_loop_guard_windows=2,
     )
 
     state = runtime.run_parsed_task("m1", parse_result)
@@ -741,9 +843,12 @@ def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_pa
 
     events = load_event_records(run_dir)
     event_names = [record["event"] for record in events]
-    assert state.completed
+    assert not state.completed
+    assert state.stopped
+    assert state.stopped_reason == "runtime_loop_guard_reached"
     assert planner.judge_contexts
     assert "phase_transition_judge_context_built" in event_names
+    assert "runtime_loop_guard_reached" in event_names
     assert "phase_transition_window_limit_reached" in event_names
     assert planner.judge_contexts[0]["executed_steps"][0]["step"]["tool"] == "uav.move_body"
     assert planner.judge_contexts[0]["action_window"]["scope"] == "current_phase_only"
@@ -790,7 +895,7 @@ def test_task_runtime_uses_post_action_model_transition_to_complete_task(tmp_pat
         shutdown_policy="none",
     )
 
-    state = runtime.run_task("m1", LAMP_TASK)
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("accumulate two windows", "rotate_right"))
     recorder.close()
 
     event_names = [record["event"] for record in load_event_records(run_dir)]
@@ -830,7 +935,7 @@ def test_task_runtime_phase_execution_summary_accumulates_windows(tmp_path):
         shutdown_policy="none",
     )
 
-    state = runtime.run_task("m1", LAMP_TASK)
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("repair succeeds", "final_phase"))
     recorder.close()
 
     latest_summary = planner.judge_contexts[-1]["phase_execution_summary"]
@@ -858,7 +963,7 @@ def test_task_runtime_normalizes_yaw_wraparound_delta(tmp_path):
     assert measurements["yaw_delta_deg"] == 29.0
 
 
-def test_task_runtime_continue_transition_window_limit_advances_phase(tmp_path):
+def test_task_runtime_continue_transition_window_limit_stops_without_advancing_phase(tmp_path):
     class AlwaysContinuePlanner:
         planner_mode = "test"
 
@@ -878,19 +983,129 @@ def test_task_runtime_continue_transition_window_limit_advances_phase(tmp_path):
         TaskParser(mode="rule_based"),
         planner=AlwaysContinuePlanner(),
         shutdown_policy="none",
+        runtime_loop_guard_windows=2,
     )
 
-    state = runtime.run_task("m1", LAMP_TASK)
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("multi motion final phase", "final_phase"))
     recorder.close()
 
     events = load_event_records(run_dir)
     event_names = [record["event"] for record in events]
-    assert state.completed
+    assert not state.completed
+    assert state.stopped
+    assert state.current_phase_index == 0
+    assert state.stopped_reason == "runtime_loop_guard_reached"
+    assert "runtime_loop_guard_reached" in event_names
     assert "phase_transition_window_limit_reached" in event_names
     mission_state = json.loads((run_dir / "state/latest_state.json").read_text(encoding="utf-8"))
-    assert mission_state["max_phase_window_count"] == 5
+    assert mission_state["max_phase_window_count"] == 2
+    assert mission_state["stopped"] is True
+    assert mission_state["stopped_reason"] == "runtime_loop_guard_reached"
     assert "phase_window_counts" not in mission_state
     assert "current_phase_window_count" in mission_state
+
+
+def test_post_action_phase_context_attaches_latest_rgb_model_input(tmp_path):
+    run_dir = tmp_path / "phase_judge_image"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
+    parse_result = make_single_phase_parse_result("inspect latest frame", "locate_person")
+    state = MissionState(
+        run_id="run_with_image",
+        user_instruction=parse_result.instruction,
+        semantic_plan=parse_result.plan,
+        max_phase_window_count=3,
+    )
+    runtime._state_flight_memories[state.run_id] = FlightMemory(
+        run_id=state.run_id,
+        map_id="m1",
+        scene_instance_id="scene",
+        agent_id="uav",
+    )
+    image_path = tmp_path / "latest.png"
+    write_tiny_png(image_path)
+    plan = ShortHorizonPlan(
+        state.current_phase_name,
+        [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10}, "scan")],
+    )
+
+    phase_context = runtime._build_post_action_phase_context(
+        state,
+        {"current_phase": parse_result.plan.phases[0].to_dict(), "fragments": [{"name": "image"}]},
+        plan,
+        SafetyDecision(plan),
+        {"pose": {"x": 0, "y": 0, "z": 0}},
+        {
+            "pose": {"x": 0, "y": 0, "z": 0},
+            "source": "automatic_phase_window",
+            "frames": {
+                "rgb": {
+                    "path": str(image_path),
+                    "width": 1,
+                    "height": 1,
+                    "mock": False,
+                    "artifact_ref": str(image_path),
+                }
+            },
+        },
+        [],
+    )
+    recorder.close()
+
+    fragment = phase_context["fragments"][0]
+    model_input = fragment["model_inputs"][0]
+    assert fragment["name"] == "image"
+    assert fragment["source"] == "PostActionObservationImageContext"
+    assert model_input["encoding"] == "data_url"
+    assert model_input["data"].startswith("data:image/png;base64,")
+    assert model_input["metadata"]["mock"] is False
+    assert (
+        fragment["content"]["visual_evidence"]["interpretation_status"]
+        == "image_attached_for_direct_judge_inspection"
+    )
+    assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 1
+
+
+def test_post_action_phase_context_keeps_metadata_without_mock_or_missing_image_inputs(tmp_path):
+    run_dir = tmp_path / "phase_judge_no_image"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
+    parse_result = make_single_phase_parse_result("inspect latest frame", "locate_person")
+    state = MissionState(
+        run_id="run_without_image",
+        user_instruction=parse_result.instruction,
+        semantic_plan=parse_result.plan,
+        max_phase_window_count=3,
+    )
+    runtime._state_flight_memories[state.run_id] = FlightMemory(
+        run_id=state.run_id,
+        map_id="m1",
+        scene_instance_id="scene",
+        agent_id="uav",
+    )
+    plan = ShortHorizonPlan(state.current_phase_name, [PlannedStep.tool_step("uav.hover", {}, "hold")])
+
+    for rgb_frame in (
+        {"path": str(tmp_path / "missing.png"), "mock": False},
+        {"path": str(tmp_path / "mock.png"), "mock": True},
+    ):
+        phase_context = runtime._build_post_action_phase_context(
+            state,
+            {"current_phase": parse_result.plan.phases[0].to_dict(), "fragments": []},
+            plan,
+            SafetyDecision(plan),
+            {"pose": {"x": 0, "y": 0, "z": 0}},
+            {"pose": {"x": 0, "y": 0, "z": 0}, "frames": {"rgb": rgb_frame}},
+            [],
+        )
+        fragment = phase_context["fragments"][0]
+        assert fragment["name"] == "image"
+        assert fragment["content"]["visual_evidence"]["has_rgb"] is True
+        assert fragment["model_inputs"] == []
+        assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 0
+    recorder.close()
 
 
 def test_task_runtime_logs_contract_repair_success_and_continues_to_safety(tmp_path):
@@ -936,7 +1151,7 @@ def test_task_runtime_logs_contract_repair_success_and_continues_to_safety(tmp_p
         shutdown_policy="none",
     )
 
-    state = runtime.run_task("m1", LAMP_TASK)
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("repair succeeds", "final_phase"))
     recorder.close()
 
     event_names = [record["event"] for record in load_event_records(run_dir)]
@@ -973,7 +1188,7 @@ def test_task_runtime_stabilizes_after_each_motion_step_before_observation(tmp_p
         shutdown_policy="none",
     )
 
-    state = runtime.run_task("m1", LAMP_TASK)
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("multi motion final phase", "final_phase"))
     recorder.close()
 
     events = load_event_records(run_dir)
