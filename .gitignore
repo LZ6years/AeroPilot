@@ -27,6 +27,7 @@ data/state_logs/
 data/rec_videos/
 .external_refs/
 outputs/
+manual_outputs/
 
 # Local visual/demo artifacts
 docs/hyperframes/

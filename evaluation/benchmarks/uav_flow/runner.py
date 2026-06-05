@@ -7,6 +7,7 @@ from typing import Any
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase, load_cases
 from evaluation.benchmarks.uav_flow.config import UavFlowEvalConfig
+from evaluation.benchmarks.uav_flow.html_review import write_html_review
 from evaluation.benchmarks.uav_flow.metrics import evaluate_case_ndtw
 from evaluation.benchmarks.uav_flow.reports import (
     create_eval_dir,
@@ -58,33 +59,55 @@ class UavFlowBenchmarkRunner:
         eval_dir = create_eval_dir(self.config.output_dir, eval_id)
         console_lines = [f"uav_flow_eval: output={eval_dir}"]
         results = []
-        for case in self.load_cases():
-            result = self.run_case(case, eval_dir)
-            results.append(result)
-            console_lines.append(
-                f"{case.case_id}: status={result.get('status')} ndtw={result.get('ndtw', {}).get('ndtw')}"
-            )
+        cases = self.load_cases()
+        shared_env_client: UavFlowBenchmarkEnvClient | None = None
+        reuse_real_env = bool(self.config.real_unrealcv and self.config.reuse_real_unrealcv_env)
+        try:
+            for case in cases:
+                result, shared_env_client = self._run_case(
+                    case,
+                    eval_dir,
+                    env_client=shared_env_client if reuse_real_env else None,
+                    reuse_scene=reuse_real_env,
+                )
+                results.append(result)
+                console_lines.append(
+                    f"{case.case_id}: status={result.get('status')} ndtw={result.get('ndtw', {}).get('ndtw')}"
+                )
+                if reuse_real_env and _shared_env_failure(result):
+                    console_lines.append(f"{case.case_id}: stopping batch after shared UnrealCV env failure")
+                    break
+        finally:
+            if shared_env_client is not None:
+                shared_env_client.close_real_env()
         summary_paths = write_eval_summary(eval_dir, results, console_lines)
+        html_paths = _write_html_review_from_summary(eval_dir, summary_paths)
+        summary_paths.update(html_paths)
         return {"eval_dir": str(eval_dir), "summary_paths": summary_paths, "results": results}
 
     def run_case(self, case: UavFlowCase, eval_dir: str | Path) -> dict[str, Any]:
+        result, _ = self._run_case(case, eval_dir)
+        return result
+
+    def _run_case(
+        self,
+        case: UavFlowCase,
+        eval_dir: str | Path,
+        *,
+        env_client: UavFlowBenchmarkEnvClient | None = None,
+        reuse_scene: bool = False,
+    ) -> tuple[dict[str, Any], UavFlowBenchmarkEnvClient]:
         case_dir = Path(eval_dir) / "cases" / case.case_id
         run_dir = RunStore(self.config.run_root).create_run_dir(f"uav_flow_{case.case_id}")
         recorder = AsyncRunLogger(run_dir)
-        env_client = UavFlowBenchmarkEnvClient(
-            case,
-            run_dir=run_dir,
-            env_id=self.config.env_id,
-            uav_flow_repo_path=self.config.uav_flow_repo_path,
-            real_unrealcv=self.config.real_unrealcv,
-            time_dilation=self.config.time_dilation,
-            resolution=self.config.resolution,
-            seed=self.config.seed,
-            action_config=self.action_config,
-        )
+        needs_prepare = env_client is not None
+        if env_client is None:
+            env_client = self._make_env_client(case, run_dir)
         status = "ok"
         error: dict[str, Any] | None = None
         try:
+            if needs_prepare:
+                env_client.prepare_case(case, run_dir, scene_id=case.case_id)
             recorder.write_json(
                 "benchmark/uav_flow_case_planner_safe.json",
                 case.planner_safe_metadata(),
@@ -107,8 +130,16 @@ class UavFlowBenchmarkRunner:
                 "uav_flow_downtownwest",
                 case.selected_instruction,
                 agent_id="uav_flow_drone",
+                scene_policy="reuse_running" if reuse_scene else "isolated",
+                stop_scene_on_finish=not reuse_scene,
                 scene_id=case.case_id,
             )
+            if reuse_scene and self.config.shutdown_policy != "none":
+                runtime.safe_hover_reused_scene(
+                    "uav_flow_downtownwest",
+                    agent_id="uav_flow_drone",
+                    scene_id=case.case_id,
+                )
             completed = state.completed
             stopped = state.stopped
             stopped_reason = state.stopped_reason
@@ -206,7 +237,20 @@ class UavFlowBenchmarkRunner:
             "sr_judge": sr_result,
             "evaluation_truth_leak_check": leak_check,
             "error": error,
-        }
+        }, env_client
+
+    def _make_env_client(self, case: UavFlowCase, run_dir: str | Path) -> UavFlowBenchmarkEnvClient:
+        return UavFlowBenchmarkEnvClient(
+            case,
+            run_dir=run_dir,
+            env_id=self.config.env_id,
+            uav_flow_repo_path=self.config.uav_flow_repo_path,
+            real_unrealcv=self.config.real_unrealcv,
+            time_dilation=self.config.time_dilation,
+            resolution=self.config.resolution,
+            seed=self.config.seed,
+            action_config=self.action_config,
+        )
 
 
 def _benchmark_action_config(config: UavFlowEvalConfig) -> Any:
@@ -221,3 +265,34 @@ def _benchmark_safety_config(config: UavFlowEvalConfig) -> Any:
     base = loaded.to_dict()
     base.update(config.safety_overrides)
     return loaded.__class__.from_dict(base)
+
+
+def _shared_env_failure(result: dict[str, Any]) -> bool:
+    error = result.get("error") or {}
+    if not isinstance(error, dict):
+        return False
+    text = f"{error.get('error_type', '')} {error.get('error', '')}".lower()
+    return any(term in text for term in ("unrealcv", "scene initialization", "object placement", "prepare_case"))
+
+
+def _write_html_review_from_summary(eval_dir: str | Path, summary_paths: dict[str, str]) -> dict[str, str]:
+    """Generate static HTML review pages from the just-written summary."""
+
+    import json
+
+    summary_path = Path(summary_paths["summary_json"])
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    html_paths = write_html_review(eval_dir, summary)
+    html_review = html_paths.get("html_review")
+    if html_review:
+        summary_md = Path(summary_paths["summary_md"])
+        console_txt = Path(summary_paths["console_txt"])
+        summary_md.write_text(
+            summary_md.read_text(encoding="utf-8") + f"\n## HTML Review\n\n- `{html_review}`\n",
+            encoding="utf-8",
+        )
+        console_txt.write_text(
+            console_txt.read_text(encoding="utf-8") + f"html_review: {html_review}\n",
+            encoding="utf-8",
+        )
+    return html_paths

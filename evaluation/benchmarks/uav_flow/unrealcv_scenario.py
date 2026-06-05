@@ -81,12 +81,39 @@ class UavFlowBenchmarkEnvClient:
         return self.start_scene(map_id, scene_id)
 
     def stop_scene(self, scene_instance_id: str) -> None:
+        self.close_real_env()
+        if self.scene is not None:
+            self.scene.status = "stopped"
+
+    def close_real_env(self) -> None:
+        """Close the underlying simulator process when this client owns one."""
+
         if self.env is not None:
             close = getattr(self.env, "close", None)
             if callable(close):
                 close()
+            self.env = None
+            self._case_objects_initialized = False
         if self.scene is not None:
             self.scene.status = "stopped"
+
+    def prepare_case(self, case: UavFlowCase, run_dir: str | Path, scene_id: str | None = None) -> SceneInstance | None:
+        """Switch a running benchmark env to a new case without restarting UE."""
+
+        self.case = case
+        self.run_dir = Path(run_dir)
+        self.world_pose_cm = list(case.initial_pos)
+        self.pose_history.clear()
+        self._frame_index = 0
+        if self.scene is not None:
+            self.scene.scene_id = scene_id or case.case_id
+            self.scene.status = "running"
+        if self.real_unrealcv and self.env is not None:
+            self._place_case_objects()
+            self._apply_pose_to_real_env()
+        if self.scene is not None or self.env is not None:
+            self._record_pose()
+        return self.scene
 
     def reset_scene(self, scene_instance_id: str) -> SceneInstance:
         self.world_pose_cm = list(self.case.initial_pos)
@@ -206,11 +233,15 @@ class UavFlowBenchmarkEnvClient:
         self._case_objects_initialized = True
 
     def _place_case_objects(self) -> None:
-        if self.env is None or not self.case.target_pos:
+        if self.env is None:
             return
         unrealcv = self.env.unwrapped.unrealcv
         use_obj = self.case.use_obj
         obj_id = self.case.obj_id
+        if not self.case.target_pos or use_obj not in {1, 2}:
+            self._hide_unused_case_object("BP_Character_21")
+            self._hide_unused_case_object("BP_Character_22")
+            return
         obj_pos = self.case.target_pos[:3]
         obj_rot = self.case.target_pos[3:] if len(self.case.target_pos) >= 6 else [0.0, 0.0, 0.0]
         if use_obj == 1:

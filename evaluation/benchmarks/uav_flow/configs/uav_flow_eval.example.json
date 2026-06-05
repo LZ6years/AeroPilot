@@ -8,6 +8,7 @@
   "limit_per_class": 1,
   "enable_sr_judge": false,
   "real_unrealcv": false,
+  "reuse_real_unrealcv_env": true,
   "time_dilation": 10,
   "resolution": [256, 256],
   "seed": 0,

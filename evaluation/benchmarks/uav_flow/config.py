@@ -30,6 +30,7 @@ class UavFlowEvalConfig:
     limit_per_class: int | None = 1
     enable_sr_judge: bool = False
     real_unrealcv: bool = False
+    reuse_real_unrealcv_env: bool = True
     time_dilation: int = 10
     resolution: list[int] = field(default_factory=lambda: [256, 256])
     seed: int = 0
@@ -62,6 +63,7 @@ class UavFlowEvalConfig:
             limit_per_class=_optional_int(data.get("limit_per_class", cls.limit_per_class)),
             enable_sr_judge=bool(data.get("enable_sr_judge", False)),
             real_unrealcv=bool(data.get("real_unrealcv", False)),
+            reuse_real_unrealcv_env=bool(data.get("reuse_real_unrealcv_env", True)),
             time_dilation=int(data.get("time_dilation", cls.time_dilation)),
             resolution=_resolution(data.get("resolution", [256, 256])),
             seed=int(data.get("seed", cls.seed)),

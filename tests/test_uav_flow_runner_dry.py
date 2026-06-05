@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.config import UavFlowEvalConfig
 from evaluation.benchmarks.uav_flow.runner import UavFlowBenchmarkRunner
@@ -141,3 +143,103 @@ def test_runner_dry_writes_review_leak_check_and_rgb_summary(tmp_path, monkeypat
     assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "review.md").exists()
     assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "plot_result.json").exists()
     assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "visual_diagnostics.json").exists()
+
+
+def test_config_roundtrip_includes_reuse_real_unrealcv_env():
+    config = UavFlowEvalConfig.from_dict({"real_unrealcv": True, "reuse_real_unrealcv_env": False})
+
+    assert config.real_unrealcv is True
+    assert config.reuse_real_unrealcv_env is False
+    assert UavFlowEvalConfig.from_dict({}).reuse_real_unrealcv_env is True
+    assert config.to_dict()["reuse_real_unrealcv_env"] is False
+
+
+def test_runner_reuses_single_real_env_client_across_cases(tmp_path, monkeypatch):
+    import evaluation.benchmarks.uav_flow.runner as runner_module
+
+    CountingReusableClient.instances = []
+    monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
+    monkeypatch.setattr(runner_module, "ModelActionPlanner", FakePlanner)
+    monkeypatch.setattr(runner_module, "UavFlowBenchmarkEnvClient", CountingReusableClient)
+    cases = [make_case(), replace(make_case(), case_id="dry_2", file_name="dry_2.json")]
+    monkeypatch.setattr(UavFlowBenchmarkRunner, "load_cases", lambda self: cases)
+    config = UavFlowEvalConfig.from_dict(
+        {
+            "output_dir": str(tmp_path / "eval"),
+            "run_root": str(tmp_path / "runs"),
+            "real_unrealcv": True,
+            "reuse_real_unrealcv_env": True,
+            "parser_mode": "fake",
+            "enable_sr_judge": False,
+            "enable_visual_diagnostics": False,
+        }
+    )
+
+    result = UavFlowBenchmarkRunner(config).run(eval_id="reuse")
+
+    assert len(result["results"]) == 2
+    assert len(CountingReusableClient.instances) == 1
+    client = CountingReusableClient.instances[0]
+    assert client.start_real_count == 1
+    assert client.prepare_count == 1
+    assert client.stop_count == 0
+    assert client.close_count == 1
+    assert (tmp_path / "eval" / "reuse" / "cases" / "dry" / "review.md").exists()
+    assert (tmp_path / "eval" / "reuse" / "cases" / "dry_2" / "review.md").exists()
+    assert result["summary_paths"]["html_review"].endswith("review.html")
+    assert (tmp_path / "eval" / "reuse" / "review.html").exists()
+    assert (tmp_path / "eval" / "reuse" / "cases" / "dry" / "review.html").exists()
+
+
+class CountingReusableClient(UavFlowBenchmarkEnvClient):
+    instances: list["CountingReusableClient"] = []
+
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.start_real_count = 0
+        self.prepare_count = 0
+        self.stop_count = 0
+        self.close_count = 0
+        CountingReusableClient.instances.append(self)
+
+    def _start_real_env(self) -> None:
+        self.start_real_count += 1
+        self.env = object()
+
+    def prepare_case(self, case: UavFlowCase, run_dir, scene_id: str | None = None):
+        self.prepare_count += 1
+        return super().prepare_case(case, run_dir, scene_id=scene_id)
+
+    def stop_scene(self, scene_instance_id: str) -> None:
+        self.stop_count += 1
+        super().stop_scene(scene_instance_id)
+
+    def close_real_env(self) -> None:
+        if self.env is not None:
+            self.close_count += 1
+            self.env = None
+        if self.scene is not None:
+            self.scene.status = "stopped"
+
+    def _init_case_objects_in_real_env(self) -> None:
+        self._case_objects_initialized = True
+
+    def _place_case_objects(self) -> None:
+        return
+
+    def _apply_pose_to_real_env(self) -> None:
+        return
+
+    def _rgb_frame(self) -> dict:
+        self._frame_index += 1
+        path = self.run_dir / "artifacts" / "rgb" / f"frame_{self._frame_index:06d}.png"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._write_dry_rgb(path)
+        return {
+            "path": str(path),
+            "width": 224,
+            "height": 224,
+            "mock": False,
+            "source": "uav_flow_benchmark",
+            "case_id": self.case.case_id,
+        }

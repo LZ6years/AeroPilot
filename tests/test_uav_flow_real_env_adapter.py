@@ -6,10 +6,12 @@ upstream UAV-Flow runner without launching the simulator.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.unrealcv_scenario import UavFlowBenchmarkEnvClient
+from src.env_client.schemas import SceneInstance
 
 
 def make_case(*, use_obj: int, target_pos: list[float] | None = None) -> UavFlowCase:
@@ -84,6 +86,58 @@ def test_real_rgb_capture_syncs_camera_before_get_image(tmp_path):
     assert set_cam_index < get_image_index
 
 
+def test_prepare_case_reuses_objects_and_resets_case_state(tmp_path):
+    first = make_case(use_obj=1)
+    second = replace(
+        make_case(use_obj=2),
+        case_id="case_2",
+        initial_pos=[100.0, 200.0, 300.0, 0.0, 90.0, 0.0],
+        target_pos=[400.0, 500.0, 600.0, 4.0, 5.0, 6.0],
+    )
+    client, unrealcv = client_with_fake_env(first, tmp_path / "first")
+    client.scene = SceneInstance("scene_1", "map", first.case_id, "local", "127.0.0.1", 0, 0, "", None, "running")
+    client._init_case_objects_in_real_env()
+    client._record_pose()
+    client._frame_index = 7
+
+    client.prepare_case(second, tmp_path / "second", scene_id=second.case_id)
+
+    assert sum(1 for call in unrealcv.calls if call[0] == "new_obj") == 2
+    assert client.case == second
+    assert client.run_dir == tmp_path / "second"
+    assert client._frame_index == 0
+    assert len(client.pose_history) == 1
+    assert client.pose_history[0]["x"] == 0.0
+    assert client.scene is not None
+    assert client.scene.scene_id == "case_2"
+    assert ("set_obj_location", "BP_Character_22", [400.0, 500.0, 0]) in unrealcv.calls
+    assert ("set_obj_location", "BP_Character_21", [0, 0, -1000]) in unrealcv.calls
+    assert ("set_obj_location", "Drone_1", [100.0, 200.0, 300.0]) in unrealcv.calls
+    assert ("set_rotation", "Drone_1", -90.0) in unrealcv.calls
+    assert unrealcv.calls[-1] == ("set_cam", 0, [100.0, 200.0, 300.0], [0.0, 0.0, 90.0])
+
+
+def test_prepare_case_without_target_hides_benchmark_objects(tmp_path):
+    client, unrealcv = client_with_fake_env(make_case(use_obj=1), tmp_path / "first")
+    no_target = replace(make_case(use_obj=1), case_id="no_target", target_pos=[])
+
+    client._init_case_objects_in_real_env()
+    client.prepare_case(no_target, tmp_path / "no_target", scene_id=no_target.case_id)
+
+    assert ("set_obj_location", "BP_Character_21", [0, 0, -1000]) in unrealcv.calls
+    assert ("set_obj_location", "BP_Character_22", [0, 0, -1000]) in unrealcv.calls
+
+
+def test_stop_scene_closes_fake_env_once(tmp_path):
+    client, _ = client_with_fake_env(make_case(use_obj=1), tmp_path)
+    env = client.env
+
+    client.stop_scene("scene")
+
+    assert env.close_count == 1
+    assert client.env is None
+
+
 def client_with_fake_env(case: UavFlowCase, tmp_path: Path) -> tuple[UavFlowBenchmarkEnvClient, "FakeUnrealCv"]:
     client = UavFlowBenchmarkEnvClient(case, run_dir=tmp_path, env_id="fake", real_unrealcv=True)
     unrealcv = FakeUnrealCv(case.initial_pos)
@@ -94,6 +148,10 @@ def client_with_fake_env(case: UavFlowCase, tmp_path: Path) -> tuple[UavFlowBenc
 class FakeEnv:
     def __init__(self, unrealcv: "FakeUnrealCv") -> None:
         self.unwrapped = FakeUnwrapped(unrealcv)
+        self.close_count = 0
+
+    def close(self) -> None:
+        self.close_count += 1
 
 
 class FakeUnwrapped:
