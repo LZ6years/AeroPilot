@@ -22,6 +22,7 @@ from src.memory.flight_memory import FlightMemory
 from src.memory.context.modules.image import latest_rgb_model_inputs_from_frame
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
+from src.plugins import PluginRegistry
 from src.perception.raw_observation import RawObservation
 from src.runtime.control import UavStabilizer
 from src.runtime.configs.action_config import UavActionConfig
@@ -58,7 +59,8 @@ class TaskRuntime:
         self.safety = safety or SafetySupervisor()
         self.shutdown_policy = shutdown_policy
         self.runtime_loop_guard_windows = int(runtime_loop_guard_windows)
-        self.tools = ToolDispatcher(env_client)
+        self.plugin_registry = PluginRegistry.from_config()
+        self.tools = ToolDispatcher(env_client, plugin_registry=self.plugin_registry)
         self.stabilizer = UavStabilizer(self.tools, recorder, stabilization_config)
         # Optional synchronous stream for CLI/TUI frontends. The recorder remains
         # the historical source of truth; this sink is only for live user display.
@@ -66,6 +68,8 @@ class TaskRuntime:
         self.context_builder = ObservationContextBuilder(
             action_config=action_config,
             safety_config=self.safety.safety_config,
+            plugin_registry=self.plugin_registry,
+            enable_model_skill_selection=getattr(self.planner, "planner_mode", "") == "model",
         )
         self.memory_writer = MemoryEventWriter(self.recorder.run_dir)
         self.memory_reader = MemoryRecordReader(self.recorder.run_dir)
@@ -346,7 +350,18 @@ class TaskRuntime:
             self._debug_event("step_started", payload)
             if step.kind != "tool" or not step.tool:
                 raise ValueError("runtime action plan requires tool steps; observation is automatic")
-            result = self.tools.call(scene.scene_instance_id, agent_id, step.tool, step.args)
+            result = self.tools.call(
+                scene.scene_instance_id,
+                agent_id,
+                step.tool,
+                step.args,
+                runtime_context={
+                    "latest_observation": dict(state.latest_observation),
+                    "observation_before": dict(observation_before),
+                    "phase": plan.phase,
+                    "run_dir": str(self.recorder.run_dir),
+                },
+            )
             data = result.to_dict()
             self._record_action(state, step.tool, step.args, data)
             self._debug_event("step_completed", {**payload, "result": data})
@@ -438,13 +453,19 @@ class TaskRuntime:
             ),
         }
         self._agent_messages(transition.agent_messages, source="phase_judge", phase=plan.phase)
-        if safety_decision.interventions:
+        if safety_decision.interventions and not self._safety_allows_phase_transition(safety_decision):
             self._debug_event(
                 "phase_transition_suppressed_by_safety",
                 {**payload, "interventions": safety_decision.interventions},
             )
             if state.current_phase_window_count >= state.max_phase_window_count:
                 self._stop_for_runtime_loop_guard(scene, agent_id, state, payload, "safety_intervention_loop_guard")
+            return
+        if (
+            transition.decision == CONTINUE_CURRENT_PHASE
+            and self._visual_phase_budget_exhausted(payload, safety_decision)
+        ):
+            self._stop_for_visual_search_budget(scene, agent_id, state, payload, safety_decision)
             return
         if transition.decision == CONTINUE_CURRENT_PHASE:
             self._event("phase_transition_continued", payload)
@@ -491,6 +512,24 @@ class TaskRuntime:
         self._try_hover(scene, agent_id, state)
         state.mark_stopped("runtime_loop_guard_reached", source=reason)
 
+    def _stop_for_visual_search_budget(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+        payload: dict[str, Any],
+        safety_decision: SafetyDecision,
+    ) -> None:
+        stop_payload = {
+            **payload,
+            "reason": "visual_search_budget_exhausted",
+            "applied_decision": "stop_task_incomplete",
+            "safety_intervention_summary": self._safety_intervention_summary(safety_decision, state),
+        }
+        self._event("visual_search_budget_exhausted", stop_payload)
+        self._try_hover(scene, agent_id, state)
+        state.mark_stopped("visual_search_budget_exhausted", source="safety_yaw_scan_budget")
+
     def _judge_phase_transition_after_execution(
         self,
         state: MissionState,
@@ -501,10 +540,10 @@ class TaskRuntime:
         observation_after: dict,
         executed_steps: list[dict],
     ) -> PhaseTransition:
-        if safety_decision.interventions:
-            return PhaseTransition.continue_current_phase("phase transition suppressed because SafetySupervisor intervened")
         judge = getattr(self.planner, "judge_phase_transition", None)
         if not callable(judge):
+            if safety_decision.interventions:
+                return PhaseTransition.continue_current_phase("SafetySupervisor changed the action; post-action judgment is required")
             return plan.phase_transition
         phase_context = self._build_post_action_phase_context(
             state,
@@ -579,6 +618,19 @@ class TaskRuntime:
             },
             "fragments": phase_judge_fragments,
             "user_preferences": planner_context.get("user_preferences", {}),
+            "safety_intervention_summary": self._safety_intervention_summary(safety_decision, state, executed_steps),
+            "yaw_scan_remaining_deg": self._yaw_scan_remaining_deg(state),
+            "visual_phase_budget_exhausted": self._visual_phase_budget_exhausted(
+                {
+                    "phase_completion_evaluation": evaluate_phase_completion(
+                        planner_context.get("phase_completion_criteria", []),
+                        state.current_phase_execution_summary,
+                    )
+                },
+                safety_decision,
+            ),
+            "recent_executed_tools": self._executed_tool_names(executed_steps)[-5:],
+            "recent_safety_reasons": self._safety_intervention_reasons(safety_decision)[-5:],
             "phase_execution_summary": state.current_phase_execution_summary,
             "action_plan": plan.to_dict(),
             "executed_steps": list(executed_steps),
@@ -592,6 +644,73 @@ class TaskRuntime:
                 "note": "Full history is stored in memory/*.jsonl; MissionState keeps only latest state.",
             },
         }
+
+    def _safety_allows_phase_transition(self, safety_decision: SafetyDecision) -> bool:
+        if not safety_decision.interventions:
+            return True
+        intervention_items = [item for item in safety_decision.interventions if isinstance(item, dict)]
+        if len(intervention_items) != len(safety_decision.interventions):
+            return False
+        return all(
+            intervention.get("reason") == "yaw_scan_budget_exceeded"
+            and intervention.get("replacement") == "uav.hover"
+            for intervention in intervention_items
+        )
+
+    def _visual_phase_budget_exhausted(
+        self,
+        payload: dict[str, Any],
+        safety_decision: SafetyDecision,
+    ) -> bool:
+        evaluation = payload.get("phase_completion_evaluation", {})
+        if not isinstance(evaluation, dict) or int(evaluation.get("model_judged_count", 0) or 0) <= 0:
+            return False
+        return any(reason == "yaw_scan_budget_exceeded" for reason in self._safety_intervention_reasons(safety_decision))
+
+    def _safety_intervention_summary(
+        self,
+        safety_decision: SafetyDecision,
+        state: MissionState,
+        executed_steps: list[dict] | None = None,
+    ) -> dict[str, Any]:
+        reasons = self._safety_intervention_reasons(safety_decision)
+        replacements = [
+            str(item.get("replacement", ""))
+            for item in safety_decision.interventions
+            if isinstance(item, dict) and item.get("replacement")
+        ]
+        hover_replacement_count = sum(1 for replacement in replacements if replacement == "uav.hover")
+        return {
+            "intervention_count": len(safety_decision.interventions),
+            "reasons": reasons,
+            "replacements": replacements,
+            "hover_replacement_count": hover_replacement_count,
+            "all_replacements_hover": bool(replacements) and hover_replacement_count == len(replacements),
+            "yaw_scan_budget_exhausted": "yaw_scan_budget_exceeded" in reasons,
+            "yaw_scan_accum_deg": float(getattr(state, "yaw_scan_accum_deg", 0.0) or 0.0),
+            "yaw_scan_remaining_deg": self._yaw_scan_remaining_deg(state),
+            "executed_tools": self._executed_tool_names(executed_steps or []),
+        }
+
+    def _safety_intervention_reasons(self, safety_decision: SafetyDecision) -> list[str]:
+        return [
+            str(item.get("reason", ""))
+            for item in safety_decision.interventions
+            if isinstance(item, dict) and item.get("reason")
+        ]
+
+    def _yaw_scan_remaining_deg(self, state: MissionState) -> float:
+        max_yaw_scan = float(self.safety.safety_config.max_yaw_scan_accum_deg)
+        yaw_scan_accum = float(getattr(state, "yaw_scan_accum_deg", 0.0) or 0.0)
+        return max(0.0, max_yaw_scan - yaw_scan_accum)
+
+    def _executed_tool_names(self, executed_steps: list[dict]) -> list[str]:
+        names = []
+        for executed in executed_steps:
+            step = executed.get("step", {}) if isinstance(executed, dict) else {}
+            if isinstance(step, dict) and step.get("tool"):
+                names.append(str(step["tool"]))
+        return names
 
     def _post_action_phase_fragments(self, observation_after: dict) -> list[dict[str, Any]]:
         frames = observation_after.get("frames") if isinstance(observation_after, dict) else {}

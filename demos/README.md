@@ -2,6 +2,48 @@
 
 `demos/` 只放用户可以体验或阅读的完整流程。底层诊断脚本放在 `tests/manual/`，离线评估工具放在 `tools/`。
 
+## plugin_system_demo.py
+
+插件系统教学 demo。它不启动 UE，默认用一个固定 selector 展示插件如何从目录加载、如何选择 skill、如何把 skill 正文注入 `skills` context fragment，以及 research image context module 如何通过插件方式替换默认 image module。注意：默认模式不调用模型来选择 skill；如果 `.env` 有 API key 且 demo RGB 可读，research image 插件仍可能调用视觉模型生成 caption。
+
+运行：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+python demos/plugin_system_demo.py
+```
+
+如果要看真实模型选择 skill：
+
+```powershell
+$env:PYTHONIOENCODING='utf-8'
+python demos/plugin_system_demo.py --selector real
+```
+
+重点输出：
+
+```text
+runs/plugin_system_demo_<timestamp>/
+  plugin_system_walkthrough.md
+  01_config_snapshot.json
+  02_discovered_skills.json
+  03_selection_result.json
+  04_loaded_skill_summaries.json
+  05_latest_context.json
+  06_research_image_context.json
+```
+
+先读 `plugin_system_walkthrough.md`。它会按代码链路解释：
+
+- `configs/plugins.json` 如何进入 `PluginRegistry`
+- `plugins/knowledge/<plugin_name>/<skill_folder>/SKILL.md` 如何变成 skill catalog
+- selector 如何选择 skill
+- `SkillContentLoader` 如何展开正文
+- `DefaultSkillsContextModule` 如何生成 `skills` fragment
+- `ContextModuleRegistry` 如何加载 `research.multimodal_image`
+
+---
+
 如果你想看目前设计的完整执行 pipeline，优先读：
 
 ```text

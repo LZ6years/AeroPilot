@@ -89,8 +89,22 @@ def test_demo_memory_builds_context_with_schema_fragments_and_action_contract(tm
     assert "phase_execution_summary" in context
     assert context["observation_policy"]["mode"] == "automatic"
     assert context["phase_transition_policy"]["mode"] == "post_action_model_judged_runtime_applied"
-    assert set(context["context_schema"]["module_content_fields"]) == {"instruction", "image", "pose", "action", "map"}
-    assert [fragment["name"] for fragment in context["fragments"]] == ["instruction", "pose", "action", "image", "map"]
+    assert set(context["context_schema"]["module_content_fields"]) == {
+        "instruction",
+        "skills",
+        "image",
+        "pose",
+        "action",
+        "map",
+    }
+    assert [fragment["name"] for fragment in context["fragments"]] == [
+        "instruction",
+        "skills",
+        "pose",
+        "action",
+        "image",
+        "map",
+    ]
     assert context["allowed_action_constraints"]["planner_tools"] == ["uav.hover", "uav.turn_relative", "uav.move_body"]
 
 

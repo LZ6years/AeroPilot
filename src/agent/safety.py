@@ -81,6 +81,8 @@ class SafetySupervisor:
             return step, None
         if step.kind != "tool" or not step.tool:
             raise SafetyViolation(f"Unsupported planned step kind: {step.kind}")
+        if step.tool.startswith("skill."):
+            return step, None
         if step.tool not in self.ALLOWED_TOOLS:
             raise SafetyViolation(f"Tool is not allowed in short-horizon plan: {step.tool}")
         if step.tool == "uav.turn_relative":

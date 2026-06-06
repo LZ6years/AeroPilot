@@ -34,7 +34,7 @@ Required output shape:
   "steps": [
     {
       "kind": "tool",
-      "tool": "uav.hover | uav.turn_relative | uav.move_body",
+      "tool": "uav.hover | uav.turn_relative | uav.move_body | enabled skill.* tool",
       "args": {},
       "reason": "short repair reason"
     }

@@ -197,6 +197,9 @@ class ToolContractValidator:
         if step.tool == "uav.move_body":
             self._validate_move_body_args(step.args, index, constraints)
             return
+        if str(step.tool).startswith("skill."):
+            self._validate_skill_tool_args(step.tool or "", step.args, index, constraints)
+            return
         self._fail(
             "tool_schema_not_supported",
             f"Tool has no validator in model action plan: {step.tool}",
@@ -206,6 +209,21 @@ class ToolContractValidator:
             expected=sorted(DEFAULT_ALLOWED_TOOL_STEPS),
             actual=step.tool,
         )
+
+    def _validate_skill_tool_args(self, tool: str, args: dict[str, Any], index: int, constraints: dict[str, Any]) -> None:
+        schema = constraints.get("action_schemas", {}).get(tool, {})
+        input_schema = schema.get("input_schema") if isinstance(schema, dict) else None
+        if not isinstance(input_schema, dict):
+            self._fail(
+                "skill_tool_schema_missing",
+                f"Skill tool has no input_schema in planner context: {tool}",
+                step_index=index,
+                tool=tool,
+                field="input_schema",
+                expected="JSON schema object",
+                actual=schema,
+            )
+        _validate_json_schema_subset(self, tool, args, input_schema, index)
 
     def _validate_turn_relative_args(self, args: dict[str, Any], index: int, constraints: dict[str, Any]) -> None:
         if set(args) != {"yaw_deg"}:
@@ -393,3 +411,144 @@ class ToolContractValidator:
                 actual=actual,
             )
         )
+
+
+def _validate_json_schema_subset(
+    validator: ToolContractValidator,
+    tool: str,
+    args: dict[str, Any],
+    schema: dict[str, Any],
+    index: int,
+) -> None:
+    if schema.get("type", "object") != "object":
+        validator._fail(
+            "skill_tool_schema_type_unsupported",
+            f"Skill tool schema must be an object schema: {tool}",
+            step_index=index,
+            tool=tool,
+            field="input_schema.type",
+            expected="object",
+            actual=schema.get("type"),
+        )
+    if not isinstance(args, dict):
+        validator._fail(
+            "skill_tool_args_invalid",
+            f"Skill tool args must be an object: {tool}",
+            step_index=index,
+            tool=tool,
+            field="args",
+            expected="object",
+            actual=args,
+        )
+    properties = schema.get("properties", {})
+    if not isinstance(properties, dict):
+        properties = {}
+    required = schema.get("required", [])
+    if not isinstance(required, list):
+        required = []
+    for name in required:
+        if name not in args:
+            validator._fail(
+                "skill_tool_required_arg_missing",
+                f"Skill tool requires arg: {name}",
+                step_index=index,
+                tool=tool,
+                field=str(name),
+                expected="present",
+            )
+    additional_allowed = bool(schema.get("additionalProperties", True))
+    if not additional_allowed:
+        extra = sorted(set(args) - set(properties))
+        if extra:
+            validator._fail(
+                "skill_tool_additional_arg_forbidden",
+                f"Skill tool received unsupported args: {extra}",
+                step_index=index,
+                tool=tool,
+                field="args",
+                expected=sorted(properties),
+                actual=extra,
+            )
+    for name, value in args.items():
+        prop_schema = properties.get(name)
+        if isinstance(prop_schema, dict):
+            _validate_json_value_subset(validator, tool, name, value, prop_schema, index)
+
+
+def _validate_json_value_subset(
+    validator: ToolContractValidator,
+    tool: str,
+    name: str,
+    value: Any,
+    schema: dict[str, Any],
+    index: int,
+) -> None:
+    expected_type = schema.get("type")
+    if expected_type == "string" and not isinstance(value, str):
+        _type_fail(validator, tool, name, value, "string", index)
+    if expected_type == "number" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+        _type_fail(validator, tool, name, value, "number", index)
+    if expected_type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+        _type_fail(validator, tool, name, value, "integer", index)
+    if expected_type == "boolean" and not isinstance(value, bool):
+        _type_fail(validator, tool, name, value, "boolean", index)
+    if expected_type == "array":
+        if not isinstance(value, list):
+            _type_fail(validator, tool, name, value, "array", index)
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for item_index, item in enumerate(value):
+                _validate_json_value_subset(validator, tool, f"{name}[{item_index}]", item, item_schema, index)
+    enum = schema.get("enum")
+    if isinstance(enum, list) and value not in enum:
+        validator._fail(
+            "skill_tool_enum_invalid",
+            f"Skill tool arg {name} must be one of {enum}",
+            step_index=index,
+            tool=tool,
+            field=name,
+            expected=enum,
+            actual=value,
+        )
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        minimum = schema.get("minimum")
+        maximum = schema.get("maximum")
+        if minimum is not None and float(value) < float(minimum):
+            validator._fail(
+                "skill_tool_number_below_minimum",
+                f"Skill tool arg {name} below minimum",
+                step_index=index,
+                tool=tool,
+                field=name,
+                expected=f">= {minimum}",
+                actual=value,
+            )
+        if maximum is not None and float(value) > float(maximum):
+            validator._fail(
+                "skill_tool_number_above_maximum",
+                f"Skill tool arg {name} above maximum",
+                step_index=index,
+                tool=tool,
+                field=name,
+                expected=f"<= {maximum}",
+                actual=value,
+            )
+
+
+def _type_fail(
+    validator: ToolContractValidator,
+    tool: str,
+    name: str,
+    value: Any,
+    expected: str,
+    index: int,
+) -> None:
+    validator._fail(
+        "skill_tool_arg_type_invalid",
+        f"Skill tool arg {name} must be {expected}",
+        step_index=index,
+        tool=tool,
+        field=name,
+        expected=expected,
+        actual=value,
+    )

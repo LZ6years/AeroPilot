@@ -10,12 +10,13 @@ import pytest
 from src.agent.messages import AgentMessage
 from src.agent.semantic.task_parser import TaskParser
 from src.memory.context.composer import ContextComposer
-from src.memory.context.custom_modules.multimodal_image import MultimodalImageContextModule
+from plugins.research.multimodal_image.context_modules import MultimodalImageContextModule
 from src.memory.flight_memory import FlightMemory
 from src.memory.context.modules.base import ContextModule
 from src.memory.context.registry import ContextModuleConfigError, ContextModuleRegistry
 from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
 from src.memory.stores import MapMemoryStore, MemoryEventWriter, MemoryRecordReader
+from src.plugins import PluginRegistry
 from src.runtime.configs.model_config import ModelConfig
 
 
@@ -135,6 +136,7 @@ def test_context_composer_outputs_uniform_fragments(tmp_path):
     assert context["semantic_goal"] == result.plan.goal.to_dict()
     assert [fragment["name"] for fragment in context["fragments"]] == [
         "instruction",
+        "skills",
         "pose",
         "action",
         "image",
@@ -143,12 +145,20 @@ def test_context_composer_outputs_uniform_fragments(tmp_path):
     for fragment in context["fragments"]:
         assert {"facts", "inferences", "goals", "risks", "budget", "metadata"} <= set(fragment)
         assert "priority" in fragment["budget"]
-    assert context["metadata"]["budget"]["max_tokens_estimate"] == 1200
-    assert context["metadata"]["budget"]["final_tokens_estimate"] <= 1200
+    assert context["metadata"]["budget"]["max_tokens_estimate"] == 2000
+    assert context["metadata"]["budget"]["final_tokens_estimate"] <= 2000
     assert "context_schema" in context
     assert "planner_context_fields" in context["context_schema"]
     assert "fragment_common_fields" in context["context_schema"]
-    assert set(context["context_schema"]["module_content_fields"]) == {"instruction", "image", "pose", "action", "map"}
+    assert set(context["context_schema"]["module_content_fields"]) == {
+        "instruction",
+        "skills",
+        "image",
+        "pose",
+        "action",
+        "map",
+    }
+    assert "available_skills" in context["context_schema"]["module_content_fields"]["skills"]["content_fields"]
     assert "latest_pose" in context["context_schema"]["module_content_fields"]["pose"]["content_fields"]
     assert "recent_rgb_frame_metadata" in context["context_schema"]["module_content_fields"]["image"]["content_fields"]
 
@@ -590,14 +600,14 @@ def test_flight_memory_keeps_long_ref_window_for_modules(tmp_path):
 def test_registry_can_disable_modules(tmp_path):
     registry = ContextModuleRegistry.from_dict(
         {
-            "modules": {
+            "context_modules": {
                 "instruction": "default",
+                "skills": False,
                 "image": False,
                 "pose": "default",
                 "action": "default",
                 "map": False,
-            },
-            "custom_modules": {},
+            }
         }
     )
     result = make_parse_result()
@@ -607,7 +617,7 @@ def test_registry_can_disable_modules(tmp_path):
     )
 
     assert [fragment["name"] for fragment in context["fragments"]] == ["instruction", "pose", "action"]
-    assert context["disabled_fragments"] == ["image", "map"]
+    assert context["disabled_fragments"] == ["skills", "image", "map"]
     assert set(context["context_schema"]["module_content_fields"]) == {"instruction", "pose", "action"}
     assert "image" not in context["context_schema"]["module_content_fields"]
     assert "map" not in context["context_schema"]["module_content_fields"]
@@ -618,99 +628,37 @@ def test_default_modules_describe_their_outputs():
 
     descriptions = registry.describe_modules()
 
-    assert set(descriptions) == {"instruction", "image", "pose", "action", "map"}
+    assert set(descriptions) == {"instruction", "skills", "image", "pose", "action", "map"}
     assert "active_instruction" in descriptions["instruction"]["content_fields"]
+    assert "available_skills" in descriptions["skills"]["content_fields"]
     assert "latest_frame_metadata" in descriptions["image"]["content_fields"]
     assert "latest_pose" in descriptions["pose"]["content_fields"]
     assert "recent_actions" in descriptions["action"]["content_fields"]
     assert "recalled_map_memories" in descriptions["map"]["content_fields"]
 
 
-def test_registry_loads_custom_module(tmp_path, monkeypatch):
-    package = tmp_path / "custom_memory"
-    package.mkdir()
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "paper_x.py").write_text(
-        "\n".join(
-            [
-                "from src.memory.context.modules.base import ContextModule",
-                "from src.memory.context.schemas import BudgetSpec, ContextFragment",
-                "",
-                "class PaperXImageMemoryModule(ContextModule):",
-                "    name = 'image'",
-                "    def build(self, sources, stage_context):",
-                "        return ContextFragment(",
-                "            name='image', enabled=True, source='PaperXImageMemoryModule',",
-                "            content={'paper': 'x', 'phase': stage_context.current_phase}, confidence='medium',",
-                "            budget=BudgetSpec(priority=81, tokens_estimate=123)",
-                "        )",
-                "    def describe_output(self):",
-                "        return {'summary': 'Paper X image memory.', 'content_fields': {'paper': 'Paper method label', 'phase': 'Current phase'}}",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-
-    registry = ContextModuleRegistry.from_dict(
+def test_registry_loads_plugin_context_module():
+    plugin_registry = PluginRegistry.discover(
         {
-            "modules": {"image": "paper_x_image_memory"},
-            "custom_modules": {
-                "paper_x_image_memory": {
-                    "module_path": "custom_memory.paper_x",
-                    "class_name": "PaperXImageMemoryModule",
-                }
-            },
+            "plugins": {
+                "roots": ["plugins/research"],
+                "enabled": ["research.multimodal_image"],
+            }
         }
     )
 
-    fragment = registry.modules["image"].build(
-        MemorySourceBundle(make_memory(tmp_path)),
-        make_stage_context(current_phase={"name": "custom_phase"}),
+    registry = ContextModuleRegistry.from_dict(
+        {"context_modules": {"image": "research.multimodal_image"}},
+        plugin_registry=plugin_registry,
     )
 
-    assert fragment.source == "PaperXImageMemoryModule"
-    assert fragment.content == {"paper": "x", "phase": {"name": "custom_phase"}}
-    assert registry.describe_modules()["image"]["content_fields"]["paper"] == "Paper method label"
+    assert registry.modules["image"].__class__.__name__ == "PluginContextModule"
+    assert registry.describe_modules()["image"]["content_fields"]["visual_processing"]
 
 
-def test_registry_rejects_custom_module_without_output_description(tmp_path, monkeypatch):
-    package = tmp_path / "custom_memory_missing_description"
-    package.mkdir()
-    (package / "__init__.py").write_text("", encoding="utf-8")
-    (package / "paper_x.py").write_text(
-        "\n".join(
-            [
-                "from src.memory.context.modules.base import ContextModule",
-                "from src.memory.context.schemas import ContextFragment",
-                "",
-                "class PaperXImageMemoryModule(ContextModule):",
-                "    name = 'image'",
-                "    def build(self, sources, stage_context):",
-                "        return ContextFragment(name='image', enabled=True, source='PaperXImageMemoryModule')",
-            ]
-        ),
-        encoding="utf-8",
-    )
-    monkeypatch.syspath_prepend(str(tmp_path))
-
-    with pytest.raises(ContextModuleConfigError, match="must implement describe_output"):
-        ContextModuleRegistry.from_dict(
-            {
-                "modules": {"image": "paper_x_image_memory"},
-                "custom_modules": {
-                    "paper_x_image_memory": {
-                        "module_path": "custom_memory_missing_description.paper_x",
-                        "class_name": "PaperXImageMemoryModule",
-                    }
-                },
-            }
-        )
-
-
-def test_registry_rejects_unknown_custom_module():
-    with pytest.raises(ContextModuleConfigError, match="Unknown custom context module"):
-        ContextModuleRegistry.from_dict({"modules": {"image": "missing"}, "custom_modules": {}})
+def test_registry_rejects_unknown_plugin_context_module():
+    with pytest.raises(ContextModuleConfigError, match="Unknown plugin context module"):
+        ContextModuleRegistry.from_dict({"context_modules": {"image": "missing.plugin"}})
 
 
 def test_map_memory_store_manifest_recall_and_map_filter(tmp_path):

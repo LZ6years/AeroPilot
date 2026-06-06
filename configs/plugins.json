@@ -1,0 +1,24 @@
+{
+  "plugins": {
+    "roots": [
+      "plugins/knowledge",
+      "plugins/research"
+    ],
+    "enabled": [
+      "knowledge.uav_flight"
+    ],
+    "disabled": []
+  },
+  "context_modules": {
+    "instruction": "default",
+    "skills": "default",
+    "image": "default",
+    "pose": "default",
+    "action": "default",
+    "map": "default"
+  },
+  "skills": {
+    "selection": "model",
+    "include_body": "summary"
+  }
+}

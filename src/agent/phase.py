@@ -32,6 +32,8 @@ TRANSLATION_FIELDS = {
     "planar": "planar_displacement_m",
 }
 
+MEASURABLE_CRITERIA_KINDS = {"translation", "rotation", "hover"}
+
 
 @dataclass(frozen=True)
 class PhaseTransition:
@@ -102,6 +104,9 @@ def evaluate_phase_completion(
     measurements = _phase_measurements(phase_execution_summary)
     evaluations = []
     for item in criteria_list:
+        if not _is_measurable_criteria(item):
+            evaluations.append(_model_judged_evaluation(item))
+            continue
         field = criteria_measurement_field(item)
         actual = _actual_for_field(field, measurements, phase_execution_summary, item)
         target = _signed_target(item)
@@ -123,9 +128,13 @@ def evaluate_phase_completion(
                 "status": _status(actual, target, tolerance, overshoot, bool(item.get("correction_allowed", False))),
             }
         )
+    measurable = [item for item in evaluations if item["status"] != "requires_model_judgment"]
+    model_judged = [item for item in evaluations if item["status"] == "requires_model_judgment"]
     return {
         "criteria_count": len(evaluations),
-        "all_within_tolerance": bool(evaluations) and all(item["within_tolerance"] for item in evaluations),
+        "measurable_count": len(measurable),
+        "model_judged_count": len(model_judged),
+        "all_within_tolerance": bool(measurable) and all(item["within_tolerance"] for item in measurable),
         "any_overshoot": any(item["overshoot"] for item in evaluations),
         "evaluations": evaluations,
     }
@@ -168,6 +177,26 @@ def _signed_target(criteria: dict[str, Any]) -> float:
     if axis in {"backward", "left", "down"} and target > 0:
         return -target
     return target
+
+
+def _is_measurable_criteria(criteria: dict[str, Any]) -> bool:
+    kind = str(criteria.get("kind", "")).strip()
+    return kind in MEASURABLE_CRITERIA_KINDS
+
+
+def _model_judged_evaluation(criteria: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "criteria": dict(criteria),
+        "field": None,
+        "target": criteria.get("target"),
+        "actual": None,
+        "error": None,
+        "tolerance": None,
+        "within_tolerance": False,
+        "overshoot": False,
+        "correction_allowed": bool(criteria.get("correction_allowed", False)),
+        "status": "requires_model_judgment",
+    }
 
 
 def _is_overshoot(actual: float, target: float, tolerance: float) -> bool:

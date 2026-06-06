@@ -20,7 +20,7 @@ from .constants import SCHEMA_VERSION, STRATEGY
 from .description import normalize_visual_description, visual_description_text
 
 
-class MultimodalImageContextModule(DefaultImageContextModule):
+class PluginContextModule(DefaultImageContextModule):
     """Default image metadata plus phase-aware visual captioning."""
 
     def __init__(

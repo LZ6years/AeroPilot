@@ -13,13 +13,14 @@ from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
-from src.agent.safety import SafetyDecision
+from src.agent.safety import SafetyDecision, SafetySupervisor
 from src.agent.semantic.schemas import SemanticGoal, SemanticPhase, SemanticPlan, SemanticTarget, TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter
 from src.env_client.local_client import LocalEnvClient
 from src.env_client.schemas import MapPackage
 from src.runtime.configs.action_config import UavActionConfig
+from src.runtime.configs.safety_config import UavSafetyConfig
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.configs.model_config import ModelConfig
@@ -62,6 +63,39 @@ def make_single_phase_parse_result(
                 final_state="done",
             ),
             phases=[SemanticPhase(1, 1, phase_name, "complete the single test phase", [])],
+        ),
+    )
+
+
+def make_visual_alignment_parse_result(
+    instruction: str = "turn to face the visible target",
+    phase_name: str = "visual_align_target",
+) -> TaskParseResult:
+    return TaskParseResult(
+        instruction=instruction,
+        parser_mode="test",
+        plan=SemanticPlan(
+            intent="visual_alignment",
+            goal=SemanticGoal(
+                target=SemanticTarget("visible target", {}),
+                final_state="target is visually aligned",
+            ),
+            phases=[
+                SemanticPhase(
+                    1,
+                    1,
+                    phase_name,
+                    "align the UAV view with the target",
+                    [
+                        {
+                            "kind": "visual_alignment",
+                            "axis": "yaw",
+                            "target": "visible target",
+                            "correction_allowed": True,
+                        }
+                    ],
+                )
+            ],
         ),
     )
 
@@ -721,6 +755,98 @@ def test_task_runtime_complete_transition_finishes_without_advancing_phase(tmp_p
     assert state.completed
     assert state.current_phase_index == 0
     assert planner.calls == 1
+
+
+def test_task_runtime_allows_judge_completion_after_yaw_budget_hover(tmp_path):
+    class YawBudgetCompletePlanner:
+        planner_mode = "test"
+
+        def __init__(self) -> None:
+            self.judge_contexts = []
+
+        def plan_next(self, state, context=None):
+            return ShortHorizonPlan(
+                state.current_phase_name,
+                [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10.0}, "scan toward target")],
+            )
+
+        def judge_phase_transition(self, phase_context):
+            self.judge_contexts.append(phase_context)
+            return PhaseTransition(COMPLETE_TASK, "latest visual evidence satisfies the phase")
+
+    run_dir = tmp_path / "yaw_budget_hover_complete"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = YawBudgetCompletePlanner()
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        safety=SafetySupervisor(UavSafetyConfig(max_yaw_scan_accum_deg=0.0)),
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task("m1", make_visual_alignment_parse_result())
+    recorder.close()
+
+    event_names = [record["event"] for record in load_event_records(run_dir)]
+    assert state.completed
+    assert not state.stopped
+    assert planner.judge_contexts
+    assert planner.judge_contexts[0]["visual_phase_budget_exhausted"] is True
+    assert planner.judge_contexts[0]["safety_intervention_summary"]["reasons"] == ["yaw_scan_budget_exceeded"]
+    assert planner.judge_contexts[0]["recent_executed_tools"] == ["uav.hover"]
+    assert "phase_transition_applied" in event_names
+    assert "phase_transition_suppressed_by_safety" not in event_names
+
+
+def test_task_runtime_stops_visual_phase_when_yaw_budget_exhausted_and_judge_continues(tmp_path):
+    class YawBudgetContinuePlanner:
+        planner_mode = "test"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.judge_contexts = []
+
+        def plan_next(self, state, context=None):
+            self.calls += 1
+            return ShortHorizonPlan(
+                state.current_phase_name,
+                [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10.0}, "continue visual search")],
+            )
+
+        def judge_phase_transition(self, phase_context):
+            self.judge_contexts.append(phase_context)
+            return PhaseTransition(CONTINUE_CURRENT_PHASE, "target is not visually confirmed")
+
+    run_dir = tmp_path / "yaw_budget_visual_stop"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = YawBudgetContinuePlanner()
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        safety=SafetySupervisor(UavSafetyConfig(max_yaw_scan_accum_deg=0.0)),
+        shutdown_policy="none",
+        runtime_loop_guard_windows=100,
+    )
+
+    state = runtime.run_parsed_task("m1", make_visual_alignment_parse_result())
+    recorder.close()
+
+    event_names = [record["event"] for record in load_event_records(run_dir)]
+    assert not state.completed
+    assert state.stopped
+    assert state.stopped_reason == "visual_search_budget_exhausted"
+    assert state.stop_source == "safety_yaw_scan_budget"
+    assert planner.calls == 1
+    assert planner.judge_contexts[0]["phase_completion_evaluation"]["model_judged_count"] == 1
+    assert "visual_search_budget_exhausted" in event_names
+    assert "runtime_loop_guard_reached" not in event_names
+    assert "phase_transition_suppressed_by_safety" not in event_names
 
 
 def test_task_runtime_complete_task_before_final_phase_advances_instead_of_finishing(tmp_path):

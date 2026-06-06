@@ -1,53 +1,91 @@
-# 统一插件化架构
+# 01 Architecture
 
-![无人机 Agent 统一插件化架构](assets/unified_plugin_architecture.png)
+插件系统是 UAV-Agent 的扩展装配层。它不替代 `TaskRuntime`、`ToolDispatcher`、`ContextModuleRegistry` 或 `FlightMemory`，而是把不同插件贡献分发给这些已有边界。
 
-## 设计目标
+## 角色划分
 
-统一插件系统的目标不是把无人机行为写成固定策略，而是让 Agent Kernel 能发现并组合不同类型的能力：
+```text
+plugins/
+  插件资产目录：Markdown skills、research context modules、未来用户插件
 
-- 知识：任务经验、飞行规则、困惑时提问策略、位置描述规范。
-- 能力：看图理解、场景判断、目标确认、结果总结。
-- 工具：无人机移动、拍照、读取位姿、保存证据。
-- 上下文：把 instruction、image、pose、action、map 等信息组织成模型可读片段。
-- 回复协议：过程回复、澄清提问、最终回答、证据引用。
+src/plugins/
+  插件系统代码：发现、注册、选择、装配
 
-Agent Kernel 只负责生命周期、上下文构建、语义计划生成、工具执行和反馈循环。具体“怎么观察目标、什么时候换角度、如何描述结果”应该由 skills 和上下文引导模型生成语义计划，而不是在 runtime 里写死。
+src/memory/context/
+  上下文运行接口：ContextModule、ContextFragment、ContextComposer
 
-## 插件层只做贡献声明
-
-插件不应该直接控制整个飞行流程。推荐把插件抽象成贡献集合：
-
-```python
-@dataclass
-class PluginContributions:
-    knowledge_skills: list[KnowledgeSkill]
-    capability_skills: list[CapabilitySkill]
-    tool_specs: list[ToolSpec]
-    context_modules: list[ContextModule]
-    response_protocols: list[ResponseProtocol]
+TaskRuntime / ObservationContextBuilder
+  飞行时加载入口：把插件贡献接入 planner context
 ```
 
-这些贡献分别进入已有或未来的系统：
+## 系统边界
 
-- `tool_specs` 进入现有 `ToolRegistry`。
-- `context_modules` 进入现有 `ContextModuleRegistry`。
-- `knowledge_skills` 被注入 planner context。
-- `capability_skills` 提供模型能力包装，例如看图理解或结果总结。
-- `response_protocols` 生成用户可见的过程回复、追问和最终回答。
+插件系统只负责贡献和装配：
 
-## 不写死目标搜索策略
+- `KnowledgeSkill` 进入 `knowledge` context fragment。
+- `ContextModuleContribution` 进入 `ContextModuleRegistry`。
+- `ToolContribution` 未来进入 `ToolRegistry`，但仍必须经过 validator 和 safety。
+- `ResponseProtocol` 未来进入 agent message / final answer 层。
+- `PolicyRule` 未来进入约束合成层。
 
-以“我有点渴了，帮我找售货机”为例，runtime 不应该内置“右转 45 度、拍照、再右转”的固定策略。
+插件系统不做：
 
-更合适的流程是：
+- 不直接调用无人机。
+- 不直接输出动作。
+- 不直接判断 phase 是否完成。
+- 不直接读完整 run artifacts。
+- 不绕过 `ToolContractValidator` 和 `SafetySupervisor`。
 
-1. 用户自然语言进入任务解析。
-2. PluginRegistry 检索相关知识，例如“寻找周围目标时可以先观察当前视角，目标不明显时扩大视野，低置信度时向用户说明不确定性”。
-3. 模型基于任务、图片、位姿、历史动作和 skills 生成语义计划。
-4. runtime 执行模型给出的工具调用。
-5. 每次观察和动作结果写回 memory/context。
-6. 回复协议把关键过程和最终答案发给人类。
+## 加载链路
 
-这样保留了模型自主规划能力，也让未来的 skills/plugin 可以持续扩展经验。
+```mermaid
+flowchart TD
+    CFG["configs/plugins.json"] --> DISC["PluginDiscovery"]
+    DISC --> REG["PluginRegistry"]
+    REG --> KS["KnowledgeSkill Catalog"]
+    REG --> CMC["ContextModule Contributions"]
+    REG --> FUT["Future Contributions"]
 
+    KS --> KMOD["KnowledgeContextModule"]
+    CMC --> CMREG["ContextModuleRegistry"]
+    KMOD --> FRAG["knowledge ContextFragment"]
+    CMREG --> FRAGS["context fragments"]
+    FRAG --> COMP["ContextComposer"]
+    FRAGS --> COMP
+    COMP --> PC["PlannerContext"]
+```
+
+## 飞行链路
+
+```mermaid
+flowchart TD
+    USER["User Instruction"] --> TP["TaskParser"]
+    TP --> STATE["MissionState"]
+    OBS["Latest Observation<br/>RGB / pose / action results"] --> STATE
+
+    STATE --> OCB["ObservationContextBuilder"]
+    OCB --> PLUG["PluginRegistry"]
+    PLUG --> KNOW["KnowledgeContextModule<br/>model-selected skills"]
+    OCB --> CM["ContextModuleRegistry"]
+    KNOW --> PC["PlannerContext"]
+    CM --> PC
+
+    PC --> PLANNER["ModelActionPlanner"]
+    PLANNER --> VALID["ToolContractValidator"]
+    VALID --> SAFETY["SafetySupervisor"]
+    SAFETY --> DISP["ToolDispatcher"]
+    DISP --> UAV["UAV Env"]
+```
+
+## 第一版目标
+
+第一版先让飞行知识稳定进入 planner context：
+
+```text
+instruction / semantic_plan / phase / image availability
+  -> model selects KnowledgeSkill from listing
+  -> skills fragment
+  -> planner context
+```
+
+这能解决 UAV-Flow 暴露出来的一类通用问题：模型需要知道“turn to face person”是视觉对齐任务，不是 yaw 回到 0；“move to a position X meters from person”需要先定位目标，再根据距离调整动作。

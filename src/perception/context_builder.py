@@ -11,6 +11,7 @@ from src.memory.flight_memory import FlightMemory
 from src.memory.context.registry import ContextModuleRegistry
 from src.memory.context.schemas import MemorySourceBundle, StageContextInput
 from src.memory.stores import MapMemoryStore, RunMemoryStore
+from src.plugins import PluginRegistry
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
 
@@ -24,13 +25,22 @@ class ObservationContextBuilder:
         action_config: UavActionConfig | None = None,
         safety_config: UavSafetyConfig | None = None,
         registry: ContextModuleRegistry | None = None,
+        plugin_registry: PluginRegistry | None = None,
+        enable_model_skill_selection: bool = False,
         map_memory: MapMemoryStore | None = None,
         map_memory_path: str | Path = DEFAULT_MAP_MEMORY_PATH,
         run_memory: RunMemoryStore | None = None,
     ) -> None:
         self.action_config = action_config or UavActionConfig()
         self.safety_config = safety_config or UavSafetyConfig()
-        self.composer = ContextComposer(registry or ContextModuleRegistry.from_config())
+        self.plugin_registry = plugin_registry or PluginRegistry.from_config()
+        self.composer = ContextComposer(
+            registry
+            or ContextModuleRegistry.from_config(
+                plugin_registry=self.plugin_registry,
+                enable_model_skill_selection=enable_model_skill_selection,
+            )
+        )
         self.map_memory = map_memory if map_memory is not None else MapMemoryStore.from_file(map_memory_path)
         self.run_memory = run_memory or RunMemoryStore()
 
@@ -82,39 +92,43 @@ class ObservationContextBuilder:
     def _allowed_action_constraints(self) -> dict[str, Any]:
         action_config = self.action_config
         safety_config = self.safety_config
-        return {
-            "planner_tools": ["uav.hover", "uav.turn_relative", "uav.move_body"],
-            "action_schemas": {
-                "uav.hover": {
-                    "args": {},
-                },
-                "uav.turn_relative": {
-                    "args": {"yaw_deg": "number"},
-                    "limits": {
-                        "yaw_deg_min": -abs(safety_config.max_yaw_step_deg),
-                        "yaw_deg_max": abs(safety_config.max_yaw_step_deg),
-                    },
-                },
-                "uav.move_body": {
-                    "args_one_of": [
-                        {
-                            "direction": "forward|backward|left|right|up|down",
-                            "duration": "number",
-                        },
-                        {
-                            "vx": "number",
-                            "vy": "number",
-                            "vz": "number",
-                            "duration": "number",
-                        },
-                    ],
-                    "limits": {
-                        "abs_vx_vy_max": abs(safety_config.max_linear_velocity_mps),
-                        "abs_vz_max": abs(safety_config.max_vertical_velocity_mps),
-                        "duration_max": safety_config.max_move_duration_sec,
-                    },
+        builtin_tools = ["uav.hover", "uav.turn_relative", "uav.move_body"]
+        skill_tools = self.plugin_registry.skill_capability_catalog.planner_tools()
+        action_schemas = {
+            "uav.hover": {
+                "args": {},
+            },
+            "uav.turn_relative": {
+                "args": {"yaw_deg": "number"},
+                "limits": {
+                    "yaw_deg_min": -abs(safety_config.max_yaw_step_deg),
+                    "yaw_deg_max": abs(safety_config.max_yaw_step_deg),
                 },
             },
+            "uav.move_body": {
+                "args_one_of": [
+                    {
+                        "direction": "forward|backward|left|right|up|down",
+                        "duration": "number",
+                    },
+                    {
+                        "vx": "number",
+                        "vy": "number",
+                        "vz": "number",
+                        "duration": "number",
+                    },
+                ],
+                "limits": {
+                    "abs_vx_vy_max": abs(safety_config.max_linear_velocity_mps),
+                    "abs_vz_max": abs(safety_config.max_vertical_velocity_mps),
+                    "duration_max": safety_config.max_move_duration_sec,
+                },
+            },
+            **self.plugin_registry.skill_capability_catalog.action_schemas(),
+        }
+        return {
+            "planner_tools": [*builtin_tools, *skill_tools],
+            "action_schemas": action_schemas,
             "forbidden_tools": [
                 "uav.connect",
                 "uav.takeoff",

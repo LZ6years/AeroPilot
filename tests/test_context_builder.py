@@ -9,7 +9,7 @@ import pytest
 from src.agent.mission_state import MissionState
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
-from src.memory.context.custom_modules.multimodal_image import MultimodalImageContextModule
+from plugins.research.multimodal_image.context_modules import MultimodalImageContextModule
 from src.memory.context.registry import ContextModuleRegistry
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader

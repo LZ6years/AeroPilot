@@ -1,0 +1,22 @@
+{
+  "call_name": "skill.person_detector.detect",
+  "description": "Detect whether a person is visible in the latest RGB frame.",
+  "input_schema": {
+    "type": "object",
+    "required": ["image_source"],
+    "additionalProperties": false,
+    "properties": {
+      "image_source": {
+        "type": "string",
+        "enum": ["latest_rgb"]
+      },
+      "min_confidence": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 1
+      }
+    }
+  },
+  "handler": "scripts/detect_person.py",
+  "mock": true
+}

@@ -41,7 +41,7 @@ from src.runtime.configs.model_config import ModelConfig, load_model_config
 
 DEFAULT_CASES = REPO_ROOT / "tests" / "fixtures" / "visual_instruction_cases.json"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "tests" / "manual_outputs" / "visual_instruction_eval"
-DEFAULT_CONTEXT_CONFIG = REPO_ROOT / "configs" / "context_modules.json"
+DEFAULT_CONTEXT_CONFIG = REPO_ROOT / "configs" / "plugins.json"
 DEFAULT_LIMIT = 8
 
 

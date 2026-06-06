@@ -15,6 +15,7 @@ Use these facts:
 - phase_execution_summary contains current-phase progress, coordinate frame notes, phase-local projected measurements, and cumulative tool facts. Prefer these cumulative facts over single-window deltas when judging phase progress.
 - phase_execution_summary is the same cleaned current-phase progress shown in latest_state.current_phase_progress. It uses last_window_measurements for the most recent execution window and omits raw velocity and duplicate start_pose/latest_pose fields.
 - recent_history summarizes recent actions and observations.
+- safety_intervention_summary, yaw_scan_remaining_deg, visual_phase_budget_exhausted, recent_executed_tools, and recent_safety_reasons summarize whether SafetySupervisor changed the action window after planning.
 - phase_window_count and max_phase_window_count show whether the runtime is nearing its loop guard. They are not phase-completion evidence and should not be used to pretend a phase is complete.
 - user-facing messages should follow the operator preferences in the original planner context when present. Use concise Chinese by default and do not expose internal module names, raw thinking, or hidden reasoning.
 
@@ -41,8 +42,12 @@ Decision rules:
 - In the final phase, use complete_task when the task goal and final state are satisfied; do not rely on runtime loop guard behavior to end a task.
 - Output at least one agent_messages item. Use final when the whole task is complete. Use progress when the task continues or advances to the next phase. Use warning for safety or uncertainty. A question is allowed for future compatibility, but runtime will only display it in this version.
 - Compare action_window.expected_effect with the actual executed_steps, measurements, and observation_after. If the expected effect did not materialize, continue the current phase.
-- If SafetySupervisor intervened, prefer continue_current_phase unless the context explicitly says runtime will suppress transition.
+- If SafetySupervisor intervened only because yaw scan budget was exhausted and the executed action is hover, still judge whether the phase is already visually satisfied from the latest image. Do not continue blind yaw scanning when visual_phase_budget_exhausted is true.
+- If visual_phase_budget_exhausted is true and visual evidence does not satisfy the current phase, continue_current_phase means the runtime should stop the task as blocked or insufficient evidence; explain that the visual target is not confirmed rather than asking for another yaw scan.
 - If phase_completion_evaluation.all_within_tolerance is true, advance to the next phase, or complete the task if this is the final phase.
+- If phase_completion_evaluation contains evaluations with status="requires_model_judgment", runtime could not deterministically score that criterion. Judge those criteria from semantic_goal, current_phase, executed actions, observation_after, and attached images or visual descriptions.
+- For visual_alignment, visual_smoke, search_confirmation, or other non-numeric criteria, do not treat the lack of deterministic tolerance as failure, and do not treat it as automatic success. Use the latest RGB/image model input when available.
+- If measurable criteria are within tolerance but model-judged visual criteria remain unconfirmed, continue the current phase unless the latest visual evidence clearly satisfies the visual criterion.
 - If a criterion is below target, continue the current phase.
 - If a criterion is overshot and correction_allowed is true, continue the current phase so the next action window can correct in the opposite direction.
 - If a criterion is overshot and correction_allowed is false, prefer hover/conservative completion only when additional movement would increase risk.

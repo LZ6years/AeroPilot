@@ -1,0 +1,134 @@
+[
+  {
+    "instruction": "Turn to face the person near the street corner.",
+    "expected_any": ["visual_target_task_reasoning"],
+    "forbidden": [],
+    "max_selected": 2
+  },
+  {
+    "instruction": "Keep the red car in view while hovering.",
+    "expected_any": ["visual_target_task_reasoning"],
+    "forbidden": [],
+    "max_selected": 2
+  },
+  {
+    "instruction": "Look at the entrance of the building and confirm it is visible.",
+    "expected_any": ["visual_target_task_reasoning", "task_completion_evidence"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Search for the missing person; they are not visible in the current image.",
+    "expected_any": ["search_under_uncertainty"],
+    "forbidden": ["approach_and_standoff"],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Find the delivery truck somewhere around the parking area.",
+    "expected_any": ["search_under_uncertainty"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Locate the sign before moving closer to the building.",
+    "expected_any": ["search_under_uncertainty", "visual_target_task_reasoning"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Approach the person and stop at a safe distance.",
+    "expected_any": ["approach_and_standoff"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Move to a position 3 meters from the vehicle.",
+    "expected_any": ["approach_and_standoff"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Follow the cyclist without getting too close.",
+    "expected_any": ["approach_and_standoff", "obstacle_and_safety_awareness"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Fly through the narrow alley while avoiding walls and poles.",
+    "expected_any": ["obstacle_and_safety_awareness"],
+    "forbidden": [],
+    "max_selected": 2
+  },
+  {
+    "instruction": "Move closer to the tree but avoid its branches.",
+    "expected_any": ["obstacle_and_safety_awareness", "approach_and_standoff"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Hover near pedestrians and keep the flight conservative.",
+    "expected_any": ["obstacle_and_safety_awareness"],
+    "forbidden": [],
+    "max_selected": 2
+  },
+  {
+    "instruction": "Decide whether the target-facing step is complete after the latest observation.",
+    "expected_any": ["task_completion_evidence", "visual_target_task_reasoning"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Do not finish until the landmark is actually visible.",
+    "expected_any": ["task_completion_evidence"],
+    "forbidden": [],
+    "max_selected": 2
+  },
+  {
+    "instruction": "Confirm whether the search phase should continue or stop.",
+    "expected_any": ["task_completion_evidence", "search_under_uncertainty"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Rotate 15 degrees clockwise.",
+    "expected_any": [],
+    "forbidden": ["approach_and_standoff", "obstacle_and_safety_awareness"],
+    "max_selected": 1
+  },
+  {
+    "instruction": "Hover in place for a moment.",
+    "expected_any": [],
+    "forbidden": ["search_under_uncertainty", "approach_and_standoff"],
+    "max_selected": 1
+  },
+  {
+    "instruction": "Move forward one meter in open space.",
+    "expected_any": [],
+    "forbidden": ["search_under_uncertainty", "task_completion_evidence"],
+    "max_selected": 1
+  },
+  {
+    "instruction": "Inspect the storefront but keep clear of nearby people and umbrellas.",
+    "expected_any": ["visual_target_task_reasoning", "obstacle_and_safety_awareness"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "The vehicle may be hidden behind another car; look for it before approaching.",
+    "expected_any": ["search_under_uncertainty", "approach_and_standoff"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Approach the doorway only if the path is clear.",
+    "expected_any": ["approach_and_standoff", "obstacle_and_safety_awareness"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Keep the monument centered and decide if the observation is sufficient.",
+    "expected_any": ["visual_target_task_reasoning", "task_completion_evidence"],
+    "forbidden": [],
+    "max_selected": 3
+  }
+]

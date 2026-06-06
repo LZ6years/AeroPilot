@@ -12,6 +12,8 @@ class ToolSpec:
     kind: str
     description: str
     required_args: tuple[str, ...] = field(default_factory=tuple)
+    schema: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

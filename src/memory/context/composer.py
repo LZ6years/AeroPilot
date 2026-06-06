@@ -10,7 +10,7 @@ from src.memory.context.registry import ContextModuleRegistry
 from src.memory.context.schemas import ContextFragment, MemorySourceBundle, PlannerContext, StageContextInput
 
 
-DEFAULT_MAX_TOKENS_ESTIMATE = 1200
+DEFAULT_MAX_TOKENS_ESTIMATE = 2000
 DEFAULT_RULES_PATH = Path("memory") / "FLYAGENT.md"
 DEFAULT_USER_PREFERENCES_PATH = Path("memory") / "USER.md"
 
@@ -95,7 +95,7 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
             "active_instruction": "The current user instruction the planner should follow.",
             "current_phase": "The current semantic phase; copy current_phase.name into the action plan response phase.",
             "semantic_goal": "The parsed mission goal for the active instruction.",
-            "fragments": "Ordered context fragments from enabled memory modules.",
+            "fragments": "Ordered context fragments from enabled context modules, including reusable skills when enabled.",
             "disabled_fragments": "Module names disabled by configuration and therefore absent from fragments.",
             "context_schema": "Model-facing explanations for this context shape and each enabled module's fields.",
             "rules": "Project-level FlyAgent behavior guidance loaded from memory/FLYAGENT.md or runtime overrides.",
@@ -109,7 +109,7 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
             "metadata": "Run identifiers, map/scene identifiers, budget metadata, and other audit information.",
         },
         "fragment_common_fields": {
-            "name": "Fragment category, such as instruction, image, pose, action, or map.",
+            "name": "Fragment category, such as instruction, skills, image, pose, action, or map.",
             "enabled": "Whether this fragment's module was enabled when the fragment was produced.",
             "source": "The module class that produced this fragment.",
             "content": "Module-specific structured content; see module_content_fields for the matching fragment name.",

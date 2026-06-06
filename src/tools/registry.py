@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from src.tools.schemas import ToolSpec
+from src.plugins import PluginRegistry
 
 
 class ToolRegistry:
@@ -26,7 +27,7 @@ class ToolRegistry:
         return sorted(self._tools)
 
 
-def default_registry() -> ToolRegistry:
+def default_registry(plugin_registry: PluginRegistry | None = None) -> ToolRegistry:
     # Build the initial primitive UAV and observation tool registry.
     registry = ToolRegistry()
     for name in (
@@ -52,4 +53,15 @@ def default_registry() -> ToolRegistry:
             required_args=("modalities",),
         )
     )
+    plugin_registry = plugin_registry or PluginRegistry.from_config()
+    for item in plugin_registry.skill_capability_catalog.listings():
+        registry.register(
+            ToolSpec(
+                name=item["call_name"],
+                kind="skill_capability",
+                description=item.get("description", ""),
+                schema=dict(item.get("input_schema", {})),
+                metadata=dict(item),
+            )
+        )
     return registry
