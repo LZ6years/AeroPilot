@@ -49,11 +49,7 @@ def test_real_engine_demo_summary_reports_pose_delta_and_artifacts(tmp_path):
         },
         "current_phase_progress": {
             "phase": "move_forward",
-            "world_pose": {
-                "start": {"position": {"x": 0.0, "y": 0.0, "z": -2.0}, "orientation": {"yaw_deg": 0.0}},
-                "latest": {"position": {"x": 5.0, "y": 0.0, "z": -2.0}, "orientation": {"yaw_deg": 0.0}},
-            },
-            "cumulative_tool_facts": {"move_body_duration_by_direction_success": {"forward": 2.5}},
+            "tool_facts": {"move_duration_by_direction_success": {"forward": 2.5}},
         },
     }
 
@@ -70,8 +66,7 @@ def test_real_engine_demo_summary_reports_pose_delta_and_artifacts(tmp_path):
     ]
     summary = build_state_summary(tmp_path, "向前飞行5米，然后悬停", state, agent_messages=messages)
 
-    assert summary["pose_delta"]["dx"] == 5.0
-    assert summary["pose_delta"]["dy"] == 0.0
+    assert summary["pose_delta"] == {"dx": None, "dy": None, "dz": None, "dyaw_deg": None}
     assert summary["observation_summary"]["has_pose"] is True
     assert summary["observation_summary"]["has_rgb"] is True
     assert summary["observation_summary"]["has_depth"] is True
@@ -145,20 +140,19 @@ def test_real_engine_demo_compact_summary_keeps_terminal_output_readable(tmp_pat
             "phase": "move_forward",
             "phase_key": "1:move_forward",
             "window_count": 1,
-            "max_phase_window_count": 5,
-            "phase_local_measurements": {
-                "forward_displacement_m": 4.9,
-                "right_displacement_m": 0.0,
-                "up_displacement_m": 0.0,
+            "max_window_count": 5,
+            "measurements": {
+                "forward_m": 4.9,
+                "right_m": 0.0,
+                "up_m": 0.0,
                 "yaw_delta_deg": 0.0,
-                "planar_displacement_m": 4.9,
+                "planar_m": 4.9,
             },
-            "cumulative_tool_facts": {
+            "tool_facts": {
                 "successful_steps": 1,
-                "move_body_duration_by_direction_success": {"forward": 2.5},
-                "turn_relative_yaw_deg_success_sum": 0.0,
+                "move_duration_by_direction_success": {"forward": 2.5},
+                "turn_yaw_success_sum_deg": 0.0,
             },
-            "world_pose": {"start": {"large": "hidden"}, "latest": {"large": "hidden"}},
         },
         "observation_summary": {"has_pose": True, "has_rgb": True, "has_depth": True, "sources": ["automatic_phase_window"]},
         "artifact_inventory": {"counts": {"rgb": 1, "depth": 1, "other": 0}},
@@ -170,7 +164,7 @@ def test_real_engine_demo_compact_summary_keeps_terminal_output_readable(tmp_pat
     assert compact["action_count"] == 1
     assert compact["action_window"]["intent"] == "finish forward motion"
     assert compact["action_window"]["expected_effect"] == "forward displacement increases"
-    assert compact["phase_progress"]["phase_local_measurements"]["forward_displacement_m"] == 4.9
+    assert compact["phase_progress"]["measurements"]["forward_m"] == 4.9
     assert "world_pose" not in compact["phase_progress"]
     assert compact["inspect_files"]["planner_context"].endswith(str(Path("contexts") / "latest_context.json"))
 

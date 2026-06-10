@@ -17,7 +17,6 @@ def make_planner_context() -> dict:
             "forbidden_tools": ["env.observe"],
         },
         "observation_policy": {"mode": "automatic", "modalities": ["rgb", "depth", "pose"]},
-        "phase_transition_policy": {"mode": "post_action_model_judged_runtime_applied"},
         "safety_constraints": {"max_yaw_scan_accum_deg": 480.0},
     }
 
@@ -59,7 +58,7 @@ def test_repair_context_keeps_contract_fields_and_small_context_summary():
         "uav.move_body",
     ]
     assert data["observation_policy"]["mode"] == "automatic"
-    assert data["phase_transition_policy"]["mode"] == "post_action_model_judged_runtime_applied"
+    assert "phase_transition_policy" not in data
     assert data["context_summary"]["fragment_names"] == ["instruction", "pose"]
     assert "flight_memory" not in data["context_summary"]
 

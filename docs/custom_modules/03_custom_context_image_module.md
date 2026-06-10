@@ -283,7 +283,7 @@ runs/<run_id>/contexts/latest_context.json
 ContextModule
   负责整理“当前看到了什么/有什么证据”
 
-KnowledgeSkill
+Skill
   负责告诉 planner“遇到这种任务一般怎么做”
 
 CallableSkill

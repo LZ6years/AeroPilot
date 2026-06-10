@@ -27,6 +27,7 @@ from src.runtime.configs.model_config import ModelConfig
 from src.uav import pose_measurements
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.memory.flight_memory import FlightMemory
+from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.sim_server.backends.airvln_backend import AirVlnBackend
 from src.sim_server.server import LocalSimulationServer
 
@@ -197,8 +198,8 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert "context_schema" in latest_context
     assert "image" in latest_context["context_schema"]["module_content_fields"]
     fragments = {fragment["name"]: fragment for fragment in latest_context["fragments"]}
-    assert fragments["image"]["content"]["recent_observation_sources"][-1] == "automatic_phase_window"
-    assert "uav.takeoff" in latest_context["allowed_action_constraints"]["lifecycle_tools_excluded"]
+    assert fragments["image"]["content"]["selected_frames"][-1]["source"] == "automatic_phase_window"
+    assert "lifecycle_tools_excluded" not in latest_context["allowed_action_constraints"]
     assert "recent_actions" not in flight_memory
     assert "recent_observations" not in flight_memory
     assert flight_memory["recent_action_refs"]
@@ -298,7 +299,7 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert "context_schema" in planner.contexts[0]
     assert "module_content_fields" in planner.contexts[0]["context_schema"]
     assert "image" in planner.contexts[0]["context_schema"]["module_content_fields"]
-    assert "recent_rgb_frame_metadata" in planner.contexts[0]["context_schema"]["module_content_fields"]["image"]["content_fields"]
+    assert "selected_frames" in planner.contexts[0]["context_schema"]["module_content_fields"]["image"]
     action_constraints = planner.contexts[0]["allowed_action_constraints"]
     assert action_constraints["planner_tools"] == ["uav.hover", "uav.turn_relative", "uav.move_body"]
     assert "observe_step_schema" not in action_constraints
@@ -313,12 +314,10 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
         "abs_vz_max": 3.0,
         "duration_max": 8.0,
     }
-    assert "env.observe" in action_constraints["forbidden_tools"]
-    assert "uav.set_pose" in action_constraints["forbidden_tools"]
+    assert "forbidden_tools" not in action_constraints
     assert "flight_memory" not in planner.contexts[0]
     assert "instruction_history" not in planner.contexts[0]
     assert "recent_observations" not in planner.contexts[0]
-    assert "recent_actions" not in planner.contexts[0]
     assert "model_action_planned" in event_names
     assert "safety_intervened" in event_names
     assert "automatic_observation_updated" in event_names
@@ -336,6 +335,42 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert agent_message_lines
     assert {record["message"]["type"] for record in agent_message_lines} == {"warning"}
     assert not (run_dir / "state/final_answer.json").exists()
+
+
+def test_task_runtime_action_planner_debug_writes_redacted_context(tmp_path):
+    class OneTurnPlanner:
+        planner_mode = "model"
+
+        def plan_next(self, state, context=None):
+            return ShortHorizonPlan(
+                state.current_phase_name,
+                [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 5.0}, "debug turn")],
+            )
+
+    run_dir = tmp_path / "planner_debug_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=OneTurnPlanner(),
+        runtime_loop_guard_windows=1,
+        enable_action_planner_debug=True,
+    )
+
+    state = runtime.run_task("m1", LAMP_TASK)
+    recorder.close()
+
+    debug_files = sorted((run_dir / "debug" / "action_planner").glob("*.json"))
+    assert debug_files
+    payload = json.loads(debug_files[0].read_text(encoding="utf-8"))
+    assert payload["planner_context"]["active_instruction"] == LAMP_TASK
+    assert payload["raw_plan"]["steps"][0]["tool"] == "uav.turn_relative"
+    assert payload["safe_plan"]["steps"][0]["tool"] == "uav.turn_relative"
+    assert "safety_decision" in payload
+    assert "data:image" not in debug_files[0].read_text(encoding="utf-8")
+    assert state.completed or state.stopped
 
 
 def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path):
@@ -508,7 +543,7 @@ def test_task_runtime_passes_action_config_to_planner_context(tmp_path):
     nominal_scale = planner.contexts[0]["allowed_action_constraints"]["nominal_action_scale"]
     assert nominal_scale["linear_velocity_mps"] == 3.5
     assert nominal_scale["vertical_velocity_mps"] == 1.25
-    assert nominal_scale["move_duration_sec"] == 1.75
+    assert "move_duration_sec" not in nominal_scale
 
 
 def test_task_runtime_reuse_running_scene_does_not_repeat_preflight(tmp_path):
@@ -671,11 +706,11 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     assert "action" in latest_context["context_schema"]["module_content_fields"]
     assert len(flight_memory["instruction_history"]) >= len(instructions)
     assert (run_dir / "memory/instructions.jsonl").read_text(encoding="utf-8").count("\n") >= len(instructions)
-    assert fragments["instruction"]["content"]["active_instruction"] == instructions[-1]
+    assert fragments["instruction"]["content"]["current_instruction"]["text"] == instructions[-1]
     assert len(fragments["instruction"]["content"]["instruction_history"]) == 5
     assert len(fragments["action"]["content"]["recent_actions"]) == 5
-    assert len(fragments["pose"]["content"]["recent_pose_history"]) <= 3
-    assert len(fragments["image"]["content"]["recent_observation_sources"]) <= 3
+    assert fragments["pose"]["metadata"]["pose_history_count"] <= 3
+    assert fragments["image"]["metadata"]["observation_count"] <= 3
     assert fragments["image"]["artifact_refs"]
     assert fragments["map"]["content"]["recalled_map_memories"] == []
     assert "flight_memory" not in latest_context
@@ -988,8 +1023,8 @@ def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_pa
     summary = planner.judge_contexts[0]["phase_execution_summary"]
     assert summary["phase"] == "move_forward"
     assert summary["window_count"] == 1
-    assert summary["cumulative_tool_facts"]["move_body_duration_by_direction_success"]["forward"] == 1.0
-    assert summary["last_window_measurements"]["planar_displacement_m"] >= 0.0
+    assert summary["tool_facts"]["move_duration_by_direction_success"]["forward"] == 1.0
+    assert summary["last_window"]["planar_m"] >= 0.0
 
 
 def test_task_runtime_uses_post_action_model_transition_to_complete_task(tmp_path):
@@ -1067,8 +1102,8 @@ def test_task_runtime_phase_execution_summary_accumulates_windows(tmp_path):
     latest_summary = planner.judge_contexts[-1]["phase_execution_summary"]
     assert state.completed
     assert latest_summary["window_count"] == 2
-    assert latest_summary["cumulative_tool_facts"]["turn_relative_yaw_deg_success_sum"] == 20.0
-    assert latest_summary["last_window_measurements"]["yaw_delta_deg"] is not None
+    assert latest_summary["tool_facts"]["turn_yaw_success_sum_deg"] == 20.0
+    assert latest_summary["last_window"]["yaw_delta_deg"] is not None
     mission_state = json.loads((run_dir / "state/latest_state.json").read_text(encoding="utf-8"))
     assert "phase_start_observations" not in mission_state
     assert "phase_execution_summaries" not in mission_state
@@ -1185,12 +1220,79 @@ def test_post_action_phase_context_attaches_latest_rgb_model_input(tmp_path):
     assert fragment["source"] == "PostActionObservationImageContext"
     assert model_input["encoding"] == "data_url"
     assert model_input["data"].startswith("data:image/png;base64,")
-    assert model_input["metadata"]["mock"] is False
+    assert set(model_input) == {"type", "role", "mime_type", "encoding", "data"}
     assert (
         fragment["content"]["visual_evidence"]["interpretation_status"]
         == "image_attached_for_direct_judge_inspection"
     )
+    assert fragment["content"]["visual_evidence"]["attached_image_count"] == 1
     assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 1
+
+
+def test_post_action_phase_context_attaches_key_rgb_model_inputs_from_memory(tmp_path):
+    run_dir = tmp_path / "phase_judge_key_images"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
+    parse_result = make_single_phase_parse_result("inspect key frames", "locate_person")
+    state = MissionState(
+        run_id="run_with_key_images",
+        user_instruction=parse_result.instruction,
+        semantic_plan=parse_result.plan,
+        max_phase_window_count=3,
+    )
+    memory = FlightMemory(
+        run_id=state.run_id,
+        map_id="m1",
+        scene_instance_id="scene",
+        agent_id="uav",
+        memory_reader=MemoryRecordReader(run_dir),
+    )
+    writer = MemoryEventWriter(run_dir)
+    paths = []
+    for index in range(6):
+        image_path = tmp_path / f"phase_{index}.png"
+        write_tiny_png(image_path)
+        paths.append(str(image_path))
+        result = writer.write_observation(
+            {
+                "source": "automatic_phase_window",
+                "timestamp": f"t{index}",
+                "modalities": ["rgb"],
+                "frames": {"rgb": {"path": str(image_path), "mock": False, "artifact_ref": str(image_path)}},
+            }
+        )
+        memory.append_observation_ref(result["observation_ref"])
+        memory.append_frame_refs(result["frame_refs"])
+    runtime._state_flight_memories[state.run_id] = memory
+    plan = ShortHorizonPlan(state.current_phase_name, [PlannedStep.tool_step("uav.hover", {}, "hold")])
+
+    phase_context = runtime._build_post_action_phase_context(
+        state,
+        {"current_phase": parse_result.plan.phases[0].to_dict(), "fragments": [{"name": "image"}]},
+        plan,
+        SafetyDecision(plan),
+        {"pose": {"x": 0, "y": 0, "z": 0}},
+        {
+            "pose": {"x": 0, "y": 0, "z": 0},
+            "source": "automatic_phase_window",
+            "frames": {"rgb": {"path": paths[-1], "mock": False, "artifact_ref": paths[-1]}},
+        },
+        [],
+    )
+    recorder.close()
+
+    fragment = phase_context["fragments"][0]
+    roles = [item["role"] for item in fragment["content"]["selected_frames"]]
+    source_paths = [item["path"] for item in fragment["metadata"]["selected_frame_metadata"]]
+    assert roles == [
+        "latest_observation",
+        "initial_observation",
+        "previous_observation",
+        "four_windows_ago_observation",
+    ]
+    assert source_paths == [paths[5], paths[0], paths[4], paths[1]]
+    assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 4
 
 
 def test_post_action_phase_context_keeps_metadata_without_mock_or_missing_image_inputs(tmp_path):
@@ -1230,6 +1332,7 @@ def test_post_action_phase_context_keeps_metadata_without_mock_or_missing_image_
         assert fragment["name"] == "image"
         assert fragment["content"]["visual_evidence"]["has_rgb"] is True
         assert fragment["model_inputs"] == []
+        assert fragment["content"]["visual_evidence"]["attached_image_count"] == 0
         assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 0
     recorder.close()
 

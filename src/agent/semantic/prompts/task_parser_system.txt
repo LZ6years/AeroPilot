@@ -28,6 +28,7 @@ Required JSON shape:
           "kind": "translation | rotation | hover | visual_alignment | visual_smoke",
           "axis": "forward | backward | left | right | up | down | yaw | planar",
           "target": 5.0,
+          "target_source": "explicit_user",
           "unit": "m | deg | sec",
           "tolerance": 1.0,
           "correction_allowed": true
@@ -54,13 +55,17 @@ Important boundaries:
 
 Completion criteria rules:
 - completion_criteria is the stable contract for deciding whether a phase is complete. It is more important than the free-form phase name.
-- For "向前飞行5米" or "向前走5m", use kind="translation", axis="forward", target=5.0, unit="m", tolerance=1.0, correction_allowed=true.
-- For backward, left, right, up, and down movement, use kind="translation" with the matching axis and a positive target distance from the instruction.
-- For "右转40度", use kind="rotation", axis="yaw", target=40.0, unit="deg", tolerance=8.0, correction_allowed=true.
-- For "左转30度", use kind="rotation", axis="yaw", target=-30.0, unit="deg", tolerance=8.0, correction_allowed=true.
+- For "向前飞行5米" or "向前走5m", use kind="translation", axis="forward", target=5.0, target_source="explicit_user", unit="m", tolerance=1.0, correction_allowed=true.
+- For numeric translation criteria, include target_source="explicit_user" only when the distance is explicitly stated in the instruction.
+- For backward, left, right, up, and down movement, use kind="translation" with the matching axis and a positive target distance only when the instruction explicitly states that distance.
+- For "右转40度", use kind="rotation", axis="yaw", target=40.0, target_source="explicit_user", unit="deg", tolerance=8.0, correction_allowed=true.
+- For "左转30度", use kind="rotation", axis="yaw", target=-30.0, target_source="explicit_user", unit="deg", tolerance=8.0, correction_allowed=true.
+- For numeric rotation criteria, include target_source="explicit_user" only when the angle is explicitly stated in the instruction.
 - Use kind="rotation" only when the instruction explicitly gives a rotation amount or a purely relative direction such as "turn right 40 degrees" or "rotate left 30 degrees".
 - For visual target orientation tasks such as "Turn to the direction of the person", "face the person", "look at the car", or "point toward the landmark", do not invent yaw target=0 or any numeric yaw target. Use kind="visual_alignment" with fields like {"target": "person", "evidence": "latest_rgb", "require_target_visible": true, "alignment_goal": "uav_faces_target_or_target_is_visually_centered", "correction_allowed": true}.
 - If the target direction is not specified in text, represent that as uncertainty; do not convert an unknown target bearing into yaw=0.
+- For target-relative movement such as "move to the trees", "approach the person", "go to the landmark", "stop in front of the entrance", or "move near the vehicle", do not invent a numeric translation target such as 5.0 meters unless the user explicitly gave that distance. Use visual or model-judged criteria that require current observation evidence, such as visual_alignment, visual_smoke, or another semantic criterion with evidence="latest_rgb" and require_target_visible=true when appropriate.
+- If the instruction gives a direction but no distance, represent the direction as a target attribute or phase meaning, and keep completion model-judged unless a safe deterministic hover/rotation criterion is explicitly supported by the text.
 - For hover/stabilize/wait phases, use kind="hover", axis="planar", target=0.0, unit="m", tolerance=0.6, correction_allowed=false.
 - For visual landmark phases that cannot be verified from text-only context yet, use kind="visual_smoke", axis="yaw" or "planar" only when there is an explicit scan/hover action goal, and add an uncertainty that visual confirmation requires image interpretation.
 - For distance-only movement tasks, preserve the requested direction and distance in goal.target.attributes. For example, "向前飞行5米，然后悬停" should produce one movement phase named move_forward, attributes {"direction": "forward", "distance_m": 5.0}, final_state "hover_after_movement", and a forward translation completion criterion.

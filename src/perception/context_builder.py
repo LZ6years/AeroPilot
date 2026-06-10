@@ -63,8 +63,6 @@ class ObservationContextBuilder:
             safety_constraints=self._safety_constraints(state),
             allowed_action_constraints=self._allowed_action_constraints(),
             observation_policy=self._observation_policy(),
-            phase_transition_policy=self._phase_transition_policy(state),
-            phase_completion_criteria=self._phase_completion_criteria(state),
             phase_execution_summary=state.current_phase_execution_summary,
             metadata={
                 "run_id": state.run_id,
@@ -129,22 +127,10 @@ class ObservationContextBuilder:
         return {
             "planner_tools": [*builtin_tools, *skill_tools],
             "action_schemas": action_schemas,
-            "forbidden_tools": [
-                "uav.connect",
-                "uav.takeoff",
-                "uav.land",
-                "uav.set_pose",
-                "uav.get_pose",
-                "uav.get_frames",
-                "env.observe",
-            ],
-            "lifecycle_tools_excluded": ["uav.connect", "uav.takeoff", "uav.land"],
-            "yaw_step_deg": safety_config.max_yaw_step_deg,
-            "linear_velocity_mps": safety_config.max_linear_velocity_mps,
-            "vertical_velocity_mps": safety_config.max_vertical_velocity_mps,
-            "move_duration_sec": safety_config.max_move_duration_sec,
-            "safety_limits": safety_config.to_dict(),
-            "nominal_action_scale": action_config.to_dict(),
+            "nominal_action_scale": {
+                "linear_velocity_mps": action_config.linear_velocity_mps,
+                "vertical_velocity_mps": action_config.vertical_velocity_mps,
+            },
         }
 
     def _observation_policy(self) -> dict[str, Any]:
@@ -154,23 +140,3 @@ class ObservationContextBuilder:
             "sample_timing": "after_each_phase_window",
             "note": "Do not output observe steps. The runtime samples observations automatically.",
         }
-
-    def _phase_transition_policy(self, state: MissionState) -> dict[str, Any]:
-        return {
-            "mode": "post_action_model_judged_runtime_applied",
-            "decisions": ["continue_current_phase", "advance_to_next_phase", "complete_task"],
-            "current_phase_window_count": state.current_phase_window_count,
-            "max_phase_window_count": state.max_phase_window_count,
-            "note": "Phase transition is judged after tool execution and automatic observation. Do not output phase_transition in the action plan. Window counts are runtime loop guard diagnostics, not phase-completion evidence.",
-        }
-
-    def _phase_completion_criteria(self, state: MissionState) -> list[dict[str, Any]]:
-        phase = self._current_phase(state)
-        if not phase:
-            return []
-        criteria = phase.get("completion_criteria", [])
-        if isinstance(criteria, list):
-            return [dict(item) for item in criteria if isinstance(item, dict)]
-        if isinstance(criteria, dict):
-            return [dict(criteria)]
-        return []

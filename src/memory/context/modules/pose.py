@@ -1,4 +1,4 @@
-"""Pose history context module."""
+"""Compact pose context module."""
 
 from __future__ import annotations
 
@@ -25,42 +25,29 @@ class DefaultPoseContextModule(ContextModule):
         ]
         latest_pose = poses[-1] if poses else {}
         recent_delta = pose_delta(poses[-2], poses[-1]) if len(poses) >= 2 else {}
-        facts = []
-        if latest_pose:
-            facts.append({"type": "latest_pose", "value": latest_pose, "source": self.__class__.__name__})
-        inferences = []
-        if recent_delta:
-            inferences.append({"type": "recent_pose_delta", "value": recent_delta, "source": self.__class__.__name__})
         return ContextFragment(
             name=self.name,
             enabled=True,
             source=self.__class__.__name__,
             content={
                 "latest_pose": latest_pose,
-                "recent_pose_history": poses,
                 "recent_pose_delta": recent_delta,
             },
-            facts=facts,
-            inferences=inferences,
             risks=[] if latest_pose else [{"type": "pose_missing", "source": self.__class__.__name__}],
             confidence="high" if latest_pose else "low",
-            budget=BudgetSpec(priority=self.priority, tokens_estimate=180, max_items=self.max_items),
-            metadata={"reset_epoch": memory.reset_epoch},
+            budget=BudgetSpec(priority=self.priority, tokens_estimate=90, max_items=self.max_items),
+            metadata={"reset_epoch": memory.reset_epoch, "pose_history_count": len(poses)},
         )
 
     def describe_output(self) -> dict[str, Any]:
         return {
-            "summary": "Latest UAV pose, short pose history, and recent pose delta.",
+            "summary": "Latest UAV pose and recent pose delta.",
             "content_fields": {
                 "latest_pose": "Most recent model-facing pose from pose refs; raw velocity is intentionally removed.",
-                "recent_pose_history": "Up to three recent model-facing pose records in chronological order; raw velocity is intentionally removed.",
                 "recent_pose_delta": "Difference between the last two poses as dx, dy, dz, and normalized dyaw_deg when available.",
             },
-            "fact_fields": {
-                "latest_pose": "Observed latest pose and the strongest pose fact for planning.",
-            },
-            "inference_fields": {
-                "recent_pose_delta": "Motion delta inferred from recent pose history; useful for checking whether recent actions changed state.",
+            "metadata_fields": {
+                "pose_history_count": "Number of recent pose refs considered before compacting the planner-facing pose context.",
             },
             "risk_fields": {
                 "pose_missing": "No recent pose is available; avoid precise movement decisions.",

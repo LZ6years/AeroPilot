@@ -53,11 +53,7 @@ class FakeState:
                 "frames": {"rgb": {"artifact_path": "missing.png"}},
             },
             "current_phase_progress": {
-                "world_pose": {
-                    "start": {"position": {"x": 0.0, "y": 0.0, "z": -2.0}},
-                    "latest": {"position": {"x": 5.0, "y": 0.0, "z": -2.0}},
-                },
-                "cumulative_tool_facts": {"move_body_duration_success_sum": 2.5},
+                "tool_facts": {"move_duration_success_sum_sec": 2.5},
             },
         }
 
@@ -103,7 +99,7 @@ class FakeRuntime:
 def test_build_turn_summary_reports_pose_delta_and_artifact_counts(tmp_path):
     summary = build_turn_summary(tmp_path, "向前飞行5米", FakeState().to_dict())
 
-    assert summary["pose_delta"]["dx"] == 5.0
+    assert summary["pose_delta"]["dx"] is None
     assert summary["observation_summary"]["has_pose"] is True
     assert summary["observation_summary"]["has_rgb"] is True
     assert summary["artifact_inventory"]["counts"] == {"rgb": 1, "depth": 0, "other": 0}

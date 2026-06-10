@@ -37,8 +37,9 @@ class PluginContextModule(DefaultImageContextModule):
     def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
         fragment = super().build(sources, stage_context)
         content = dict(fragment.content)
+        metadata = dict(fragment.metadata)
         warnings = list(fragment.warnings)
-        latest_rgb = _latest_rgb(content)
+        latest_rgb = _latest_rgb(metadata)
         path = _usable_rgb_path(latest_rgb)
         model_inputs: list[dict[str, Any]] = []
         visual_description: dict[str, Any] | None = None
@@ -94,7 +95,7 @@ class PluginContextModule(DefaultImageContextModule):
             artifact_refs=list(fragment.artifact_refs),
             budget=fragment.budget,
             warnings=warnings,
-            metadata=dict(fragment.metadata),
+            metadata=metadata,
         )
 
     def describe_output(self) -> dict[str, Any]:
@@ -116,10 +117,22 @@ class PluginContextModule(DefaultImageContextModule):
         return description
 
 
-def _latest_rgb(content: dict[str, Any]) -> dict[str, Any] | None:
-    latest = content.get("latest_frame_metadata", {})
-    rgb = latest.get("rgb") if isinstance(latest, dict) else None
-    return dict(rgb) if isinstance(rgb, dict) else None
+def _latest_rgb(metadata: dict[str, Any]) -> dict[str, Any] | None:
+    selected = metadata.get("selected_frame_metadata", [])
+    if isinstance(selected, list):
+        for frame in selected:
+            if isinstance(frame, dict) and frame.get("role") == "latest_observation":
+                return _restore_frame_metadata(frame)
+    return None
+
+
+def _restore_frame_metadata(frame: dict[str, Any]) -> dict[str, Any]:
+    restored = dict(frame)
+    if "frame_id" in restored:
+        restored["id"] = restored.pop("frame_id")
+    if "role" in restored:
+        restored["selection_role"] = restored["role"]
+    return restored
 
 
 def _usable_rgb_path(latest_rgb: dict[str, Any] | None) -> Path | None:

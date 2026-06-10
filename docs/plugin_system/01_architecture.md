@@ -22,9 +22,9 @@ TaskRuntime / ObservationContextBuilder
 
 插件系统只负责贡献和装配：
 
-- `KnowledgeSkill` 进入 `knowledge` context fragment。
+- `Skill` 进入 `skills` context fragment。
 - `ContextModuleContribution` 进入 `ContextModuleRegistry`。
-- `ToolContribution` 未来进入 `ToolRegistry`，但仍必须经过 validator 和 safety。
+- 带 `capability.json` 的 callable skill 进入 `SkillCapabilityCatalog`，并以 `skill.*` 形式经过 validator 和 dispatcher。
 - `ResponseProtocol` 未来进入 agent message / final answer 层。
 - `PolicyRule` 未来进入约束合成层。
 
@@ -42,13 +42,13 @@ TaskRuntime / ObservationContextBuilder
 flowchart TD
     CFG["configs/plugins.json"] --> DISC["PluginDiscovery"]
     DISC --> REG["PluginRegistry"]
-    REG --> KS["KnowledgeSkill Catalog"]
+    REG --> KS["Skill Catalog"]
     REG --> CMC["ContextModule Contributions"]
     REG --> FUT["Future Contributions"]
 
-    KS --> KMOD["KnowledgeContextModule"]
+    KS --> KMOD["SkillsContextModule"]
     CMC --> CMREG["ContextModuleRegistry"]
-    KMOD --> FRAG["knowledge ContextFragment"]
+    KMOD --> FRAG["skills ContextFragment"]
     CMREG --> FRAGS["context fragments"]
     FRAG --> COMP["ContextComposer"]
     FRAGS --> COMP
@@ -65,7 +65,7 @@ flowchart TD
 
     STATE --> OCB["ObservationContextBuilder"]
     OCB --> PLUG["PluginRegistry"]
-    PLUG --> KNOW["KnowledgeContextModule<br/>model-selected skills"]
+    PLUG --> KNOW["SkillsContextModule<br/>model-selected skills"]
     OCB --> CM["ContextModuleRegistry"]
     KNOW --> PC["PlannerContext"]
     CM --> PC
@@ -83,7 +83,7 @@ flowchart TD
 
 ```text
 instruction / semantic_plan / phase / image availability
-  -> model selects KnowledgeSkill from listing
+  -> model selects Skill from listing
   -> skills fragment
   -> planner context
 ```

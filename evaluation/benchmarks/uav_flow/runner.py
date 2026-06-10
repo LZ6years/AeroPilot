@@ -125,6 +125,7 @@ class UavFlowBenchmarkRunner:
                 shutdown_policy=self.config.shutdown_policy,
                 action_config=self.action_config,
                 runtime_loop_guard_windows=self.config.runtime_loop_guard_windows,
+                enable_action_planner_debug=self.config.enable_action_planner_debug,
             )
             state = runtime.run_task(
                 "uav_flow_downtownwest",

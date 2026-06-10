@@ -1,4 +1,4 @@
-"""Recent RGB metadata context module."""
+"""Compact RGB context module."""
 
 from __future__ import annotations
 
@@ -19,23 +19,17 @@ class DefaultImageContextModule(ContextModule):
     def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
         memory = sources.flight_memory
         reader = memory.memory_reader
-        observations = reader.read_refs(memory.recent_observation_refs[-self.max_items :]) if reader else []
+        all_observations = reader.read_refs(memory.recent_observation_refs) if reader else []
+        observations = all_observations[-self.max_items :]
         rgb_frames = _recent_rgb_frames(reader, observations, self.max_items) if reader else []
+        selected_rgb_frames = (
+            selected_rgb_frames_from_observations(reader, all_observations) if reader else []
+        )
         latest_rgb = rgb_frames[-1] if rgb_frames else None
-        frames = {"rgb": latest_rgb} if latest_rgb else {}
         artifact_refs = [item["artifact_ref"] for item in rgb_frames if item.get("artifact_ref")]
-        facts = []
         warnings = []
         risks = []
-        if rgb_frames:
-            facts.append(
-                {
-                    "type": "available_modalities",
-                    "value": ["rgb"],
-                    "source": self.__class__.__name__,
-                }
-            )
-        else:
+        if not rgb_frames:
             warnings.append("no_recent_image_frames")
             risks.append({"type": "visual_evidence_missing", "source": self.__class__.__name__})
         for frame in rgb_frames:
@@ -57,49 +51,51 @@ class DefaultImageContextModule(ContextModule):
             ),
             "latest_observation_source": latest_rgb.get("observation_source") if latest_rgb else None,
         }
-        model_inputs = latest_rgb_model_inputs_from_frame(latest_rgb)
+        model_inputs = rgb_model_inputs_from_frames(selected_rgb_frames)
+        selected_frames = selected_frame_summaries(selected_rgb_frames)
         visual_evidence["interpretation_status"] = (
             "image_attached_not_interpreted" if model_inputs else "metadata_only_not_interpreted"
         )
+        visual_evidence["attached_image_count"] = len(model_inputs)
         return ContextFragment(
             name=self.name,
             enabled=True,
             source=self.__class__.__name__,
             content={
-                "latest_frame_metadata": frames,
-                "recent_rgb_frame_metadata": rgb_frames,
-                "recent_observation_sources": [item.get("source") for item in observations if isinstance(item, dict)],
+                "selected_frames": selected_frames,
                 "visual_evidence": visual_evidence,
             },
             model_inputs=model_inputs,
-            facts=facts,
             risks=risks,
             artifact_refs=artifact_refs,
-            confidence="medium" if frames else "low",
+            confidence="medium" if latest_rgb else "low",
             budget=BudgetSpec(priority=self.priority, tokens_estimate=300, max_items=self.max_items),
             warnings=warnings,
-            metadata={"observation_count": len(observations)},
+            metadata={
+                "observation_count": len(observations),
+                "selected_frame_metadata": frame_debug_metadata(selected_rgb_frames),
+                "recent_rgb_frame_metadata": frame_debug_metadata(rgb_frames),
+            },
         )
 
     def describe_output(self) -> dict[str, Any]:
         return {
-            "summary": "Recent RGB frame metadata, artifact references, and visual evidence availability.",
+            "summary": "Selected RGB frame roles, attached image count, and visual evidence availability.",
             "content_fields": {
-                "latest_frame_metadata": "Latest available frame metadata grouped by modality; currently contains latest RGB metadata when present.",
-                "recent_rgb_frame_metadata": "Up to three recent RGB frame metadata records, including path/artifact reference and frame metadata.",
-                "recent_observation_sources": "Sources of the observations used to build this image context.",
+                "selected_frames": "Key RGB frames selected for multimodal input, exposed only as role/source pairs.",
                 "visual_evidence": "Boolean availability summary such as has_rgb, has_depth, has_mock_frames, latest_observation_source, and interpretation_status.",
             },
             "model_inputs": (
-                "At most one encoded latest real RGB image for planner multimodal input. "
+                "Up to four encoded real RGB images for planner multimodal input. "
                 "Mock, missing, or unreadable images are not attached."
             ),
-            "fact_fields": {
-                "available_modalities": "Modalities currently available as observed evidence.",
-            },
             "risk_fields": {
                 "visual_evidence_missing": "No recent RGB evidence is available.",
                 "visual_evidence_is_mock": "A recent frame is mock/synthetic placeholder evidence and should not support confident target approach.",
+            },
+            "metadata_fields": {
+                "selected_frame_metadata": "Full selected-frame audit metadata for debug/reporting.",
+                "recent_rgb_frame_metadata": "Full recent RGB audit metadata for debug/reporting.",
             },
             "artifact_refs": "Image artifact paths or memory refs that can be inspected outside the planner context.",
         }
@@ -123,6 +119,92 @@ def _recent_rgb_frames(reader: Any, observations: list[dict[str, Any]], limit: i
             }
             frames.append(frame)
     return frames[-limit:]
+
+
+def selected_rgb_frames_from_observations(reader: Any, observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Select key RGB frames from observation history without interpreting image content.
+
+    The fixed v1 policy is deliberately simple: current/latest, initial, previous
+    phase-window, and four phase-windows ago. Duplicate frames are removed by
+    frame id/path so short runs naturally attach fewer than four images.
+    """
+
+    rgb_frames = _recent_rgb_frames(reader, observations, len(observations))
+    if not rgb_frames:
+        return []
+    candidates = [
+        ("latest_observation", rgb_frames[-1]),
+        ("initial_observation", rgb_frames[0]),
+    ]
+    if len(rgb_frames) >= 2:
+        candidates.append(("previous_observation", rgb_frames[-2]))
+    if len(rgb_frames) >= 5:
+        candidates.append(("four_windows_ago_observation", rgb_frames[-5]))
+    selected: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for role, frame in candidates:
+        key = _frame_identity(frame)
+        if key in seen:
+            continue
+        seen.add(key)
+        item = dict(frame)
+        item["selection_role"] = role
+        selected.append(item)
+    return selected[:4]
+
+
+def selected_frame_summaries(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for frame in frames:
+        role = frame.get("selection_role")
+        if not isinstance(role, str) or not role:
+            role = "latest_observation"
+        item = {"role": role}
+        source = frame.get("observation_source")
+        if isinstance(source, str) and source:
+            item["source"] = source
+        summaries.append(item)
+    return summaries
+
+
+def frame_debug_metadata(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    metadata: list[dict[str, Any]] = []
+    for frame in frames:
+        item: dict[str, Any] = {}
+        role = frame.get("selection_role")
+        if isinstance(role, str) and role:
+            item["role"] = role
+        if frame.get("id") is not None:
+            item["frame_id"] = frame.get("id")
+        for source_key, target_key in (
+            ("observation_id", "observation_id"),
+            ("observation_source", "observation_source"),
+            ("path", "path"),
+            ("artifact_ref", "artifact_ref"),
+            ("width", "width"),
+            ("height", "height"),
+            ("mock", "mock"),
+            ("source", "source"),
+        ):
+            if source_key in frame:
+                item[target_key] = frame.get(source_key)
+        metadata.append(item)
+    return metadata
+
+
+def rgb_model_inputs_from_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    inputs: list[dict[str, Any]] = []
+    for frame in frames[:4]:
+        inputs.extend(latest_rgb_model_inputs_from_frame(frame))
+    return inputs
+
+
+def _frame_identity(frame: dict[str, Any]) -> str:
+    for key in ("path", "artifact_path", "artifact_ref", "id", "observation_id"):
+        value = frame.get(key)
+        if isinstance(value, str) and value:
+            return f"{key}:{value}"
+    return repr(sorted(frame.items()))
 
 
 def _artifact_ref(record: dict[str, Any], frame_ref: dict[str, Any] | None) -> str | None:
@@ -149,22 +231,14 @@ def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> lis
     if data_url is None:
         return []
     mime_type = data_url.split(";", 1)[0].removeprefix("data:")
-    artifact_ref = latest_rgb.get("artifact_ref") if isinstance(latest_rgb.get("artifact_ref"), str) else str(path)
+    role = str(latest_rgb.get("selection_role") or "latest_observation")
     return [
         {
             "type": "image",
-            "source": "image",
-            "role": "latest_observation",
+            "role": role,
             "mime_type": mime_type,
             "encoding": "data_url",
             "data": data_url,
-            "metadata": {
-                "source_path": str(path),
-                "artifact_ref": artifact_ref,
-                "modality": "rgb",
-                "processing": "select_latest_rgb",
-                "mock": False,
-            },
         }
     ]
 

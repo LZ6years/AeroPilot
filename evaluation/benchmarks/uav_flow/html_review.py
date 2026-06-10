@@ -228,6 +228,7 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
     actions = artifacts.get("actions", []) if isinstance(artifacts.get("actions"), list) else []
     run_dir = _path_from_result(result.get("run_dir"), None)
     messages = _agent_messages(run_dir, artifacts)
+    planner_debug = _action_planner_debug_records(run_dir)
     return _page(
         title=f"UAV-Flow Case {case_id}",
         body=f"""
@@ -276,6 +277,10 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
 <section>
   <h2>Timeline</h2>
   {_timeline(case_dir, actions, rgb_frames)}
+</section>
+<section>
+  <h2>Action Planner Debug</h2>
+  {_planner_debug(case_dir, planner_debug)}
 </section>
 <section>
   <h2>Messages</h2>
@@ -468,6 +473,7 @@ def _artifact_links(case_dir: Path, result: dict[str, Any], run_dir: Path | None
                 _link(case_dir, run_dir / "memory" / "actions.jsonl", "actions.jsonl"),
                 _link(case_dir, run_dir / "memory" / "agent_messages.jsonl", "agent_messages.jsonl"),
                 _link(case_dir, run_dir / "artifacts" / "rgb", "rgb folder"),
+                _link(case_dir, run_dir / "debug" / "action_planner", "action planner debug"),
             ]
         )
     review_path = result.get("review_path")
@@ -520,6 +526,119 @@ def _agent_messages(run_dir: Path | None, artifacts: dict[str, Any]) -> list[Any
             return records
     messages = artifacts.get("agent_messages", [])
     return messages if isinstance(messages, list) else []
+
+
+def _action_planner_debug_records(run_dir: Path | None) -> list[dict[str, Any]]:
+    if run_dir is None:
+        return []
+    debug_dir = run_dir / "debug" / "action_planner"
+    if not debug_dir.exists():
+        return []
+    records: list[dict[str, Any]] = []
+    for path in sorted(debug_dir.glob("*.json")):
+        payload = _read_json(path)
+        if not payload:
+            continue
+        payload["_path"] = str(path)
+        records.append(payload)
+    return records
+
+
+def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
+    if not records:
+        return '<p class="empty">Action planner debug was not enabled for this run.</p>'
+    items = []
+    for record in records:
+        context = record.get("planner_context", {}) if isinstance(record.get("planner_context"), dict) else {}
+        fragments = {item.get("name"): item for item in context.get("fragments", []) if isinstance(item, dict)}
+        image = fragments.get("image", {})
+        action = fragments.get("action", {})
+        raw_plan = record.get("raw_plan", {}) if isinstance(record.get("raw_plan"), dict) else {}
+        safe_plan = record.get("safe_plan", {}) if isinstance(record.get("safe_plan"), dict) else {}
+        safety = record.get("safety_decision", {}) if isinstance(record.get("safety_decision"), dict) else {}
+        items.append(
+            """
+<details class="planner-debug">
+  <summary>Window {window} · {phase} · raw tools {raw_tools} · safe tools {safe_tools}</summary>
+  <div class="debug-grid">
+    <article>
+      <h3>Planner Context</h3>
+      <dl class="kv">
+        {_active}
+        {_phase}
+        {_criteria}
+        {_exec}
+        {_image_roles}
+        {_action_trend}
+      </dl>
+      <div class="links compact">{artifact}</div>
+    </article>
+    <article>
+      <h3>Planner Output</h3>
+      <h4>Raw plan</h4>
+      {_plan_raw}
+      <h4>Safety-reviewed plan</h4>
+      {_plan_safe}
+      <h4>Safety</h4>
+      <pre>{safety}</pre>
+    </article>
+  </div>
+</details>
+""".format(
+                window=_e(record.get("window_index")),
+                phase=_e(record.get("phase")),
+                raw_tools=_e(_plan_tools(raw_plan)),
+                safe_tools=_e(_plan_tools(safe_plan)),
+                _active=_kv("Instruction", context.get("active_instruction")),
+                _phase=_kv("Current phase", (context.get("current_phase") or {}).get("name") if isinstance(context.get("current_phase"), dict) else context.get("current_phase")),
+                _criteria=_kv("Completion criteria", json.dumps(context.get("phase_completion_criteria", []), ensure_ascii=False)),
+                _exec=_kv("Phase execution summary", json.dumps(_compact_phase_execution(context.get("phase_execution_summary", {})), ensure_ascii=False)),
+                _image_roles=_kv("Image model inputs", json.dumps([item.get("role") for item in image.get("model_inputs", [])], ensure_ascii=False)),
+                _action_trend=_kv("Action trend", json.dumps((action.get("content", {}) if isinstance(action.get("content"), dict) else {}).get("action_trend", {}), ensure_ascii=False)),
+                artifact=_link(base, _path_from_result(record.get("_path"), None), "open full debug json"),
+                _plan_raw=_plan_block(raw_plan),
+                _plan_safe=_plan_block(safe_plan),
+                safety=_e(json.dumps(_compact_safety(safety), ensure_ascii=False, indent=2)),
+            )
+        )
+    return "\n".join(items)
+
+
+def _plan_tools(plan: dict[str, Any]) -> list[str]:
+    steps = plan.get("steps", []) if isinstance(plan, dict) else []
+    return [str(item.get("tool")) for item in steps if isinstance(item, dict) and item.get("tool")]
+
+
+def _plan_block(plan: dict[str, Any]) -> str:
+    if not plan:
+        return '<p class="empty">missing</p>'
+    payload = {
+        "action_window": plan.get("action_window"),
+        "agent_messages": plan.get("agent_messages"),
+        "steps": plan.get("steps"),
+    }
+    return f"<pre>{_e(json.dumps(payload, ensure_ascii=False, indent=2))}</pre>"
+
+
+def _compact_phase_execution(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        return {}
+    return {
+        "phase": summary.get("phase"),
+        "phase_key": summary.get("phase_key"),
+        "window_count": summary.get("window_count"),
+        "max_window_count": summary.get("max_window_count"),
+        "measurements": summary.get("measurements"),
+        "last_window": summary.get("last_window"),
+        "tool_facts": summary.get("tool_facts"),
+    }
+
+
+def _compact_safety(safety: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "interventions": safety.get("interventions"),
+        "plan_changed": safety.get("plan_changed"),
+    }
 
 
 def _read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -601,6 +720,13 @@ def _page(title: str, body: str) -> str:
     .message {{ border: 1px solid var(--line); border-radius: 8px; padding: 12px; margin: 10px 0; background: #fff; }}
     .message p {{ margin: 8px 0 0; }}
     .message-meta {{ display: flex; flex-wrap: wrap; gap: 10px; }}
+    pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f8fb; border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 360px; overflow: auto; font-size: 12px; }}
+    details.planner-debug {{ border: 1px solid var(--line); border-radius: 8px; background: #fff; margin: 10px 0; padding: 12px; }}
+    details.planner-debug summary {{ cursor: pointer; font-weight: 700; color: #344054; }}
+    .debug-grid {{ display: grid; grid-template-columns: minmax(0, 0.46fr) minmax(0, 0.54fr); gap: 14px; margin-top: 12px; }}
+    .debug-grid article {{ padding: 12px; }}
+    .debug-grid h3 {{ margin: 0 0 10px; font-size: 15px; }}
+    .debug-grid h4 {{ margin: 12px 0 6px; font-size: 13px; color: #344054; }}
     .case-cards {{ display: grid; gap: 18px; }}
     .case-card {{ border: 1px solid var(--line); border-radius: 8px; background: #fff; padding: 16px; }}
     .case-card-head {{ display: flex; justify-content: space-between; gap: 16px; align-items: flex-start; margin-bottom: 12px; }}
@@ -630,7 +756,7 @@ def _page(title: str, body: str) -> str:
     .compact-message p {{ font-size: 13px; }}
     .links.compact {{ margin-top: 8px; }}
     .top-nav {{ padding: 18px 24px 0; }}
-    @media (max-width: 1040px) {{ .evidence-grid {{ grid-template-columns: 1fr; grid-template-areas: "rgb" "actions" "messages"; }} .case-card .frames.key figure {{ max-width: none; }} }}
+    @media (max-width: 1040px) {{ .evidence-grid {{ grid-template-columns: 1fr; grid-template-areas: "rgb" "actions" "messages"; }} .case-card .frames.key figure {{ max-width: none; }} .debug-grid {{ grid-template-columns: 1fr; }} }}
     @media (max-width: 860px) {{ header.hero {{ display: block; }} .metrics {{ min-width: 0; margin-top: 16px; }} .grid.two {{ grid-template-columns: 1fr; }} .case-card-head {{ display: block; }} .case-actions {{ justify-content: flex-start; margin-top: 10px; }} }}
   </style>
 </head>

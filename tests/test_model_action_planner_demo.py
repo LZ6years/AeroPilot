@@ -85,10 +85,10 @@ def test_demo_memory_builds_context_with_schema_fragments_and_action_contract(tm
     assert "fragments" in context
     assert "allowed_action_constraints" in context
     assert "observation_policy" in context
-    assert "phase_transition_policy" in context
+    assert "phase_transition_policy" not in context
+    assert "phase_completion_criteria" not in context
     assert "phase_execution_summary" in context
     assert context["observation_policy"]["mode"] == "automatic"
-    assert context["phase_transition_policy"]["mode"] == "post_action_model_judged_runtime_applied"
     assert set(context["context_schema"]["module_content_fields"]) == {
         "instruction",
         "skills",

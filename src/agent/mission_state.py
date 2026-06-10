@@ -11,7 +11,7 @@ import copy
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.uav import pose_measurements, yaw_deg
+from src.uav import pose_measurements
 from src.agent.semantic.schemas import SemanticPlan
 
 
@@ -31,6 +31,7 @@ class MissionState:
     yaw_scan_accum_deg: float = 0.0
     current_phase_window_count_value: int = 0
     max_phase_window_count: int = 5
+    current_phase_origin_pose: dict[str, Any] = field(default_factory=dict)
     completed: bool = False
     stopped: bool = False
     stopped_reason: str | None = None
@@ -71,6 +72,7 @@ class MissionState:
             return
         self.current_phase_window_count_value = 0
         self.current_phase_progress = {}
+        self.current_phase_origin_pose = {}
 
     @property
     def current_phase_window_count(self) -> int:
@@ -85,27 +87,15 @@ class MissionState:
         if self.current_phase_progress.get("phase_key") == self.current_phase_key:
             return
         start_pose = _pose_from_observation(start_observation)
-        clean_start_pose = _clean_pose(start_pose)
+        self.current_phase_origin_pose = _clean_pose(start_pose)
         self.current_phase_progress = {
             "phase_key": self.current_phase_key,
             "phase": self.current_phase_name,
-            "coordinate_frames": _coordinate_frames(),
-            "world_pose": {
-                "start": clean_start_pose,
-                "latest": dict(clean_start_pose),
-            },
-            "phase_local_frame": {
-                "origin": "current phase start pose",
-                "origin_yaw_deg": round(yaw_deg(start_pose), 3),
-                "description": "Used to project world dx/dy into phase-local forward/right displacement.",
-            },
             "window_count": self.current_phase_window_count,
-            "max_phase_window_count": self.max_phase_window_count,
-            "last_window_measurements": {},
-            "phase_local_measurements": pose_measurements(start_pose, start_pose),
-            "cumulative_measurements": pose_measurements(start_pose, start_pose),
-            "cumulative_tool_facts": _empty_tool_facts(),
-            "note": "Current-phase facts only. Use phase_local_measurements.forward_displacement_m for forward movement progress; history is stored in memory/events.",
+            "max_window_count": self.max_phase_window_count,
+            "measurements": _compact_measurements(pose_measurements(start_pose, start_pose)),
+            "last_window": _compact_measurements({}),
+            "tool_facts": _empty_tool_facts(),
         }
 
     def update_current_phase_progress(
@@ -118,34 +108,18 @@ class MissionState:
         self.ensure_current_phase_progress(self.latest_observation or latest_observation)
         latest_pose = _pose_from_observation(latest_observation)
         progress = copy.deepcopy(self.current_phase_progress)
-        start_pose = dict(progress.get("world_pose", {}).get("start", {}))
-        clean_latest_pose = _clean_pose(latest_pose)
-        progress["world_pose"] = {
-            "start": _clean_pose(start_pose),
-            "latest": clean_latest_pose,
-        }
+        start_pose = dict(self.current_phase_origin_pose)
         progress["window_count"] = self.current_phase_window_count
-        progress["max_phase_window_count"] = self.max_phase_window_count
+        progress["max_window_count"] = self.max_phase_window_count
         window_measurements = last_window_measurements
         if window_measurements is None:
             window_measurements = latest_window_measurements
-        progress["last_window_measurements"] = dict(window_measurements or progress.get("last_window_measurements", {}))
-        progress.pop("latest_window_measurements", None)
-        progress.pop("start_pose", None)
-        progress.pop("latest_pose", None)
-        if "phase_local_frame" not in progress:
-            progress["phase_local_frame"] = {
-                "origin": "current phase start pose",
-                "origin_yaw_deg": round(yaw_deg(start_pose), 3),
-                "description": "Used to project world dx/dy into phase-local forward/right displacement.",
-            }
-        progress.pop("phase_origin_yaw_deg", None)
+        progress["last_window"] = _compact_measurements(window_measurements or {})
         measurements = pose_measurements(start_pose, latest_pose)
-        progress["phase_local_measurements"] = measurements
-        progress["cumulative_measurements"] = measurements
+        progress["measurements"] = _compact_measurements(measurements)
         if tool_facts_delta:
-            progress["cumulative_tool_facts"] = _merge_tool_facts(
-                progress.get("cumulative_tool_facts", {}),
+            progress["tool_facts"] = _merge_tool_facts(
+                progress.get("tool_facts", {}),
                 tool_facts_delta,
             )
         self.current_phase_progress = progress
@@ -231,19 +205,24 @@ def _clean_observation(observation: dict[str, Any]) -> dict[str, Any]:
     return data
 
 
-def _coordinate_frames() -> dict[str, Any]:
+def _compact_measurements(measurements: dict[str, Any]) -> dict[str, Any]:
     return {
-        "world_ned": {
-            "description": "AirSim/UE world frame. x/y are horizontal world axes; z is down-positive NED.",
-            "source": "raw AirSim pose",
-        },
-        "mission_local": {
-            "description": "Instruction-start local frame. Origin is the UAV pose at instruction start; initial yaw is 0; forward/right/up are for user movement semantics.",
-        },
-        "phase_local": {
-            "description": "Current-phase local frame. Origin and yaw are captured at this phase start; use forward/right/up displacement to judge this phase.",
-        },
+        "forward_m": _round_measurement(measurements.get("forward_displacement_m")),
+        "right_m": _round_measurement(measurements.get("right_displacement_m")),
+        "up_m": _round_measurement(measurements.get("up_displacement_m")),
+        "planar_m": _round_measurement(measurements.get("planar_displacement_m")),
+        "vertical_m": _round_measurement(measurements.get("vertical_delta_m")),
+        "yaw_delta_deg": _round_measurement(measurements.get("yaw_delta_deg")),
     }
+
+
+def _round_measurement(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return round(float(value), 3)
+    except (TypeError, ValueError):
+        return None
 
 
 def _empty_tool_facts() -> dict[str, Any]:
@@ -251,11 +230,11 @@ def _empty_tool_facts() -> dict[str, Any]:
         "total_steps": 0,
         "successful_steps": 0,
         "failed_steps": 0,
-        "turn_relative_yaw_deg_attempted_sum": 0.0,
-        "turn_relative_yaw_deg_success_sum": 0.0,
-        "move_body_duration_attempted_sum": 0.0,
-        "move_body_duration_success_sum": 0.0,
-        "move_body_duration_by_direction_success": {},
+        "turn_yaw_attempted_sum_deg": 0.0,
+        "turn_yaw_success_sum_deg": 0.0,
+        "move_duration_attempted_sum_sec": 0.0,
+        "move_duration_success_sum_sec": 0.0,
+        "move_duration_by_direction_success": {},
         "tools_executed": {},
     }
 
@@ -267,18 +246,18 @@ def _merge_tool_facts(current: dict[str, Any], delta: dict[str, Any]) -> dict[st
         "total_steps",
         "successful_steps",
         "failed_steps",
-        "turn_relative_yaw_deg_attempted_sum",
-        "turn_relative_yaw_deg_success_sum",
-        "move_body_duration_attempted_sum",
-        "move_body_duration_success_sum",
+        "turn_yaw_attempted_sum_deg",
+        "turn_yaw_success_sum_deg",
+        "move_duration_attempted_sum_sec",
+        "move_duration_success_sum_sec",
     ):
         merged[key] = round(float(merged.get(key, 0.0) or 0.0) + float(delta.get(key, 0.0) or 0.0), 3)
         if key.endswith("_steps"):
             merged[key] = int(merged[key])
-    directions = dict(merged.get("move_body_duration_by_direction_success", {}))
-    for direction, duration in dict(delta.get("move_body_duration_by_direction_success", {})).items():
+    directions = dict(merged.get("move_duration_by_direction_success", {}))
+    for direction, duration in dict(delta.get("move_duration_by_direction_success", {})).items():
         directions[str(direction)] = round(float(directions.get(str(direction), 0.0) or 0.0) + float(duration or 0.0), 3)
-    merged["move_body_duration_by_direction_success"] = directions
+    merged["move_duration_by_direction_success"] = directions
     tools = dict(merged.get("tools_executed", {}))
     for tool, count in dict(delta.get("tools_executed", {})).items():
         tools[str(tool)] = int(tools.get(str(tool), 0) or 0) + int(count or 0)

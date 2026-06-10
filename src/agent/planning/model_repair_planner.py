@@ -32,7 +32,6 @@ class RepairContext:
     previous_violations: list[dict[str, Any]] = field(default_factory=list)
     allowed_action_constraints: dict[str, Any] = field(default_factory=dict)
     observation_policy: dict[str, Any] = field(default_factory=dict)
-    phase_transition_policy: dict[str, Any] = field(default_factory=dict)
     context_summary: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -58,7 +57,6 @@ class RepairContext:
             previous_violations=list(previous_violations),
             allowed_action_constraints=dict(planner_context.get("allowed_action_constraints", {})),
             observation_policy=dict(planner_context.get("observation_policy", {})),
-            phase_transition_policy=dict(planner_context.get("phase_transition_policy", {})),
             context_summary=_context_summary(planner_context),
         )
 
@@ -72,7 +70,6 @@ class RepairContext:
             "previous_violations": list(self.previous_violations),
             "allowed_action_constraints": dict(self.allowed_action_constraints),
             "observation_policy": dict(self.observation_policy),
-            "phase_transition_policy": dict(self.phase_transition_policy),
             "context_summary": dict(self.context_summary),
         }
 

@@ -428,9 +428,8 @@ def context_summary(context: dict[str, Any]) -> dict[str, Any]:
         "module_content_fields": list(context["context_schema"]["module_content_fields"].keys()),
         "fragment_names": [fragment["name"] for fragment in context["fragments"]],
         "safety_constraints": context["safety_constraints"],
-        "phase_transition_policy": context["phase_transition_policy"],
         "allowed_tools": context["allowed_action_constraints"]["planner_tools"],
-        "forbidden_tools": context["allowed_action_constraints"]["forbidden_tools"],
+        "action_schema_names": list(context["allowed_action_constraints"].get("action_schemas", {})),
     }
 
 

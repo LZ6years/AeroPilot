@@ -18,6 +18,7 @@
   "runtime_loop_guard_windows": 100,
   "enable_visual_diagnostics": false,
   "visual_diagnostics_max_frames": 12,
+  "enable_action_planner_debug": false,
   "action_config_overrides": {
     "linear_velocity_mps": 1.0,
     "move_duration_sec": 1.0,

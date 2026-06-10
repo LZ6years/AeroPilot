@@ -150,6 +150,55 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
     for name in ["frame_000001.png", "frame_000002.png", "frame_000003.png"]:
         (rgb_dir / name).write_bytes(b"png")
     (run_dir / "memory").mkdir()
+    debug_dir = run_dir / "debug" / "action_planner"
+    debug_dir.mkdir(parents=True)
+    (debug_dir / "p_window_000.json").write_text(
+        json.dumps(
+            {
+                "phase": "p",
+                "window_index": 0,
+                "planner_context": {
+                    "active_instruction": "Turn to the direction of the person.",
+                    "current_phase": {"name": "p"},
+                    "phase_completion_criteria": [{"kind": "visual_alignment"}],
+                    "phase_execution_summary": {"window_count": 0},
+                    "fragments": [
+                        {
+                            "name": "image",
+                            "model_inputs": [
+                                {
+                                    "type": "image",
+                                    "role": "latest_observation",
+                                    "data": "<omitted encoded image data: 123 chars>",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "action",
+                            "content": {
+                                "action_trend": {
+                                    "motion_pattern": {"type": "alternating_yaw"},
+                                }
+                            },
+                        },
+                    ],
+                },
+                "raw_plan": {
+                    "action_window": {"intent": "debug raw"},
+                    "agent_messages": [{"content": "raw message"}],
+                    "steps": [{"kind": "tool", "tool": "uav.turn_relative", "args": {"yaw_deg": 5}}],
+                },
+                "safe_plan": {
+                    "action_window": {"intent": "debug safe"},
+                    "agent_messages": [{"content": "safe message"}],
+                    "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}}],
+                },
+                "safety_decision": {"interventions": [{"reason": "test"}], "plan_changed": True},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     (run_dir / "memory" / "agent_messages.jsonl").write_text(
         json.dumps(
             {
@@ -245,6 +294,12 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
     assert "frame_000002.png" in case_html
     assert "Before RGB" in case_html
     assert "After RGB" in case_html
+    assert "Action Planner Debug" in case_html
+    assert "debug raw" in case_html
+    assert "debug safe" in case_html
+    assert "latest_observation" in case_html
+    assert "alternating_yaw" in case_html
+    assert "data:image/png;base64" not in case_html
     assert "Observation after action #0" in case_html
     assert "artifacts/rgb/frame_000001.png" in case_html
     assert "data:image/png;base64" not in case_html

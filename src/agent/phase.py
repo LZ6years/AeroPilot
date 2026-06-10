@@ -23,13 +23,13 @@ VALID_PHASE_TRANSITIONS = {
 }
 
 TRANSLATION_FIELDS = {
-    "forward": "forward_displacement_m",
-    "backward": "forward_displacement_m",
-    "right": "right_displacement_m",
-    "left": "right_displacement_m",
-    "up": "up_displacement_m",
-    "down": "up_displacement_m",
-    "planar": "planar_displacement_m",
+    "forward": "forward_m",
+    "backward": "forward_m",
+    "right": "right_m",
+    "left": "right_m",
+    "up": "up_m",
+    "down": "up_m",
+    "planar": "planar_m",
 }
 
 MEASURABLE_CRITERIA_KINDS = {"translation", "rotation", "hover"}
@@ -149,7 +149,7 @@ def _normalize_criteria(criteria: list[dict[str, Any]] | dict[str, Any] | None) 
 
 
 def _phase_measurements(summary: dict[str, Any]) -> dict[str, Any]:
-    for key in ("phase_local_measurements", "cumulative_measurements", "last_window_measurements"):
+    for key in ("measurements", "last_window"):
         value = summary.get(key)
         if isinstance(value, dict) and value:
             return value
@@ -165,7 +165,7 @@ def _actual_for_field(
     if not field:
         return None
     prefer_tool_fact = criteria.get("prefer_tool_fact")
-    facts = summary.get("cumulative_tool_facts", {}) if isinstance(summary.get("cumulative_tool_facts", {}), dict) else {}
+    facts = summary.get("tool_facts", {}) if isinstance(summary.get("tool_facts", {}), dict) else {}
     if prefer_tool_fact and prefer_tool_fact in facts:
         return _safe_float(facts.get(prefer_tool_fact))
     return _safe_float(measurements.get(field))

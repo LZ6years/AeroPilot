@@ -42,6 +42,7 @@ class UavFlowEvalConfig:
     runtime_loop_guard_windows: int = 100
     enable_visual_diagnostics: bool = False
     visual_diagnostics_max_frames: int = 12
+    enable_action_planner_debug: bool = False
     max_cases: int | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -75,6 +76,7 @@ class UavFlowEvalConfig:
             runtime_loop_guard_windows=int(data.get("runtime_loop_guard_windows", cls.runtime_loop_guard_windows)),
             enable_visual_diagnostics=bool(data.get("enable_visual_diagnostics", False)),
             visual_diagnostics_max_frames=int(data.get("visual_diagnostics_max_frames", cls.visual_diagnostics_max_frames)),
+            enable_action_planner_debug=bool(data.get("enable_action_planner_debug", False)),
             max_cases=_optional_int(data.get("max_cases")),
             metadata=dict(data.get("metadata", {})),
         )

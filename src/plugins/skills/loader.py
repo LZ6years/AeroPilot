@@ -1,11 +1,11 @@
-"""Load bounded text and skill-local resources for selected knowledge skills."""
+"""Load bounded text and skill-local resources for selected skills."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
 
-from src.plugins.contracts.knowledge import KnowledgeSkill
+from src.plugins.contracts.skill import Skill
 
 
 DEFAULT_MAX_SKILL_CHARS = 2400
@@ -17,7 +17,7 @@ class SkillResourceLoader:
     max_reference_chars: int = DEFAULT_MAX_REFERENCE_CHARS
     load_reference_files: bool = True
 
-    def load_references(self, skill: KnowledgeSkill) -> list[dict[str, Any]]:
+    def load_references(self, skill: Skill) -> list[dict[str, Any]]:
         if not self.load_reference_files:
             return []
         return [
@@ -25,10 +25,10 @@ class SkillResourceLoader:
             for path in skill.reference_paths
         ]
 
-    def available_references(self, skill: KnowledgeSkill) -> list[str]:
+    def available_references(self, skill: Skill) -> list[str]:
         return [_relative_to_skill(skill, path) for path in skill.reference_paths]
 
-    def script_assets(self, skill: KnowledgeSkill) -> list[str]:
+    def script_assets(self, skill: Skill) -> list[str]:
         return [_relative_to_skill(skill, path) for path in skill.script_paths]
 
 
@@ -55,7 +55,7 @@ class SkillContentLoader:
             ),
         )
 
-    def load_summary(self, skill: KnowledgeSkill) -> dict[str, Any]:
+    def load_summary(self, skill: Skill) -> dict[str, Any]:
         resource_loader = self.resource_loader
         return {
             "plugin_id": skill.plugin_id,
@@ -74,7 +74,7 @@ class SkillContentLoader:
         }
 
 
-def _load_reference(skill: KnowledgeSkill, path, max_chars: int) -> dict[str, Any]:
+def _load_reference(skill: Skill, path, max_chars: int) -> dict[str, Any]:
     resolved = path.resolve()
     skill_root = skill.skill_dir.resolve()
     try:
@@ -94,7 +94,7 @@ def _load_reference(skill: KnowledgeSkill, path, max_chars: int) -> dict[str, An
     }
 
 
-def _relative_to_skill(skill: KnowledgeSkill, path) -> str:
+def _relative_to_skill(skill: Skill, path) -> str:
     try:
         return str(path.relative_to(skill.skill_dir))
     except ValueError:

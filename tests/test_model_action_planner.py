@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 
 import pytest
 
@@ -143,15 +144,6 @@ def make_context() -> dict:
                     },
                 },
             },
-            "forbidden_tools": [
-                "uav.connect",
-                "uav.takeoff",
-                "uav.land",
-                "uav.set_pose",
-                "uav.get_pose",
-                "uav.get_frames",
-                "env.observe",
-            ],
         },
     }
 
@@ -223,6 +215,22 @@ def test_model_user_content_adds_text_model_inputs():
     assert isinstance(content, list)
     assert json.loads(content[0]["text"])["current_phase"]["name"] == "orient_leftward"
     assert content[1] == {"type": "text", "text": "画面中疑似入口位于右前方。"}
+
+
+def test_action_planner_prompt_uses_image_sequence_action_trend_and_explicit_targets():
+    prompt = (
+        Path("src")
+        / "agent"
+        / "planning"
+        / "prompts"
+        / "action_planner_system.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "selected_frames" in prompt
+    assert "action_trend" in prompt
+    assert 'target_source="explicit_user"' in prompt
+    assert "do not mention exact remaining meters/degrees" in prompt
+    assert "alternating_yaw" in prompt
 
 
 def test_model_action_planner_requires_api_key():
@@ -397,7 +405,7 @@ def test_model_action_planner_rejects_env_observe_tool_step():
         }
     )
 
-    with pytest.raises(ValueError, match="forbidden"):
+    with pytest.raises(ValueError, match="not allowed"):
         planner.plan_next(make_state(), make_context())
 
 
@@ -509,10 +517,6 @@ def test_model_action_planner_accepts_forward_5m_duration_from_nominal_scale():
     context["allowed_action_constraints"]["nominal_action_scale"] = {
         "linear_velocity_mps": 2.0,
         "vertical_velocity_mps": 1.0,
-        "move_duration_sec": 2.0,
-        "vertical_duration_sec": 2.0,
-        "vertical_step_m": 2.0,
-        "yaw_step_deg": 30.0,
     }
     planner = StubModelActionPlanner(
         {

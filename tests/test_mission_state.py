@@ -55,8 +55,8 @@ def test_mission_state_tracks_phase_execution_facts():
         tool_facts_delta={
             "total_steps": 1,
             "successful_steps": 1,
-            "move_body_duration_success_sum": 0.5,
-            "move_body_duration_by_direction_success": {"forward": 0.5},
+            "move_duration_success_sum_sec": 0.5,
+            "move_duration_by_direction_success": {"forward": 0.5},
             "tools_executed": {"uav.move_body": 1},
         },
     )
@@ -69,17 +69,16 @@ def test_mission_state_tracks_phase_execution_facts():
     assert "latest_pose" not in data
     assert "yaw_scan_accum_deg" not in data
     assert data["safety"]["yaw_scan"]["accum_deg"] == 0.0
-    assert data["current_phase_progress"]["world_pose"]["start"]["x"] == 0.0
-    assert data["current_phase_progress"]["world_pose"]["latest"]["x"] == 1.0
+    assert "world_pose" not in data["current_phase_progress"]
     assert "start_pose" not in data["current_phase_progress"]
     assert "latest_pose" not in data["current_phase_progress"]
     assert "phase_origin_yaw_deg" not in data["current_phase_progress"]
-    assert data["current_phase_progress"]["phase_local_frame"]["origin_yaw_deg"] == 0.0
-    assert data["current_phase_progress"]["last_window_measurements"]["planar_displacement_m"] == 1.0
+    assert "phase_local_frame" not in data["current_phase_progress"]
+    assert data["current_phase_progress"]["last_window"]["planar_m"] == 1.0
     assert "latest_window_measurements" not in data["current_phase_progress"]
-    assert data["current_phase_progress"]["cumulative_tool_facts"]["move_body_duration_success_sum"] == 0.5
-    assert data["current_phase_progress"]["phase_local_measurements"]["forward_displacement_m"] == 1.0
-    assert "coordinate_frames" in data["current_phase_progress"]
+    assert data["current_phase_progress"]["tool_facts"]["move_duration_success_sum_sec"] == 0.5
+    assert data["current_phase_progress"]["measurements"]["forward_m"] == 1.0
+    assert "coordinate_frames" not in data["current_phase_progress"]
     assert data["current_phase_key"] == "1:orient_right"
 
 
@@ -105,7 +104,7 @@ def test_mission_state_uses_phase_index_to_separate_duplicate_phase_names():
 
     assert first_progress["phase_key"] == "1:move_forward"
     assert state.current_phase_execution_summary["phase_key"] == "2:move_forward"
-    assert state.current_phase_execution_summary["world_pose"]["start"]["x"] == 10.0
+    assert state.current_phase_execution_summary["measurements"]["forward_m"] == 1.0
 
 
 def test_phase_local_projection_uses_phase_start_yaw():
@@ -119,9 +118,9 @@ def test_phase_local_projection_uses_phase_start_yaw():
     state.ensure_current_phase_progress({"pose": {"position": {"x": 0.0, "y": 0.0, "z": -2.0}, "euler_rad": {"yaw": 0.0}}})
     state.update_current_phase_progress({"pose": {"position": {"x": 5.0, "y": 0.0, "z": -2.0}, "euler_rad": {"yaw": 0.0}}})
 
-    measurements = state.current_phase_progress["phase_local_measurements"]
-    assert measurements["forward_displacement_m"] == 5.0
-    assert measurements["right_displacement_m"] == 0.0
+    measurements = state.current_phase_progress["measurements"]
+    assert measurements["forward_m"] == 5.0
+    assert measurements["right_m"] == 0.0
 
 
 def test_phase_local_projection_handles_90_degree_yaw():
@@ -139,9 +138,9 @@ def test_phase_local_projection_handles_90_degree_yaw():
         {"pose": {"position": {"x": 0.0, "y": 5.0, "z": -2.0}, "euler_rad": {"yaw": 3.141592653589793 / 2}}}
     )
 
-    measurements = state.current_phase_progress["phase_local_measurements"]
-    assert measurements["forward_displacement_m"] == 5.0
-    assert measurements["right_displacement_m"] == 0.0
+    measurements = state.current_phase_progress["measurements"]
+    assert measurements["forward_m"] == 5.0
+    assert measurements["right_m"] == 0.0
 
 
 def test_shared_pose_measurements_cover_cardinal_yaws():

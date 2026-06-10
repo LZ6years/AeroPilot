@@ -46,10 +46,12 @@ def build_visual_caption_payload(
 ) -> dict[str, Any]:
     """Build an OpenAI-compatible multimodal request for phase-aware captioning."""
 
+    current_phase = dict(stage_context.current_phase) if stage_context.current_phase else None
+    criteria = current_phase.get("completion_criteria", []) if isinstance(current_phase, dict) else []
     user_context = {
         "active_instruction": stage_context.active_instruction,
-        "current_phase": dict(stage_context.current_phase) if stage_context.current_phase else None,
-        "phase_completion_criteria": [dict(item) for item in stage_context.phase_completion_criteria],
+        "current_phase": current_phase,
+        "phase_completion_criteria": [dict(item) for item in criteria if isinstance(item, dict)],
         "expected_visual_description": {
             "schema_version": SCHEMA_VERSION,
             "strategy": STRATEGY,

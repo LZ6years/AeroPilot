@@ -12,6 +12,7 @@ UAV-Flow 在这里不是 runtime integration。它的角色是提供任务集、
 |---|---|
 | `external_eval_requirements.md` | 需求和边界：为什么接 UAV-Flow、输入输出按谁、指标怎么解释、哪些信息不能进入 planner |
 | `unrealcv_compatibility_plan.md` | 实现影响：代码放哪里、哪些模块新增、哪些主链路不改、测试和输出怎么组织 |
+| `manual_testing.md` | 人工运行 UAV-Flow 测试的操作手册：真实 UE 启动、batch 配置、HTML/context 复盘、常见排查 |
 
 ## 目录约定
 

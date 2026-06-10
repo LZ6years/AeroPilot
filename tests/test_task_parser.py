@@ -129,3 +129,14 @@ def test_semantic_phase_accepts_completion_criteria():
         }
     ]
     assert phase.to_dict()["completion_criteria"][0]["axis"] == "forward"
+
+
+def test_model_parser_prompt_requires_explicit_numeric_targets():
+    parser = TaskParser(mode="rule_based")
+
+    prompt = parser.system_prompt
+
+    assert 'target_source="explicit_user"' in prompt
+    assert "do not invent a numeric translation target such as 5.0 meters" in prompt
+    assert "move to the trees" in prompt
+    assert "only when the instruction explicitly states that distance" in prompt

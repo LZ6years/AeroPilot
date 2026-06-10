@@ -12,8 +12,7 @@ Use these facts:
 - measurements contain world_delta, phase-local forward/right/up displacement, planar_displacement, vertical_delta, and yaw_delta_deg. They are measured facts, not hard rules.
 - phase_completion_criteria defines the stable completion target for the current phase. Phase names are free-form labels; judge completion from criteria when present.
 - phase_completion_evaluation is a deterministic comparison of criteria vs current measured progress. Use it as evidence, but still ground the final reason in the executed actions and observations.
-- phase_execution_summary contains current-phase progress, coordinate frame notes, phase-local projected measurements, and cumulative tool facts. Prefer these cumulative facts over single-window deltas when judging phase progress.
-- phase_execution_summary is the same cleaned current-phase progress shown in latest_state.current_phase_progress. It uses last_window_measurements for the most recent execution window and omits raw velocity and duplicate start_pose/latest_pose fields.
+- phase_execution_summary contains compact current-phase progress. measurements are cumulative for the current phase, last_window is the most recent action-window movement/yaw, and tool_facts are cumulative executed tool facts.
 - recent_history summarizes recent actions and observations.
 - safety_intervention_summary, yaw_scan_remaining_deg, visual_phase_budget_exhausted, recent_executed_tools, and recent_safety_reasons summarize whether SafetySupervisor changed the action window after planning.
 - phase_window_count and max_phase_window_count show whether the runtime is nearing its loop guard. They are not phase-completion evidence and should not be used to pretend a phase is complete.
@@ -52,10 +51,10 @@ Decision rules:
 - If a criterion is overshot and correction_allowed is true, continue the current phase so the next action window can correct in the opposite direction.
 - If a criterion is overshot and correction_allowed is false, prefer hover/conservative completion only when additional movement would increase risk.
 - For movement tasks, judge from executed movement, phase-local projected displacement, final_state, and recent history together.
-- For "forward/backward/left/right/up/down" tasks, prefer phase_execution_summary.phase_local_measurements.forward_displacement_m/right_displacement_m/up_displacement_m over raw world_ned dx/dy.
-- Use right_displacement_m as drift/cross-track context, but do not reject a forward phase solely because right drift is nonzero unless the phase explicitly requires strict path alignment.
-- For movement tasks, use phase_execution_summary.phase_local_measurements and cumulative_tool_facts to avoid repeatedly asking for the same full movement when the phase has already accumulated progress.
-- For rotation tasks, use normalized cumulative yaw facts from phase_execution_summary. Do not mistake yaw wraparound, such as 159 degrees to -172 degrees, for a large negative turn.
+- For "forward/backward/left/right/up/down" tasks, prefer phase_execution_summary.measurements.forward_m/right_m/up_m over raw world_ned dx/dy.
+- Use measurements.right_m as drift/cross-track context, but do not reject a forward phase solely because right drift is nonzero unless the phase explicitly requires strict path alignment.
+- For movement tasks, use phase_execution_summary.measurements and phase_execution_summary.tool_facts to avoid repeatedly asking for the same full movement when the phase has already accumulated progress.
+- For rotation tasks, use normalized cumulative yaw facts from phase_execution_summary.measurements.yaw_delta_deg and phase_execution_summary.tool_facts.turn_yaw_success_sum_deg. Do not mistake yaw wraparound, such as 159 degrees to -172 degrees, for a large negative turn.
 - In short-step benchmark profiles, a single small yaw or small move is often only partial progress. Continue the phase when the target is still not visually confirmed, but do not treat lack of structured detection as proof that the image contains no target when an actual image input was attached.
 - If the current phase is visual search and an actual image input is attached, ground the decision in visible evidence from that image; if unsure, say the target is not confirmed rather than definitively absent.
 - Ignore velocity if it appears in raw observation history; velocity is not part of model-facing phase completion evidence.

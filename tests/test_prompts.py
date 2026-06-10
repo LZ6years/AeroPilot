@@ -22,16 +22,16 @@ def test_task_parser_prompt_contains_phase_position_and_safety_boundaries():
     assert "Do not turn simple movement-only tasks into visual landmark search tasks" in prompt
 
 
-def test_action_planner_prompt_contains_allowed_and_forbidden_tools():
+def test_action_planner_prompt_contains_allowed_tools_contract():
     prompt = (Path("src") / "agent" / "planning" / "prompts" / "action_planner_system.txt").read_text(encoding="utf-8")
 
     assert "uav.hover" in prompt
     assert "uav.turn_relative" in prompt
     assert "uav.move_body" in prompt
-    assert "forbidden_tools" in prompt
+    assert "forbidden_tools" not in prompt
     assert "observation_policy" in prompt
     assert "phase_transition" in prompt
-    assert "phase_completion_criteria" in prompt
+    assert "current_phase.completion_criteria" in prompt
     assert "action_window" in prompt
     assert "current_phase_only" in prompt
     assert "requires_intermediate_observation" in prompt
@@ -44,7 +44,7 @@ def test_action_planner_prompt_contains_allowed_and_forbidden_tools():
     assert "action_schemas" in prompt
     assert "Do not invent alternate argument names" in prompt
     assert "nominal_action_scale" in prompt
-    assert "short-step benchmark profile" in prompt
+    assert "short-step profile" in prompt
     assert "duration = distance_m / nominal_action_scale.linear_velocity_mps" in prompt
     assert '{"direction": "forward", "duration": 2.5}' in prompt
     assert "model_inputs" in prompt

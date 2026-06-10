@@ -52,8 +52,6 @@ class ContextComposer:
             safety_constraints=dict(stage_context.safety_constraints),
             allowed_action_constraints=dict(stage_context.allowed_action_constraints),
             observation_policy=dict(stage_context.observation_policy),
-            phase_transition_policy=dict(stage_context.phase_transition_policy),
-            phase_completion_criteria=[dict(item) for item in stage_context.phase_completion_criteria],
             phase_execution_summary=dict(stage_context.phase_execution_summary),
             metadata={
                 "run_id": memory.run_id,
@@ -90,41 +88,63 @@ def _merge_text_config(file_config: dict[str, Any], override: dict[str, Any] | N
 
 
 def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]:
+    enabled_modules = set(module_descriptions)
     return {
         "planner_context_fields": {
-            "active_instruction": "The current user instruction the planner should follow.",
-            "current_phase": "The current semantic phase; copy current_phase.name into the action plan response phase.",
-            "semantic_goal": "The parsed mission goal for the active instruction.",
-            "fragments": "Ordered context fragments from enabled context modules, including reusable skills when enabled.",
-            "disabled_fragments": "Module names disabled by configuration and therefore absent from fragments.",
-            "context_schema": "Model-facing explanations for this context shape and each enabled module's fields.",
-            "rules": "Project-level FlyAgent behavior guidance loaded from memory/FLYAGENT.md or runtime overrides.",
-            "user_preferences": "User-facing preference guidance loaded from memory/USER.md or runtime overrides.",
-            "safety_constraints": "Current runtime safety state that should guide planning before SafetySupervisor review.",
-            "allowed_action_constraints": "The action planning contract: allowed UAV tools, forbidden tools, schemas, and limits.",
-            "observation_policy": "Runtime perception policy. When automatic, the planner must not output observe steps.",
-            "phase_transition_policy": "How runtime judges phase progress after tool execution and automatic observation.",
-            "phase_completion_criteria": "Current semantic phase completion contract. Phase names are free-form; these criteria define target axis, target value, tolerance, and whether correction is allowed.",
-            "phase_execution_summary": "Clean model-facing alias of latest_state.current_phase_progress. It contains current-phase measured/executed facts, coordinate frame notes, world_pose start/latest, phase_local_frame, last_window_measurements, and phase-local forward/right/up projection fields. Raw velocity and duplicate start_pose/latest_pose fields are intentionally omitted.",
-            "metadata": "Run identifiers, map/scene identifiers, budget metadata, and other audit information.",
+            "active_instruction": "Current user instruction.",
+            "current_phase": "Current semantic phase; response phase must match current_phase.name.",
+            "semantic_goal": "Parsed mission goal.",
+            "fragments": "Enabled context fragments.",
+            "rules": "Global FlyAgent behavior guidance.",
+            "user_preferences": "User response preferences.",
+            "safety_constraints": "Current safety state.",
+            "allowed_action_constraints": "Allowed tools, forbidden tools, schemas, and limits.",
+            "observation_policy": "Runtime collects observations automatically; do not output observe steps.",
+            "phase_execution_summary": "Compact measured progress and tool facts in the current phase.",
         },
-        "fragment_common_fields": {
-            "name": "Fragment category, such as instruction, skills, image, pose, action, or map.",
-            "enabled": "Whether this fragment's module was enabled when the fragment was produced.",
-            "source": "The module class that produced this fragment.",
-            "content": "Module-specific structured content; see module_content_fields for the matching fragment name.",
-            "model_inputs": "Provider-ready inputs prepared by context modules, such as encoded image data URLs or text visual descriptions. Large encoded data may be omitted from the JSON text before model submission and sent as separate provider content parts.",
-            "facts": "Observed or verifiable facts. Prefer these over inferences when planning.",
-            "inferences": "Hints, guesses, derived values, or map-memory clues that require caution or confirmation.",
-            "goals": "Mission or phase goals contributed by this fragment.",
-            "risks": "Uncertainty, missing evidence, failures, or reconfirmation requirements.",
-            "confidence": "Module confidence label: low, medium, or high.",
-            "artifact_refs": "Paths or refs to artifacts such as image files or memory records.",
-            "budget": "Priority and token estimate used by ContextComposer ordering and trimming.",
-            "warnings": "Non-fatal issues that should make planning more conservative.",
-            "metadata": "Auxiliary module metadata such as reset_epoch, map_id, or coordinate frame.",
+        "fragment_fields": {
+            "name": "Fragment type.",
+            "content": "Planner-facing compact content.",
+            "model_inputs": "Attached image/text model inputs.",
+            "risks": "Warnings or missing evidence.",
+            "metadata": "Debug/audit metadata; do not treat as task evidence.",
         },
-        "module_content_fields": dict(module_descriptions),
+        "module_content_fields": {
+            name: fields
+            for name, fields in _compact_module_content_fields().items()
+            if name in enabled_modules
+        },
+    }
+
+
+def _compact_module_content_fields() -> dict[str, dict[str, str]]:
+    return {
+        "instruction": {
+            "current_instruction": "Current instruction summary.",
+            "instruction_history": "Recent compact instruction summaries.",
+            "current_phase": "Compact phase name and meaning.",
+            "uncertainties": "Known parser uncertainties.",
+        },
+        "skills": {
+            "selected_skills": "Selected reusable guidance for this planning step.",
+            "callable_capabilities": "Enabled callable skill tools, present only when non-empty.",
+        },
+        "image": {
+            "selected_frames": "Attached image roles such as latest_observation, initial_observation, previous_observation, and four_windows_ago_observation.",
+            "visual_evidence": "RGB availability, mock status, attached image count, and interpretation status.",
+        },
+        "pose": {
+            "latest_pose": "Latest UAV pose.",
+            "recent_pose_delta": "Delta between recent poses.",
+        },
+        "action": {
+            "recent_actions": "Recent compact actions with tool, args, and ok.",
+            "action_trend": "Recent motion pattern such as repeated_yaw, alternating_yaw, repeated_move, or mixed.",
+        },
+        "map": {
+            "recalled_map_memories": "Map memory clues; confirm with current observations.",
+            "recall_filter": "Map recall filter.",
+        },
     }
 
 

@@ -12,7 +12,3 @@ from src.plugins.contracts.skill import Skill
 class PluginContributions:
     skills: list[Skill] = field(default_factory=list)
     context_modules: list[ContextModuleContribution] = field(default_factory=list)
-
-    @property
-    def knowledge_skills(self) -> list[Skill]:
-        return self.skills

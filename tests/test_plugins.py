@@ -59,11 +59,11 @@ def test_plugin_discovery_finds_only_current_uav_flight_skills():
         enabled=["knowledge.uav_flight"],
     ).discover()
 
-    names = {skill.name for skill in result.contributions.knowledge_skills}
+    names = {skill.name for skill in result.contributions.skills}
 
     assert names == EXPECTED_UAV_FLIGHT_SKILLS
     assert not REMOVED_UAV_FLIGHT_SKILLS & names
-    assert {skill.plugin_id for skill in result.contributions.knowledge_skills} == {"knowledge.uav_flight"}
+    assert {skill.plugin_id for skill in result.contributions.skills} == {"knowledge.uav_flight"}
     assert result.warnings == []
 
 
@@ -136,9 +136,10 @@ def test_skills_module_handles_no_model_selection():
     fragment = module.build(MemorySourceBundle(memory), make_stage_context(result)).to_dict()
 
     assert fragment["name"] == "skills"
-    assert fragment["content"]["available_skills"]
     assert fragment["content"]["selected_skills"] == []
-    assert fragment["content"]["selection"]["status"] == "disabled"
+    assert "available_skills" not in fragment["content"]
+    assert fragment["metadata"]["available_skill_names"]
+    assert fragment["metadata"]["selection"]["status"] == "disabled"
     assert fragment["facts"] == []
 
 
@@ -220,9 +221,12 @@ def test_skills_module_loads_model_selected_skill():
 
     fragment = module.build(MemorySourceBundle(memory), make_stage_context(result)).to_dict()
 
-    assert fragment["content"]["selection"]["accepted_skill_names"] == ["visual_target_task_reasoning"]
-    assert fragment["content"]["selection"]["rejected_skill_names"] == ["missing_skill"]
+    assert fragment["metadata"]["selection"]["accepted_skill_names"] == ["visual_target_task_reasoning"]
+    assert fragment["metadata"]["selection"]["rejected_skill_names"] == ["missing_skill"]
     assert fragment["content"]["selected_skills"][0]["name"] == "visual_target_task_reasoning"
     assert "skill_text" in fragment["content"]["selected_skills"][0]
+    assert "plugin_id" not in fragment["content"]["selected_skills"][0]
+    assert "source_path" not in fragment["content"]["selected_skills"][0]
+    assert "available_references" not in fragment["content"]["selected_skills"][0]
     assert fragment["facts"] == []
     assert fragment["warnings"].count("skill_selection_rejected:missing_skill") >= 1

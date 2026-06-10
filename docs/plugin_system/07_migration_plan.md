@@ -1,13 +1,13 @@
 # 07 Migration Plan
 
-这份文档记录当前 plugin system 的迁移状态和后续边界。当前实现已经不再使用旧 `custom_modules`，knowledge skill 也已经迁移为文件夹式结构。
+这份文档记录当前 plugin system 的迁移状态和后续边界。当前实现已经不再使用旧 `custom_modules`，skill 也已经迁移为文件夹式结构。
 
 ## 已完成
 
 - 删除旧式 `src/memory/context/custom_modules` 长期机制。
 - 新增 `src/plugins`，负责 discovery、registry、catalog、selection、loader 和 contracts。
 - 新增 `plugins/knowledge` 和 `plugins/research`。
-- `KnowledgeSkill` 使用文件夹式结构：
+- `Skill` 使用文件夹式结构：
 
 ```text
 plugins/knowledge/<plugin_name>/<skill_folder>/
@@ -29,7 +29,7 @@ plugins/research/multimodal_image/context_modules/image.py
 - 模型选择 skill name 后，runtime 校验 selected names。
 - runtime 只读取被选中 skill folder 内的 `SKILL.md`、`reference.md`、`references/*.md`。
 - `scripts/*` 只列出路径，不执行。
-- `knowledge.facts` 保持为空，skill 是 guidance，不是 observation fact。
+- `skills.facts` 保持为空，skill 是 guidance，不是 observation fact。
 
 ## 后续可做
 
@@ -49,4 +49,3 @@ plugins/research/multimodal_image/context_modules/image.py
 - 新 UAV tools。
 - response protocol 接管消息系统。
 - benchmark truth 注入。
-

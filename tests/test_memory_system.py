@@ -149,7 +149,7 @@ def test_context_composer_outputs_uniform_fragments(tmp_path):
     assert context["metadata"]["budget"]["final_tokens_estimate"] <= 2000
     assert "context_schema" in context
     assert "planner_context_fields" in context["context_schema"]
-    assert "fragment_common_fields" in context["context_schema"]
+    assert "fragment_fields" in context["context_schema"]
     assert set(context["context_schema"]["module_content_fields"]) == {
         "instruction",
         "skills",
@@ -158,9 +158,9 @@ def test_context_composer_outputs_uniform_fragments(tmp_path):
         "action",
         "map",
     }
-    assert "available_skills" in context["context_schema"]["module_content_fields"]["skills"]["content_fields"]
-    assert "latest_pose" in context["context_schema"]["module_content_fields"]["pose"]["content_fields"]
-    assert "recent_rgb_frame_metadata" in context["context_schema"]["module_content_fields"]["image"]["content_fields"]
+    assert "selected_skills" in context["context_schema"]["module_content_fields"]["skills"]
+    assert "latest_pose" in context["context_schema"]["module_content_fields"]["pose"]
+    assert "selected_frames" in context["context_schema"]["module_content_fields"]["image"]
 
 
 def test_context_composer_loads_rules_and_user_preferences_from_markdown(tmp_path):
@@ -284,8 +284,10 @@ def test_action_module_reads_jsonl_refs_and_outputs_compact_recent_actions(tmp_p
     action = _fragment(context, "action")
 
     assert len(action["content"]["recent_actions"]) == 5
-    assert "data" not in action["content"]["recent_actions"][-1]["result"]
+    assert action["content"]["recent_actions"][-1] == {"tool": "uav.hover", "args": {}, "ok": True}
+    assert "result" not in action["content"]["recent_actions"][-1]
     assert "action_effect_summaries" not in action["content"]
+    assert action["facts"] == []
     assert action["inferences"] == []
 
 
@@ -300,10 +302,11 @@ def test_pose_and_image_modules_read_jsonl_refs(tmp_path):
     image = _fragment(context, "image")
 
     assert pose["content"]["latest_pose"] == {"x": 1.0, "y": 0.0, "z": -2.0}
+    assert "recent_pose_history" not in pose["content"]
     assert image["content"]["visual_evidence"]["has_rgb"] is True
     assert image["content"]["visual_evidence"]["has_depth"] is False
-    assert image["content"]["latest_frame_metadata"]["rgb"]["path"] == "rgb.png"
-    assert image["content"]["recent_rgb_frame_metadata"][0]["path"] == "rgb.png"
+    assert image["content"]["selected_frames"] == [{"role": "latest_observation", "source": "phase_step"}]
+    assert image["metadata"]["selected_frame_metadata"][0]["path"] == "rgb.png"
     assert image["artifact_refs"] == ["rgb.png"]
     assert image["model_inputs"] == []
     assert image["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
@@ -333,18 +336,14 @@ def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
     model_input = image["model_inputs"][0]
 
     assert model_input["type"] == "image"
-    assert model_input["source"] == "image"
     assert model_input["role"] == "latest_observation"
     assert model_input["encoding"] == "data_url"
     assert model_input["data"] == "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
-    assert model_input["metadata"] == {
-        "source_path": str(rgb_path),
-        "artifact_ref": str(rgb_path),
-        "modality": "rgb",
-        "processing": "select_latest_rgb",
-        "mock": False,
-    }
+    assert set(model_input) == {"type", "role", "mime_type", "encoding", "data"}
+    assert image["content"]["selected_frames"] == [{"role": "latest_observation", "source": "automatic_phase_window"}]
+    assert image["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)
     assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
+    assert image["content"]["visual_evidence"]["attached_image_count"] == 1
     assert "visual_description" not in image["content"]
 
 
@@ -374,7 +373,7 @@ def test_image_module_keeps_three_recent_rgb_frames_only(tmp_path):
     )
     image = _fragment(context, "image")
 
-    assert [item["path"] for item in image["content"]["recent_rgb_frame_metadata"]] == [
+    assert [item["path"] for item in image["metadata"]["recent_rgb_frame_metadata"]] == [
         "rgb_1.png",
         "rgb_2.png",
         "rgb_3.png",
@@ -456,7 +455,7 @@ def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
     assert fragment["content"]["visual_processing"]["strategy"] == "qwen_vl_phase_caption_v3"
     assert fragment["content"]["visual_processing"]["status"] == "captioned"
     assert fragment["content"]["visual_evidence"]["interpretation_status"] == "captioned"
-    assert fragment["content"]["recent_rgb_frame_metadata"][0]["path"] == str(rgb_path)
+    assert fragment["metadata"]["recent_rgb_frame_metadata"][0]["path"] == str(rgb_path)
     assert fragment["artifact_refs"] == [str(rgb_path)]
 
 
@@ -534,10 +533,10 @@ def test_pose_module_keeps_three_recent_pose_refs(tmp_path):
     )
     pose = _fragment(context, "pose")
 
-    assert [item["yaw_deg"] for item in pose["content"]["recent_pose_history"]] == [10.0, 20.0, 30.0]
+    assert pose["metadata"]["pose_history_count"] == 3
+    assert pose["content"]["recent_pose_delta"]["dyaw_deg"] == 10.0
     assert "velocity" not in pose["content"]["latest_pose"]
-    assert all("velocity" not in item for item in pose["content"]["recent_pose_history"])
-    assert "velocity" not in pose["facts"][0]["value"]
+    assert pose["facts"] == []
 
 
 def test_flight_memory_json_is_manifest_not_raw_history(tmp_path):
@@ -629,9 +628,9 @@ def test_default_modules_describe_their_outputs():
     descriptions = registry.describe_modules()
 
     assert set(descriptions) == {"instruction", "skills", "image", "pose", "action", "map"}
-    assert "active_instruction" in descriptions["instruction"]["content_fields"]
-    assert "available_skills" in descriptions["skills"]["content_fields"]
-    assert "latest_frame_metadata" in descriptions["image"]["content_fields"]
+    assert "current_instruction" in descriptions["instruction"]["content_fields"]
+    assert "selected_skills" in descriptions["skills"]["content_fields"]
+    assert "selected_frames" in descriptions["image"]["content_fields"]
     assert "latest_pose" in descriptions["pose"]["content_fields"]
     assert "recent_actions" in descriptions["action"]["content_fields"]
     assert "recalled_map_memories" in descriptions["map"]["content_fields"]

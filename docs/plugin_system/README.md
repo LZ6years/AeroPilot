@@ -2,7 +2,7 @@
 
 这个目录记录 UAV-Agent 的统一插件系统设计。当前目标不是做完整插件市场，而是先搭起清晰的插件骨架，让飞行任务知识、上下文模块和未来能力可以用同一套方式被发现、注册、选择和装配。
 
-第一版只完整实现 `KnowledgeSkill`。其他插件贡献类型会先在框架和文档中定义清楚，等知识注入稳定后再逐步接入。
+第一版主要实现统一 `Skill`：普通 skill 提供 guidance；带 `capability.json` 的 callable skill 可作为外接能力路径，但默认不启用。
 
 ## 核心问题
 
@@ -46,7 +46,7 @@ UAV-Agent 在飞行时需要根据自然语言指令、当前图像、位姿、�
 - context module slot 从文件名生成，例如 `context_modules/image.py` 贡献 `image` slot；实际启用哪些 slot 由 `configs/plugins.json` 决定，不在代码里写死。
 - 不保留旧式 `src/memory/context/custom_modules` 作为长期机制。
 - 不做 legacy wrapper；研究模块要直接迁移到 `plugins/research/<name>/context_modules/`。
-- 第一版只完整实现 `KnowledgeSkill`。
+- 第一版主要实现普通 guidance skill；callable skill 作为外接能力扩展路径保留。
 - 内置 UAV tools 不作为 skills；外接能力通过 callable skill 暴露为 `skill.*` 调用。
 
 ## 推荐阅读顺序
@@ -54,7 +54,7 @@ UAV-Agent 在飞行时需要根据自然语言指令、当前图像、位姿、�
 1. [01_architecture.md](01_architecture.md)：整体架构和飞行链路。
 2. [02_directory_layout.md](02_directory_layout.md)：目录结构和命名规则。
 3. [03_contribution_types.md](03_contribution_types.md)：插件贡献类型。
-4. [04_skill_discovery_and_injection.md](04_skill_discovery_and_injection.md)：KnowledgeSkill 发现、选择和注入。
+4. [04_skill_discovery_and_injection.md](04_skill_discovery_and_injection.md)：Skill 发现、选择和注入。
 5. [05_context_module_plugins.md](05_context_module_plugins.md)：ContextModule 插件化。
 6. [06_runtime_loading.md](06_runtime_loading.md)：飞行时如何加载和引入。
 7. [07_migration_plan.md](07_migration_plan.md)：后续代码迁移路径。

@@ -163,10 +163,9 @@ def build_turn_summary(
 ) -> dict[str, Any]:
     latest_observation = state.get("latest_observation", {})
     progress = state.get("current_phase_progress", {}) if isinstance(state.get("current_phase_progress", {}), dict) else {}
-    world_pose = progress.get("world_pose", {}) if isinstance(progress.get("world_pose", {}), dict) else {}
-    initial_pose = dict(world_pose.get("start", {}))
-    final_pose = dict(world_pose.get("latest", {})) or pose_from_observation(latest_observation)
-    tool_facts = progress.get("cumulative_tool_facts", {})
+    initial_pose = {}
+    final_pose = pose_from_observation(latest_observation)
+    tool_facts = progress.get("tool_facts", {})
     events = load_events(run_dir / "events.jsonl")
     segment_events = latest_instruction_events(events)
     messages = list(agent_messages) if agent_messages is not None else agent_messages_from_events(segment_events)

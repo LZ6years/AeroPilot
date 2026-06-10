@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -17,6 +18,14 @@ from src.perception.context_builder import ObservationContextBuilder
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.model_config import ModelConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
+
+
+def write_tiny_png(path) -> None:
+    path.write_bytes(
+        base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+        )
+    )
 
 
 def make_state() -> MissionState:
@@ -98,14 +107,9 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
         "sample_timing": "after_each_phase_window",
         "note": "Do not output observe steps. The runtime samples observations automatically.",
     }
-    assert context["phase_transition_policy"] == {
-        "mode": "post_action_model_judged_runtime_applied",
-        "decisions": ["continue_current_phase", "advance_to_next_phase", "complete_task"],
-        "current_phase_window_count": 0,
-        "max_phase_window_count": 5,
-        "note": "Phase transition is judged after tool execution and automatic observation. Do not output phase_transition in the action plan. Window counts are runtime loop guard diagnostics, not phase-completion evidence.",
-    }
-    assert context["phase_completion_criteria"] == [
+    assert "phase_transition_policy" not in context
+    assert "phase_completion_criteria" not in context
+    assert context["current_phase"]["completion_criteria"] == [
         {
             "kind": "rotation",
             "axis": "yaw",
@@ -116,13 +120,10 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
         }
     ]
     assert context["phase_execution_summary"] == {}
-    assert "phase_transition_policy" in context["context_schema"]["planner_context_fields"]
-    assert "phase_completion_criteria" in context["context_schema"]["planner_context_fields"]
+    assert "phase_completion_criteria" not in context["context_schema"]["planner_context_fields"]
     assert "phase_execution_summary" in context["context_schema"]["planner_context_fields"]
-    assert "uav.connect" in action_constraints["lifecycle_tools_excluded"]
-    assert "uav.connect" in action_constraints["forbidden_tools"]
-    assert "uav.set_pose" in action_constraints["forbidden_tools"]
-    assert "env.observe" in action_constraints["forbidden_tools"]
+    assert "forbidden_tools" not in action_constraints
+    assert "lifecycle_tools_excluded" not in action_constraints
     assert action_constraints["action_schemas"]["uav.hover"]["args"] == {}
     assert action_constraints["action_schemas"]["uav.turn_relative"]["args"] == {"yaw_deg": "number"}
     assert action_constraints["action_schemas"]["uav.move_body"]["args_one_of"][0]["direction"] == (
@@ -134,7 +135,14 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert context["metadata"]["run_id"] == state.run_id
     assert context["metadata"]["current_phase_index"] == state.current_phase_index
     fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
-    assert fragments["image"]["content"]["recent_observation_sources"][-1] == "phase_step"
+    instruction = fragments["instruction"]["content"]
+    assert instruction["current_instruction"]["text"] == state.user_instruction
+    assert instruction["current_phase"]["name"] == "orient_leftward"
+    assert instruction["instruction_history"][0]["instruction"] == state.user_instruction
+    assert "semantic_plan" not in instruction["instruction_history"][0]
+    assert "phases" not in instruction["instruction_history"][0]
+    assert "completion_criteria" not in instruction["instruction_history"][0]
+    assert fragments["image"]["content"]["selected_frames"][-1]["source"] == "phase_step"
     assert fragments["image"]["model_inputs"] == []
     assert fragments["image"]["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
     assert "visual_processing" not in fragments["image"]["content"]
@@ -158,7 +166,7 @@ def test_context_builder_handles_missing_observation(tmp_path):
 def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_path):
     state = make_state()
     rgb_path = tmp_path / "frame.png"
-    rgb_path.write_bytes(b"fake-png")
+    write_tiny_png(rgb_path)
     state.record_observation(
         {
             "scene_instance_id": "scene_1",
@@ -174,18 +182,110 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
     image = fragments["image"]
     assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
-    assert image["content"]["latest_frame_metadata"]["rgb"]["path"] == str(rgb_path)
+    assert image["content"]["selected_frames"] == [{"role": "latest_observation", "source": "phase_step"}]
+    assert image["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)
     assert image["model_inputs"][0]["type"] == "image"
     assert image["model_inputs"][0]["encoding"] == "data_url"
-    assert image["model_inputs"][0]["metadata"]["source_path"] == str(rgb_path)
+    assert set(image["model_inputs"][0]) == {"type", "role", "mime_type", "encoding", "data"}
     assert "visual_processing" not in image["content"]
     assert "visual_description" not in image["content"]
+
+
+def test_context_builder_default_image_attaches_key_rgb_frames(tmp_path):
+    state = make_state()
+    observations = []
+    paths = []
+    for index in range(6):
+        rgb_path = tmp_path / f"frame_{index}.png"
+        rgb_path.write_bytes(b"fake-png")
+        paths.append(str(rgb_path))
+        observations.append(
+            {
+                "scene_instance_id": "scene_1",
+                "agent_id": "uav_1",
+                "modalities": ["rgb"],
+                "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+                "source": f"phase_window_{index}",
+                "timestamp": f"t{index}",
+            }
+        )
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, observations=observations))
+
+    fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
+    image = fragments["image"]
+    roles = [item["role"] for item in image["content"]["selected_frames"]]
+    source_paths = [item["path"] for item in image["metadata"]["selected_frame_metadata"]]
+    assert roles == [
+        "latest_observation",
+        "initial_observation",
+        "previous_observation",
+        "four_windows_ago_observation",
+    ]
+    assert source_paths == [paths[5], paths[0], paths[4], paths[1]]
+    assert len(image["model_inputs"]) == 4
+    assert all(item["encoding"] == "data_url" for item in image["model_inputs"])
+    assert all("metadata" not in item and "source" not in item for item in image["model_inputs"])
+
+
+def test_context_builder_default_image_deduplicates_key_rgb_frames(tmp_path):
+    state = make_state()
+    rgb_path = tmp_path / "same.png"
+    rgb_path.write_bytes(b"fake-png")
+    observations = [
+        {
+            "scene_instance_id": "scene_1",
+            "agent_id": "uav_1",
+            "modalities": ["rgb"],
+            "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+            "source": f"phase_window_{index}",
+            "timestamp": f"t{index}",
+        }
+        for index in range(5)
+    ]
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, observations=observations))
+
+    image = {fragment["name"]: fragment for fragment in context["fragments"]}["image"]
+    assert image["content"]["selected_frames"] == [{"role": "latest_observation", "source": "phase_window_4"}]
+    assert len(image["metadata"]["selected_frame_metadata"]) == 1
+    assert len(image["model_inputs"]) == 1
+
+
+def test_context_builder_action_trend_summarizes_recent_actions(tmp_path):
+    state = make_state()
+    actions = [
+        {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}, "result": {"ok": True}},
+        {"tool": "uav.turn_relative", "args": {"yaw_deg": -5}, "result": {"ok": True}},
+        {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}, "result": {"ok": True}},
+    ]
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, actions=actions))
+
+    action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
+    trend = action["content"]["action_trend"]
+    assert trend["tool_sequence"] == ["uav.turn_relative", "uav.turn_relative", "uav.turn_relative"]
+    assert trend["repetition"] == {"last_tool": "uav.turn_relative", "consecutive_count": 3}
+    assert trend["motion_pattern"]["type"] == "alternating_yaw"
+
+
+def test_context_builder_action_trend_detects_repeated_move(tmp_path):
+    state = make_state()
+    actions = [
+        {"tool": "uav.move_body", "args": {"direction": "forward", "duration": 0.3}, "result": {"ok": True}},
+        {"tool": "uav.move_body", "args": {"direction": "forward", "duration": 0.3}, "result": {"ok": True}},
+    ]
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, actions=actions))
+
+    action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
+    assert action["content"]["action_trend"]["motion_pattern"]["type"] == "repeated_move"
 
 
 def test_context_builder_runs_custom_multimodal_image_only_when_configured(tmp_path):
     state = make_state()
     rgb_path = tmp_path / "frame.png"
-    rgb_path.write_bytes(b"fake-png")
+    write_tiny_png(rgb_path)
     state.record_observation(
         {
             "scene_instance_id": "scene_1",
@@ -270,14 +370,13 @@ def test_context_builder_includes_phase_execution_summary(tmp_path):
     assert context["phase_execution_summary"]["phase"] == "orient_leftward"
     assert context["phase_execution_summary"]["phase_key"] == "1:orient_leftward"
     assert context["phase_execution_summary"] == state.to_dict()["current_phase_progress"]
-    assert context["phase_execution_summary"]["cumulative_measurements"]["planar_displacement_m"] == 1.25
-    assert context["phase_execution_summary"]["last_window_measurements"]["planar_displacement_m"] == 1.25
+    assert context["phase_execution_summary"]["measurements"]["planar_m"] == 1.25
+    assert context["phase_execution_summary"]["last_window"]["planar_m"] == 1.25
     assert "latest_window_measurements" not in context["phase_execution_summary"]
     assert "start_pose" not in context["phase_execution_summary"]
     assert "latest_pose" not in context["phase_execution_summary"]
-    assert "phase_local_frame" in context["phase_execution_summary"]
-    assert "velocity" not in context["phase_execution_summary"]["world_pose"]["start"]
-    assert "velocity" not in context["phase_execution_summary"]["world_pose"]["latest"]
+    assert "phase_local_frame" not in context["phase_execution_summary"]
+    assert "world_pose" not in context["phase_execution_summary"]
     assert "velocity" not in state.to_dict()["latest_observation"]["pose"]
 
 
@@ -311,12 +410,15 @@ def test_context_builder_action_limits_come_from_safety_config(tmp_path):
         "abs_vz_max": 3.0,
         "duration_max": 8.0,
     }
-    assert constraints["yaw_step_deg"] == 25.0
-    assert constraints["linear_velocity_mps"] == 6.0
-    assert constraints["vertical_velocity_mps"] == 3.0
-    assert constraints["move_duration_sec"] == 8.0
-    assert constraints["nominal_action_scale"]["move_duration_sec"] == 1.25
-    assert constraints["safety_limits"] == safety_config.to_dict()
+    assert "yaw_step_deg" not in constraints
+    assert "linear_velocity_mps" not in constraints
+    assert "vertical_velocity_mps" not in constraints
+    assert "move_duration_sec" not in constraints
+    assert "safety_limits" not in constraints
+    assert constraints["nominal_action_scale"] == {
+        "linear_velocity_mps": 1.5,
+        "vertical_velocity_mps": 0.75,
+    }
 
 
 def test_context_builder_exposes_yaw_scan_budget(tmp_path):

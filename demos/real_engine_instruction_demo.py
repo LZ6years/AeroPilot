@@ -326,9 +326,8 @@ def build_state_summary(
 
     latest_observation = state.get("latest_observation", {})
     progress = state.get("current_phase_progress", {}) if isinstance(state.get("current_phase_progress", {}), dict) else {}
-    world_pose = progress.get("world_pose", {}) if isinstance(progress.get("world_pose", {}), dict) else {}
-    initial_pose = dict(world_pose.get("start", {}))
-    final_pose = dict(world_pose.get("latest", {})) or pose_from_observation(latest_observation)
+    initial_pose = {}
+    final_pose = pose_from_observation(latest_observation)
     events = load_events(run_dir / "events.jsonl")
     debug_events = load_events(run_dir / "debug" / "debug_events.jsonl")
     segment_events = latest_instruction_events(events + debug_events)
@@ -480,24 +479,24 @@ def summarize_phase_progress(progress: dict[str, Any]) -> dict[str, Any]:
 
     if not isinstance(progress, dict) or not progress:
         return {}
-    measurements = progress.get("phase_local_measurements", {})
-    tool_facts = progress.get("cumulative_tool_facts", {})
+    measurements = progress.get("measurements", {})
+    tool_facts = progress.get("tool_facts", {})
     return {
         "phase": progress.get("phase"),
         "phase_key": progress.get("phase_key"),
         "window_count": progress.get("window_count"),
-        "max_phase_window_count": progress.get("max_phase_window_count"),
-        "phase_local_measurements": {
-            "forward_displacement_m": measurements.get("forward_displacement_m"),
-            "right_displacement_m": measurements.get("right_displacement_m"),
-            "up_displacement_m": measurements.get("up_displacement_m"),
+        "max_window_count": progress.get("max_window_count"),
+        "measurements": {
+            "forward_m": measurements.get("forward_m"),
+            "right_m": measurements.get("right_m"),
+            "up_m": measurements.get("up_m"),
             "yaw_delta_deg": measurements.get("yaw_delta_deg"),
-            "planar_displacement_m": measurements.get("planar_displacement_m"),
+            "planar_m": measurements.get("planar_m"),
         },
         "tool_facts": {
             "successful_steps": tool_facts.get("successful_steps"),
-            "move_body_duration_by_direction_success": tool_facts.get("move_body_duration_by_direction_success", {}),
-            "turn_relative_yaw_deg_success_sum": tool_facts.get("turn_relative_yaw_deg_success_sum"),
+            "move_duration_by_direction_success": tool_facts.get("move_duration_by_direction_success", {}),
+            "turn_yaw_success_sum_deg": tool_facts.get("turn_yaw_success_sum_deg"),
         },
     }
 
