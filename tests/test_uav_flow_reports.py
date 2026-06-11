@@ -160,11 +160,17 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                 "planner_context": {
                     "active_instruction": "Turn to the direction of the person.",
                     "current_phase": {"name": "p"},
+                    "safety_constraints": {"yaw_scan_remaining_deg": 15.0},
+                    "observation_policy": {"mode": "automatic"},
                     "phase_completion_criteria": [{"kind": "visual_alignment"}],
                     "phase_execution_summary": {"window_count": 0},
                     "fragments": [
                         {
                             "name": "image",
+                            "metadata": {
+                                "available_skill_names": ["skill_selection_debug_marker"],
+                                "selection": {"status": "debug_only"},
+                            },
                             "model_inputs": [
                                 {
                                     "type": "image",
@@ -194,6 +200,47 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                     "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}}],
                 },
                 "safety_decision": {"interventions": [{"reason": "test"}], "plan_changed": True},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    phase_debug_dir = run_dir / "debug" / "phase_transition"
+    phase_debug_dir.mkdir(parents=True)
+    (phase_debug_dir / "p_window_000.json").write_text(
+        json.dumps(
+            {
+                "active_instruction": "Turn to the direction of the person.",
+                "current_phase": {"name": "p"},
+                "phase_window_count": 1,
+                "phase_completion_criteria": [{"kind": "visual_alignment"}],
+                "action_window": {"intent": "judge current phase"},
+                "phase_execution_summary": {"window_count": 1},
+                "action_plan": {"steps": [{"tool": "uav.turn_relative", "args": {"yaw_deg": -10}}]},
+                "executed_steps": [
+                    {
+                        "phase": "p",
+                        "step_index": 0,
+                        "step": {"tool": "uav.turn_relative", "args": {"yaw_deg": -10}},
+                        "result": {"ok": True, "message": "turned"},
+                    }
+                ],
+                "measurements": {"yaw_delta_deg": -10},
+                "safety_intervention_summary": {"intervention_count": 0},
+                "visual_phase_budget_exhausted": False,
+                "fragments": [
+                    {
+                        "name": "image",
+                        "metadata": {"selection": "phase_judge_debug_marker"},
+                        "model_inputs": [
+                            {
+                                "type": "image",
+                                "role": "latest",
+                                "data": "<omitted encoded image data: 456 chars>",
+                            }
+                        ],
+                    }
+                ],
             },
             ensure_ascii=False,
         ),
@@ -295,10 +342,18 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
     assert "Before RGB" in case_html
     assert "After RGB" in case_html
     assert "Action Planner Debug" in case_html
+    assert "Model-Facing Context" in case_html
+    assert "Phase Judge Debug" in case_html
+    assert "Judge Context Summary" in case_html
+    assert "Executed Window" in case_html
+    assert "open full phase judge json" in case_html
     assert "debug raw" in case_html
     assert "debug safe" in case_html
     assert "latest_observation" in case_html
     assert "alternating_yaw" in case_html
+    assert "yaw_scan_remaining_deg" not in case_html
+    assert "skill_selection_debug_marker" not in case_html
+    assert "phase_judge_debug_marker" not in case_html
     assert "data:image/png;base64" not in case_html
     assert "Observation after action #0" in case_html
     assert "artifacts/rgb/frame_000001.png" in case_html
@@ -378,6 +433,79 @@ def test_html_review_marks_missing_after_frame_without_reusing_last_rgb(tmp_path
     assert "missing" in index
     assert "missing" in case_html
     assert case_html.count("frame_000001.png") >= 1
+
+
+def test_html_review_uses_phase_start_observation_anchor(tmp_path):
+    eval_dir = tmp_path / "eval"
+    case_dir = eval_dir / "cases" / "anchored"
+    run_dir = tmp_path / "runs" / "anchored"
+    rgb_dir = run_dir / "artifacts" / "rgb"
+    memory_dir = run_dir / "memory"
+    state_dir = run_dir / "state"
+    rgb_dir.mkdir(parents=True)
+    memory_dir.mkdir(parents=True)
+    state_dir.mkdir(parents=True)
+    case_dir.mkdir(parents=True)
+    first_frame = rgb_dir / "frame_000001.png"
+    task_initial_frame = rgb_dir / "frame_000002.png"
+    phase_start_frame = rgb_dir / "frame_000003.png"
+    first_frame.write_bytes(b"png")
+    task_initial_frame.write_bytes(b"png")
+    phase_start_frame.write_bytes(b"png")
+    (memory_dir / "frames.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "frame_0001", "observation_id": "obs_0001", "modality": "rgb", "path": str(first_frame)}),
+                json.dumps({"id": "frame_0002", "observation_id": "obs_0002", "modality": "rgb", "path": str(task_initial_frame)}),
+                json.dumps({"id": "frame_0003", "observation_id": "obs_0003", "modality": "rgb", "path": str(phase_start_frame)}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (memory_dir / "observations.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"id": "obs_0001", "frame_refs": [{"ref": "memory/frames.jsonl#1"}]}),
+                json.dumps({"id": "obs_0002", "frame_refs": [{"ref": "memory/frames.jsonl#2"}]}),
+                json.dumps({"id": "obs_0003", "frame_refs": [{"ref": "memory/frames.jsonl#3"}]}),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (state_dir / "flight_memory.json").write_text(
+        json.dumps(
+            {
+                "observation_anchors": {
+                    "task_initial": {"ref": "memory/observations.jsonl#2"},
+                    "phase_start": {"ref": "memory/observations.jsonl#3"},
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = {
+        "metrics": {"case_count": 1},
+        "failure_counts": {},
+        "cases": [
+            {
+                "case_id": "anchored",
+                "class_name": "Move",
+                "status": "ok",
+                "case_dir": str(case_dir),
+                "run_dir": str(run_dir),
+                "run_artifacts": {"rgb_count": 3},
+                "ndtw": {},
+                "sr_judge": {},
+            }
+        ],
+    }
+
+    paths = write_html_review(eval_dir, summary)
+
+    case_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    index = Path(paths["html_review"]).read_text(encoding="utf-8")
+    assert "Initial - <code>frame_000003.png</code>" in case_html
+    assert "Initial - <code>frame_000003.png</code>" in index
 
 
 def test_failure_counts_classifies_common_failures():

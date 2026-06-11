@@ -7,6 +7,7 @@ import json
 
 import pytest
 
+from src.agent.planning.model_inputs import build_model_user_content
 from src.agent.mission_state import MissionState
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
@@ -142,7 +143,7 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert "semantic_plan" not in instruction["instruction_history"][0]
     assert "phases" not in instruction["instruction_history"][0]
     assert "completion_criteria" not in instruction["instruction_history"][0]
-    assert fragments["image"]["content"]["selected_frames"][-1]["source"] == "phase_step"
+    assert fragments["image"]["content"]["selected_frames"][0]["role"] == "phase_start"
     assert fragments["image"]["model_inputs"] == []
     assert fragments["image"]["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
     assert "visual_processing" not in fragments["image"]["content"]
@@ -182,8 +183,11 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
     image = fragments["image"]
     assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
-    assert image["content"]["selected_frames"] == [{"role": "latest_observation", "source": "phase_step"}]
+    assert image["content"]["selected_frames"][0]["role"] == "phase_start"
+    assert image["content"]["selected_frames"][0]["observation_id"] == "obs_0001"
+    assert image["content"]["selected_frames"][0]["frame_id"] == "frame_0001"
     assert image["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)
+    assert "recent_rgb_frame_metadata" not in image["metadata"]
     assert image["model_inputs"][0]["type"] == "image"
     assert image["model_inputs"][0]["encoding"] == "data_url"
     assert set(image["model_inputs"][0]) == {"type", "role", "mime_type", "encoding", "data"}
@@ -217,12 +221,12 @@ def test_context_builder_default_image_attaches_key_rgb_frames(tmp_path):
     roles = [item["role"] for item in image["content"]["selected_frames"]]
     source_paths = [item["path"] for item in image["metadata"]["selected_frame_metadata"]]
     assert roles == [
-        "latest_observation",
-        "initial_observation",
-        "previous_observation",
-        "four_windows_ago_observation",
+        "phase_start",
+        "latest",
+        "previous",
+        "history_anchor",
     ]
-    assert source_paths == [paths[5], paths[0], paths[4], paths[1]]
+    assert source_paths == [paths[0], paths[5], paths[4], paths[1]]
     assert len(image["model_inputs"]) == 4
     assert all(item["encoding"] == "data_url" for item in image["model_inputs"])
     assert all("metadata" not in item and "source" not in item for item in image["model_inputs"])
@@ -247,9 +251,66 @@ def test_context_builder_default_image_deduplicates_key_rgb_frames(tmp_path):
     context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, observations=observations))
 
     image = {fragment["name"]: fragment for fragment in context["fragments"]}["image"]
-    assert image["content"]["selected_frames"] == [{"role": "latest_observation", "source": "phase_window_4"}]
+    assert image["content"]["selected_frames"][0]["role"] == "phase_start"
     assert len(image["metadata"]["selected_frame_metadata"]) == 1
+    assert "recent_rgb_frame_metadata" not in image["metadata"]
     assert len(image["model_inputs"]) == 1
+
+
+def test_context_builder_default_image_prefers_current_phase_anchor(tmp_path):
+    state = make_state()
+    observations = []
+    paths = []
+    for index in range(4):
+        rgb_path = tmp_path / f"anchored_{index}.png"
+        rgb_path.write_bytes(b"fake-png")
+        paths.append(str(rgb_path))
+        observations.append(
+            {
+                "scene_instance_id": "scene_1",
+                "agent_id": "uav_1",
+                "modalities": ["rgb"],
+                "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+                "source": f"source_{index}",
+                "timestamp": f"t{index}",
+            }
+        )
+    memory = make_memory(tmp_path, state, observations=observations)
+    memory.set_observation_anchor("task_initial", memory.recent_observation_refs[1])
+    memory.set_observation_anchor("phase_start", memory.recent_observation_refs[2])
+
+    context = ObservationContextBuilder().build(state, memory)
+
+    image = {fragment["name"]: fragment for fragment in context["fragments"]}["image"]
+    roles = [item["role"] for item in image["content"]["selected_frames"]]
+    source_paths = [item["path"] for item in image["metadata"]["selected_frame_metadata"]]
+    assert roles == ["phase_start", "latest"]
+    assert source_paths == [paths[2], paths[3]]
+
+
+def test_model_user_content_omits_fragment_debug_metadata(tmp_path):
+    state = make_state()
+    rgb_path = tmp_path / "frame.png"
+    write_tiny_png(rgb_path)
+    state.record_observation(
+        {
+            "scene_instance_id": "scene_1",
+            "agent_id": "uav_1",
+            "modalities": ["rgb"],
+            "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+            "source": "phase_step",
+        }
+    )
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
+
+    content = build_model_user_content(context)
+    text = content[0]["text"] if isinstance(content, list) else content
+
+    assert "selected_frame_metadata" not in text
+    assert str(rgb_path) not in text
+    assert "safety_constraints" not in text
+    assert "observation_policy" not in text
+    assert "yaw_scan_remaining_deg" not in text
 
 
 def test_context_builder_action_trend_summarizes_recent_actions(tmp_path):

@@ -14,7 +14,8 @@ messages during a flight task.
 
 - Keep messages concise and understandable to the human operator.
 - Mention uncertainty when visual evidence is weak or ambiguous.
-- Attach evidence references when the runtime provides image, pose, action, or diagnostic refs.
+- Use evidence references only when the runtime explicitly provides image, pose,
+  action, or diagnostic refs; otherwise leave evidence_refs empty.
 - Use Chinese by default when the user speaks Chinese.
 
 ## Do Not

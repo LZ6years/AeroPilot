@@ -74,19 +74,43 @@ def _text_part(item: dict[str, Any]) -> dict[str, Any] | None:
 
 def _sanitize_context(context: dict[str, Any]) -> dict[str, Any]:
     sanitized = copy.deepcopy(context)
+    _remove_debug_only_top_level_fields(sanitized)
     fragments = sanitized.get("fragments", [])
     if not isinstance(fragments, list):
         return sanitized
     for fragment in fragments:
         if not isinstance(fragment, dict):
             continue
+        fragment.pop("metadata", None)
         model_inputs = fragment.get("model_inputs", [])
         if not isinstance(model_inputs, list):
             continue
         for item in model_inputs:
-            if isinstance(item, dict) and "data" in item:
+            if not isinstance(item, dict):
+                continue
+            item.pop("metadata", None)
+            if "data" in item:
                 item["data"] = _omitted_data_marker(item.get("data"))
     return sanitized
+
+
+def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
+    """Keep runtime/safety audit data out of the model-facing text payload.
+
+    Safety constraints and observation policy remain in the recorder/debug
+    context. The action planner only needs the tool contract and the rule that
+    observation is automatic; the SafetySupervisor enforces live safety limits.
+    """
+
+    context.pop("safety_constraints", None)
+    context.pop("observation_policy", None)
+    schema = context.get("context_schema")
+    if not isinstance(schema, dict):
+        return
+    fields = schema.get("planner_context_fields")
+    if isinstance(fields, dict):
+        fields.pop("safety_constraints", None)
+        fields.pop("observation_policy", None)
 
 
 def _omitted_data_marker(value: Any) -> str:

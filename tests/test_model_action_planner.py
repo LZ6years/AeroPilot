@@ -149,10 +149,15 @@ def make_context() -> dict:
 
 
 def test_model_user_content_stays_text_without_model_inputs():
-    content = build_model_user_content(make_context())
+    context = make_context()
+    context["safety_constraints"] = {"yaw_scan_remaining_deg": 10.0}
+    content = build_model_user_content(context)
 
     assert isinstance(content, str)
-    assert json.loads(content)["current_phase"]["name"] == "orient_leftward"
+    text_context = json.loads(content)
+    assert text_context["current_phase"]["name"] == "orient_leftward"
+    assert "safety_constraints" not in text_context
+    assert "observation_policy" not in text_context
 
 
 def test_model_user_content_attaches_encoded_image_from_any_fragment():

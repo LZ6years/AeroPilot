@@ -20,7 +20,7 @@ from src.env_client.base import EnvClient
 from src.env_client.schemas import SceneInstance
 from src.memory.flight_memory import FlightMemory
 from src.memory.context.modules.image import (
-    frame_debug_metadata,
+    frame_context_metadata,
     rgb_model_inputs_from_frames,
     selected_frame_summaries,
     selected_rgb_frames_from_observations,
@@ -488,6 +488,7 @@ class TaskRuntime:
             return
         if transition.decision == ADVANCE_TO_NEXT_PHASE:
             state.advance_phase()
+            self._mark_phase_start_observation(state)
             self._event("phase_transition_applied", payload)
             return
         if transition.decision == COMPLETE_TASK:
@@ -500,6 +501,7 @@ class TaskRuntime:
                 }
                 self._debug_event("phase_complete_task_downgraded", downgraded_payload)
                 state.advance_phase()
+                self._mark_phase_start_observation(state)
                 self._event("phase_transition_applied", downgraded_payload)
                 return
             state.mark_completed()
@@ -740,11 +742,17 @@ class TaskRuntime:
         rgb_frame = frames.get("rgb") if isinstance(frames, dict) else None
         latest_rgb = dict(rgb_frame) if isinstance(rgb_frame, dict) else None
         selected_rgb_frames = []
+        observations = []
         if memory and memory.memory_reader:
             observations = memory.memory_reader.read_refs(memory.recent_observation_refs)
-            selected_rgb_frames = selected_rgb_frames_from_observations(memory.memory_reader, observations)
+            selected_rgb_frames = selected_rgb_frames_from_observations(
+                memory.memory_reader,
+                observations,
+                observation_anchors=getattr(memory, "observation_anchors", {}),
+            )
         if not selected_rgb_frames and latest_rgb:
-            latest_rgb["selection_role"] = "latest_observation"
+            latest_rgb["selection_role"] = "latest"
+            latest_rgb["selection_reason"] = "Latest RGB observation for post-action phase judgment"
             selected_rgb_frames = [latest_rgb]
         model_inputs = rgb_model_inputs_from_frames(selected_rgb_frames)
         has_rgb = latest_rgb is not None
@@ -792,8 +800,7 @@ class TaskRuntime:
                 "warnings": ["rgb_frame_is_mock"] if has_mock_frames else [],
                 "metadata": {
                     "observation_source": observation_after.get("source"),
-                    "selected_frame_metadata": frame_debug_metadata(selected_rgb_frames),
-                    "recent_rgb_frame_metadata": frame_debug_metadata([latest_rgb] if latest_rgb else []),
+                    **frame_context_metadata(observations, selected_rgb_frames, [latest_rgb] if latest_rgb else []),
                 },
             }
         ]
@@ -899,9 +906,20 @@ class TaskRuntime:
         memory.append_observation_ref(write_result["observation_ref"])
         memory.append_pose_ref(write_result.get("pose_ref"))
         memory.append_frame_refs(write_result.get("frame_refs"))
+        if source in {"preflight", "instruction_start"}:
+            memory.set_observation_anchor("task_initial", write_result["observation_ref"], overwrite=False)
+            memory.set_observation_anchor("phase_start", write_result["observation_ref"], overwrite=True)
         self.recorder.write_json("debug/latest_observation.json", data)
         self.recorder.write_json("contexts/latest_context.json", self.context_builder.build(state, self._memory_for_state(state)))
         return data
+
+    def _mark_phase_start_observation(self, state: MissionState) -> None:
+        """Anchor the latest observation as the start of the newly active phase."""
+
+        memory = self._memory_for_state(state)
+        if not memory.recent_observation_refs:
+            return
+        memory.set_observation_anchor("phase_start", memory.recent_observation_refs[-1], overwrite=True)
 
     def _try_hover(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
         try:

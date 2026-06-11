@@ -9,5 +9,7 @@ Use this callable skill when the current instruction depends on a visible person
 
 The skill provides a controlled external capability named `skill.person_detector.detect`.
 Call it before moving toward a person when the planner needs explicit target confirmation.
+Call it only when `skill.person_detector.detect` is present in
+`allowed_action_constraints.planner_tools`.
 
 Do not treat this skill text as a detection result. Only the returned capability result is runtime evidence.

@@ -130,7 +130,7 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
             "callable_capabilities": "Enabled callable skill tools, present only when non-empty.",
         },
         "image": {
-            "selected_frames": "Attached image roles such as latest_observation, initial_observation, previous_observation, and four_windows_ago_observation.",
+            "selected_frames": "Attached image roles such as phase_start, latest, previous, and history_anchor.",
             "visual_evidence": "RGB availability, mock status, attached image count, and interpretation status.",
         },
         "pose": {

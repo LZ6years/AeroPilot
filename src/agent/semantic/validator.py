@@ -13,7 +13,6 @@ class SemanticPlanValidationError(ValueError):
 
 
 FORBIDDEN_ACTION_TOKENS = (
-    "uav.",
     "env.observe",
     "move_body",
     "turn_relative",
@@ -67,6 +66,10 @@ def _reject_forbidden_tokens(value: Any) -> None:
     if not isinstance(value, str):
         return
     lower = value.lower()
+    namespace_match = re.search(r"(?<![a-z0-9_])uav\.[a-z_][a-z0-9_]*", lower)
+    if namespace_match:
+        token = namespace_match.group(0)
+        raise SemanticPlanValidationError(f"Semantic plan must not contain primitive action token: {token}")
     for token in FORBIDDEN_ACTION_TOKENS:
         if _contains_forbidden_token(lower, token):
             raise SemanticPlanValidationError(f"Semantic plan must not contain primitive action token: {token}")

@@ -7,7 +7,7 @@ from typing import Any
 from src.memory.context.modules.base import ContextModule
 from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
 from src.plugins import PluginRegistry
-from src.plugins.skills import ModelSkillSelector, SkillContentLoader
+from src.plugins.skills import ModelSkillSelector, SkillContentLoader, SkillSelectionResult
 
 
 class DefaultSkillsContextModule(ContextModule):
@@ -25,12 +25,20 @@ class DefaultSkillsContextModule(ContextModule):
         self.plugin_registry = plugin_registry or PluginRegistry.from_config()
         self.skill_selector = skill_selector or ModelSkillSelector()
         self.content_loader = content_loader or SkillContentLoader()
+        self._phase_selection_cache: dict[tuple[str, str, str], SkillSelectionResult] = {}
 
     def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
         catalog = self.plugin_registry.skill_catalog
         listings = catalog.listings()
         selection_context = _selection_context(stage_context, listings)
-        selection = self.skill_selector.select(selection_context, catalog)
+        cache_key = _phase_cache_key(stage_context)
+        cached_selection = self._phase_selection_cache.get(cache_key)
+        selection_source = "phase_cache" if cached_selection is not None else "fresh"
+        if cached_selection is None:
+            selection = self.skill_selector.select(selection_context, catalog)
+            self._phase_selection_cache[cache_key] = selection
+        else:
+            selection = cached_selection
         accepted, rejected = catalog.validate_selection(selection.accepted_skill_names)
         selected = [_planner_skill_summary(self.content_loader.load_summary(skill)) for skill in accepted]
         callable_skills = self.plugin_registry.skill_capability_catalog.listings()
@@ -56,6 +64,8 @@ class DefaultSkillsContextModule(ContextModule):
                 "enabled_plugins": list(self.plugin_registry.enabled_plugins),
                 "available_skill_names": [item["name"] for item in listings],
                 "selection": selection.to_dict(),
+                "selection_source": selection_source,
+                "phase_key": cache_key[1],
             },
         )
 
@@ -72,6 +82,8 @@ class DefaultSkillsContextModule(ContextModule):
             "metadata_fields": {
                 "available_skill_names": "Debug/audit list of enabled skill names considered by the selector.",
                 "selection": "Debug/audit data for skill selection; not needed for action reasoning.",
+                "selection_source": "Whether skills were selected fresh for this semantic phase or reused from the phase cache.",
+                "phase_key": "Semantic phase cache key used for phase-local skill reuse.",
             },
         }
 
@@ -95,6 +107,22 @@ def _selection_context(stage_context: StageContextInput, listings: list[dict[str
             "Return JSON: {\"selected_skills\": [\"skill_name\"]}."
         ),
     }
+
+
+def _phase_cache_key(stage_context: StageContextInput) -> tuple[str, str, str]:
+    metadata = stage_context.metadata if isinstance(stage_context.metadata, dict) else {}
+    run_id = str(metadata.get("run_id") or "")
+    phase = stage_context.current_phase if isinstance(stage_context.current_phase, dict) else {}
+    phase_key = str(metadata.get("current_phase_key") or _phase_key_from_phase(phase))
+    return (run_id, phase_key, stage_context.active_instruction)
+
+
+def _phase_key_from_phase(phase: dict[str, Any]) -> str:
+    index = phase.get("index")
+    name = phase.get("name")
+    if index is None and not name:
+        return "no_phase"
+    return f"{index}:{name}"
 
 
 def _planner_skill_summary(summary: dict[str, Any]) -> dict[str, Any]:

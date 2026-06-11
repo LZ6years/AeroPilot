@@ -230,3 +230,39 @@ def test_skills_module_loads_model_selected_skill():
     assert "available_references" not in fragment["content"]["selected_skills"][0]
     assert fragment["facts"] == []
     assert fragment["warnings"].count("skill_selection_rejected:missing_skill") >= 1
+
+
+def test_skills_module_reuses_selection_within_phase_and_refreshes_on_phase_change():
+    class CountingSelector:
+        def __init__(self):
+            self.calls = 0
+
+        def select(self, selection_context, catalog):
+            self.calls += 1
+            return SkillSelectionResult(
+                requested_skill_names=["visual_target_task_reasoning"],
+                accepted_skill_names=["visual_target_task_reasoning"],
+                status="selected",
+            )
+
+    result = TaskParser(mode="rule_based").parse("观察右侧区域，不确定时问我。")
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", active_instruction=result.instruction)
+    selector = CountingSelector()
+    module = DefaultSkillsContextModule(plugin_registry=_uav_flight_registry(), skill_selector=selector)
+    phase_one = make_stage_context(result)
+    phase_one = StageContextInput(
+        **{**phase_one.to_dict(), "metadata": {"run_id": "run_1", "current_phase_key": "1:observe_area"}}
+    )
+    phase_two = StageContextInput(
+        **{**phase_one.to_dict(), "metadata": {"run_id": "run_1", "current_phase_key": "2:clarify_if_uncertain"}}
+    )
+
+    first = module.build(MemorySourceBundle(memory), phase_one).to_dict()
+    second = module.build(MemorySourceBundle(memory), phase_one).to_dict()
+    third = module.build(MemorySourceBundle(memory), phase_two).to_dict()
+
+    assert selector.calls == 2
+    assert first["metadata"]["selection_source"] == "fresh"
+    assert second["metadata"]["selection_source"] == "phase_cache"
+    assert third["metadata"]["selection_source"] == "fresh"
+    assert second["content"]["selected_skills"][0]["name"] == "visual_target_task_reasoning"

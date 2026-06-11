@@ -198,10 +198,11 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert "context_schema" in latest_context
     assert "image" in latest_context["context_schema"]["module_content_fields"]
     fragments = {fragment["name"]: fragment for fragment in latest_context["fragments"]}
-    assert fragments["image"]["content"]["selected_frames"][-1]["source"] == "automatic_phase_window"
+    assert fragments["image"]["content"]["selected_frames"][0]["role"] == "phase_start"
     assert "lifecycle_tools_excluded" not in latest_context["allowed_action_constraints"]
     assert "recent_actions" not in flight_memory
     assert "recent_observations" not in flight_memory
+    assert flight_memory["observation_anchors"]["task_initial"]["ref"].startswith("memory/observations.jsonl#")
     assert flight_memory["recent_action_refs"]
     assert flight_memory["recent_observation_refs"]
 
@@ -1286,12 +1287,12 @@ def test_post_action_phase_context_attaches_key_rgb_model_inputs_from_memory(tmp
     roles = [item["role"] for item in fragment["content"]["selected_frames"]]
     source_paths = [item["path"] for item in fragment["metadata"]["selected_frame_metadata"]]
     assert roles == [
-        "latest_observation",
-        "initial_observation",
-        "previous_observation",
-        "four_windows_ago_observation",
+        "phase_start",
+        "latest",
+        "previous",
+        "history_anchor",
     ]
-    assert source_paths == [paths[5], paths[0], paths[4], paths[1]]
+    assert source_paths == [paths[0], paths[5], paths[4], paths[1]]
     assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 4
 
 

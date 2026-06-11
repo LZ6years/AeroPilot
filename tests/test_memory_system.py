@@ -305,7 +305,7 @@ def test_pose_and_image_modules_read_jsonl_refs(tmp_path):
     assert "recent_pose_history" not in pose["content"]
     assert image["content"]["visual_evidence"]["has_rgb"] is True
     assert image["content"]["visual_evidence"]["has_depth"] is False
-    assert image["content"]["selected_frames"] == [{"role": "latest_observation", "source": "phase_step"}]
+    assert image["content"]["selected_frames"][0]["role"] == "phase_start"
     assert image["metadata"]["selected_frame_metadata"][0]["path"] == "rgb.png"
     assert image["artifact_refs"] == ["rgb.png"]
     assert image["model_inputs"] == []
@@ -336,11 +336,11 @@ def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
     model_input = image["model_inputs"][0]
 
     assert model_input["type"] == "image"
-    assert model_input["role"] == "latest_observation"
+    assert model_input["role"] == "phase_start"
     assert model_input["encoding"] == "data_url"
     assert model_input["data"] == "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
     assert set(model_input) == {"type", "role", "mime_type", "encoding", "data"}
-    assert image["content"]["selected_frames"] == [{"role": "latest_observation", "source": "automatic_phase_window"}]
+    assert image["content"]["selected_frames"][0]["role"] == "phase_start"
     assert image["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)
     assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
     assert image["content"]["visual_evidence"]["attached_image_count"] == 1
@@ -455,7 +455,8 @@ def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
     assert fragment["content"]["visual_processing"]["strategy"] == "qwen_vl_phase_caption_v3"
     assert fragment["content"]["visual_processing"]["status"] == "captioned"
     assert fragment["content"]["visual_evidence"]["interpretation_status"] == "captioned"
-    assert fragment["metadata"]["recent_rgb_frame_metadata"][0]["path"] == str(rgb_path)
+    assert fragment["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)
+    assert "recent_rgb_frame_metadata" not in fragment["metadata"]
     assert fragment["artifact_refs"] == [str(rgb_path)]
 
 

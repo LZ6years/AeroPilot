@@ -49,6 +49,7 @@ class StageContextInput:
     allowed_action_constraints: dict[str, Any] = field(default_factory=dict)
     observation_policy: dict[str, Any] = field(default_factory=dict)
     phase_execution_summary: dict[str, Any] = field(default_factory=dict)
+    phase_completion_criteria: list[dict[str, Any]] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -61,6 +62,7 @@ class StageContextInput:
             "allowed_action_constraints": dict(self.allowed_action_constraints),
             "observation_policy": dict(self.observation_policy),
             "phase_execution_summary": dict(self.phase_execution_summary),
+            "phase_completion_criteria": [dict(item) for item in self.phase_completion_criteria],
             "metadata": dict(self.metadata),
         }
 

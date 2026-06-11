@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from src.agent.semantic import SemanticPlanValidationError, semantic_plan_from_dict
 from src.agent.semantic.task_parser import TaskParser, TaskParserConfigError
 from src.agent.semantic.schemas import SemanticPhase
 from src.runtime.configs.model_config import ModelConfig
@@ -140,3 +141,44 @@ def test_model_parser_prompt_requires_explicit_numeric_targets():
     assert "do not invent a numeric translation target such as 5.0 meters" in prompt
     assert "move to the trees" in prompt
     assert "only when the instruction explicitly states that distance" in prompt
+
+
+def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespace():
+    semantic_plan_from_dict(
+        {
+            "intent": "navigate_by_visual_landmark",
+            "goal": {
+                "target": {"description": "front trees", "attributes": {}},
+                "final_state": "uav_near_front_trees",
+            },
+            "phases": [
+                {
+                    "index": 1,
+                    "total": 1,
+                    "name": "approach_front_trees",
+                    "meaning": "Move the UAV. toward the trees on the front side using visual evidence.",
+                }
+            ],
+            "uncertainties": [],
+        }
+    )
+
+    with pytest.raises(SemanticPlanValidationError, match="uav.move_body"):
+        semantic_plan_from_dict(
+            {
+                "intent": "navigate_by_visual_landmark",
+                "goal": {
+                    "target": {"description": "front trees", "attributes": {}},
+                    "final_state": "uav_near_front_trees",
+                },
+                "phases": [
+                    {
+                        "index": 1,
+                        "total": 1,
+                        "name": "approach_front_trees",
+                        "meaning": "Call uav.move_body toward the trees.",
+                    }
+                ],
+                "uncertainties": [],
+            }
+        )

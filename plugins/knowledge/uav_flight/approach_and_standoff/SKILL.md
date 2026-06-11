@@ -11,9 +11,10 @@ distance from it. Approach tasks are target-relative; they usually require targe
 confirmation before meaningful movement.
 
 First establish or refresh the target relation. If the target is visible, reason
-about direction, approximate distance, free space, and whether moving forward,
-backward, or laterally better satisfies the requested relation. If the target is
-not visible, search or observe before moving toward an assumed location.
+qualitatively about direction, visual scale, depth evidence when available, free
+space, and whether moving forward, backward, or laterally better satisfies the
+requested relation. If the target is not visible, search or stabilize before
+moving toward an assumed location.
 
 Prefer short, verifiable moves when distance or path clearance is uncertain.
 After moving, use the next observation to update whether the UAV is closer,
@@ -25,7 +26,7 @@ Do not move blindly toward a target that is not visually confirmed or otherwise
 well supported by current context. Do not treat hidden benchmark positions as
 evidence. Do not confuse "face the target" with "reach the requested distance."
 
-Approach and standoff decisions should consider target visibility and approximate
+Approach and standoff decisions should consider target visibility and qualitative
 bearing, whether there is clear free space between the UAV and target, whether
 the requested relation is "near", "at a distance", "follow", or "inspect", and
 whether recent movement already changed the relation enough to re-observe.

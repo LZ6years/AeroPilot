@@ -67,6 +67,7 @@ class ObservationContextBuilder:
             metadata={
                 "run_id": state.run_id,
                 "current_phase_index": state.current_phase_index,
+                "current_phase_key": state.current_phase_key,
             },
         )
 

@@ -28,6 +28,7 @@ class FlightMemory:
     recent_pose_refs: list[dict[str, Any]] = field(default_factory=list)
     recent_frame_refs: list[dict[str, Any]] = field(default_factory=list)
     recent_agent_message_refs: list[dict[str, Any]] = field(default_factory=list)
+    observation_anchors: dict[str, dict[str, Any]] = field(default_factory=dict)
     reset_epoch: int = 0
     rolling_summary: dict[str, Any] = field(default_factory=dict)
     memory_reader: Any = field(default=None, repr=False, compare=False)
@@ -37,6 +38,7 @@ class FlightMemory:
         self.active_instruction_id = ref.get("id")
         self.instruction_history.append(dict(ref))
         self.instruction_history = self.instruction_history[-MAX_INSTRUCTION_REFS:]
+        self.observation_anchors = {}
 
     def append_observation_ref(self, ref: dict[str, Any]) -> None:
         self.recent_observation_refs.append(dict(ref))
@@ -60,6 +62,23 @@ class FlightMemory:
     def append_agent_message_ref(self, ref: dict[str, Any]) -> None:
         self.recent_agent_message_refs.append(dict(ref))
         self.recent_agent_message_refs = self.recent_agent_message_refs[-MAX_RECENT_AGENT_MESSAGE_REFS:]
+
+    def set_observation_anchor(self, name: str, ref: dict[str, Any] | None, *, overwrite: bool = True) -> None:
+        """Record a stable observation role for the active instruction.
+
+        Recent observation history is a rolling list, so roles such as "task
+        initial" or "phase start" should be stored explicitly instead of being
+        inferred later from whichever frames remain in memory.
+        """
+
+        if ref is None:
+            return
+        key = str(name).strip()
+        if not key:
+            return
+        if not overwrite and key in self.observation_anchors:
+            return
+        self.observation_anchors[key] = dict(ref)
 
     def reset_pose_epoch(self, active_instruction: str | None = None) -> None:
         self.reset_epoch += 1
@@ -93,6 +112,7 @@ class FlightMemory:
             "recent_pose_refs": [dict(item) for item in self.recent_pose_refs],
             "recent_frame_refs": [dict(item) for item in self.recent_frame_refs],
             "recent_agent_message_refs": [dict(item) for item in self.recent_agent_message_refs],
+            "observation_anchors": {key: dict(value) for key, value in self.observation_anchors.items()},
             "reset_epoch": self.reset_epoch,
             "rolling_summary": dict(self.rolling_summary),
         }

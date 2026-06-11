@@ -23,7 +23,13 @@ class DefaultImageContextModule(ContextModule):
         observations = all_observations[-self.max_items :]
         rgb_frames = _recent_rgb_frames(reader, observations, self.max_items) if reader else []
         selected_rgb_frames = (
-            selected_rgb_frames_from_observations(reader, all_observations) if reader else []
+            selected_rgb_frames_from_observations(
+                reader,
+                all_observations,
+                observation_anchors=getattr(memory, "observation_anchors", {}),
+            )
+            if reader
+            else []
         )
         latest_rgb = rgb_frames[-1] if rgb_frames else None
         artifact_refs = [item["artifact_ref"] for item in rgb_frames if item.get("artifact_ref")]
@@ -71,11 +77,7 @@ class DefaultImageContextModule(ContextModule):
             confidence="medium" if latest_rgb else "low",
             budget=BudgetSpec(priority=self.priority, tokens_estimate=300, max_items=self.max_items),
             warnings=warnings,
-            metadata={
-                "observation_count": len(observations),
-                "selected_frame_metadata": frame_debug_metadata(selected_rgb_frames),
-                "recent_rgb_frame_metadata": frame_debug_metadata(rgb_frames),
-            },
+            metadata=frame_context_metadata(observations, selected_rgb_frames, rgb_frames),
         )
 
     def describe_output(self) -> dict[str, Any]:
@@ -95,7 +97,7 @@ class DefaultImageContextModule(ContextModule):
             },
             "metadata_fields": {
                 "selected_frame_metadata": "Full selected-frame audit metadata for debug/reporting.",
-                "recent_rgb_frame_metadata": "Full recent RGB audit metadata for debug/reporting.",
+                "recent_rgb_frame_metadata": "Recent RGB audit metadata when it differs from selected frames.",
             },
             "artifact_refs": "Image artifact paths or memory refs that can be inspected outside the planner context.",
         }
@@ -104,51 +106,48 @@ class DefaultImageContextModule(ContextModule):
 def _recent_rgb_frames(reader: Any, observations: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
     frames = []
     for observation in observations:
-        frame_refs = observation.get("frame_refs", []) if isinstance(observation, dict) else []
-        frame_records = reader.read_refs(frame_refs)
-        for index, record in enumerate(frame_records):
-            if record.get("modality") != "rgb":
-                continue
-            frame = {
-                "id": record.get("id"),
-                "path": record.get("path"),
-                "observation_id": record.get("observation_id"),
-                "observation_source": observation.get("source") if isinstance(observation, dict) else None,
-                "artifact_ref": _artifact_ref(record, frame_refs[index] if index < len(frame_refs) else None),
-                **dict(record.get("metadata", {})),
-            }
-            frames.append(frame)
+        frames.extend(_rgb_frames_from_observation(reader, observation))
     return frames[-limit:]
 
 
-def selected_rgb_frames_from_observations(reader: Any, observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def selected_rgb_frames_from_observations(
+    reader: Any,
+    observations: list[dict[str, Any]],
+    observation_anchors: dict[str, dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     """Select key RGB frames from observation history without interpreting image content.
 
-    The fixed v1 policy is deliberately simple: current/latest, initial, previous
-    phase-window, and four phase-windows ago. Duplicate frames are removed by
-    frame id/path so short runs naturally attach fewer than four images.
+    Prefer the explicit current-phase anchor written by runtime, then fall back
+    to older instruction/history anchors for legacy artifacts. Duplicate frames
+    are removed by frame id/path so short runs naturally attach fewer than four
+    images.
     """
 
     rgb_frames = _recent_rgb_frames(reader, observations, len(observations))
     if not rgb_frames:
         return []
+    anchors = observation_anchors if isinstance(observation_anchors, dict) else {}
+    phase_start = _rgb_frame_from_anchor(reader, anchors.get("phase_start"))
+    legacy_task_initial = _rgb_frame_from_anchor(reader, anchors.get("task_initial"))
+    phase_start_frame = phase_start or legacy_task_initial or rgb_frames[0]
     candidates = [
-        ("latest_observation", rgb_frames[-1]),
-        ("initial_observation", rgb_frames[0]),
+        ("phase_start", "First RGB observation for the current semantic phase", phase_start_frame),
+        ("latest", "Newest RGB observation for this decision", rgb_frames[-1]),
     ]
     if len(rgb_frames) >= 2:
-        candidates.append(("previous_observation", rgb_frames[-2]))
+        candidates.append(("previous", "Previous RGB observation for short-term comparison", rgb_frames[-2]))
     if len(rgb_frames) >= 5:
-        candidates.append(("four_windows_ago_observation", rgb_frames[-5]))
+        candidates.append(("history_anchor", "Older RGB observation for broad visual change comparison", rgb_frames[-5]))
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for role, frame in candidates:
+    for role, reason, frame in candidates:
         key = _frame_identity(frame)
         if key in seen:
             continue
         seen.add(key)
         item = dict(frame)
         item["selection_role"] = role
+        item["selection_reason"] = reason
         selected.append(item)
     return selected[:4]
 
@@ -158,13 +157,32 @@ def selected_frame_summaries(frames: list[dict[str, Any]]) -> list[dict[str, Any
     for frame in frames:
         role = frame.get("selection_role")
         if not isinstance(role, str) or not role:
-            role = "latest_observation"
+            role = "latest"
         item = {"role": role}
-        source = frame.get("observation_source")
-        if isinstance(source, str) and source:
-            item["source"] = source
+        for source_key, target_key in (
+            ("observation_id", "observation_id"),
+            ("id", "frame_id"),
+            ("selection_reason", "reason"),
+        ):
+            value = frame.get(source_key)
+            if isinstance(value, str) and value:
+                item[target_key] = value
         summaries.append(item)
     return summaries
+
+
+def frame_context_metadata(
+    observations: list[dict[str, Any]],
+    selected_frames: list[dict[str, Any]],
+    recent_frames: list[dict[str, Any]],
+) -> dict[str, Any]:
+    metadata: dict[str, Any] = {
+        "observation_count": len(observations),
+        "selected_frame_metadata": frame_debug_metadata(selected_frames),
+    }
+    if not _same_frame_identity_set(selected_frames, recent_frames):
+        metadata["recent_rgb_frame_metadata"] = frame_debug_metadata(recent_frames)
+    return metadata
 
 
 def frame_debug_metadata(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -174,6 +192,9 @@ def frame_debug_metadata(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
         role = frame.get("selection_role")
         if isinstance(role, str) and role:
             item["role"] = role
+        reason = frame.get("selection_reason")
+        if isinstance(reason, str) and reason:
+            item["reason"] = reason
         if frame.get("id") is not None:
             item["frame_id"] = frame.get("id")
         for source_key, target_key in (
@@ -207,6 +228,40 @@ def _frame_identity(frame: dict[str, Any]) -> str:
     return repr(sorted(frame.items()))
 
 
+def _same_frame_identity_set(left: list[dict[str, Any]], right: list[dict[str, Any]]) -> bool:
+    left_keys = {_frame_identity(frame) for frame in left}
+    right_keys = {_frame_identity(frame) for frame in right}
+    return left_keys == right_keys
+
+
+def _rgb_frame_from_anchor(reader: Any, ref: dict[str, Any] | None) -> dict[str, Any] | None:
+    observation = reader.read_ref(ref) if ref else None
+    frames = _rgb_frames_from_observation(reader, observation)
+    return frames[0] if frames else None
+
+
+def _rgb_frames_from_observation(reader: Any, observation: dict[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(observation, dict):
+        return []
+    frame_refs = observation.get("frame_refs", [])
+    frame_records = reader.read_refs(frame_refs)
+    frames: list[dict[str, Any]] = []
+    for index, record in enumerate(frame_records):
+        if record.get("modality") != "rgb":
+            continue
+        frames.append(
+            {
+                "id": record.get("id"),
+                "path": record.get("path"),
+                "observation_id": record.get("observation_id"),
+                "observation_source": observation.get("source"),
+                "artifact_ref": _artifact_ref(record, frame_refs[index] if index < len(frame_refs) else None),
+                **dict(record.get("metadata", {})),
+            }
+        )
+    return frames
+
+
 def _artifact_ref(record: dict[str, Any], frame_ref: dict[str, Any] | None) -> str | None:
     path = record.get("path")
     if isinstance(path, str) and path:
@@ -231,7 +286,7 @@ def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> lis
     if data_url is None:
         return []
     mime_type = data_url.split(";", 1)[0].removeprefix("data:")
-    role = str(latest_rgb.get("selection_role") or "latest_observation")
+    role = str(latest_rgb.get("selection_role") or "latest")
     return [
         {
             "type": "image",
