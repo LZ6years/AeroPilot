@@ -110,7 +110,11 @@ def make_state() -> MissionState:
         index=1,
         total=len(result.plan.phases),
         name="orient_leftward",
-        meaning="向左调整视角，寻找入口可能区域",
+        goal="orient toward the left-side entrance search area",
+        done_when=["left-side entrance search area is visible"],
+        observe=["latest_observation", "phase_execution_summary"],
+        continue_when=["left-side area is not yet visible"],
+        metrics=[],
     )
     state = MissionState("run_test", result.instruction, result.plan)
     state.record_observation({"source": "preflight", "modalities": ["rgb", "depth", "pose"]})
@@ -160,6 +164,96 @@ def test_model_user_content_stays_text_without_model_inputs():
     assert "observation_policy" not in text_context
 
 
+def test_model_user_content_strips_phase_judge_audit_fields():
+    context = {
+        "active_instruction": "Turn toward the person.",
+        "semantic_goal": {"target": "person"},
+        "current_phase": {
+            "name": "orient_toward_person",
+            "goal": "face the person",
+            "done_when": ["person is visible", "view is roughly aligned"],
+            "observe": ["latest_observation"],
+            "continue_when": ["person is not confirmed"],
+            "metrics": [],
+        },
+        "phase_metrics": [],
+        "phase_completion_evaluation": {"model_judged_count": 1},
+        "phase_execution_summary": {"window_count": 1},
+        "measurements": {"yaw_delta_deg": -5.0},
+        "user_preferences": {"style": "concise"},
+        "fragments": [{"name": "image", "model_inputs": []}],
+        "planner_context_summary": {"fragment_names": ["image"], "safety_constraints": {"yaw_scan_remaining_deg": 340}},
+        "action_window": {"intent": "scan", "expected_effect": "target centered"},
+        "action_plan": {"steps": [{"tool": "uav.turn_relative", "args": {"yaw_deg": 5}}]},
+        "safety_intervention_summary": {"reasons": ["yaw_scan_budget_exceeded"]},
+        "yaw_scan_remaining_deg": 340,
+        "visual_phase_budget_exhausted": False,
+        "recent_executed_tools": ["uav.turn_relative"],
+        "recent_safety_reasons": [],
+        "safety_interventions": [],
+        "recent_history": {"recent_action_refs": [{"ref": "memory/actions.jsonl#1"}]},
+        "observation_before": {"pose": {"x": 0, "velocity": {"x": 1}}},
+        "phase_window_count": 1,
+        "max_phase_window_count": 100,
+        "observation_after": {
+            "source": "automatic_phase_window",
+            "timestamp": "t1",
+            "modalities": ["rgb", "depth", "pose"],
+            "pose": {"x": 1},
+            "frames": {"rgb": {"path": "frame.png"}, "depth": {"path": "depth.png"}},
+        },
+        "executed_steps": [
+            {
+                "phase": "orient_toward_person",
+                "step_index": 0,
+                "step": {"tool": "uav.turn_relative", "args": {"yaw_deg": -5}},
+                "result": {"ok": True, "message": "turned", "raw": {"debug": True}},
+                "stabilization": {"elapsed_sec": 1.0},
+            }
+        ],
+    }
+
+    content = build_model_user_content(context)
+
+    assert isinstance(content, str)
+    text_context = json.loads(content)
+    for debug_key in [
+        "planner_context_summary",
+        "action_window",
+        "action_plan",
+        "safety_intervention_summary",
+        "yaw_scan_remaining_deg",
+        "visual_phase_budget_exhausted",
+        "recent_executed_tools",
+        "recent_safety_reasons",
+        "safety_interventions",
+        "recent_history",
+        "observation_before",
+        "phase_window_count",
+        "max_phase_window_count",
+    ]:
+        assert debug_key not in text_context
+    assert text_context["active_instruction"] == "Turn toward the person."
+    assert text_context["executed_steps"] == [
+        {
+            "phase": "orient_toward_person",
+            "step_index": 0,
+            "tool": "uav.turn_relative",
+            "args": {"yaw_deg": -5},
+            "ok": True,
+            "message": "turned",
+        }
+    ]
+    assert text_context["observation_after"] == {
+        "source": "automatic_phase_window",
+        "timestamp": "t1",
+        "modalities": ["rgb", "depth", "pose"],
+        "pose": {"x": 1},
+        "has_rgb": True,
+        "has_depth": True,
+    }
+
+
 def test_model_user_content_attaches_encoded_image_from_any_fragment():
     image_data = "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
     context = make_context()
@@ -189,6 +283,47 @@ def test_model_user_content_attaches_encoded_image_from_any_fragment():
     assert image_data not in content[0]["text"]
     assert text_context["fragments"][0]["model_inputs"][0]["data"].startswith("<omitted encoded model input data")
     assert content[1] == {"type": "image_url", "image_url": {"url": image_data}}
+
+
+def test_model_user_content_inserts_label_before_semantic_image_input():
+    image_data = "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
+    context = make_context()
+    context["fragments"] = [
+        {
+            "name": "image",
+            "model_inputs": [
+                {
+                    "type": "image",
+                    "input_id": "image_1_current_observation",
+                    "role": "current_observation",
+                    "usage": "Use as the current visual evidence for this decision.",
+                    "mime_type": "image/png",
+                    "encoding": "data_url",
+                    "data": image_data,
+                }
+            ],
+        }
+    ]
+
+    content = build_model_user_content(context)
+
+    assert isinstance(content, list)
+    assert len(content) == 3
+    text_context = json.loads(content[0]["text"])
+    model_input = text_context["fragments"][0]["model_inputs"][0]
+    assert model_input["input_id"] == "image_1_current_observation"
+    assert model_input["role"] == "current_observation"
+    assert model_input["usage"] == "Use as the current visual evidence for this decision."
+    assert model_input["data"].startswith("<omitted encoded model input data")
+    assert content[1] == {
+        "type": "text",
+        "text": (
+            "Model input label: input_id=image_1_current_observation; "
+            "role=current_observation; "
+            "usage=Use as the current visual evidence for this decision."
+        ),
+    }
+    assert content[2] == {"type": "image_url", "image_url": {"url": image_data}}
 
 
 def test_model_user_content_ignores_unencoded_image_path():
@@ -233,8 +368,8 @@ def test_action_planner_prompt_uses_image_sequence_action_trend_and_explicit_tar
 
     assert "selected_frames" in prompt
     assert "action_trend" in prompt
-    assert 'target_source="explicit_user"' in prompt
-    assert "do not mention exact remaining meters/degrees" in prompt
+    assert "current_phase.metrics" in prompt
+    assert "Do not tell the user an exact remaining distance or angle unless current_phase.metrics provides a numeric target" in prompt
     assert "alternating_yaw" in prompt
 
 
@@ -267,14 +402,14 @@ def test_model_action_planner_accepts_open_phase_name():
     assert plan.steps[0].tool == "uav.turn_relative"
     assert plan.steps[0].args["yaw_deg"] == -15
     assert len(plan.steps) == 1
-    assert plan.phase_transition.decision == ADVANCE_TO_NEXT_PHASE
+    assert "phase_transition" not in plan.to_dict()
     assert plan.agent_messages[0].type == "progress"
 
 
-def test_short_horizon_plan_direct_constructor_defaults_to_advance():
+def test_short_horizon_plan_direct_constructor_has_no_planner_side_transition():
     plan = ShortHorizonPlan("orient_leftward", [])
 
-    assert plan.phase_transition.decision == ADVANCE_TO_NEXT_PHASE
+    assert "phase_transition" not in plan.to_dict()
     assert plan.action_window.scope == "current_phase_only"
     assert plan.to_dict()["action_window"]["intent"]
 

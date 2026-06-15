@@ -22,17 +22,16 @@ VALID_PHASE_TRANSITIONS = {
     COMPLETE_TASK,
 }
 
-TRANSLATION_FIELDS = {
-    "forward": "forward_m",
-    "backward": "forward_m",
-    "right": "right_m",
-    "left": "right_m",
-    "up": "up_m",
-    "down": "up_m",
-    "planar": "planar_m",
+METRIC_FIELDS = {
+    "forward_distance": "forward_m",
+    "right_distance": "right_m",
+    "up_distance": "up_m",
+    "planar_distance": "planar_m",
+    "yaw_delta": "yaw_delta_deg",
+    "hover_stability": "planar_m",
 }
 
-MEASURABLE_CRITERIA_KINDS = {"translation", "rotation", "hover"}
+MEASURABLE_METRIC_NAMES = set(METRIC_FIELDS)
 
 
 @dataclass(frozen=True)
@@ -42,10 +41,6 @@ class PhaseTransition:
     decision: str
     reason: str = ""
     agent_messages: list[AgentMessage] = field(default_factory=list)
-
-    @classmethod
-    def default_advance(cls, reason: str = "legacy short-horizon plan advances after one window") -> "PhaseTransition":
-        return cls(ADVANCE_TO_NEXT_PHASE, reason)
 
     @classmethod
     def continue_current_phase(cls, reason: str = "continue collecting evidence for current phase") -> "PhaseTransition":
@@ -82,41 +77,57 @@ class PhaseTransition:
         }
 
 
-def criteria_measurement_field(criteria: dict[str, Any]) -> str | None:
-    """Return the model-facing measurement field for a completion criterion."""
+def metric_measurement_field(metric: dict[str, Any]) -> str | None:
+    """Return the model-facing measurement field for a phase metric."""
 
-    axis = str(criteria.get("axis", "")).strip()
-    kind = str(criteria.get("kind", "")).strip()
-    if kind == "rotation" or axis == "yaw":
-        return "yaw_delta_deg"
-    if kind == "hover":
-        return "planar_displacement_m"
-    return TRANSLATION_FIELDS.get(axis)
+    return METRIC_FIELDS.get(str(metric.get("name", "")).strip())
 
 
 def evaluate_phase_completion(
-    criteria: list[dict[str, Any]] | dict[str, Any] | None,
+    metrics: list[dict[str, Any]] | dict[str, Any] | None,
     phase_execution_summary: dict[str, Any],
 ) -> dict[str, Any]:
-    """Compare criteria targets with current phase measurements."""
+    """Compare phase metrics with current phase measurements."""
 
-    criteria_list = _normalize_criteria(criteria)
+    metric_list = _normalize_metrics(metrics)
     measurements = _phase_measurements(phase_execution_summary)
+    if not metric_list:
+        return {
+            "metrics_count": 0,
+            "measurable_count": 0,
+            "model_judged_count": 1,
+            "all_within_tolerance": False,
+            "any_overshoot": False,
+            "evaluations": [
+                {
+                    "metric": None,
+                    "field": None,
+                    "target": None,
+                    "actual": None,
+                    "error": None,
+                    "tolerance": None,
+                    "within_tolerance": False,
+                    "overshoot": False,
+                    "correction_allowed": False,
+                    "status": "requires_model_judgment",
+                }
+            ],
+        }
     evaluations = []
-    for item in criteria_list:
-        if not _is_measurable_criteria(item):
+    for item in metric_list:
+        if not _is_measurable_metric(item):
             evaluations.append(_model_judged_evaluation(item))
             continue
-        field = criteria_measurement_field(item)
+        field = metric_measurement_field(item)
         actual = _actual_for_field(field, measurements, phase_execution_summary, item)
-        target = _signed_target(item)
+        target = float(item.get("target", 0.0) or 0.0)
         tolerance = float(item.get("tolerance", 0.0) or 0.0)
         error = None if actual is None else round(float(actual) - target, 3)
         within = actual is not None and abs(float(error)) <= tolerance
         overshoot = actual is not None and _is_overshoot(float(actual), target, tolerance)
         evaluations.append(
             {
-                "criteria": dict(item),
+                "metric": dict(item),
                 "field": field,
                 "target": target,
                 "actual": actual,
@@ -131,7 +142,7 @@ def evaluate_phase_completion(
     measurable = [item for item in evaluations if item["status"] != "requires_model_judgment"]
     model_judged = [item for item in evaluations if item["status"] == "requires_model_judgment"]
     return {
-        "criteria_count": len(evaluations),
+        "metrics_count": len(evaluations),
         "measurable_count": len(measurable),
         "model_judged_count": len(model_judged),
         "all_within_tolerance": bool(measurable) and all(item["within_tolerance"] for item in measurable),
@@ -140,11 +151,11 @@ def evaluate_phase_completion(
     }
 
 
-def _normalize_criteria(criteria: list[dict[str, Any]] | dict[str, Any] | None) -> list[dict[str, Any]]:
-    if isinstance(criteria, list):
-        return [dict(item) for item in criteria if isinstance(item, dict)]
-    if isinstance(criteria, dict):
-        return [dict(criteria)]
+def _normalize_metrics(metrics: list[dict[str, Any]] | dict[str, Any] | None) -> list[dict[str, Any]]:
+    if isinstance(metrics, list):
+        return [dict(item) for item in metrics if isinstance(item, dict)]
+    if isinstance(metrics, dict):
+        return [dict(metrics)]
     return []
 
 
@@ -160,41 +171,33 @@ def _actual_for_field(
     field: str | None,
     measurements: dict[str, Any],
     summary: dict[str, Any],
-    criteria: dict[str, Any],
+    metric: dict[str, Any],
 ) -> float | None:
     if not field:
         return None
-    prefer_tool_fact = criteria.get("prefer_tool_fact")
+    prefer_tool_fact = metric.get("prefer_tool_fact")
     facts = summary.get("tool_facts", {}) if isinstance(summary.get("tool_facts", {}), dict) else {}
     if prefer_tool_fact and prefer_tool_fact in facts:
         return _safe_float(facts.get(prefer_tool_fact))
     return _safe_float(measurements.get(field))
 
 
-def _signed_target(criteria: dict[str, Any]) -> float:
-    target = float(criteria.get("target", 0.0) or 0.0)
-    axis = str(criteria.get("axis", "")).strip()
-    if axis in {"backward", "left", "down"} and target > 0:
-        return -target
-    return target
+def _is_measurable_metric(metric: dict[str, Any]) -> bool:
+    name = str(metric.get("name", "")).strip()
+    return name in MEASURABLE_METRIC_NAMES
 
 
-def _is_measurable_criteria(criteria: dict[str, Any]) -> bool:
-    kind = str(criteria.get("kind", "")).strip()
-    return kind in MEASURABLE_CRITERIA_KINDS
-
-
-def _model_judged_evaluation(criteria: dict[str, Any]) -> dict[str, Any]:
+def _model_judged_evaluation(metric: dict[str, Any]) -> dict[str, Any]:
     return {
-        "criteria": dict(criteria),
+        "metric": dict(metric),
         "field": None,
-        "target": criteria.get("target"),
+        "target": metric.get("target"),
         "actual": None,
         "error": None,
         "tolerance": None,
         "within_tolerance": False,
         "overshoot": False,
-        "correction_allowed": bool(criteria.get("correction_allowed", False)),
+        "correction_allowed": bool(metric.get("correction_allowed", False)),
         "status": "requires_model_judgment",
     }
 

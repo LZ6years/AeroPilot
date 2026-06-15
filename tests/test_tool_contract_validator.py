@@ -11,7 +11,6 @@ from src.agent.planning import (
     ToolContractValidator,
     ToolContractViolation,
 )
-from src.agent.phase import ADVANCE_TO_NEXT_PHASE
 from src.agent.planning.schemas import PlannedStep
 
 
@@ -63,7 +62,6 @@ def test_tool_contract_validator_accepts_legal_tool_plan():
     result = ToolContractValidator().validate(plan, "scan_left", make_context())
 
     assert result is plan
-    assert result.phase_transition.decision == ADVANCE_TO_NEXT_PHASE
     assert result.action_window.scope == "current_phase_only"
 
 

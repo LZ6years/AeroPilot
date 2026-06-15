@@ -1,4 +1,4 @@
-﻿"""Test M3 task parsing into semantic plans."""
+"""Test task parsing into lightweight semantic plans."""
 
 from __future__ import annotations
 
@@ -17,9 +17,9 @@ def test_rule_based_parser_parses_black_street_lamp_task():
 
     plan = result.plan
     assert plan.intent == "navigate_by_visual_landmark"
-    assert plan.goal.target.description == "黑色路灯"
-    assert plan.goal.target.attributes == {"color": "black", "category": "street_lamp"}
-    assert plan.goal.final_state == "uav_facing_target_and_hovering"
+    assert plan.task_goal.target == "black street lamp"
+    assert plan.task_goal.target_attributes == {"color": "black", "category": "street_lamp"}
+    assert plan.task_goal.final_state == "uav_facing_target_and_hovering"
     assert [phase.name for phase in plan.phases] == [
         "orient_right",
         "search_landmark",
@@ -28,6 +28,7 @@ def test_rule_based_parser_parses_black_street_lamp_task():
     ]
     assert [phase.index for phase in plan.phases] == [1, 2, 3, 4]
     assert [phase.total for phase in plan.phases] == [4, 4, 4, 4]
+    assert plan.phases[2].done_when == ["street lamp remains visible", "view is roughly aligned with the target"]
     assert "target_identity_requires_observation" in plan.uncertainties
 
 
@@ -38,12 +39,13 @@ def test_rule_based_parser_parses_red_vehicle_task():
 
     plan = result.plan
     assert plan.intent == "navigate_by_visual_landmark"
-    assert plan.goal.target.description == "红色车辆"
-    assert plan.goal.target.attributes == {"color": "red", "category": "vehicle"}
-    assert plan.goal.final_state == "uav_near_target_with_safe_distance"
+    assert plan.task_goal.target == "red vehicle"
+    assert plan.task_goal.target_attributes == {"color": "red", "category": "vehicle"}
+    assert plan.task_goal.final_state == "uav_near_target_with_safe_distance"
     assert [phase.name for phase in plan.phases] == ["search_landmark", "approach_landmark", "stop"]
     assert [phase.index for phase in plan.phases] == [1, 2, 3]
     assert [phase.total for phase in plan.phases] == [3, 3, 3]
+    assert plan.phases[1].observe == ["latest_observation", "phase_start_reference", "phase_execution_summary"]
     assert "safe_distance_requires_depth_or_user_constraint" in plan.uncertainties
 
 
@@ -53,9 +55,9 @@ def test_rule_based_parser_parses_building_entrance_task():
     result = parser.parse("左转寻找建筑入口并停在入口前")
 
     plan = result.plan
-    assert plan.goal.target.description == "建筑入口"
-    assert plan.goal.target.attributes == {"category": "building_entrance"}
-    assert plan.goal.final_state == "uav_hovering_in_front_of_target"
+    assert plan.task_goal.target == "building entrance"
+    assert plan.task_goal.target_attributes == {"category": "building_entrance"}
+    assert plan.task_goal.final_state == "uav_hovering_in_front_of_target"
     assert [phase.name for phase in plan.phases] == [
         "orient_left",
         "search_landmark",
@@ -73,9 +75,9 @@ def test_rule_based_parser_parses_observe_and_clarify_task():
 
     plan = result.plan
     assert plan.intent == "observe_and_clarify"
-    assert plan.goal.target.description == "右侧区域中的目标"
-    assert plan.goal.target.attributes == {}
-    assert plan.goal.final_state == "uav_hovering_or_waiting_for_clarification"
+    assert plan.task_goal.target == "right-side area target"
+    assert plan.task_goal.target_attributes == {}
+    assert plan.task_goal.final_state == "uav_hovering_or_waiting_for_clarification"
     assert [phase.name for phase in plan.phases] == [
         "orient_right",
         "observe_area",
@@ -101,54 +103,58 @@ def test_model_parser_requires_api_key():
         parser.parse("前面右转会有一个黑色的路灯，右转面向路灯后停下")
 
 
-def test_semantic_phase_accepts_completion_criteria():
+def test_semantic_phase_accepts_metrics():
     phase = SemanticPhase.from_dict(
         {
             "index": 1,
             "total": 1,
             "name": "move_forward",
-            "meaning": "move forward five meters",
-            "completion_criteria": {
-                "kind": "translation",
-                "axis": "forward",
-                "target": 5.0,
-                "unit": "m",
-                "tolerance": 1.0,
-                "correction_allowed": True,
-            },
+            "goal": "move forward five meters",
+            "done_when": ["forward distance reaches about five meters"],
+            "observe": ["phase_execution_summary"],
+            "continue_when": ["forward progress is below target"],
+            "metrics": [
+                {
+                    "name": "forward_distance",
+                    "target": 5.0,
+                    "unit": "m",
+                    "tolerance": 1.0,
+                    "correction_allowed": True,
+                }
+            ],
         }
     )
 
-    assert phase.completion_criteria == [
+    assert phase.metrics == [
         {
-            "kind": "translation",
-            "axis": "forward",
+            "name": "forward_distance",
             "target": 5.0,
             "unit": "m",
             "tolerance": 1.0,
             "correction_allowed": True,
         }
     ]
-    assert phase.to_dict()["completion_criteria"][0]["axis"] == "forward"
+    assert phase.to_dict()["metrics"][0]["name"] == "forward_distance"
 
 
-def test_model_parser_prompt_requires_explicit_numeric_targets():
+def test_model_parser_prompt_requires_explicit_numeric_metrics():
     parser = TaskParser(mode="rule_based")
 
     prompt = parser.system_prompt
 
-    assert 'target_source="explicit_user"' in prompt
-    assert "do not invent a numeric translation target such as 5.0 meters" in prompt
+    assert "Use metrics only when the user explicitly gives a distance" in prompt
+    assert "Do not invent numeric metric targets when the user did not provide them." in prompt
     assert "move to the trees" in prompt
-    assert "only when the instruction explicitly states that distance" in prompt
+    assert "Do not invent a distance metric." in prompt
 
 
 def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespace():
     semantic_plan_from_dict(
         {
             "intent": "navigate_by_visual_landmark",
-            "goal": {
-                "target": {"description": "front trees", "attributes": {}},
+            "task_goal": {
+                "target": "front trees",
+                "target_attributes": {},
                 "final_state": "uav_near_front_trees",
             },
             "phases": [
@@ -156,7 +162,11 @@ def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespa
                     "index": 1,
                     "total": 1,
                     "name": "approach_front_trees",
-                    "meaning": "Move the UAV. toward the trees on the front side using visual evidence.",
+                    "goal": "Move the UAV toward the trees on the front side using visual evidence.",
+                    "done_when": ["trees are identifiable", "approach progress is visible"],
+                    "observe": ["latest_observation"],
+                    "continue_when": ["trees are unclear"],
+                    "metrics": [],
                 }
             ],
             "uncertainties": [],
@@ -167,8 +177,9 @@ def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespa
         semantic_plan_from_dict(
             {
                 "intent": "navigate_by_visual_landmark",
-                "goal": {
-                    "target": {"description": "front trees", "attributes": {}},
+                "task_goal": {
+                    "target": "front trees",
+                    "target_attributes": {},
                     "final_state": "uav_near_front_trees",
                 },
                 "phases": [
@@ -176,7 +187,11 @@ def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespa
                         "index": 1,
                         "total": 1,
                         "name": "approach_front_trees",
-                        "meaning": "Call uav.move_body toward the trees.",
+                        "goal": "Call uav.move_body toward the trees.",
+                        "done_when": ["uav.move_body has been called"],
+                        "observe": ["latest_observation"],
+                        "continue_when": [],
+                        "metrics": [],
                     }
                 ],
                 "uncertainties": [],

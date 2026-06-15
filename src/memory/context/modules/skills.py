@@ -89,13 +89,11 @@ class DefaultSkillsContextModule(ContextModule):
 
 
 def _selection_context(stage_context: StageContextInput, listings: list[dict[str, Any]]) -> dict[str, Any]:
-    current_phase = stage_context.current_phase if isinstance(stage_context.current_phase, dict) else {}
     return {
         "active_instruction": stage_context.active_instruction,
         "semantic_plan": stage_context.semantic_plan,
         "current_phase": stage_context.current_phase,
         "semantic_goal": stage_context.semantic_goal,
-        "phase_completion_criteria": current_phase.get("completion_criteria", []),
         "phase_execution_summary": stage_context.phase_execution_summary,
         "metadata": dict(stage_context.metadata),
         "available_skills": listings,

@@ -92,8 +92,8 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
     return {
         "planner_context_fields": {
             "active_instruction": "Current user instruction.",
-            "current_phase": "Current semantic phase; response phase must match current_phase.name.",
-            "semantic_goal": "Parsed mission goal.",
+            "current_phase": "Current semantic phase with goal, done_when, observe, continue_when, and metrics.",
+            "semantic_goal": "Parsed lightweight task_goal.",
             "fragments": "Enabled context fragments.",
             "rules": "Global FlyAgent behavior guidance.",
             "user_preferences": "User response preferences.",
@@ -122,7 +122,6 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
         "instruction": {
             "current_instruction": "Current instruction summary.",
             "instruction_history": "Recent compact instruction summaries.",
-            "current_phase": "Compact phase name and meaning.",
             "uncertainties": "Known parser uncertainties.",
         },
         "skills": {
@@ -130,7 +129,7 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
             "callable_capabilities": "Enabled callable skill tools, present only when non-empty.",
         },
         "image": {
-            "selected_frames": "Attached image roles such as phase_start, latest, previous, and history_anchor.",
+            "selected_frames": "Attached image roles such as current_observation and phase_start_reference.",
             "visual_evidence": "RGB availability, mock status, attached image count, and interpretation status.",
         },
         "pose": {
@@ -140,6 +139,7 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
         "action": {
             "recent_actions": "Recent compact actions with tool, args, and ok.",
             "action_trend": "Recent motion pattern such as repeated_yaw, alternating_yaw, repeated_move, or mixed.",
+            "motion_history_summary": "History-only compact motion summary for current-phase progress when available and recent yaw behavior.",
         },
         "map": {
             "recalled_map_memories": "Map memory clues; confirm with current observations.",

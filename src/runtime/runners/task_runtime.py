@@ -10,6 +10,7 @@ from src.agent.mission_state import MissionState
 from src.agent.messages import AgentMessage
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition, evaluate_phase_completion
 from src.agent.planning.model_action_planner import ModelActionPlanner
+from src.agent.planning.model_inputs import sanitize_context_for_model_text
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.safety import SafetySupervisor
 from src.agent.safety import SafetyDecision
@@ -313,7 +314,9 @@ class TaskRuntime:
         state.ensure_current_phase_progress(observation_before)
         state.update_current_phase_progress(observation_before)
         context = self.context_builder.build(state, self._memory_for_state(state))
+        model_context = sanitize_context_for_model_text(context)
         self.recorder.write_json("contexts/latest_context.json", context)
+        self.recorder.write_json("contexts/latest_action_planner_model_context.json", model_context)
         try:
             raw_plan = self.planner.plan_next(state, context)
         except ModelRepairPlannerError as exc:
@@ -327,6 +330,7 @@ class TaskRuntime:
         planner_debug_ref = self._write_action_planner_debug_artifact(
             state,
             context,
+            model_context,
             raw_plan,
             plan,
             safety_decision,
@@ -454,15 +458,16 @@ class TaskRuntime:
         safety_decision: SafetyDecision,
         transition: PhaseTransition,
     ) -> None:
-        criteria = self._current_phase_completion_criteria(state)
+        metrics = self._current_phase_metrics(state)
         payload = {
             "phase": plan.phase,
             "decision": transition.decision,
             "reason": transition.reason,
             "current_phase_window_count": state.current_phase_window_count,
             "max_phase_window_count": state.max_phase_window_count,
+            "phase_metrics": metrics,
             "phase_completion_evaluation": evaluate_phase_completion(
-                criteria,
+                metrics,
                 state.current_phase_execution_summary,
             ),
         }
@@ -558,9 +563,20 @@ class TaskRuntime:
     ) -> PhaseTransition:
         judge = getattr(self.planner, "judge_phase_transition", None)
         if not callable(judge):
-            if safety_decision.interventions:
-                return PhaseTransition.continue_current_phase("SafetySupervisor changed the action; post-action judgment is required")
-            return plan.phase_transition
+            reason = (
+                "SafetySupervisor changed the action; post-action judgment is required"
+                if safety_decision.interventions
+                else "post-action phase judge unavailable; continue current phase conservatively"
+            )
+            self._debug_event(
+                "post_action_phase_judge_unavailable",
+                {
+                    "phase": plan.phase,
+                    "reason": reason,
+                    "safety_intervention_count": len(safety_decision.interventions),
+                },
+            )
+            return PhaseTransition.continue_current_phase(reason)
         phase_context = self._build_post_action_phase_context(
             state,
             planner_context,
@@ -570,11 +586,13 @@ class TaskRuntime:
             observation_after,
             executed_steps,
         )
+        model_phase_context = sanitize_context_for_model_text(phase_context)
         self.recorder.write_json("contexts/latest_phase_transition_context.json", phase_context)
+        self.recorder.write_json("contexts/latest_phase_transition_model_context.json", model_phase_context)
         context_ref = self._write_phase_transition_debug_artifact(
             state.current_phase_key,
             state.current_phase_window_count,
-            phase_context,
+            {**phase_context, "model_context": model_phase_context},
         )
         context_summary = {
             "phase": plan.phase,
@@ -582,7 +600,7 @@ class TaskRuntime:
             "window_index": state.current_phase_window_count,
             "context_ref": context_ref,
             "action_window": phase_context.get("action_window", {}),
-            "phase_completion_criteria": phase_context.get("phase_completion_criteria", []),
+            "phase_metrics": phase_context.get("phase_metrics", []),
             "phase_execution_summary": phase_context.get("phase_execution_summary", {}),
         }
         self._debug_event("phase_transition_judge_context_built", context_summary)
@@ -613,16 +631,16 @@ class TaskRuntime:
             for fragment in phase_judge_fragments
             if isinstance(fragment, dict)
         )
-        criteria = self._current_phase_completion_criteria(state)
+        metrics = self._current_phase_metrics(state)
         completion_evaluation = evaluate_phase_completion(
-            criteria,
+            metrics,
             state.current_phase_execution_summary,
         )
         return {
             "active_instruction": state.user_instruction,
-            "semantic_goal": state.semantic_plan.goal.to_dict(),
+            "semantic_goal": state.semantic_plan.task_goal.to_dict(),
             "current_phase": planner_context.get("current_phase"),
-            "phase_completion_criteria": criteria,
+            "phase_metrics": metrics,
             "phase_completion_evaluation": completion_evaluation,
             "phase_window_count": state.current_phase_window_count,
             "max_phase_window_count": state.max_phase_window_count,
@@ -656,15 +674,10 @@ class TaskRuntime:
             },
         }
 
-    def _current_phase_completion_criteria(self, state: MissionState) -> list[dict[str, Any]]:
+    def _current_phase_metrics(self, state: MissionState) -> list[dict[str, Any]]:
         if state.current_phase_index >= len(state.semantic_plan.phases):
             return []
-        criteria = state.semantic_plan.phases[state.current_phase_index].completion_criteria
-        if isinstance(criteria, list):
-            return [dict(item) for item in criteria if isinstance(item, dict)]
-        if isinstance(criteria, dict):
-            return [dict(criteria)]
-        return []
+        return [dict(item) for item in state.semantic_plan.phases[state.current_phase_index].metrics]
 
     def _safety_allows_phase_transition(self, safety_decision: SafetyDecision) -> bool:
         if not safety_decision.interventions:
@@ -751,8 +764,10 @@ class TaskRuntime:
                 observation_anchors=getattr(memory, "observation_anchors", {}),
             )
         if not selected_rgb_frames and latest_rgb:
-            latest_rgb["selection_role"] = "latest"
-            latest_rgb["selection_reason"] = "Latest RGB observation for post-action phase judgment"
+            latest_rgb["selection_role"] = "current_observation"
+            latest_rgb["selection_reason"] = "Use as the current visual evidence for this decision."
+            latest_rgb["input_id"] = "image_1_current_observation"
+            latest_rgb["usage"] = "Use as the current visual evidence for this decision."
             selected_rgb_frames = [latest_rgb]
         model_inputs = rgb_model_inputs_from_frames(selected_rgb_frames)
         has_rgb = latest_rgb is not None
@@ -1059,6 +1074,7 @@ class TaskRuntime:
         self,
         state: MissionState,
         planner_context: dict,
+        model_context: dict,
         raw_plan: ShortHorizonPlan,
         safe_plan: ShortHorizonPlan,
         safety_decision: SafetyDecision,
@@ -1073,6 +1089,7 @@ class TaskRuntime:
                 "phase_key": state.current_phase_key,
                 "window_index": state.current_phase_window_count,
                 "planner_context": _redact_model_input_data(planner_context),
+                "model_context": model_context,
                 "raw_plan": raw_plan.to_dict(),
                 "safe_plan": safe_plan.to_dict(),
                 "safety_decision": {

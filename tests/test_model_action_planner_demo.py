@@ -23,14 +23,21 @@ def make_parse_result() -> TaskParseResult:
     plan = SemanticPlan.from_dict(
         {
             "intent": "navigate_by_visual_landmark",
-            "goal": {
-                "target": {"description": "black street lamp", "attributes": {"color": "black"}},
+            "task_goal": {
+                "target": "black street lamp",
+                "target_attributes": {"color": "black"},
                 "final_state": "uav_facing_target_and_hovering",
             },
             "phases": [
                 {
+                    "index": 1,
+                    "total": 1,
                     "name": "orient_right",
-                    "meaning": "turn right and search for the target landmark",
+                    "goal": "turn right and search for the target landmark",
+                    "done_when": ["target landmark is visible"],
+                    "observe": ["latest_observation", "phase_execution_summary"],
+                    "continue_when": ["target landmark is not visible"],
+                    "metrics": [],
                 }
             ],
             "uncertainties": ["target_identity_requires_observation"],
@@ -154,4 +161,6 @@ def test_demo_writes_expected_artifact_files(tmp_path):
     preview = (tmp_path / "demo/demo_preview.md").read_text(encoding="utf-8")
     assert "Model Action Planner Demo" in preview
     assert "Contract Repair" in preview
-    assert "模型阶段推进判断" in preview
+    assert "Phase Transition Boundary" in preview
+    assert "planner_side_phase_transition" in preview
+    assert "model_phase_transition_judged" in preview

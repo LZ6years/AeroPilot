@@ -30,7 +30,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.agent.mission_state import MissionState
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
 from src.agent.planning.tool_contract_validator import ToolContractValidator
-from src.agent.semantic.schemas import SemanticGoal, SemanticPhase, SemanticPlan, SemanticTarget
+from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal
 from src.memory.context.composer import ContextComposer
 from src.memory.context.modules import (
     DefaultActionContextModule,
@@ -334,8 +334,9 @@ def _config_snapshot(registry: PluginRegistry) -> dict[str, Any]:
 def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
     return SemanticPlan(
         intent="approach_visual_target",
-        goal=SemanticGoal(
-            target=SemanticTarget(description="person", attributes={"category": "human"}),
+        task_goal=TaskGoal(
+            target="person",
+            target_attributes={"category": "human"},
             final_state="UAV approaches the person while keeping safe distance.",
         ),
         phases=[
@@ -343,8 +344,12 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
                 index=1,
                 total=1,
                 name="approach_person_safely",
-                meaning="Confirm the person visually and approach conservatively.",
-                completion_criteria=[{"type": "safe_visual_approach", "target": "person"}],
+                goal="Confirm the person visually and approach conservatively.",
+                done_when=["person is identifiable", "approach remains safe"],
+                observe=["latest_observation", "phase_execution_summary"],
+                continue_when=["person identity is unclear", "safe approach relation is unclear"],
+                action_bias="approach cautiously when the person is roughly ahead and clearance is plausible",
+                metrics=[],
             )
         ],
         uncertainties=[],
@@ -356,7 +361,7 @@ def _stage_context(instruction: str, plan: SemanticPlan, plugin_registry: Plugin
         active_instruction=instruction,
         semantic_plan=plan.to_dict(),
         current_phase=plan.phases[0].to_dict(),
-        semantic_goal=plan.goal.to_dict(),
+        semantic_goal=plan.task_goal.to_dict(),
         allowed_action_constraints=ObservationContextBuilder(plugin_registry=plugin_registry)._allowed_action_constraints(),
         metadata={"demo": "plugin_system_demo"},
     )

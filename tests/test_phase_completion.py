@@ -1,4 +1,4 @@
-"""Tests for deterministic phase completion evidence."""
+"""Tests for deterministic phase metric evidence."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from src.agent.phase import evaluate_phase_completion
 
 def test_phase_completion_marks_within_tolerance():
     result = evaluate_phase_completion(
-        [{"kind": "translation", "axis": "forward", "target": 5.0, "unit": "m", "tolerance": 1.0}],
+        [{"name": "forward_distance", "target": 5.0, "unit": "m", "tolerance": 1.0}],
         {"measurements": {"forward_m": 5.4}},
     )
 
@@ -17,7 +17,7 @@ def test_phase_completion_marks_within_tolerance():
 
 def test_phase_completion_marks_below_target():
     result = evaluate_phase_completion(
-        [{"kind": "rotation", "axis": "yaw", "target": 40.0, "unit": "deg", "tolerance": 8.0}],
+        [{"name": "yaw_delta", "target": 40.0, "unit": "deg", "tolerance": 8.0}],
         {"measurements": {"yaw_delta_deg": 20.0}},
     )
 
@@ -29,8 +29,7 @@ def test_phase_completion_marks_overshoot_correction_allowed():
     result = evaluate_phase_completion(
         [
             {
-                "kind": "translation",
-                "axis": "forward",
+                "name": "forward_distance",
                 "target": 5.0,
                 "unit": "m",
                 "tolerance": 1.0,
@@ -44,11 +43,11 @@ def test_phase_completion_marks_overshoot_correction_allowed():
     assert result["evaluations"][0]["status"] == "overshoot_correction_allowed"
 
 
-def test_phase_completion_signs_left_and_down_targets():
+def test_phase_completion_uses_signed_right_and_up_targets():
     result = evaluate_phase_completion(
         [
-            {"kind": "translation", "axis": "left", "target": 2.0, "unit": "m", "tolerance": 0.8},
-            {"kind": "translation", "axis": "down", "target": 1.0, "unit": "m", "tolerance": 0.8},
+            {"name": "right_distance", "target": -2.0, "unit": "m", "tolerance": 0.8},
+            {"name": "up_distance", "target": -1.0, "unit": "m", "tolerance": 0.8},
         ],
         {"measurements": {"right_m": -2.1, "up_m": -1.2}},
     )
@@ -57,41 +56,33 @@ def test_phase_completion_signs_left_and_down_targets():
     assert [item["target"] for item in result["evaluations"]] == [-2.0, -1.0]
 
 
-def test_phase_completion_marks_visual_alignment_for_model_judgment():
+def test_phase_completion_without_metrics_requires_model_judgment():
     result = evaluate_phase_completion(
-        [
-            {
-                "kind": "visual_alignment",
-                "target": "person",
-                "evidence": "latest_rgb",
-                "require_target_visible": True,
-                "correction_allowed": True,
-            }
-        ],
+        [],
         {"measurements": {"yaw_delta_deg": 15.0}},
     )
 
-    assert result["criteria_count"] == 1
+    assert result["metrics_count"] == 0
     assert result["measurable_count"] == 0
     assert result["model_judged_count"] == 1
     assert result["all_within_tolerance"] is False
     assert result["any_overshoot"] is False
     assert result["evaluations"][0]["status"] == "requires_model_judgment"
-    assert result["evaluations"][0]["target"] == "person"
+    assert result["evaluations"][0]["metric"] is None
     assert result["evaluations"][0]["actual"] is None
     assert result["evaluations"][0]["error"] is None
 
 
-def test_phase_completion_handles_mixed_measurable_and_model_judged_criteria():
+def test_phase_completion_handles_mixed_measurable_and_model_judged_metrics():
     result = evaluate_phase_completion(
         [
-            {"kind": "translation", "axis": "forward", "target": 2.0, "unit": "m", "tolerance": 0.5},
-            {"kind": "visual_alignment", "target": "sunshade", "evidence": "latest_rgb"},
+            {"name": "forward_distance", "target": 2.0, "unit": "m", "tolerance": 0.5},
+            {"name": "visual_confidence", "target": "sunshade_visible"},
         ],
         {"measurements": {"forward_m": 2.1}},
     )
 
-    assert result["criteria_count"] == 2
+    assert result["metrics_count"] == 2
     assert result["measurable_count"] == 1
     assert result["model_judged_count"] == 1
     assert result["all_within_tolerance"] is True

@@ -1,4 +1,10 @@
-"""Model configuration and OpenAI-compatible caption calls."""
+"""Model configuration and OpenAI-compatible visual-caption calls.
+
+This module belongs to the multimodal image context plugin. It packages the
+current phase and the RGB frame for a caption model, but it does not own the
+semantic plan schema. It therefore forwards the lightweight phase fields as-is
+and uses `phase_metrics` only as optional deterministic context.
+"""
 
 from __future__ import annotations
 
@@ -33,7 +39,9 @@ def caption_model_config(base_config: ModelConfig | None = None, env_path: str |
     env = _merged_flyagent_env(Path(env_path))
     return replace(
         config,
-        model_name=env.get("FLYAGENT_VISUAL_DESCRIPTION_MODEL_NAME") or config.model_name or DEFAULT_VISUAL_DESCRIPTION_MODEL,
+        model_name=env.get("FLYAGENT_VISUAL_DESCRIPTION_MODEL_NAME")
+        or config.model_name
+        or DEFAULT_VISUAL_DESCRIPTION_MODEL,
         base_url=env.get("FLYAGENT_VISUAL_DESCRIPTION_MODEL_BASE_URL") or config.base_url,
     )
 
@@ -47,11 +55,11 @@ def build_visual_caption_payload(
     """Build an OpenAI-compatible multimodal request for phase-aware captioning."""
 
     current_phase = dict(stage_context.current_phase) if stage_context.current_phase else None
-    criteria = current_phase.get("completion_criteria", []) if isinstance(current_phase, dict) else []
+    metrics = current_phase.get("metrics", []) if isinstance(current_phase, dict) else []
     user_context = {
         "active_instruction": stage_context.active_instruction,
         "current_phase": current_phase,
-        "phase_completion_criteria": [dict(item) for item in criteria if isinstance(item, dict)],
+        "phase_metrics": [dict(item) for item in metrics if isinstance(item, dict)],
         "expected_visual_description": {
             "schema_version": SCHEMA_VERSION,
             "strategy": STRATEGY,
@@ -140,19 +148,23 @@ def usage_summary(value: Any) -> dict[str, Any]:
 
 def _caption_system_prompt() -> str:
     return (
-        "你是无人机 phase 视觉摘要器，只输出 JSON。所有自然语言必须中文。只写视觉事实，不写动作。"
-        "visual_description 字段: schema_version=phase_visual_summary_v1, strategy=qwen_vl_phase_caption_v3, "
-        "phase, phase_relevance, scene_summary, spatial_overview, relevant_objects, free_space, "
-        "landmarks, phase_relevant_cues, uncertainty, confidence。"
-        "relevant_objects 最多4个，每个含 name, position, role, phase_relevance, description, confidence；"
-        "position 必须选九宫格: foreground-left, foreground-center, foreground-right, "
+        "你是无人机当前阶段的视觉摘要器，只输出 JSON。所有自然语言必须使用中文。"
+        "只描述可见视觉事实，不输出动作建议、机动建议或下一步观察建议。"
+        "schema_version 必须是 phase_visual_summary_v1，strategy 必须是 qwen_vl_phase_caption_v3。"
+        "visual_description 字段必须包含: schema_version, strategy, phase, phase_relevance, "
+        "scene_summary, spatial_overview, relevant_objects, free_space, landmarks, "
+        "phase_relevant_cues, uncertainty, confidence。"
+        "phase 使用 name 和 goal，不使用 meaning。"
+        "relevant_objects 最多 4 个，每个包含 name, position, role, phase_relevance, "
+        "description, confidence。"
+        "position 必须从九宫格中选择: foreground-left, foreground-center, foreground-right, "
         "midground-left, midground-center, midground-right, background-left, background-center, "
-        "background-right；只有完全看不出位置才用 unknown，不要默认 unknown；"
-        "role 只取 target_candidate, landmark, boundary, free_space, vehicle, obstacle, unknown。"
-        "找建筑入口时，target_candidate 只给入口、门廊、门洞、入口标识、建筑底层开口；车辆用 vehicle。"
-        "free_space/landmarks/phase_relevant_cues/uncertainty 各最多2条短句。"
-        "禁写英文描述、天气、建筑用途、无关物体、turn_left、move_forward、recommended_next_observation、"
-        "左转、右转、前进、靠近、飞向、悬停、机动、通行、绕行、扫描。"
+        "background-right；只有完全看不出位置才用 unknown，不要默认 unknown。"
+        "role 只能取 target_candidate, landmark, boundary, free_space, vehicle, obstacle, unknown。"
+        "寻找建筑入口时，target_candidate 只给入口、门廊、门洞、入口标识、建筑底层开口；车辆用 vehicle。"
+        "free_space、landmarks、phase_relevant_cues、uncertainty 各最多 2 条短句。"
+        "禁止输出英文描述、天气、建筑用途、无关物体、turn_left、move_forward、"
+        "recommended_next_observation、左转、右转、前进、靠近、飞向、悬停、机动、通行、绕行、扫描。"
     )
 
 

@@ -44,16 +44,26 @@ def test_dry_env_client_generates_real_rgb_artifact_for_default_image_module(tmp
     write_result = writer.write_observation(raw)
     reader = MemoryRecordReader(tmp_path)
     plan = semantic_plan_from_dict(
-        {
-            "intent": "benchmark",
-            "goal": {
-                "target": {"description": "person", "attributes": {}},
-                "final_state": "facing_target",
-            },
-            "phases": [{"name": "turn_to_target", "meaning": "face the visible person"}],
-            "uncertainties": [],
-        }
-    )
+            {
+                "intent": "benchmark",
+                "task_goal": {
+                    "target": "person",
+                    "target_attributes": {},
+                    "final_state": "facing_target",
+                },
+                "phases": [
+                    {
+                        "name": "turn_to_target",
+                        "goal": "face the visible person",
+                        "done_when": ["person is visible and roughly faced"],
+                        "observe": ["latest_observation"],
+                        "continue_when": ["person is not confirmed"],
+                        "metrics": [],
+                    }
+                ],
+                "uncertainties": [],
+            }
+        )
     state = MissionState(run_id=tmp_path.name, user_instruction=case.selected_instruction, semantic_plan=plan)
     state.record_observation(raw)
     memory = FlightMemory(
@@ -86,11 +96,21 @@ class FakeTaskParser:
         plan = semantic_plan_from_dict(
             {
                 "intent": "benchmark",
-                "goal": {
-                    "target": {"description": "person", "attributes": {}},
+                "task_goal": {
+                    "target": "person",
+                    "target_attributes": {},
                     "final_state": "facing_target",
                 },
-                "phases": [{"name": "benchmark_phase", "meaning": "complete benchmark smoke"}],
+                "phases": [
+                    {
+                        "name": "benchmark_phase",
+                        "goal": "complete benchmark smoke",
+                        "done_when": ["benchmark smoke task is complete"],
+                        "observe": ["latest_observation", "phase_execution_summary"],
+                        "continue_when": ["benchmark smoke task is incomplete"],
+                        "metrics": [],
+                    }
+                ],
                 "uncertainties": [],
             }
         )
@@ -107,8 +127,10 @@ class FakePlanner:
         return ShortHorizonPlan(
             phase="benchmark_phase",
             steps=[PlannedStep.tool_step("uav.hover", {})],
-            phase_transition=PhaseTransition(COMPLETE_TASK, "dry runner complete"),
         )
+
+    def judge_phase_transition(self, phase_context) -> PhaseTransition:
+        return PhaseTransition(COMPLETE_TASK, "dry runner complete")
 
 
 def test_runner_dry_writes_review_leak_check_and_rgb_summary(tmp_path, monkeypatch):

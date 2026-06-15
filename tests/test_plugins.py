@@ -38,7 +38,7 @@ def make_stage_context(result) -> StageContextInput:
         active_instruction=result.instruction,
         semantic_plan=result.plan.to_dict(),
         current_phase=result.plan.phases[0].to_dict(),
-        semantic_goal=result.plan.goal.to_dict(),
+        semantic_goal=result.plan.task_goal.to_dict(),
     )
 
 
@@ -77,7 +77,16 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
     summary = SkillContentLoader().load_summary(accepted[0])
     assert summary["name"] == "visual_target_task_reasoning"
     assert "Visual Target Task Reasoning" in summary["skill_text"]
-    assert "Visual-target tasks usually need three checks" in summary["skill_text"]
+    assert "Before choosing a visual-target action, check" in summary["skill_text"]
+    assert "left target -> left/negative yaw" in summary["skill_text"]
+    assert "Self-check before yaw" in summary["skill_text"]
+    assert "cumulative yaw" in summary["skill_text"]
+    assert "choice to stop" in summary["skill_text"]
+    assert "Do not chase perfect centering" in summary["skill_text"]
+    assert "good enough to advance" in summary["skill_text"]
+    assert "recent motion history" in summary["skill_text"]
+    assert "motion_history_summary" not in summary["skill_text"]
+    assert "phase_action_summary" not in summary["skill_text"]
     assert summary["references"] == []
     assert summary["available_references"] == []
     assert summary["assets"]["scripts"] == []
@@ -93,8 +102,36 @@ def test_skill_loader_lists_references_without_executing_scripts():
     safety_refs = summaries["obstacle_and_safety_awareness"]["available_references"]
     assert search_refs == ["references\\search_patterns.md"] or search_refs == ["references/search_patterns.md"]
     assert safety_refs == ["references\\safety_checks.md"] or safety_refs == ["references/safety_checks.md"]
+    assert "No-candidate broad search" in summaries["search_under_uncertainty"]["skill_text"]
+    assert "target-like evidence" in summaries["search_under_uncertainty"]["skill_text"]
+    assert "30-45 degrees" in summaries["search_under_uncertainty"]["skill_text"]
+    assert "Candidate confirmation" in summaries["search_under_uncertainty"]["skill_text"]
+    assert "small 5-15 degree yaw" in summaries["search_under_uncertainty"]["skill_text"]
+    assert "Do not call a 30 degree yaw \"small\"" in summaries["search_under_uncertainty"]["skill_text"]
+    assert "small left/negative" not in summaries["search_under_uncertainty"]["skill_text"]
     assert summaries["search_under_uncertainty"]["assets"]["scripts"] == []
     assert summaries["obstacle_and_safety_awareness"]["assets"]["scripts"] == []
+
+
+def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmation():
+    skill_text = Path("plugins/knowledge/uav_flight/search_under_uncertainty/SKILL.md").read_text(encoding="utf-8")
+    reference_text = Path(
+        "plugins/knowledge/uav_flight/search_under_uncertainty/references/search_patterns.md"
+    ).read_text(encoding="utf-8")
+    normalized_skill_text = " ".join(skill_text.split())
+    normalized_reference_text = " ".join(reference_text.split())
+
+    assert "No-candidate broad search" in normalized_skill_text
+    assert "no target-like evidence is visible" in normalized_skill_text
+    assert "30-45 degrees" in normalized_skill_text
+    assert "small 5-15 degree yaw" in normalized_skill_text
+    assert 'Do not use a 30-45 degree broad-search turn as "further confirmation"' in normalized_skill_text
+    assert "If your message or reason says possible, suspected, candidate" in normalized_skill_text
+    assert 'Do not call a 30 degree yaw "small" or "local" confirmation' in normalized_skill_text
+    assert "Use the visual-target skill for detailed image-side centering behavior" in normalized_skill_text
+    assert "30-45 degrees is broad search, not a small/local confirmation turn" in normalized_reference_text
+    assert "switch from broad sweep to hover or a small 5-15 degree yaw" in normalized_reference_text
+    assert "continue a 30-45 degree broad sweep as if it were confirmation" in normalized_reference_text
 
 
 def test_skill_catalog_accepts_unique_qualified_skill_names():

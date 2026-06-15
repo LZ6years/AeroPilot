@@ -1,4 +1,4 @@
-"""Parse user instructions into semantic task plans."""
+"""Parse user instructions into lightweight semantic task plans."""
 
 from __future__ import annotations
 
@@ -19,13 +19,11 @@ class TaskParserConfigError(RuntimeError):
 
 class TaskParser:
     def __init__(self, mode: str | None = None, model_config: ModelConfig | None = None) -> None:
-        # Use model mode by default; tests and offline smoke can opt into rule_based.
         self.model_config = model_config or load_model_config()
         self.mode = mode or self.model_config.task_parser_mode
         self.system_prompt = self._load_system_prompt()
 
     def parse(self, instruction: str) -> TaskParseResult:
-        # Return a validated semantic plan without executing any primitive action.
         clean_instruction = instruction.strip()
         if not clean_instruction:
             raise ValueError("instruction must not be empty")
@@ -38,19 +36,34 @@ class TaskParser:
         return TaskParseResult(clean_instruction, self.mode, validate_semantic_plan(plan))
 
     def _parse_rule_based(self, instruction: str) -> SemanticPlan:
-        # First M3 slice: deterministic Chinese examples for schema and runtime integration.
         if self._is_observe_and_clarify(instruction):
             return semantic_plan_from_dict(
                 {
                     "intent": "observe_and_clarify",
-                    "goal": {
-                        "target": {"description": "右侧区域中的目标", "attributes": {}},
+                    "task_goal": {
+                        "target": "right-side area target",
+                        "target_attributes": {},
                         "final_state": "uav_hovering_or_waiting_for_clarification",
                     },
                     "phases": [
-                        {"name": "orient_right", "meaning": "向右侧调整视角"},
-                        {"name": "observe_area", "meaning": "观察右侧区域"},
-                        {"name": "clarify_if_uncertain", "meaning": "目标不明确时悬停并请求用户确认"},
+                        _phase(
+                            "orient_right",
+                            "orient the view toward the right-side area",
+                            ["right-side area is in the forward view"],
+                            ["right-side area is not yet in view"],
+                        ),
+                        _phase(
+                            "observe_area",
+                            "observe the right-side area for possible targets",
+                            ["the area has been observed with current visual evidence"],
+                            ["the observation is missing or unusable"],
+                        ),
+                        _phase(
+                            "clarify_if_uncertain",
+                            "hold safely if the target remains ambiguous",
+                            ["uncertainty is acknowledged and the UAV is stable"],
+                            ["the UAV is not stable enough to wait"],
+                        ),
                     ],
                     "uncertainties": [
                         "target_description_is_underspecified",
@@ -63,15 +76,37 @@ class TaskParser:
             return semantic_plan_from_dict(
                 {
                     "intent": "navigate_by_visual_landmark",
-                    "goal": {
-                        "target": {"description": "建筑入口", "attributes": {"category": "building_entrance"}},
+                    "task_goal": {
+                        "target": "building entrance",
+                        "target_attributes": {"category": "building_entrance"},
                         "final_state": "uav_hovering_in_front_of_target",
                     },
                     "phases": [
-                        {"name": "orient_left", "meaning": "根据用户线索先向左侧观察"},
-                        {"name": "search_landmark", "meaning": "寻找建筑入口"},
-                        {"name": "approach_landmark", "meaning": "逐步接近入口前方区域"},
-                        {"name": "stop", "meaning": "在入口前悬停"},
+                        _phase(
+                            "orient_left",
+                            "orient toward the left-side search area",
+                            ["left-side area is visible in the latest observation"],
+                            ["left-side area is not yet in view"],
+                        ),
+                        _phase(
+                            "search_landmark",
+                            "identify the building entrance candidate",
+                            ["building entrance or a strong entrance candidate is visible"],
+                            ["entrance identity is unclear"],
+                        ),
+                        _phase(
+                            "approach_landmark",
+                            "move closer to the entrance front area",
+                            ["entrance remains identifiable", "UAV has made meaningful approach progress"],
+                            ["entrance identity is unclear", "movement has not made approach progress"],
+                            observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
+                        ),
+                        _phase(
+                            "stop",
+                            "hold in front of the entrance",
+                            ["UAV is stable near the entrance front area"],
+                            ["UAV is not stable or not plausibly in front of the entrance"],
+                        ),
                     ],
                     "uncertainties": [
                         "left_turn_angle_may_not_be_exact",
@@ -84,17 +119,31 @@ class TaskParser:
             return semantic_plan_from_dict(
                 {
                     "intent": "navigate_by_visual_landmark",
-                    "goal": {
-                        "target": {
-                            "description": "红色车辆",
-                            "attributes": {"color": "red", "category": "vehicle"},
-                        },
+                    "task_goal": {
+                        "target": "red vehicle",
+                        "target_attributes": {"color": "red", "category": "vehicle"},
                         "final_state": "uav_near_target_with_safe_distance",
                     },
                     "phases": [
-                        {"name": "search_landmark", "meaning": "在前方视野中寻找红色车辆"},
-                        {"name": "approach_landmark", "meaning": "在安全距离约束下靠近目标"},
-                        {"name": "stop", "meaning": "悬停并等待下一步指令"},
+                        _phase(
+                            "search_landmark",
+                            "identify the red vehicle candidate",
+                            ["red vehicle or strong vehicle candidate is visible"],
+                            ["vehicle identity is unclear"],
+                        ),
+                        _phase(
+                            "approach_landmark",
+                            "move closer to the vehicle while preserving safe standoff",
+                            ["vehicle remains identifiable", "UAV is closer while keeping a safe distance"],
+                            ["vehicle identity is unclear", "safe approach relation is not yet plausible"],
+                            observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
+                        ),
+                        _phase(
+                            "stop",
+                            "hold near the vehicle with safe distance",
+                            ["UAV is stable near the vehicle with safe distance"],
+                            ["UAV is not stable or safe distance is unclear"],
+                        ),
                     ],
                     "uncertainties": [
                         "target_identity_requires_observation",
@@ -107,18 +156,37 @@ class TaskParser:
             return semantic_plan_from_dict(
                 {
                     "intent": "navigate_by_visual_landmark",
-                    "goal": {
-                        "target": {
-                            "description": "黑色路灯",
-                            "attributes": {"color": "black", "category": "street_lamp"},
-                        },
+                    "task_goal": {
+                        "target": "black street lamp",
+                        "target_attributes": {"color": "black", "category": "street_lamp"},
                         "final_state": "uav_facing_target_and_hovering",
                     },
                     "phases": [
-                        {"name": "orient_right", "meaning": "根据用户线索先向右侧观察"},
-                        {"name": "search_landmark", "meaning": "寻找黑色路灯"},
-                        {"name": "align_to_landmark", "meaning": "让 UAV 面向路灯"},
-                        {"name": "stop", "meaning": "悬停并结束任务"},
+                        _phase(
+                            "orient_right",
+                            "orient toward the right-side search area",
+                            ["right-side area is visible in the latest observation"],
+                            ["right-side area is not yet in view"],
+                        ),
+                        _phase(
+                            "search_landmark",
+                            "identify the black street lamp candidate",
+                            ["black street lamp or strong street-lamp candidate is visible"],
+                            ["street lamp identity is unclear"],
+                        ),
+                        _phase(
+                            "align_to_landmark",
+                            "face the street lamp well enough to finish",
+                            ["street lamp remains visible", "view is roughly aligned with the target"],
+                            ["target identity is unclear", "view is not plausibly aligned"],
+                        ),
+                        _phase(
+                            "stop",
+                            "hover after facing the street lamp",
+                            ["UAV is stable and the target-facing task is satisfied"],
+                            ["UAV is not stable"],
+                            observe=["phase_execution_summary"],
+                        ),
                     ],
                     "uncertainties": [
                         "right_turn_angle_may_not_be_exact",
@@ -142,10 +210,7 @@ class TaskParser:
         payload = {
             "model": self.model_config.model_name,
             "messages": [
-                {
-                    "role": "system",
-                    "content": self.system_prompt,
-                },
+                {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": instruction},
             ],
             "temperature": 0,
@@ -187,14 +252,32 @@ class TaskParser:
 
     def _is_observe_and_clarify(self, instruction: str) -> bool:
         return (
-            self._contains_any(instruction, ("观察", "看看", "看一下"))
+            self._contains_any(instruction, ("观察", "看看", "看一看"))
             and self._contains_any(instruction, ("右侧", "右边"))
             and self._contains_any(instruction, ("不确定", "不明确", "询问", "问我"))
         )
 
 
+def _phase(
+    name: str,
+    goal: str,
+    done_when: list[str],
+    continue_when: list[str],
+    *,
+    observe: list[str] | None = None,
+    metrics: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    return {
+        "name": name,
+        "goal": goal,
+        "done_when": done_when,
+        "observe": observe or ["latest_observation", "phase_execution_summary"],
+        "continue_when": continue_when,
+        "metrics": metrics or [],
+    }
+
+
 def _loads_json_object(content: str) -> dict[str, Any]:
-    # Some providers wrap JSON in Markdown despite the prompt, so accept that but still require one object.
     stripped = content.strip()
     if stripped.startswith("```"):
         stripped = stripped.removeprefix("```json").removeprefix("```").strip()

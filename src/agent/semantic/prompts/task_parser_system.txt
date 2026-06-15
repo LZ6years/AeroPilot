@@ -5,30 +5,38 @@ Parse the user's navigation instruction into exactly one JSON object. Do not inc
 Required JSON shape:
 {
   "intent": "navigate_by_visual_landmark | observe_and_clarify | movement | other short snake_case intent",
-  "goal": {
-    "target": {
-      "description": "short natural-language target description",
-      "attributes": {
-        "color": "optional normalized color",
-        "category": "optional normalized category",
-        "direction": "optional movement direction such as forward/backward/left/right/up/down",
-        "distance_m": "optional numeric movement distance in meters"
-      }
+  "task_goal": {
+    "target": "short natural-language target description",
+    "target_attributes": {
+      "color": "optional normalized color",
+      "category": "optional normalized category",
+      "relation": "optional relation such as front_side, near, above, through, beside",
+      "direction": "optional user-mentioned direction",
+      "distance_m": "optional explicit numeric distance"
     },
     "final_state": "short snake_case final state"
   },
   "phases": [
     {
       "index": 1,
-      "total": 4,
+      "total": 2,
       "name": "short snake_case semantic phase name",
-      "meaning": "what this phase means",
-      "completion_criteria": [
+      "goal": "one concise sentence describing what this phase should accomplish",
+      "done_when": [
+        "short observable condition that means this phase is complete"
+      ],
+      "observe": [
+        "latest_observation",
+        "phase_start_reference",
+        "phase_execution_summary"
+      ],
+      "continue_when": [
+        "short condition that means this phase should continue"
+      ],
+      "metrics": [
         {
-          "kind": "translation | rotation | hover | visual_alignment | visual_smoke",
-          "axis": "forward | backward | left | right | up | down | yaw | planar",
+          "name": "forward_distance | right_distance | up_distance | planar_distance | yaw_delta | hover_stability",
           "target": 5.0,
-          "target_source": "explicit_user",
           "unit": "m | deg | sec",
           "tolerance": 1.0,
           "correction_allowed": true
@@ -45,29 +53,34 @@ Important boundaries:
 - This is semantic planning only.
 - Do not output primitive UAV tools or action names such as uav.turn_relative, uav.move_body, env.observe, takeoff, land, get_pose, or get_frames.
 - Natural-language mentions of the vehicle as "UAV" are allowed, but never write API-style tokens with a lowercase tool namespace such as uav.<tool_name>.
-- If the user says "向上飞行", "向下飞行", "fly up", or "fly down", describe it semantically as altitude change, climb, descend, or vertical repositioning. These are normal in-air movement requests, not lifecycle actions.
-- For movement-only tasks like forward/backward/left/right/up/down/turn/hover, use concise semantic phase names such as move_forward, strafe_left, adjust_altitude_up, rotate_right, or stabilize_hover. The exact phase name is not a fixed program dispatch key.
 - Phase names may be freely created for the current task, but they must be concise snake_case and must not be tool names.
 - Every phase must include a 1-based index and the total number of phases in the plan.
-- Do not turn simple movement-only tasks into visual landmark search tasks.
 - Do not expand the task into a long executable action sequence.
-- If the task is underspecified, represent that as uncertainties and clarification-oriented phases instead of inventing facts.
+- If the task is underspecified, represent that as uncertainties and conservative phase conditions instead of inventing facts.
 - Keep target attributes factual from the instruction. If an attribute is unknown, omit it.
 
-Completion criteria rules:
-- completion_criteria is the stable contract for deciding whether a phase is complete. It is more important than the free-form phase name.
-- For "向前飞行5米" or "向前走5m", use kind="translation", axis="forward", target=5.0, target_source="explicit_user", unit="m", tolerance=1.0, correction_allowed=true.
-- For numeric translation criteria, include target_source="explicit_user" only when the distance is explicitly stated in the instruction.
-- For backward, left, right, up, and down movement, use kind="translation" with the matching axis and a positive target distance only when the instruction explicitly states that distance.
-- For "右转40度", use kind="rotation", axis="yaw", target=40.0, target_source="explicit_user", unit="deg", tolerance=8.0, correction_allowed=true.
-- For "左转30度", use kind="rotation", axis="yaw", target=-30.0, target_source="explicit_user", unit="deg", tolerance=8.0, correction_allowed=true.
-- For numeric rotation criteria, include target_source="explicit_user" only when the angle is explicitly stated in the instruction.
-- Use kind="rotation" only when the instruction explicitly gives a rotation amount or a purely relative direction such as "turn right 40 degrees" or "rotate left 30 degrees".
-- For visual target orientation tasks such as "Turn to the direction of the person", "face the person", "look at the car", or "point toward the landmark", do not invent yaw target=0 or any numeric yaw target. Use kind="visual_alignment" with fields like {"target": "person", "evidence": "latest_rgb", "require_target_visible": true, "alignment_goal": "uav_faces_target_or_target_is_visually_centered", "correction_allowed": true}.
-- If the target direction is not specified in text, represent that as uncertainty; do not convert an unknown target bearing into yaw=0.
-- For target-relative movement such as "move to the trees", "approach the person", "go to the landmark", "stop in front of the entrance", or "move near the vehicle", do not invent a numeric translation target such as 5.0 meters unless the user explicitly gave that distance. Use visual or model-judged criteria that require current observation evidence, such as visual_alignment, visual_smoke, or another semantic criterion with evidence="latest_rgb" and require_target_visible=true when appropriate.
-- For target-relative movement, keep visibility, alignment, approach, and arrival conceptually separate in the phase meaning or completion evidence. Seeing or facing the target is useful evidence, but it is not by itself proof that the UAV has arrived near the requested target relation.
-- If the instruction gives a direction but no distance, represent the direction as a target attribute or phase meaning, and keep completion model-judged unless a safe deterministic hover/rotation criterion is explicitly supported by the text.
-- For hover/stabilize/wait phases, use kind="hover", axis="planar", target=0.0, unit="m", tolerance=0.6, correction_allowed=false.
-- For visual landmark phases that cannot be verified from text-only context yet, use kind="visual_smoke" as a visual confirmation check, with axis="yaw" or "planar" only when there is an explicit scan/hover action goal, and add an uncertainty that visual confirmation requires image interpretation.
-- For distance-only movement tasks, preserve the requested direction and distance in goal.target.attributes. For example, "向前飞行5米，然后悬停" should produce one movement phase named move_forward, attributes {"direction": "forward", "distance_m": 5.0}, final_state "hover_after_movement", and a forward translation completion criterion.
+Phase field rules:
+- goal is the current semantic objective, not a primitive action.
+- done_when states what must be true for the phase to be considered complete.
+- observe lists evidence sources the planner and phase judge should consider. Use only compact names such as latest_observation, phase_start_reference, phase_execution_summary, depth_if_available, or user_instruction.
+- continue_when states why the current phase should keep going.
+- metrics is only for explicit numeric or directly measurable phase targets.
+
+Metric rules:
+- Use metrics only when the user explicitly gives a distance, angle, duration, or a deterministic hover/stability requirement.
+- For "move forward 5 meters", use name="forward_distance", target=5.0, unit="m", tolerance=1.0, correction_allowed=true.
+- For backward movement, use name="forward_distance" with a negative target.
+- For right or left movement, use name="right_distance" with positive target for right and negative target for left.
+- For up or down movement, use name="up_distance" with positive target for up and negative target for down.
+- For "turn right 40 degrees", use name="yaw_delta", target=40.0, unit="deg", tolerance=8.0, correction_allowed=true.
+- For "turn left 30 degrees", use name="yaw_delta", target=-30.0, unit="deg", tolerance=8.0, correction_allowed=true.
+- For hover/stabilize/wait phases with an explicit duration or stable-state intent, use name="hover_stability".
+- Do not invent numeric metric targets when the user did not provide them.
+
+Open-ended UAV tasks:
+- For visual target orientation tasks such as "face the person", "look at the car", or "point toward the landmark", express completion through done_when and continue_when. Do not invent a yaw metric.
+- For target-relative movement such as "move to the trees", "approach the person", "go to the landmark", "stop in front of the entrance", or "move near the vehicle", express target identity, approach progress, and spatial relation through done_when and continue_when. Do not invent a distance metric.
+- For tasks involving a side or relation such as front side, above, below, beside, near, inside, or through, put the relation in task_goal.target_attributes and in the phase conditions.
+- Seeing or facing a target is useful evidence, but it is not by itself proof that an approach, arrival, or spatial-relation phase is complete.
+- For approach phases, include progress-style conditions such as "UAV has moved meaningfully closer than phase start" when appropriate.
+- For search phases, include uncertainty conditions such as "target identity is unclear".

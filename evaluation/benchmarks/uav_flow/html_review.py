@@ -232,6 +232,7 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
     messages = _agent_messages(run_dir, artifacts)
     planner_debug = _action_planner_debug_records(run_dir)
     phase_debug = _phase_transition_debug_records(run_dir)
+    phase_events = _phase_transition_events(run_dir)
     return _page(
         title=f"UAV-Flow Case {case_id}",
         body=f"""
@@ -287,6 +288,7 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
 </section>
 <section>
   <h2>Phase Judge Debug</h2>
+  {_phase_transition_events_panel(phase_events)}
   {_phase_judge_debug(case_dir, phase_debug)}
 </section>
 <section>
@@ -627,14 +629,33 @@ def _phase_transition_debug_records(run_dir: Path | None) -> list[dict[str, Any]
     return records
 
 
+def _phase_transition_events(run_dir: Path | None) -> list[dict[str, Any]]:
+    """Return runtime transition events that represent the applied phase state."""
+
+    if run_dir is None:
+        return []
+    names = {
+        "model_phase_transition_judged",
+        "phase_transition_applied",
+        "phase_transition_continued",
+    }
+    records = []
+    for item in _read_jsonl(run_dir / "events.jsonl"):
+        event = item.get("event") or item.get("kind")
+        if event in names:
+            records.append({"event": event, "payload": item.get("payload", {})})
+    return records
+
+
 def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
     if not records:
         return '<p class="empty">Action planner debug was not enabled for this run.</p>'
     items = []
     for record in records:
         context = record.get("planner_context", {}) if isinstance(record.get("planner_context"), dict) else {}
-        model_context_text = _model_facing_context_text(context)
-        fragments = {item.get("name"): item for item in context.get("fragments", []) if isinstance(item, dict)}
+        model_context = record.get("model_context") if isinstance(record.get("model_context"), dict) else context
+        model_context_text = _model_facing_context_text(model_context)
+        fragments = {item.get("name"): item for item in model_context.get("fragments", []) if isinstance(item, dict)}
         image = fragments.get("image", {})
         action = fragments.get("action", {})
         raw_plan = record.get("raw_plan", {}) if isinstance(record.get("raw_plan"), dict) else {}
@@ -652,7 +673,7 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
       <dl class="kv">
         {_active}
         {_phase}
-        {_criteria}
+        {_metrics}
         {_exec}
         {_image_roles}
         {_action_trend}
@@ -661,6 +682,7 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
     </article>
     <article>
       <h3>Planner Output</h3>
+      <p class="empty">Planner output is only the current action window; phase switching is decided by Phase Judge events.</p>
       <h4>Raw plan</h4>
       {_plan_raw}
       <h4>Safety-reviewed plan</h4>
@@ -677,9 +699,9 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
                 safe_tools=_e(_plan_tools(safe_plan)),
                 _active=_kv("Instruction", context.get("active_instruction")),
                 _phase=_kv("Current phase", (context.get("current_phase") or {}).get("name") if isinstance(context.get("current_phase"), dict) else context.get("current_phase")),
-                _criteria=_kv("Completion criteria", json.dumps(context.get("phase_completion_criteria", []), ensure_ascii=False)),
+                _metrics=_kv("Phase metrics", json.dumps(context.get("phase_metrics", []), ensure_ascii=False)),
                 _exec=_kv("Phase execution summary", json.dumps(_compact_phase_execution(context.get("phase_execution_summary", {})), ensure_ascii=False)),
-                _image_roles=_kv("Image model inputs", json.dumps([item.get("role") for item in image.get("model_inputs", [])], ensure_ascii=False)),
+                _image_roles=_kv("Image model inputs", json.dumps(_fragment_model_input_roles(model_context), ensure_ascii=False)),
                 _action_trend=_kv("Action trend", json.dumps((action.get("content", {}) if isinstance(action.get("content"), dict) else {}).get("action_trend", {}), ensure_ascii=False)),
                 artifact=_link(base, _path_from_result(record.get("_path"), None), "open full debug json"),
                 model_context=_e(model_context_text),
@@ -691,12 +713,44 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
     return "\n".join(items)
 
 
+def _phase_transition_events_panel(events: list[dict[str, Any]]) -> str:
+    if not events:
+        return '<p class="empty">No runtime phase transition events recorded.</p>'
+    rows = []
+    for index, item in enumerate(events):
+        payload = item.get("payload", {}) if isinstance(item.get("payload"), dict) else {}
+        rows.append(
+            """
+<tr>
+  <td>{idx}</td><td><code>{event}</code></td><td>{phase}</td><td>{decision}</td><td>{reason}</td>
+</tr>
+""".format(
+                idx=_e(index),
+                event=_e(item.get("event")),
+                phase=_e(payload.get("phase")),
+                decision=_e(payload.get("applied_decision") or payload.get("decision")),
+                reason=_e(payload.get("guard_reason") or payload.get("reason")),
+            )
+        )
+    return """
+<article>
+  <h3>Runtime Phase Transition Events</h3>
+  <p class="empty">These events, not planner action_window fields, represent phase continuation or switching.</p>
+  <table class="compact-table">
+    <thead><tr><th>#</th><th>Event</th><th>Phase</th><th>Decision</th><th>Reason</th></tr></thead>
+    <tbody>{}</tbody>
+  </table>
+</article>
+""".format("\n".join(rows))
+
+
 def _phase_judge_debug(base: Path, records: list[dict[str, Any]]) -> str:
     if not records:
         return '<p class="empty">Phase transition judge debug was not enabled for this run.</p>'
     items = []
     for record in records:
-        model_context_text = _model_facing_context_text(record)
+        model_context = record.get("model_context") if isinstance(record.get("model_context"), dict) else record
+        model_context_text = _model_facing_context_text(model_context)
         action_plan = record.get("action_plan", {}) if isinstance(record.get("action_plan"), dict) else {}
         executed_steps = record.get("executed_steps", []) if isinstance(record.get("executed_steps"), list) else []
         summary = record.get("phase_execution_summary", {}) if isinstance(record.get("phase_execution_summary"), dict) else {}
@@ -712,7 +766,7 @@ def _phase_judge_debug(base: Path, records: list[dict[str, Any]]) -> str:
       <dl class="kv">
         {_active}
         {_phase}
-        {_criteria}
+        {_metrics}
         {_action_window}
         {_exec}
         {_measurements}
@@ -738,8 +792,8 @@ def _phase_judge_debug(base: Path, records: list[dict[str, Any]]) -> str:
                 model_context=_e(model_context_text),
                 _active=_kv("Instruction", record.get("active_instruction")),
                 _phase=_kv("Current phase", (record.get("current_phase") or {}).get("name") if isinstance(record.get("current_phase"), dict) else record.get("current_phase")),
-                _criteria=_kv("Completion criteria", json.dumps(record.get("phase_completion_criteria", []), ensure_ascii=False)),
-                _action_window=_kv("Action window", json.dumps(record.get("action_window", {}), ensure_ascii=False)),
+                _metrics=_kv("Phase metrics", json.dumps(record.get("phase_metrics", []), ensure_ascii=False)),
+                _action_window=_kv("Planner action_window (debug-only)", json.dumps(record.get("action_window", {}), ensure_ascii=False)),
                 _exec=_kv("Phase execution summary", json.dumps(_compact_phase_execution(summary), ensure_ascii=False)),
                 _measurements=_kv("Measurements", json.dumps(record.get("measurements", {}), ensure_ascii=False)),
                 _safety=_kv("Safety summary", json.dumps(_compact_phase_safety(record), ensure_ascii=False)),
@@ -829,7 +883,15 @@ def _fragment_model_input_roles(record: dict[str, Any]) -> list[dict[str, Any]]:
             continue
         for item in model_inputs:
             if isinstance(item, dict):
-                roles.append({"fragment": fragment.get("name"), "type": item.get("type"), "role": item.get("role")})
+                roles.append(
+                    {
+                        "fragment": fragment.get("name"),
+                        "type": item.get("type"),
+                        "input_id": item.get("input_id"),
+                        "role": item.get("role"),
+                        "usage": item.get("usage"),
+                    }
+                )
     return roles
 
 

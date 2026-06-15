@@ -5,24 +5,31 @@ from __future__ import annotations
 from pathlib import Path
 
 
-def test_task_parser_prompt_contains_phase_position_and_safety_boundaries():
+def test_task_parser_prompt_contains_lightweight_semantic_plan_contract():
     prompt = (Path("src") / "agent" / "semantic" / "prompts" / "task_parser_system.txt").read_text(encoding="utf-8")
 
-    assert '"index"' in prompt
-    assert '"total"' in prompt
-    assert "not a fixed program dispatch key" in prompt
+    assert '"intent"' in prompt
+    assert '"task_goal"' in prompt
+    assert '"target_attributes"' in prompt
+    assert '"done_when"' in prompt
+    assert '"observe"' in prompt
+    assert '"continue_when"' in prompt
+    assert '"metrics"' in prompt
+    assert '"action_bias"' not in prompt
+    assert '"forward_distance | right_distance | up_distance | planar_distance | yaw_delta | hover_stability"' in prompt
     assert "uav.turn_relative" in prompt
     assert "env.observe" in prompt
     assert "uav.<tool_name>" in prompt
-    assert "向上飞行" in prompt
-    assert "altitude change" in prompt
     assert "distance_m" in prompt
-    assert "completion_criteria" in prompt
-    assert "correction_allowed" in prompt
-    assert "hover_after_movement" in prompt
-    assert "Do not turn simple movement-only tasks into visual landmark search tasks" in prompt
-    assert "Seeing or facing the target" in prompt
-    assert "visual confirmation check" in prompt
+    assert "Do not invent numeric metric targets" in prompt
+    assert "Do not invent a distance metric." in prompt
+    assert "Seeing or facing a target is useful evidence" in prompt
+    assert "completion_criteria" not in prompt
+    assert "visual_alignment" not in prompt
+    assert "visual_smoke" not in prompt
+    assert '"kind"' not in prompt
+    assert '"axis"' not in prompt
+    assert '"meaning"' not in prompt
 
 
 def test_action_planner_prompt_contains_allowed_tools_contract():
@@ -34,7 +41,12 @@ def test_action_planner_prompt_contains_allowed_tools_contract():
     assert "forbidden_tools" not in prompt
     assert "observation_policy" not in prompt
     assert "phase_transition" in prompt
-    assert "current_phase.completion_criteria" in prompt
+    assert "current_phase.goal" in prompt
+    assert "current_phase.done_when" in prompt
+    assert "current_phase.continue_when" in prompt
+    assert "current_phase.metrics" in prompt
+    assert "current_phase.action_bias" not in prompt
+    assert "current_phase.completion_criteria" not in prompt
     assert "action_window" in prompt
     assert "current_phase_only" in prompt
     assert "requires_intermediate_observation" in prompt
@@ -53,8 +65,12 @@ def test_action_planner_prompt_contains_allowed_tools_contract():
     assert "Do not mechanically reuse 0.5 or 1.0 seconds" in prompt
     assert "model_inputs" in prompt
     assert "actual image input is attached" in prompt
-    assert "target is left of image center" in prompt
-    assert "do not chase pixel-perfect centering" in prompt
+    assert "negative yaw turns left; positive yaw turns right" in prompt
+    assert "selected skill guidance" in prompt
+    assert "visual target alignment, search, or candidate confirmation" in prompt
+    assert "target is left of image center" not in prompt
+    assert "Decide image side before yaw sign" not in prompt
+    assert "do not chase pixel-perfect centering" not in prompt
     assert "do not use runtime safety budgets as a search strategy" in prompt
     assert "safety_constraints yaw scan budget" not in prompt
     assert "outside the required JSON shape" in prompt
@@ -87,9 +103,27 @@ def test_phase_transition_judge_prompt_requires_agent_messages():
     assert "raw thinking" in prompt
     assert "Do not say a visual target was found" in prompt
     assert "actual image input is attached" in prompt
-    assert "executed_steps[].result" in prompt
-    assert "unconfirmed model-judged criteria" in prompt
-    assert "do not require pixel-perfect centering" in prompt
-    assert "alternating small yaw corrections" in prompt
+    assert "current_phase.done_when" in prompt
+    assert "current_phase.continue_when" in prompt
+    assert "phase_metrics" in prompt
+    assert "phase_completion_evaluation" in prompt
+    assert "Avoid keeping a phase alive only for perfect visual centering" in prompt
+    assert "available execution or motion history" in prompt
+    assert "history-only evidence" in prompt
+    assert "repeated or alternating small yaw corrections" in prompt
+    assert "advance or complete" in prompt
+    assert "motion_history_summary" not in prompt
+    assert "phase_action_summary" not in prompt
+    assert "recent_history" not in prompt
+    assert "Runtime safety budgets" in prompt
+    assert "phase_completion_criteria" not in prompt
+    assert "visual_alignment" not in prompt
+    assert "visual_smoke" not in prompt
+    assert "action_window" not in prompt
+    assert "yaw_scan_remaining_deg" not in prompt
+    assert "visual_phase_budget_exhausted" not in prompt
+    assert "recent_executed_tools" not in prompt
+    assert "recent_safety_reasons" not in prompt
+    assert "planner_context_summary" not in prompt
     assert "short-step benchmark profiles" not in prompt
     assert "recommended_next_observation" not in prompt

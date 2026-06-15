@@ -178,14 +178,14 @@ def build_description_context(
     memory.append_frame_refs(observation_write["frame_refs"])
     stage_context = StageContextInput(
         active_instruction=instruction,
-        current_phase={"name": phase_name, "meaning": phase_meaning},
-        phase_completion_criteria=[
-            {
-                "type": "visual_goal",
-                "description": phase_meaning,
-                "evidence_required": "phase-relevant visual facts only",
-            }
-        ],
+        current_phase={
+            "name": phase_name,
+            "goal": phase_meaning,
+            "done_when": ["phase-relevant visual facts are described"],
+            "observe": ["latest_observation"],
+            "continue_when": ["phase-relevant visual facts are unclear"],
+            "metrics": [],
+        },
     )
     fragment = MultimodalImageContextModule(
         model_config=model_config,
@@ -197,14 +197,15 @@ def build_description_context(
     _assert_visual_caption_input(fragment)
     return {
         "active_instruction": instruction,
-        "current_phase": {"name": phase_name, "meaning": phase_meaning},
-        "phase_completion_criteria": [
-            {
-                "type": "visual_goal",
-                "description": phase_meaning,
-                "evidence_required": "phase-relevant visual facts only",
-            }
-        ],
+        "current_phase": {
+            "name": phase_name,
+            "goal": phase_meaning,
+            "done_when": ["phase-relevant visual facts are described"],
+            "observe": ["latest_observation"],
+            "continue_when": ["phase-relevant visual facts are unclear"],
+            "metrics": [],
+        },
+        "phase_metrics": [],
         "semantic_goal": {"target": "phase_visual_summary_v1 probe"},
         "fragments": [fragment],
         "metadata": {"source_image": str(image_path), "case_index": case_index},
@@ -218,9 +219,6 @@ def build_description_payload(config: ModelConfig, context: dict[str, Any], imag
         StageContextInput(
             active_instruction=str(context.get("active_instruction", "")),
             current_phase=context.get("current_phase") if isinstance(context.get("current_phase"), dict) else None,
-            phase_completion_criteria=[
-                dict(item) for item in context.get("phase_completion_criteria", []) if isinstance(item, dict)
-            ],
         ),
     )
 

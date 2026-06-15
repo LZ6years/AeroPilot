@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from evaluation.benchmarks.uav_flow import UavFlowBenchmarkRunner, UavFlowEvalConfig
 from src.agent.mission_state import MissionState
-from src.agent.semantic.schemas import SemanticGoal, SemanticPhase, SemanticPlan, SemanticTarget
+from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal
 from src.memory.context.modules.skills import DefaultSkillsContextModule
 from src.memory.context.registry import ContextModuleRegistry
 from src.memory.context.schemas import MemorySourceBundle, StageContextInput
@@ -282,8 +282,11 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             index=1,
             total=1,
             name="rotate_to_face_person",
-            meaning="Locate the person visually and rotate until the person is centered enough to face.",
-            completion_criteria=[{"type": "visual_alignment", "target": "person"}],
+            goal="Locate the person visually and rotate until the person is centered enough to face.",
+            done_when=["person is identifiable", "view is roughly aligned with the person"],
+            observe=["latest_observation", "phase_execution_summary"],
+            continue_when=["person identity is unclear", "view is not plausibly aligned"],
+            metrics=[],
         )
     elif "move" in lower:
         intent = "move_to_standoff_distance"
@@ -292,8 +295,11 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             index=1,
             total=1,
             name="locate_and_move_to_person_standoff",
-            meaning="Locate the person and move to the requested distance.",
-            completion_criteria=[{"type": "distance_to_target", "target": "person", "distance_m": 3.5}],
+            goal="Locate the person and move to the requested distance.",
+            done_when=["person is identifiable", "standoff distance is plausibly near 3.5 meters"],
+            observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
+            continue_when=["person identity is unclear", "standoff distance is not yet plausible"],
+            metrics=[],
         )
     else:
         intent = "approach_visual_target"
@@ -302,13 +308,17 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             index=1,
             total=1,
             name="approach_person_safely",
-            meaning="Confirm the person visually and approach conservatively.",
-            completion_criteria=[{"type": "safe_visual_approach", "target": "person"}],
+            goal="Confirm the person visually and approach conservatively.",
+            done_when=["person is identifiable", "approach remains safe"],
+            observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
+            continue_when=["person identity is unclear", "safe approach relation is unclear"],
+            metrics=[],
         )
     return SemanticPlan(
         intent=intent,
-        goal=SemanticGoal(
-            target=SemanticTarget(description="person", attributes={"category": "human"}),
+        task_goal=TaskGoal(
+            target="person",
+            target_attributes={"category": "human"},
             final_state=final_state,
         ),
         phases=[phase],
@@ -321,7 +331,7 @@ def _stage_context(instruction: str, plan: SemanticPlan) -> StageContextInput:
         active_instruction=instruction,
         semantic_plan=plan.to_dict(),
         current_phase=plan.phases[0].to_dict(),
-        semantic_goal=plan.goal.to_dict(),
+        semantic_goal=plan.task_goal.to_dict(),
     )
 
 

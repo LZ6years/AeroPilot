@@ -5,121 +5,115 @@
     {
       "id": "entrance_candidate_glass_building",
       "image": "tests/fixtures/visual_description_images/frame_000003.png",
-      "instruction": "请根据当前画面判断玻璃幕墙建筑底层是否存在入口候选区域，只描述可见视觉事实。",
+      "instruction": "Describe whether the current image contains a possible entrance candidate near the glass curtain-wall building base. Only report visible visual facts.",
       "phase": {
         "name": "search_visual_entrance",
-        "meaning": "寻找建筑入口、门廊、入口标识或建筑底层开口"
+        "goal": "identify building entrance, doorway, entrance sign, or building-base opening candidates",
+        "done_when": ["entrance candidate visibility is described"],
+        "observe": ["latest_observation"],
+        "continue_when": ["entrance candidate remains unclear"],
+        "metrics": []
       },
-      "phase_completion_criteria": [
-        {
-          "type": "visual_goal",
-          "description": "画面中出现与建筑入口相关的可见候选区域或明确说明当前未清晰可见"
-        }
-      ],
+      "phase_metrics": [],
       "expected": {
-        "must_mention_any": ["玻璃", "建筑", "底层", "入口", "开口", "门廊"],
-        "landmark_any": ["红色车辆", "白色车辆", "绿树", "铺装地面", "玻璃幕墙"],
-        "forbidden_terms": ["前进", "靠近", "飞向", "悬停", "扫描", "绕行", "recommended_next_observation", "5米", "5m", "30度"]
+        "must_mention_any": ["glass", "building", "base", "entrance", "opening", "doorway"],
+        "landmark_any": ["red vehicle", "white vehicle", "tree", "paved ground", "glass facade"],
+        "forbidden_terms": ["forward", "approach", "fly toward", "hover", "scan", "continue", "recommended_next_observation", "5m", "30 degrees"]
       }
     },
     {
       "id": "yellow_bus_tree_landmarks",
       "image": "tests/fixtures/visual_description_images/frame_000007.png",
-      "instruction": "请识别画面中可作为视觉参照的黄色车辆和大树，并说明它们在画面中的相对位置。",
+      "instruction": "Identify yellow vehicles and large trees that could be used as visual references, and describe their relative positions in the image.",
       "phase": {
         "name": "identify_visual_landmarks",
-        "meaning": "确认可稳定复用的视觉参照物"
+        "goal": "identify stable reusable visual landmarks",
+        "done_when": ["at least one stable landmark and its image position are described"],
+        "observe": ["latest_observation"],
+        "continue_when": ["no stable landmark is visible"],
+        "metrics": []
       },
-      "phase_completion_criteria": [
-        {
-          "type": "visual_goal",
-          "description": "至少识别一个稳定 landmark，并给出其画面位置"
-        }
-      ],
+      "phase_metrics": [],
       "expected": {
-        "must_mention_any": ["黄色", "校车", "巴士", "大树", "树"],
-        "landmark_any": ["黄色校车", "大树", "玻璃建筑", "青色车辆"],
-        "forbidden_terms": ["前进", "靠近", "飞向", "悬停", "扫描", "绕行", "recommended_next_observation", "5米", "5m", "30度"]
+        "must_mention_any": ["yellow", "bus", "vehicle", "large tree", "tree"],
+        "landmark_any": ["yellow bus", "large tree", "glass building", "blue vehicle"],
+        "forbidden_terms": ["forward", "approach", "fly toward", "hover", "scan", "continue", "recommended_next_observation", "5m", "30 degrees"]
       }
     },
     {
       "id": "open_foreground_paving",
       "image": "tests/fixtures/visual_description_images/frame_000001.png",
-      "instruction": "请判断画面前景铺装区域是否开阔，并指出附近会影响视觉理解的车辆或树木位置。",
+      "instruction": "Judge whether the foreground paved area appears open, and point out nearby vehicles or trees that affect visual understanding.",
       "phase": {
         "name": "check_visible_free_space",
-        "meaning": "确认画面中是否存在开阔铺装区域作为视觉上下文"
+        "goal": "describe visible open paved area and nearby visual context",
+        "done_when": ["foreground or midground open-area visibility is described"],
+        "observe": ["latest_observation"],
+        "continue_when": ["free-space visibility cannot be described"],
+        "metrics": []
       },
-      "phase_completion_criteria": [
-        {
-          "type": "visual_goal",
-          "description": "说明前景或中景开阔区域的可见程度"
-        }
-      ],
+      "phase_metrics": [],
       "expected": {
-        "must_mention_any": ["前景", "铺装", "地面", "开阔", "空旷"],
-        "landmark_any": ["白色车辆", "红色车辆", "树", "建筑"],
-        "forbidden_terms": ["前进", "靠近", "飞向", "悬停", "扫描", "绕行", "recommended_next_observation", "5米", "5m", "30度"]
+        "must_mention_any": ["foreground", "paved", "ground", "open", "clear"],
+        "landmark_any": ["white vehicle", "red vehicle", "tree", "building"],
+        "forbidden_terms": ["forward", "approach", "fly toward", "hover", "scan", "continue", "recommended_next_observation", "5m", "30 degrees"]
       }
     },
     {
       "id": "no_clear_entrance_sign",
       "image": "tests/fixtures/visual_description_images/frame_000005.png",
-      "instruction": "请确认当前画面是否能看到明确入口标识；如果没有，只说明哪些建筑底层或车辆可作为视觉参照。",
+      "instruction": "Confirm whether a clear entrance sign is visible. If not, describe only relevant building-base or vehicle visual references.",
       "phase": {
         "name": "verify_entrance_visibility",
-        "meaning": "确认入口标识是否已经清晰可见"
+        "goal": "judge whether an entrance sign is clearly visible",
+        "done_when": ["entrance-sign visibility and related visual references are described"],
+        "observe": ["latest_observation"],
+        "continue_when": ["entrance-sign visibility is unclear"],
+        "metrics": []
       },
-      "phase_completion_criteria": [
-        {
-          "type": "visual_goal",
-          "description": "判断入口标识是否清晰可见，并列出相关视觉参照"
-        }
-      ],
+      "phase_metrics": [],
       "expected": {
-        "must_mention_any": ["入口", "标识", "未清晰", "建筑", "底层"],
-        "landmark_any": ["黄色校车", "黑色车辆", "树", "玻璃建筑"],
-        "forbidden_terms": ["前进", "靠近", "飞向", "悬停", "扫描", "绕行", "recommended_next_observation", "5米", "5m", "30度"]
+        "must_mention_any": ["entrance", "sign", "unclear", "building", "base"],
+        "landmark_any": ["yellow bus", "dark vehicle", "tree", "glass building"],
+        "forbidden_terms": ["forward", "approach", "fly toward", "hover", "scan", "continue", "recommended_next_observation", "5m", "30 degrees"]
       }
     },
     {
       "id": "vehicles_are_not_entrance_targets",
       "image": "tests/fixtures/visual_description_images/frame_000009.png",
-      "instruction": "当前阶段目标是建筑入口，请区分车辆和入口候选，不要把黄色车或白紫车辆当作入口目标。",
+      "instruction": "The current phase target is a building entrance. Distinguish vehicles from entrance candidates, and do not treat yellow or white-purple vehicles as the entrance target.",
       "phase": {
         "name": "separate_target_from_landmarks",
-        "meaning": "区分入口目标候选与车辆类视觉参照物"
+        "goal": "distinguish entrance target candidates from vehicle visual references",
+        "done_when": ["vehicles are described as references or non-targets unless a clear entrance candidate exists"],
+        "observe": ["latest_observation"],
+        "continue_when": ["target/non-target distinction remains unclear"],
+        "metrics": []
       },
-      "phase_completion_criteria": [
-        {
-          "type": "visual_goal",
-          "description": "车辆只能作为参照或车辆对象，除非画面中存在明确入口候选"
-        }
-      ],
+      "phase_metrics": [],
       "expected": {
-        "must_mention_any": ["车辆", "入口", "参照", "黄色", "白紫"],
-        "landmark_any": ["黄色校车", "白紫车辆", "大树", "玻璃建筑"],
-        "forbidden_terms": ["前进", "靠近", "飞向", "悬停", "扫描", "绕行", "recommended_next_observation", "5米", "5m", "30度"]
+        "must_mention_any": ["vehicle", "entrance", "reference", "yellow", "white"],
+        "landmark_any": ["yellow bus", "white-purple vehicle", "large tree", "glass building"],
+        "forbidden_terms": ["forward", "approach", "fly toward", "hover", "scan", "continue", "recommended_next_observation", "5m", "30 degrees"]
       }
     },
     {
       "id": "right_side_vehicle_and_building_context",
       "image": "tests/fixtures/visual_description_images/frame_000003.png",
-      "instruction": "请描述右侧白色车辆、红色车辆和后方建筑底层之间的画面位置关系，用于判断入口候选是否被车辆干扰。",
+      "instruction": "Describe the image-position relationship among the right-side white vehicle, red vehicle, and building base, for judging whether entrance candidates are occluded by vehicles.",
       "phase": {
         "name": "relate_vehicle_to_building_base",
-        "meaning": "理解车辆与建筑底层候选区域的相对位置"
+        "goal": "describe vehicle positions relative to building-base candidate areas",
+        "done_when": ["vehicle and building-base relative positions are described"],
+        "observe": ["latest_observation"],
+        "continue_when": ["relative positions are unclear"],
+        "metrics": []
       },
-      "phase_completion_criteria": [
-        {
-          "type": "visual_goal",
-          "description": "输出车辆与建筑底层候选区域的画面相对位置"
-        }
-      ],
+      "phase_metrics": [],
       "expected": {
-        "must_mention_any": ["右侧", "白色车辆", "红色车辆", "建筑", "底层"],
-        "landmark_any": ["白色车辆", "红色车辆", "玻璃建筑", "树"],
-        "forbidden_terms": ["前进", "靠近", "飞向", "悬停", "扫描", "绕行", "recommended_next_observation", "5米", "5m", "30度"]
+        "must_mention_any": ["right side", "white vehicle", "red vehicle", "building", "base"],
+        "landmark_any": ["white vehicle", "red vehicle", "glass building", "tree"],
+        "forbidden_terms": ["forward", "approach", "fly toward", "hover", "scan", "continue", "recommended_next_observation", "5m", "30 degrees"]
       }
     }
   ]

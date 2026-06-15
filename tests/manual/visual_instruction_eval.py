@@ -1,4 +1,4 @@
-"""Evaluate default image-module visual inputs with natural-language cases.
+﻿"""Evaluate default image-module visual inputs with natural-language cases.
 
 This manual probe verifies that the default ``image`` context module can pass
 the latest real RGB frame to the planner as an encoded multimodal input while
@@ -77,20 +77,18 @@ def cases_from_run_dir(run_dir: str | Path, limit: int = DEFAULT_LIMIT) -> list[
             {
                 "id": f"run_rgb_{index:03d}",
                 "image": str(path),
-                "instruction": "请根据当前真实运行画面描述与建筑入口、车辆参照和开阔铺装区域有关的视觉事实，不输出动作建议。",
+                "instruction": "Describe visual facts related to building entrances, vehicle references, and open paved areas in the current real RGB frame. Do not output movement advice.",
                 "phase": {
                     "name": "real_engine_visual_check",
-                    "meaning": "从真实运行 RGB 中提取当前阶段可用的视觉事实",
+                    "goal": "extract visual facts relevant to the current phase from a real RGB frame",
+                    "done_when": ["relevant visual facts are described"],
+                    "observe": ["latest_observation"],
+                    "continue_when": ["relevant visual facts are unclear"],
+                    "metrics": [],
                 },
-                "phase_completion_criteria": [
-                    {
-                        "type": "visual_goal",
-                        "description": "输出当前画面中与入口候选、视觉参照或开阔区域相关的事实",
-                    }
-                ],
                 "expected": {
-                    "must_mention_any": ["建筑", "车辆", "树", "铺装", "入口"],
-                    "landmark_any": ["建筑", "车辆", "树"],
+                    "must_mention_any": ["building", "vehicle", "tree", "paving", "entrance"],
+                    "landmark_any": ["building", "vehicle", "tree"],
                     "forbidden_terms": _default_forbidden_terms(),
                 },
             },
@@ -135,9 +133,6 @@ def build_case_context(
         active_instruction=str(case["instruction"]),
         current_phase=dict(case.get("phase", {})),
         semantic_goal={"source": "visual_instruction_eval", "case_id": case["id"]},
-        phase_completion_criteria=[
-            dict(item) for item in case.get("phase_completion_criteria", []) if isinstance(item, dict)
-        ],
     )
     registry = ContextModuleRegistry.from_config(_repo_path(context_config))
     return ContextComposer(registry).compose(MemorySourceBundle(memory, MapMemoryStore()), stage_context)
@@ -191,8 +186,8 @@ def call_visual_eval_model(config: ModelConfig, context: dict[str, Any], case: d
     if not config.api_key:
         raise RuntimeError("Missing FLYAGENT_MODEL_API_KEY; API key will not be printed.")
     system_prompt = (
-        "你是无人机视觉输入链路评估器。只基于收到的 JSON 上下文和图片输出 JSON。"
-        "检查模型是否真的能利用图片内容回答当前视觉指令。不要输出动作建议。"
+        "You are a UAV visual-input pipeline evaluator. Return JSON only, based on the provided context and image. "
+        "Check whether the model can use image content to answer the current visual instruction. Do not output movement advice."
     )
     expected = case.get("expected", {}) if isinstance(case.get("expected"), dict) else {}
     eval_context = dict(context)
@@ -201,9 +196,9 @@ def call_visual_eval_model(config: ModelConfig, context: dict[str, Any], case: d
         "must_mention_any": expected.get("must_mention_any", []),
         "forbidden_terms": expected.get("forbidden_terms", []),
         "response_schema": {
-            "visual_answer": "简短中文视觉回答",
-            "mentions": ["命中的视觉关键词"],
-            "forbidden_terms": ["若输出中含动作建议或禁词，在这里列出"],
+            "visual_answer": "short visual answer",
+            "mentions": ["matched visual keywords"],
+            "forbidden_terms": ["movement advice or forbidden terms if present"],
             "uses_image": True,
         },
     }
@@ -357,11 +352,17 @@ def _normalise_case(item: dict[str, Any], index: int) -> dict[str, Any]:
     case.setdefault("id", f"case_{index:03d}")
     if "image" not in case:
         raise ValueError(f"case {case['id']} missing image")
-    case.setdefault("instruction", "请根据当前画面描述与当前阶段相关的视觉事实，不输出动作建议。")
-    case.setdefault("phase", {"name": "visual_check", "meaning": "确认当前画面的视觉事实"})
+    case.setdefault("instruction", "Describe visual facts relevant to the current phase. Do not output movement advice.")
     case.setdefault(
-        "phase_completion_criteria",
-        [{"type": "visual_goal", "description": "输出当前阶段相关视觉事实"}],
+        "phase",
+        {
+            "name": "visual_check",
+            "goal": "describe visual facts relevant to the current phase",
+            "done_when": ["relevant visual facts are described"],
+            "observe": ["latest_observation"],
+            "continue_when": ["relevant visual facts are unclear"],
+            "metrics": [],
+        },
     )
     expected = dict(case.get("expected", {})) if isinstance(case.get("expected"), dict) else {}
     expected.setdefault("must_mention_any", [])
@@ -372,7 +373,7 @@ def _normalise_case(item: dict[str, Any], index: int) -> dict[str, Any]:
 
 
 def _default_forbidden_terms() -> list[str]:
-    return ["前进", "靠近", "飞向", "悬停", "扫描", "绕行", "recommended_next_observation", "5米", "5m", "30度"]
+    return ["forward", "approach", "fly toward", "hover", "scan", "continue", "recommended_next_observation", "5m", "30 degrees"]
 
 
 def _repo_path(path: str | Path) -> Path:

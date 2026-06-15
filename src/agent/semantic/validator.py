@@ -27,10 +27,10 @@ def validate_semantic_plan(plan: SemanticPlan) -> SemanticPlan:
     # Keep M3 semantic-only: no primitive action names or executable tool calls.
     if not plan.intent:
         raise SemanticPlanValidationError("SemanticPlan.intent is required")
-    if not plan.goal.target.description:
-        raise SemanticPlanValidationError("SemanticPlan.goal.target.description is required")
-    if not plan.goal.final_state:
-        raise SemanticPlanValidationError("SemanticPlan.goal.final_state is required")
+    if not plan.task_goal.target:
+        raise SemanticPlanValidationError("SemanticPlan.task_goal.target is required")
+    if not plan.task_goal.final_state:
+        raise SemanticPlanValidationError("SemanticPlan.task_goal.final_state is required")
     if not plan.phases:
         raise SemanticPlanValidationError("SemanticPlan.phases must not be empty")
     for expected_index, phase in enumerate(plan.phases, start=1):
@@ -42,8 +42,10 @@ def validate_semantic_plan(plan: SemanticPlan) -> SemanticPlan:
             raise SemanticPlanValidationError(f"SemanticPhase.total must equal phases length: {phase.name}")
         if not phase.name:
             raise SemanticPlanValidationError("SemanticPhase.name is required")
-        if not phase.meaning:
-            raise SemanticPlanValidationError(f"SemanticPhase.meaning is required: {phase.name}")
+        if not phase.goal:
+            raise SemanticPlanValidationError(f"SemanticPhase.goal is required: {phase.name}")
+        if not phase.done_when:
+            raise SemanticPlanValidationError(f"SemanticPhase.done_when is required: {phase.name}")
     _reject_forbidden_tokens(plan.to_dict())
     return plan
 

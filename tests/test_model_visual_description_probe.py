@@ -438,8 +438,7 @@ def test_visual_description_prompt_is_phase_aware_and_navigation_bounded():
         config,
         {
             "active_instruction": "寻找建筑入口",
-            "current_phase": {"name": "search_target", "meaning": "寻找入口候选"},
-            "phase_completion_criteria": [{"type": "visual_goal"}],
+            "current_phase": {"name": "search_target", "goal": "寻找入口候选"},
             "fragments": [],
         },
         Path("tests/fixtures/visual_description_images/frame_000001.png"),
@@ -454,11 +453,11 @@ def test_visual_description_prompt_is_phase_aware_and_navigation_bounded():
     assert "foreground-left" in prompt and "background-right" in prompt
     assert "不要默认 unknown" in prompt
     assert "phase_relevance" in prompt
-    assert "所有自然语言必须中文" in prompt
-    assert "禁写英文描述" in prompt
+    assert "所有自然语言必须使用中文" in prompt
+    assert "禁止输出英文描述" in prompt
     assert "target_candidate 只给入口" in prompt
     assert "车辆用 vehicle" in prompt
-    assert "天气" in prompt and "禁写" in prompt
+    assert "天气" in prompt and "禁止输出" in prompt
     assert "悬停" in prompt and "绕行" in prompt
     assert "recommended_next_observation" in prompt
     assert "occlusions_or_risks" not in prompt

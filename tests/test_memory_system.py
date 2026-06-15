@@ -24,15 +24,20 @@ def make_parse_result():
     return TaskParser(mode="rule_based").parse("右转寻找黑色路灯并停下")
 
 
-def make_stage_context(result=None, current_phase: dict | None = None) -> StageContextInput:
+def make_stage_context(
+    result=None,
+    current_phase: dict | None = None,
+    phase_execution_summary: dict | None = None,
+) -> StageContextInput:
     result = result or make_parse_result()
     return StageContextInput(
         active_instruction=result.instruction,
         semantic_plan=result.plan.to_dict(),
         current_phase=current_phase if current_phase is not None else result.plan.phases[0].to_dict(),
-        semantic_goal=result.plan.goal.to_dict(),
+        semantic_goal=result.plan.task_goal.to_dict(),
         safety_constraints={"hover_required": False},
         allowed_action_constraints={"planner_tools": ["uav.hover", "env.observe"]},
+        phase_execution_summary=phase_execution_summary or {},
         metadata={"test": True},
     )
 
@@ -117,7 +122,7 @@ def test_stage_context_input_to_dict_has_expected_fields():
     assert data["active_instruction"] == result.instruction
     assert data["semantic_plan"] == result.plan.to_dict()
     assert data["current_phase"] == result.plan.phases[0].to_dict()
-    assert data["semantic_goal"] == result.plan.goal.to_dict()
+    assert data["semantic_goal"] == result.plan.task_goal.to_dict()
     assert data["safety_constraints"] == {"hover_required": False}
     assert data["allowed_action_constraints"]["planner_tools"] == ["uav.hover", "env.observe"]
     assert data["metadata"] == {"test": True}
@@ -133,7 +138,7 @@ def test_context_composer_outputs_uniform_fragments(tmp_path):
 
     assert context["active_instruction"] == memory.active_instruction
     assert context["current_phase"]["name"]
-    assert context["semantic_goal"] == result.plan.goal.to_dict()
+    assert context["semantic_goal"] == result.plan.task_goal.to_dict()
     assert [fragment["name"] for fragment in context["fragments"]] == [
         "instruction",
         "skills",
@@ -279,12 +284,30 @@ def test_action_module_reads_jsonl_refs_and_outputs_compact_recent_actions(tmp_p
 
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
-        make_stage_context(current_phase={"name": "stop"}),
+        make_stage_context(
+            current_phase={"name": "stop"},
+            phase_execution_summary={
+                "phase": "stop",
+                "window_count": 7,
+                "measurements": {"yaw_delta_deg": 60.0},
+                "tool_facts": {
+                    "turn_yaw_success_sum_deg": 60.0,
+                    "tools_executed": {"uav.turn_relative": 6},
+                },
+            },
+        ),
     )
     action = _fragment(context, "action")
 
-    assert len(action["content"]["recent_actions"]) == 5
-    assert action["content"]["recent_actions"][-1] == {"tool": "uav.hover", "args": {}, "ok": True}
+    assert len(action["content"]["recent_actions"]) == 2
+    assert action["content"]["recent_actions"][-1] == {"tool": "uav.hover", "args": {}, "ok": True, "history_only": True}
+    assert all(item["history_only"] is True for item in action["content"]["recent_actions"])
+    assert action["content"]["motion_history_summary"]["phase"] == "stop"
+    assert action["content"]["motion_history_summary"]["window_count"] == 7
+    assert action["content"]["motion_history_summary"]["turn_count"] == 6
+    assert action["content"]["motion_history_summary"]["net_yaw_deg"] == 60.0
+    assert action["content"]["motion_history_summary"]["history_only"] is True
+    assert "motion_history_summary_sources" in action["metadata"]
     assert "result" not in action["content"]["recent_actions"][-1]
     assert "action_effect_summaries" not in action["content"]
     assert action["facts"] == []
@@ -305,7 +328,7 @@ def test_pose_and_image_modules_read_jsonl_refs(tmp_path):
     assert "recent_pose_history" not in pose["content"]
     assert image["content"]["visual_evidence"]["has_rgb"] is True
     assert image["content"]["visual_evidence"]["has_depth"] is False
-    assert image["content"]["selected_frames"][0]["role"] == "phase_start"
+    assert image["content"]["selected_frames"][0]["role"] == "current_observation"
     assert image["metadata"]["selected_frame_metadata"][0]["path"] == "rgb.png"
     assert image["artifact_refs"] == ["rgb.png"]
     assert image["model_inputs"] == []
@@ -336,11 +359,14 @@ def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
     model_input = image["model_inputs"][0]
 
     assert model_input["type"] == "image"
-    assert model_input["role"] == "phase_start"
+    assert model_input["input_id"] == "image_1_current_observation"
+    assert model_input["role"] == "current_observation"
+    assert model_input["usage"] == "Use as the current visual evidence for this decision."
     assert model_input["encoding"] == "data_url"
     assert model_input["data"] == "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
-    assert set(model_input) == {"type", "role", "mime_type", "encoding", "data"}
-    assert image["content"]["selected_frames"][0]["role"] == "phase_start"
+    assert set(model_input) == {"type", "input_id", "role", "usage", "mime_type", "encoding", "data"}
+    assert image["content"]["selected_frames"][0]["input_id"] == model_input["input_id"]
+    assert image["content"]["selected_frames"][0]["role"] == "current_observation"
     assert image["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)
     assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
     assert image["content"]["visual_evidence"]["attached_image_count"] == 1
@@ -396,7 +422,14 @@ def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
         return {
             "parsed": {
                 "visual_description": {
-                    "phase": {"name": "search_landmark", "meaning": "寻找入口候选"},
+                    "phase": {
+                        "name": "search_landmark",
+                        "goal": "identify the entrance candidate",
+                        "done_when": ["entrance candidate is visible"],
+                        "observe": ["latest_observation"],
+                        "continue_when": ["entrance identity is unclear"],
+                        "metrics": [],
+                    },
                     "phase_relevance": "可见建筑底层入口候选。",
                     "scene_summary": "建筑底层入口候选位于画面中景。",
                     "spatial_overview": "midground-center: 建筑底层开口。",
@@ -441,7 +474,16 @@ def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
         caption_client=caption_client,
     ).build(
         MemorySourceBundle(memory),
-        make_stage_context(current_phase={"name": "search_landmark", "meaning": "寻找入口候选"}),
+        make_stage_context(
+            current_phase={
+                "name": "search_landmark",
+                "goal": "identify the entrance candidate",
+                "done_when": ["entrance candidate is visible"],
+                "observe": ["latest_observation"],
+                "continue_when": ["entrance identity is unclear"],
+                "metrics": [],
+            }
+        ),
     ).to_dict()
 
     model_input = fragment["model_inputs"][0]
@@ -634,6 +676,8 @@ def test_default_modules_describe_their_outputs():
     assert "selected_frames" in descriptions["image"]["content_fields"]
     assert "latest_pose" in descriptions["pose"]["content_fields"]
     assert "recent_actions" in descriptions["action"]["content_fields"]
+    assert "motion_history_summary" in descriptions["action"]["content_fields"]
+    assert "motion_history_summary_sources" in descriptions["action"]["metadata_fields"]
     assert "recalled_map_memories" in descriptions["map"]["content_fields"]
 
 

@@ -121,9 +121,9 @@ def _latest_rgb(metadata: dict[str, Any]) -> dict[str, Any] | None:
     selected = metadata.get("selected_frame_metadata", [])
     if isinstance(selected, list):
         for frame in selected:
-            if isinstance(frame, dict) and frame.get("role") in {"latest", "latest_observation"}:
+            if isinstance(frame, dict) and frame.get("role") in {"current_observation", "latest", "latest_observation"}:
                 return _restore_frame_metadata(frame)
-        if len(selected) == 1 and isinstance(selected[0], dict) and selected[0].get("role") == "phase_start":
+        if len(selected) == 1 and isinstance(selected[0], dict) and selected[0].get("role") in {"phase_start_reference", "phase_start"}:
             return _restore_frame_metadata(selected[0])
     return None
 

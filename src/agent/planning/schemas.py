@@ -6,7 +6,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.agent.messages import AgentMessage
-from src.agent.phase import PhaseTransition
 
 ACTION_WINDOW_SCOPE_CURRENT_PHASE = "current_phase_only"
 
@@ -104,7 +103,6 @@ class ActionWindow:
 class ShortHorizonPlan:
     phase: str
     steps: list[PlannedStep]
-    phase_transition: PhaseTransition = field(default_factory=PhaseTransition.default_advance)
     action_window: ActionWindow = field(default_factory=ActionWindow.default)
     agent_messages: list[AgentMessage] = field(default_factory=list)
 
@@ -113,22 +111,13 @@ class ShortHorizonPlan:
         cls,
         data: dict[str, Any],
         *,
-        require_phase_transition: bool = False,
         require_action_window: bool = False,
         require_agent_messages: bool = False,
     ) -> "ShortHorizonPlan":
-        if require_phase_transition and "phase_transition" not in data:
-            raise ValueError("ShortHorizonPlan response requires phase_transition")
         if require_action_window and "action_window" not in data:
             raise ValueError("ShortHorizonPlan response requires action_window")
         if require_agent_messages and "agent_messages" not in data:
             raise ValueError("ShortHorizonPlan response requires agent_messages")
-        transition_data = data.get("phase_transition")
-        transition = (
-            PhaseTransition.from_dict(dict(transition_data))
-            if transition_data is not None
-            else PhaseTransition.default_advance()
-        )
         action_window_data = data.get("action_window")
         action_window = (
             ActionWindow.from_dict(dict(action_window_data))
@@ -143,7 +132,6 @@ class ShortHorizonPlan:
         return cls(
             phase=str(data.get("phase", "")).strip(),
             steps=[PlannedStep.from_dict(dict(item)) for item in data.get("steps", [])],
-            phase_transition=transition,
             action_window=action_window,
             agent_messages=[AgentMessage.from_dict(dict(item)) for item in messages_data],
         )
@@ -152,7 +140,6 @@ class ShortHorizonPlan:
         return {
             "phase": self.phase,
             "steps": [step.to_dict() for step in self.steps],
-            "phase_transition": self.phase_transition.to_dict(),
             "action_window": self.action_window.to_dict(),
             "agent_messages": [message.to_dict() for message in self.agent_messages],
         }

@@ -64,7 +64,6 @@ class ModelActionPlanner:
         response = self._call_openai_compatible(context)
         plan = ShortHorizonPlan.from_dict(
             _without_phase_transition(response),
-            require_phase_transition=False,
             require_action_window=True,
             require_agent_messages=True,
         )
@@ -172,7 +171,6 @@ class ModelActionPlanner:
             try:
                 repaired_plan = ShortHorizonPlan.from_dict(
                     _without_phase_transition(repaired_plan_data),
-                    require_phase_transition=False,
                     require_action_window=True,
                     require_agent_messages=True,
                 )

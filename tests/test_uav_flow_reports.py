@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from evaluation.benchmarks.uav_flow.reports import (
@@ -162,7 +163,7 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                     "current_phase": {"name": "p"},
                     "safety_constraints": {"yaw_scan_remaining_deg": 15.0},
                     "observation_policy": {"mode": "automatic"},
-                    "phase_completion_criteria": [{"kind": "visual_alignment"}],
+                    "phase_metrics": [],
                     "phase_execution_summary": {"window_count": 0},
                     "fragments": [
                         {
@@ -175,6 +176,34 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                                 {
                                     "type": "image",
                                     "role": "latest_observation",
+                                    "data": "<omitted encoded image data: 123 chars>",
+                                }
+                            ],
+                        },
+                        {
+                            "name": "action",
+                            "content": {
+                                "action_trend": {
+                                    "motion_pattern": {"type": "alternating_yaw"},
+                                }
+                            },
+                        },
+                    ],
+                },
+                "model_context": {
+                    "active_instruction": "Turn to the direction of the person.",
+                    "current_phase": {"name": "p"},
+                    "phase_metrics": [],
+                    "phase_execution_summary": {"window_count": 0},
+                    "fragments": [
+                        {
+                            "name": "image",
+                            "model_inputs": [
+                                {
+                                    "type": "image",
+                                    "input_id": "image_1_current_observation",
+                                    "role": "current_observation",
+                                    "usage": "Use as the current visual evidence for this decision.",
                                     "data": "<omitted encoded image data: 123 chars>",
                                 }
                             ],
@@ -213,8 +242,8 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                 "active_instruction": "Turn to the direction of the person.",
                 "current_phase": {"name": "p"},
                 "phase_window_count": 1,
-                "phase_completion_criteria": [{"kind": "visual_alignment"}],
-                "action_window": {"intent": "judge current phase"},
+                "phase_metrics": [],
+                "action_window": {"intent": "raw action window should stay out of model-facing block"},
                 "phase_execution_summary": {"window_count": 1},
                 "action_plan": {"steps": [{"tool": "uav.turn_relative", "args": {"yaw_deg": -10}}]},
                 "executed_steps": [
@@ -227,7 +256,29 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                 ],
                 "measurements": {"yaw_delta_deg": -10},
                 "safety_intervention_summary": {"intervention_count": 0},
+                "yaw_scan_remaining_deg": 340,
                 "visual_phase_budget_exhausted": False,
+                "model_context": {
+                    "active_instruction": "Turn to the direction of the person.",
+                    "model_context_marker": "phase_model_context_wins",
+                    "executed_steps": [
+                        {
+                            "phase": "p",
+                            "step_index": 0,
+                            "tool": "uav.turn_relative",
+                            "args": {"yaw_deg": -10},
+                            "ok": True,
+                            "message": "turned",
+                        }
+                    ],
+                    "observation_after": {
+                        "source": "automatic_phase_window",
+                        "modalities": ["rgb"],
+                        "has_rgb": True,
+                        "has_depth": False,
+                    },
+                    "fragments": [],
+                },
                 "fragments": [
                     {
                         "name": "image",
@@ -243,6 +294,35 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                 ],
             },
             ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "model_phase_transition_judged",
+                        "payload": {
+                            "phase": "p",
+                            "decision": "continue_current_phase",
+                            "reason": "target still unclear",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "event": "phase_transition_continued",
+                        "payload": {
+                            "phase": "p",
+                            "decision": "continue_current_phase",
+                            "reason": "target still unclear",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
         ),
         encoding="utf-8",
     )
@@ -344,12 +424,21 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
     assert "Action Planner Debug" in case_html
     assert "Model-Facing Context" in case_html
     assert "Phase Judge Debug" in case_html
+    assert "Runtime Phase Transition Events" in case_html
+    assert "model_phase_transition_judged" in case_html
+    assert "phase_transition_continued" in case_html
+    assert "Planner output is only the current action window" in case_html
     assert "Judge Context Summary" in case_html
     assert "Executed Window" in case_html
     assert "open full phase judge json" in case_html
+    phase_model_blocks = re.findall(r"<h3>Model-Facing Context</h3>\s*<pre>(.*?)</pre>", case_html, flags=re.S)
+    assert any("phase_model_context_wins" in block for block in phase_model_blocks)
+    assert all("raw action window should stay out of model-facing block" not in block for block in phase_model_blocks)
+    assert all("yaw_scan_remaining_deg" not in block for block in phase_model_blocks)
     assert "debug raw" in case_html
     assert "debug safe" in case_html
-    assert "latest_observation" in case_html
+    assert "image_1_current_observation" in case_html
+    assert "current_observation" in case_html
     assert "alternating_yaw" in case_html
     assert "yaw_scan_remaining_deg" not in case_html
     assert "skill_selection_debug_marker" not in case_html

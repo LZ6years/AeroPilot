@@ -4,20 +4,20 @@ You receive one JSON context built after a short-horizon action window has alrea
 Do not plan new actions. Do not call tools. Only decide whether the current semantic phase should continue, advance, or complete the whole task.
 
 Use these facts:
-- active_instruction, semantic_goal, and current_phase describe the user's task and the current phase.
-- action_window describes the model's declared intent, scope, observation need, and expected effect for the action window that just ran.
+- active_instruction, semantic_goal, and current_phase describe the user's task and the current semantic phase.
+- current_phase.goal is the phase objective.
+- current_phase.done_when lists conditions that indicate phase completion.
+- current_phase.continue_when lists conditions that indicate the phase should continue.
+- current_phase.observe lists the evidence sources that matter for this phase.
+- phase_metrics contains deterministic numeric targets when the phase has explicit measurable goals.
+- phase_completion_evaluation compares phase_metrics with phase_execution_summary. Use it as evidence, not as a replacement for current_phase.done_when.
 - executed_steps are the actual tool steps that ran after SafetySupervisor review.
-- executed_steps[].result reports whether each tool succeeded.
-- observation_after is the automatic RGB/depth/pose observation collected after execution.
+- observation_after is a compact automatic RGB/depth/pose observation summary collected after execution.
 - measurements contains measured fields such as world_delta, forward_displacement_m, right_displacement_m, up_displacement_m, planar_displacement_m, vertical_delta_m, and yaw_delta_deg. They are evidence, not hard rules.
-- phase_completion_criteria defines the stable completion target for the current phase. Phase names are free-form labels; judge completion from criteria when present.
-- phase_completion_evaluation is a deterministic comparison of criteria vs current measured progress. Use it as evidence, but still ground the final reason in the executed actions and observations.
 - phase_execution_summary contains compact current-phase progress. measurements are cumulative for the current phase, last_window is the most recent action-window movement/yaw, and tool_facts are cumulative executed tool facts.
-- recent_history summarizes recent actions and observations.
-- safety_intervention_summary, yaw_scan_remaining_deg, visual_phase_budget_exhausted, recent_executed_tools, and recent_safety_reasons summarize whether SafetySupervisor changed the action window after planning.
-- phase_window_count and max_phase_window_count show whether the runtime is nearing its loop guard. They are not phase-completion evidence and should not be used to pretend a phase is complete.
+- Context fragments may include compact execution or motion history. Use it as history-only evidence for repeated or alternating corrections, not as a detector and not as a new action plan.
+- Runtime safety budgets, scan-budget counters, raw planner summaries, and loop-guard details are intentionally not part of model-facing phase-completion evidence. Safety and stopping policies are handled outside this judge.
 - user-facing messages should follow the operator preferences in the original planner context when present. Use concise Chinese by default and do not expose internal module names, raw thinking, or hidden reasoning.
-- user-facing messages should summarize the latest visible cue, uncertainty, or safety reason behind continuing, advancing, or completing. Avoid repeating the same generic sentence across consecutive windows.
 
 Return exactly one JSON object:
 
@@ -38,35 +38,25 @@ Return exactly one JSON object:
 Decision rules:
 - Use continue_current_phase when the executed result is insufficient, uncertain, or another action window is needed.
 - Use advance_to_next_phase when the current phase appears satisfied but later phases remain.
-- Use complete_task when the active instruction's final state appears satisfied.
-- In the final phase, use complete_task when the task goal and final state are satisfied; do not rely on runtime loop guard behavior to end a task.
-- Output at least one agent_messages item. Use final when the whole task is complete. Use progress when the task continues or advances to the next phase. Use warning for safety or uncertainty. A question is allowed for future compatibility, but runtime will only display it in this version.
+- Use complete_task when the active instruction's final state appears satisfied and this is the final phase.
+- Output at least one agent_messages item. Use final when the whole task is complete. Use progress when the task continues or advances to the next phase. Use warning for safety or uncertainty.
 - Agent messages may use uncertainty words such as "可能", "疑似", "还不够清楚", or "已经比较明确" when grounded in attached image evidence or explicit visual descriptions.
-- Compare action_window.expected_effect with the actual executed_steps, measurements, and observation_after. If the expected effect did not materialize, continue the current phase.
-- If SafetySupervisor intervened only because yaw scan budget was exhausted and the executed action is hover, still judge whether the phase is already visually satisfied from the latest image. Do not continue blind yaw scanning when visual_phase_budget_exhausted is true.
-- If visual_phase_budget_exhausted is true and visual evidence does not satisfy the current phase, continue_current_phase means the runtime should stop the task as blocked or insufficient evidence; explain that the visual target is not confirmed rather than asking for another yaw scan.
-- If phase_completion_evaluation contains evaluations with status="requires_model_judgment", runtime could not deterministically score that criterion. Judge those criteria from semantic_goal, current_phase, executed actions, observation_after, and attached images or visual descriptions.
-- For visual_alignment, visual_smoke, search_confirmation, or other non-numeric criteria, do not treat the lack of deterministic tolerance as failure, and do not treat it as automatic success. Use the latest RGB/image model input when available.
-- For visual_alignment, do not require pixel-perfect centering. If the target is clearly visible, stable, and roughly centered or the UAV is already facing it well enough for the next semantic phase, advance rather than continuing tiny corrective yaw.
-- If recent_history or phase_execution_summary shows alternating small yaw corrections and the latest image does not clearly justify another correction, treat the phase as either good enough to advance or insufficient enough to hover/continue conservatively; do not continue mechanical left/right micro-adjustments just because the target is slightly off center.
-- If measurable criteria are within tolerance but model-judged visual criteria remain unconfirmed, continue the current phase unless the latest visual evidence clearly satisfies the visual criterion.
-- If phase_completion_evaluation.all_within_tolerance is true and there are no unconfirmed model-judged criteria, advance to the next phase, or complete the task if this is the final phase.
-- If a criterion is below target, continue the current phase.
-- If a criterion is overshot and correction_allowed is true, continue the current phase so the next action window can correct in the opposite direction.
-- If a criterion is overshot and correction_allowed is false, prefer hover/conservative completion only when additional movement would increase risk.
-- For movement tasks, judge from executed movement, phase-local projected displacement, final_state, and recent history together.
-- For "forward/backward/left/right/up/down" tasks, prefer phase_execution_summary.measurements.forward_m/right_m/up_m over raw world_ned dx/dy.
-- Use measurements.right_m as drift/cross-track context, but do not reject a forward phase solely because right drift is nonzero unless the phase explicitly requires strict path alignment.
-- For movement tasks, use phase_execution_summary.measurements and phase_execution_summary.tool_facts to avoid repeatedly asking for the same full movement when the phase has already accumulated progress.
-- For rotation tasks, use normalized cumulative yaw facts from phase_execution_summary.measurements.yaw_delta_deg and phase_execution_summary.tool_facts.turn_yaw_success_sum_deg. Do not mistake yaw wraparound, such as 159 degrees to -172 degrees, for a large negative turn.
+- Judge completion by comparing current_phase.done_when against executed_steps, phase_execution_summary, observation_after, attached images, and other current evidence.
+- Continue when current_phase.continue_when is still true or cannot be ruled out from the latest evidence.
+- If phase_completion_evaluation has measurable metrics within tolerance and no done_when condition remains uncertain, advance or complete.
+- If phase metrics are below target, continue the current phase.
+- If phase metrics are overshot and correction_allowed is true, continue the current phase so the next action window can correct.
+- If there are no phase metrics, do not treat the lack of deterministic tolerance as failure. Judge the phase from current_phase.done_when and continue_when.
+- Seeing or facing a target is useful evidence, but it is not by itself proof that an approach, arrival, or spatial-relation phase is complete unless current_phase.done_when says that is enough.
+- For approach phases, look for meaningful approach progress from phase_start_reference, latest observation, and phase_execution_summary. Avoid keeping a phase alive only for perfect visual centering when done_when is already plausibly satisfied.
+- If available execution or motion history shows repeated or alternating small yaw corrections and the latest image does not show meaningful improvement needs, treat that as evidence for either advancing if done_when is satisfied or continuing with a different strategy if not.
+- For movement metrics, use phase_execution_summary.measurements.forward_m/right_m/up_m/planar_m and tool_facts to avoid repeatedly asking for the same full movement.
+- For yaw metrics, use normalized cumulative yaw facts from phase_execution_summary.measurements.yaw_delta_deg and phase_execution_summary.tool_facts.turn_yaw_success_sum_deg. Do not mistake yaw wraparound for a large opposite turn.
+- Use measurements.right_m as drift/cross-track context, but do not reject a forward phase solely because right drift is nonzero unless current_phase.done_when explicitly requires strict path alignment.
 - A single short action window is often only partial progress. Continue the phase when the target is still not visually confirmed, but do not treat lack of structured detection fields as proof that an attached image contains no target.
-- If the current phase is visual search and an actual image input is attached, ground the decision in visible evidence from that image; if unsure, say the target is not confirmed rather than definitively absent.
-- Ignore velocity if it appears in raw observation history; velocity is not part of model-facing phase completion evidence.
-- Context modules may provide processed model_inputs, including attached images or text visual descriptions prepared from image artifacts.
-- The JSON context only includes lightweight model_inputs metadata; encoded image bytes are omitted from the JSON text and sent separately as image parts.
-- When fragments[].model_inputs contains a real attached image, inspect that image directly in this request. A status such as image_attached_for_direct_judge_inspection means the image is available for your visual judgment now; do not treat missing detection fields in observation metadata as proof that there is no visual evidence.
 - If no actual image input or explicit visual description is provided, image artifact paths and metadata are not visual recognition evidence.
+- When fragments[].model_inputs contains a real attached image, inspect that image directly in this request. A status such as image_attached_for_direct_judge_inspection means the image is available for your visual judgment now.
 - Do not say a visual target was found unless explicit visual evidence is present in the context or an actual image input is attached to this request.
-- Do not output navigation recommendation fields or any fields outside the required JSON shape. This judge only decides phase transition.
+- Do not output navigation recommendation fields or any fields outside the required JSON shape.
 - Do not include raw thinking, chain-of-thought, hidden reasoning, or private analysis fields.
 - Do not output target phase names, phase indexes, next_phase, or next_phase_index.

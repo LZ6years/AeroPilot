@@ -31,7 +31,7 @@ def normalize_visual_description(
         "source_image": str(data.get("source_image") or image_path),
         "phase": {
             "name": _text_field(phase.get("name") or stage_phase.get("name")),
-            "meaning": _text_field(phase.get("meaning") or stage_phase.get("meaning")),
+            "goal": _text_field(phase.get("goal") or stage_phase.get("goal")),
         },
         "phase_relevance": _text_field(data.get("phase_relevance")),
         "scene_summary": _text_field(data.get("scene_summary")),

@@ -399,9 +399,24 @@ def build_preview_markdown(artifacts: DemoArtifacts) -> str:
             ),
             "```",
             "",
-            "## 模型阶段推进判断",
+            "## Phase Transition Boundary",
+            "",
+            "ShortHorizonPlan no longer carries a planner-side phase_transition. "
+            "Runtime applies phase changes only from the post-action phase judge.",
+            "",
             "```json",
-            json.dumps(artifacts.validated_plan.phase_transition.to_dict(), indent=2, ensure_ascii=False),
+            json.dumps(
+                {
+                    "planner_side_phase_transition": "removed",
+                    "authoritative_events": [
+                        "model_phase_transition_judged",
+                        "phase_transition_applied",
+                        "phase_transition_continued",
+                    ],
+                },
+                indent=2,
+                ensure_ascii=False,
+            ),
             "```",
             "",
             "## SafetySupervisor Result",

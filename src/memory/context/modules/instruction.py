@@ -23,7 +23,6 @@ class DefaultInstructionContextModule(ContextModule):
         memory = sources.flight_memory
         reader = memory.memory_reader
         plan = stage_context.semantic_plan
-        current_phase = stage_context.current_phase
         raw_history = reader.read_refs(memory.instruction_history[-self.max_items :]) if reader else []
         history_summary = _summarize_instruction_history(
             raw_history,
@@ -31,7 +30,6 @@ class DefaultInstructionContextModule(ContextModule):
             max_items=self.max_items,
         )
         current_instruction = _current_instruction_summary(memory.active_instruction, plan)
-        current_phase_summary = _phase_summary(current_phase)
         goals = [
             {
                 "type": "mission_goal",
@@ -39,8 +37,6 @@ class DefaultInstructionContextModule(ContextModule):
                 "source": self.__class__.__name__,
             }
         ]
-        if current_phase_summary:
-            goals.append({"type": "phase_goal", "value": current_phase_summary, "source": self.__class__.__name__})
         return ContextFragment(
             name=self.name,
             enabled=True,
@@ -48,7 +44,6 @@ class DefaultInstructionContextModule(ContextModule):
             content={
                 "current_instruction": current_instruction,
                 "instruction_history": history_summary,
-                "current_phase": current_phase_summary,
                 "uncertainties": _compact_uncertainties(plan.get("uncertainties", [])),
             },
             goals=goals,
@@ -59,22 +54,20 @@ class DefaultInstructionContextModule(ContextModule):
 
     def describe_output(self) -> dict[str, Any]:
         return {
-            "summary": "Compact current instruction, recent instruction summaries, and current phase intent.",
+            "summary": "Compact current instruction and recent instruction summaries.",
             "content_fields": {
                 "current_instruction": "Compact structured summary of the active instruction and parsed mission goal.",
                 "instruction_history": "Recent instruction summaries; full semantic plans remain in memory/debug artifacts.",
-                "current_phase": "Compact current phase name and meaning without duplicating full completion criteria.",
                 "uncertainties": "Known uncertainties from task parsing that should make planning more conservative.",
             },
             "goal_fields": {
                 "mission_goal": "Overall parsed mission goal.",
-                "phase_goal": "The current phase objective that should guide the next 1-3 actions.",
             },
         }
 
 
 def _current_instruction_summary(instruction: str, plan: dict[str, Any]) -> dict[str, Any]:
-    goal = plan.get("goal", {}) if isinstance(plan.get("goal"), dict) else {}
+    goal = plan.get("task_goal", {}) if isinstance(plan.get("task_goal"), dict) else {}
     return {
         "text": instruction,
         "intent": plan.get("intent", ""),
@@ -98,7 +91,7 @@ def _summarize_instruction_history(
             "id": record.get("id"),
             "instruction": instruction,
             "intent": plan.get("intent", ""),
-            "target": _target_label(plan.get("goal", {})),
+            "target": _target_label(plan.get("task_goal", {})),
             "status": "active" if instruction and instruction == active_instruction else "previous",
         }
         if not summary["target"]:
@@ -111,16 +104,11 @@ def _compact_goal(goal: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(goal, dict):
         return {}
     compact: dict[str, Any] = {}
-    target = goal.get("target")
-    if isinstance(target, dict):
-        target_summary: dict[str, Any] = {}
-        if target.get("description"):
-            target_summary["description"] = target.get("description")
-        attributes = target.get("attributes")
-        if isinstance(attributes, dict) and attributes.get("category"):
-            target_summary["category"] = attributes.get("category")
-        if target_summary:
-            compact["target"] = target_summary
+    if goal.get("target"):
+        compact["target"] = goal.get("target")
+    attributes = goal.get("target_attributes")
+    if isinstance(attributes, dict) and attributes:
+        compact["target_attributes"] = dict(attributes)
     if goal.get("final_state"):
         compact["final_state"] = goal.get("final_state")
     return compact
@@ -129,24 +117,9 @@ def _compact_goal(goal: dict[str, Any]) -> dict[str, Any]:
 def _target_label(goal: Any) -> str:
     if not isinstance(goal, dict):
         return ""
-    target = goal.get("target")
-    if isinstance(target, dict):
-        attributes = target.get("attributes")
-        if isinstance(attributes, dict) and attributes.get("category"):
-            return str(attributes.get("category"))
-        if target.get("description"):
-            return str(target.get("description"))
+    if goal.get("target"):
+        return str(goal.get("target"))
     return ""
-
-
-def _phase_summary(phase: dict[str, Any] | None) -> dict[str, Any]:
-    if not isinstance(phase, dict):
-        return {}
-    summary: dict[str, Any] = {}
-    for key in ("index", "total", "name", "meaning"):
-        if key in phase:
-            summary[key] = phase[key]
-    return summary
 
 
 def _compact_uncertainties(items: Any, max_items: int = 5) -> list[Any]:

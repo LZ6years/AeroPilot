@@ -1,4 +1,9 @@
-"""Schemas for semantic task parsing."""
+"""Schemas for semantic task parsing.
+
+The semantic plan is a compact model-facing contract. It describes what each
+phase means and how completion should be judged, without encoding primitive UAV
+tools or forcing every visual/spatial task into fixed criterion enums.
+"""
 
 from __future__ import annotations
 
@@ -7,15 +12,17 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class SemanticTarget:
-    description: str
-    attributes: dict[str, Any] = field(default_factory=dict)
+class TaskGoal:
+    target: str
+    final_state: str
+    target_attributes: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "SemanticTarget":
+    def from_dict(cls, data: dict[str, Any]) -> "TaskGoal":
         return cls(
-            description=str(data.get("description", "")).strip(),
-            attributes=dict(data.get("attributes", {})),
+            target=str(data.get("target", "")).strip(),
+            target_attributes=dict(data.get("target_attributes", {})),
+            final_state=str(data.get("final_state", "")).strip(),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -23,28 +30,15 @@ class SemanticTarget:
 
 
 @dataclass(frozen=True)
-class SemanticGoal:
-    target: SemanticTarget
-    final_state: str
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "SemanticGoal":
-        return cls(
-            target=SemanticTarget.from_dict(dict(data.get("target", {}))),
-            final_state=str(data.get("final_state", "")).strip(),
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"target": self.target.to_dict(), "final_state": self.final_state}
-
-
-@dataclass(frozen=True)
 class SemanticPhase:
     index: int
     total: int
     name: str
-    meaning: str
-    completion_criteria: list[dict[str, Any]] = field(default_factory=list)
+    goal: str
+    done_when: list[str] = field(default_factory=list)
+    observe: list[str] = field(default_factory=list)
+    continue_when: list[str] = field(default_factory=list)
+    metrics: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], index: int | None = None, total: int | None = None) -> "SemanticPhase":
@@ -54,45 +48,42 @@ class SemanticPhase:
             index=int(phase_index),
             total=int(phase_total),
             name=str(data.get("name", "")).strip(),
-            meaning=str(data.get("meaning", "")).strip(),
-            completion_criteria=_criteria_from_dict(data.get("completion_criteria")),
+            goal=str(data.get("goal", "")).strip(),
+            done_when=_string_list(data.get("done_when")),
+            observe=_string_list(data.get("observe")),
+            continue_when=_string_list(data.get("continue_when")),
+            metrics=_dict_list(data.get("metrics")),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
-def _criteria_from_dict(value: Any) -> list[dict[str, Any]]:
-    if isinstance(value, list):
-        return [dict(item) for item in value if isinstance(item, dict)]
-    if isinstance(value, dict):
-        return [dict(value)]
-    return []
-
-
 @dataclass(frozen=True)
 class SemanticPlan:
     intent: str
-    goal: SemanticGoal
+    task_goal: TaskGoal
     phases: list[SemanticPhase]
     uncertainties: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SemanticPlan":
+        phases = data.get("phases", [])
         return cls(
             intent=str(data.get("intent", "")).strip(),
-            goal=SemanticGoal.from_dict(dict(data.get("goal", {}))),
+            task_goal=TaskGoal.from_dict(dict(data.get("task_goal", {}))),
             phases=[
-                SemanticPhase.from_dict(item, index=index, total=len(data.get("phases", [])))
-                for index, item in enumerate(data.get("phases", []), start=1)
+                SemanticPhase.from_dict(item, index=index, total=len(phases))
+                for index, item in enumerate(phases, start=1)
+                if isinstance(item, dict)
             ],
-            uncertainties=[str(item).strip() for item in data.get("uncertainties", [])],
+            uncertainties=_string_list(data.get("uncertainties")),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "intent": self.intent,
-            "goal": self.goal.to_dict(),
+            "task_goal": self.task_goal.to_dict(),
             "phases": [phase.to_dict() for phase in self.phases],
             "uncertainties": list(self.uncertainties),
         }
@@ -112,3 +103,17 @@ class TaskParseResult:
             "validation_ok": self.validation_ok,
             "plan": self.plan.to_dict(),
         }
+
+
+def _string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _dict_list(value: Any) -> list[dict[str, Any]]:
+    if isinstance(value, list):
+        return [dict(item) for item in value if isinstance(item, dict)]
+    if isinstance(value, dict):
+        return [dict(value)]
+    return []

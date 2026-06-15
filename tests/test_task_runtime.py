@@ -14,7 +14,7 @@ from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
 from src.agent.safety import SafetyDecision, SafetySupervisor
-from src.agent.semantic.schemas import SemanticGoal, SemanticPhase, SemanticPlan, SemanticTarget, TaskParseResult
+from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal, TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter
 from src.env_client.local_client import LocalEnvClient
@@ -59,42 +59,49 @@ def make_single_phase_parse_result(
         parser_mode="test",
         plan=SemanticPlan(
             intent="test_single_phase",
-            goal=SemanticGoal(
-                target=SemanticTarget("single phase target", {}),
+            task_goal=TaskGoal(
+                target="single phase target",
                 final_state="done",
             ),
-            phases=[SemanticPhase(1, 1, phase_name, "complete the single test phase", [])],
+            phases=[
+                SemanticPhase(
+                    index=1,
+                    total=1,
+                    name=phase_name,
+                    goal="complete the single test phase",
+                    done_when=["single test phase is complete"],
+                    observe=["latest_observation", "phase_execution_summary"],
+                    continue_when=["single test phase is not complete"],
+                    metrics=[],
+                )
+            ],
         ),
     )
 
 
-def make_visual_alignment_parse_result(
+def make_visual_target_parse_result(
     instruction: str = "turn to face the visible target",
-    phase_name: str = "visual_align_target",
+    phase_name: str = "orient_visual_target",
 ) -> TaskParseResult:
     return TaskParseResult(
         instruction=instruction,
         parser_mode="test",
         plan=SemanticPlan(
-            intent="visual_alignment",
-            goal=SemanticGoal(
-                target=SemanticTarget("visible target", {}),
+            intent="visual_target_orientation",
+            task_goal=TaskGoal(
+                target="visible target",
                 final_state="target is visually aligned",
             ),
             phases=[
                 SemanticPhase(
-                    1,
-                    1,
-                    phase_name,
-                    "align the UAV view with the target",
-                    [
-                        {
-                            "kind": "visual_alignment",
-                            "axis": "yaw",
-                            "target": "visible target",
-                            "correction_allowed": True,
-                        }
-                    ],
+                    index=1,
+                    total=1,
+                    name=phase_name,
+                    goal="align the UAV view with the target",
+                    done_when=["visible target is identifiable", "view is roughly aligned with the target"],
+                    observe=["latest_observation", "phase_execution_summary"],
+                    continue_when=["target is not visually confirmed"],
+                    metrics=[],
                 )
             ],
         ),
@@ -120,11 +127,23 @@ def write_tiny_png(path):
 class HoverOnlyPlanner:
     planner_mode = "test"
 
+    def __init__(self) -> None:
+        self._next_transition = PhaseTransition(COMPLETE_TASK, "test planner completed final phase")
+
     def plan_next(self, state, context=None):
+        decision = COMPLETE_TASK
+        reason = "test planner completed final phase"
+        if state.current_phase_index < len(state.semantic_plan.phases) - 1:
+            decision = ADVANCE_TO_NEXT_PHASE
+            reason = "test planner completed current phase"
+        self._next_transition = PhaseTransition(decision, reason)
         return ShortHorizonPlan(
             state.current_phase_name,
             [PlannedStep.tool_step("uav.hover", {}, "test planner holds position")],
         )
+
+    def judge_phase_transition(self, phase_context):
+        return self._next_transition
 
 
 def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
@@ -150,6 +169,7 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert (run_dir / "debug/latest_observation.json").exists()
     assert (run_dir / "debug/debug_events.jsonl").exists()
     assert (run_dir / "contexts/latest_context.json").exists()
+    assert (run_dir / "contexts/latest_action_planner_model_context.json").exists()
     assert (run_dir / "state/flight_memory.json").exists()
     assert (run_dir / "memory/instructions.jsonl").exists()
     assert (run_dir / "memory/actions.jsonl").exists()
@@ -198,7 +218,7 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert "context_schema" in latest_context
     assert "image" in latest_context["context_schema"]["module_content_fields"]
     fragments = {fragment["name"]: fragment for fragment in latest_context["fragments"]}
-    assert fragments["image"]["content"]["selected_frames"][0]["role"] == "phase_start"
+    assert fragments["image"]["content"]["selected_frames"][0]["role"] == "current_observation"
     assert "lifecycle_tools_excluded" not in latest_context["allowed_action_constraints"]
     assert "recent_actions" not in flight_memory
     assert "recent_observations" not in flight_memory
@@ -367,6 +387,7 @@ def test_task_runtime_action_planner_debug_writes_redacted_context(tmp_path):
     assert debug_files
     payload = json.loads(debug_files[0].read_text(encoding="utf-8"))
     assert payload["planner_context"]["active_instruction"] == LAMP_TASK
+    assert payload["model_context"]["active_instruction"] == LAMP_TASK
     assert payload["raw_plan"]["steps"][0]["tool"] == "uav.turn_relative"
     assert payload["safe_plan"]["steps"][0]["tool"] == "uav.turn_relative"
     assert "safety_decision" in payload
@@ -451,7 +472,7 @@ def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path
     assert any(event["kind"] == "phase_transition_applied" for event in live_events)
     transition_payload = next(event["payload"] for event in live_events if event["kind"] == "phase_transition_applied")
     transition_payload_text = json.dumps(transition_payload, ensure_ascii=False)
-    assert transition_payload["phase_completion_evaluation"]["criteria_count"] == 0
+    assert transition_payload["phase_completion_evaluation"]["metrics_count"] == 0
     assert "planner_context" not in transition_payload
     assert "data:image" not in transition_payload_text
     assert "base64" not in transition_payload_text
@@ -709,7 +730,8 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     assert (run_dir / "memory/instructions.jsonl").read_text(encoding="utf-8").count("\n") >= len(instructions)
     assert fragments["instruction"]["content"]["current_instruction"]["text"] == instructions[-1]
     assert len(fragments["instruction"]["content"]["instruction_history"]) == 5
-    assert len(fragments["action"]["content"]["recent_actions"]) == 5
+    assert len(fragments["action"]["content"]["recent_actions"]) == 2
+    assert all(item["history_only"] is True for item in fragments["action"]["content"]["recent_actions"])
     assert fragments["pose"]["metadata"]["pose_history_count"] <= 3
     assert fragments["image"]["metadata"]["observation_count"] <= 3
     assert fragments["image"]["artifact_refs"]
@@ -729,12 +751,14 @@ def test_task_runtime_continue_transition_keeps_same_phase_for_next_window(tmp_p
 
         def plan_next(self, state, context=None):
             self.seen_phases.append(context["current_phase"]["name"])
-            decision = CONTINUE_CURRENT_PHASE if len(self.seen_phases) == 1 else COMPLETE_TASK
             return ShortHorizonPlan(
                 state.current_phase_name,
                 [PlannedStep.tool_step("uav.hover", {}, "hold while checking current phase")],
-                PhaseTransition(decision, "test transition"),
             )
+
+        def judge_phase_transition(self, phase_context):
+            decision = CONTINUE_CURRENT_PHASE if len(self.seen_phases) == 1 else COMPLETE_TASK
+            return PhaseTransition(decision, "test transition")
 
     run_dir = tmp_path / "continue_transition"
     recorder = AsyncRunLogger(run_dir)
@@ -770,8 +794,10 @@ def test_task_runtime_complete_transition_finishes_without_advancing_phase(tmp_p
             return ShortHorizonPlan(
                 state.current_phase_name,
                 [PlannedStep.tool_step("uav.hover", {}, "final state reached")],
-                PhaseTransition(COMPLETE_TASK, "task final state reached"),
             )
+
+        def judge_phase_transition(self, phase_context):
+            return PhaseTransition(COMPLETE_TASK, "task final state reached")
 
     run_dir = tmp_path / "complete_transition"
     recorder = AsyncRunLogger(run_dir)
@@ -823,7 +849,7 @@ def test_task_runtime_allows_judge_completion_after_yaw_budget_hover(tmp_path):
         shutdown_policy="none",
     )
 
-    state = runtime.run_parsed_task("m1", make_visual_alignment_parse_result())
+    state = runtime.run_parsed_task("m1", make_visual_target_parse_result())
     recorder.close()
 
     event_names = [record["event"] for record in load_event_records(run_dir)]
@@ -870,7 +896,7 @@ def test_task_runtime_stops_visual_phase_when_yaw_budget_exhausted_and_judge_con
         runtime_loop_guard_windows=100,
     )
 
-    state = runtime.run_parsed_task("m1", make_visual_alignment_parse_result())
+    state = runtime.run_parsed_task("m1", make_visual_target_parse_result())
     recorder.close()
 
     event_names = [record["event"] for record in load_event_records(run_dir)]
@@ -897,21 +923,41 @@ def test_task_runtime_complete_task_before_final_phase_advances_instead_of_finis
             return ShortHorizonPlan(
                 state.current_phase_name,
                 [PlannedStep.tool_step("uav.hover", {}, "hold")],
-                PhaseTransition(COMPLETE_TASK, "model tried to finish the task"),
             )
+
+        def judge_phase_transition(self, phase_context):
+            return PhaseTransition(COMPLETE_TASK, "model tried to finish the task")
 
     parse_result = TaskParseResult(
         instruction="move, then turn",
         parser_mode="test",
         plan=SemanticPlan(
             intent="test_multi_phase_completion_guard",
-            goal=SemanticGoal(
-                target=SemanticTarget("two phase target", {}),
+            task_goal=TaskGoal(
+                target="two phase target",
                 final_state="turned",
             ),
             phases=[
-                SemanticPhase(1, 1, "move_forward", "move forward", []),
-                SemanticPhase(2, 2, "rotate_right", "turn right", []),
+                SemanticPhase(
+                    index=1,
+                    total=2,
+                    name="move_forward",
+                    goal="move forward",
+                    done_when=["forward movement is complete"],
+                    observe=["phase_execution_summary"],
+                    continue_when=["forward movement is incomplete"],
+                    metrics=[],
+                ),
+                SemanticPhase(
+                    index=2,
+                    total=2,
+                    name="rotate_right",
+                    goal="turn right",
+                    done_when=["right turn is complete"],
+                    observe=["phase_execution_summary"],
+                    continue_when=["right turn is incomplete"],
+                    metrics=[],
+                ),
             ],
         ),
     )
@@ -963,20 +1009,23 @@ def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_pa
         parser_mode="test",
         plan=SemanticPlan(
             intent="navigate_by_movement",
-            goal=SemanticGoal(
-                target=SemanticTarget("position 5 meters forward", {"direction": "forward", "distance_m": 5.0}),
+            task_goal=TaskGoal(
+                target="position 5 meters forward",
+                target_attributes={"direction": "forward", "distance_m": 5.0},
                 final_state="hover_after_movement",
             ),
             phases=[
                 SemanticPhase(
-                    1,
-                    1,
-                    "move_forward",
-                    "advance forward by 5 meters",
-                    [
+                    index=1,
+                    total=1,
+                    name="move_forward",
+                    goal="advance forward by 5 meters",
+                    done_when=["forward distance reaches about five meters"],
+                    observe=["phase_execution_summary"],
+                    continue_when=["forward progress is below the target"],
+                    metrics=[
                         {
-                            "kind": "translation",
-                            "axis": "forward",
+                            "name": "forward_distance",
                             "target": 5.0,
                             "unit": "m",
                             "tolerance": 1.0,
@@ -1017,8 +1066,8 @@ def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_pa
     assert planner.judge_contexts[0]["action_window"]["intent"]
     assert "planar_displacement_m" in planner.judge_contexts[0]["measurements"]
     assert "phase_execution_summary" in planner.judge_contexts[0]
-    assert planner.judge_contexts[0]["phase_completion_criteria"][0]["axis"] == "forward"
-    assert planner.judge_contexts[0]["phase_completion_evaluation"]["criteria_count"] == 1
+    assert planner.judge_contexts[0]["phase_metrics"][0]["name"] == "forward_distance"
+    assert planner.judge_contexts[0]["phase_completion_evaluation"]["metrics_count"] == 1
     assert "velocity" not in planner.judge_contexts[0]["observation_before"].get("pose", {})
     assert "velocity" not in planner.judge_contexts[0]["observation_after"].get("pose", {})
     summary = planner.judge_contexts[0]["phase_execution_summary"]
@@ -1026,6 +1075,33 @@ def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_pa
     assert summary["window_count"] == 1
     assert summary["tool_facts"]["move_duration_by_direction_success"]["forward"] == 1.0
     assert summary["last_window"]["planar_m"] >= 0.0
+    raw_context = json.loads((run_dir / "contexts" / "latest_phase_transition_context.json").read_text(encoding="utf-8"))
+    model_context = json.loads((run_dir / "contexts" / "latest_phase_transition_model_context.json").read_text(encoding="utf-8"))
+    debug_ref = [record["payload"]["context_ref"] for record in events if record["event"] == "phase_transition_judge_context_built"][-1]
+    debug_context = json.loads((run_dir / debug_ref).read_text(encoding="utf-8"))
+    assert raw_context["action_window"]["scope"] == "current_phase_only"
+    assert raw_context["planner_context_summary"]["phase_judge_model_input_count"] >= 0
+    assert debug_context["action_window"]["scope"] == "current_phase_only"
+    assert debug_context["model_context"] == model_context
+    assert model_context["executed_steps"][0]["tool"] == "uav.move_body"
+    assert model_context["observation_after"]["has_rgb"] is True
+    for debug_key in [
+        "action_window",
+        "planner_context_summary",
+        "action_plan",
+        "safety_intervention_summary",
+        "yaw_scan_remaining_deg",
+        "visual_phase_budget_exhausted",
+        "recent_executed_tools",
+        "recent_safety_reasons",
+        "safety_interventions",
+        "recent_history",
+        "observation_before",
+        "phase_window_count",
+        "max_phase_window_count",
+    ]:
+        assert debug_key not in model_context
+    assert "frames" not in model_context["observation_after"]
 
 
 def test_task_runtime_uses_post_action_model_transition_to_complete_task(tmp_path):
@@ -1133,8 +1209,10 @@ def test_task_runtime_continue_transition_window_limit_stops_without_advancing_p
             return ShortHorizonPlan(
                 state.current_phase_name,
                 [PlannedStep.tool_step("uav.hover", {}, "keep checking current phase")],
-                PhaseTransition(CONTINUE_CURRENT_PHASE, "not enough evidence"),
             )
+
+        def judge_phase_transition(self, phase_context):
+            return PhaseTransition(CONTINUE_CURRENT_PHASE, "not enough evidence")
 
     run_dir = tmp_path / "continue_loop_guard"
     recorder = AsyncRunLogger(run_dir)
@@ -1165,6 +1243,47 @@ def test_task_runtime_continue_transition_window_limit_stops_without_advancing_p
     assert mission_state["stopped_reason"] == "runtime_loop_guard_reached"
     assert "phase_window_counts" not in mission_state
     assert "current_phase_window_count" in mission_state
+
+
+def test_task_runtime_without_post_action_judge_continues_conservatively(tmp_path):
+    class NoJudgePlanner:
+        planner_mode = "test"
+
+        def plan_next(self, state, context=None):
+            return ShortHorizonPlan(
+                state.current_phase_name,
+                [PlannedStep.tool_step("uav.hover", {}, "hold without judge")],
+            )
+
+    run_dir = tmp_path / "no_post_action_judge"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=NoJudgePlanner(),
+        shutdown_policy="none",
+        runtime_loop_guard_windows=1,
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("no judge", "final_phase"))
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+    unavailable_events = [
+        record["payload"]
+        for record in events
+        if record["event"] == "post_action_phase_judge_unavailable"
+    ]
+    assert not state.completed
+    assert state.stopped
+    assert state.stopped_reason == "runtime_loop_guard_reached"
+    assert unavailable_events
+    assert unavailable_events[-1]["reason"] == "post-action phase judge unavailable; continue current phase conservatively"
+    assert "phase_transition_continued" in event_names
+    assert "phase_transition_applied" not in event_names
 
 
 def test_post_action_phase_context_attaches_latest_rgb_model_input(tmp_path):
@@ -1221,7 +1340,8 @@ def test_post_action_phase_context_attaches_latest_rgb_model_input(tmp_path):
     assert fragment["source"] == "PostActionObservationImageContext"
     assert model_input["encoding"] == "data_url"
     assert model_input["data"].startswith("data:image/png;base64,")
-    assert set(model_input) == {"type", "role", "mime_type", "encoding", "data"}
+    assert set(model_input) == {"type", "input_id", "role", "usage", "mime_type", "encoding", "data"}
+    assert model_input["role"] == "current_observation"
     assert (
         fragment["content"]["visual_evidence"]["interpretation_status"]
         == "image_attached_for_direct_judge_inspection"
@@ -1287,13 +1407,11 @@ def test_post_action_phase_context_attaches_key_rgb_model_inputs_from_memory(tmp
     roles = [item["role"] for item in fragment["content"]["selected_frames"]]
     source_paths = [item["path"] for item in fragment["metadata"]["selected_frame_metadata"]]
     assert roles == [
-        "phase_start",
-        "latest",
-        "previous",
-        "history_anchor",
+        "current_observation",
+        "phase_start_reference",
     ]
-    assert source_paths == [paths[0], paths[5], paths[4], paths[1]]
-    assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 4
+    assert source_paths == [paths[5], paths[0]]
+    assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 2
 
 
 def test_post_action_phase_context_keeps_metadata_without_mock_or_missing_image_inputs(tmp_path):
@@ -1367,8 +1485,10 @@ def test_task_runtime_logs_contract_repair_success_and_continues_to_safety(tmp_p
             return ShortHorizonPlan(
                 state.current_phase_name,
                 [PlannedStep.tool_step("uav.hover", {}, "repaired safe hover")],
-                PhaseTransition(COMPLETE_TASK, "repair succeeded"),
             )
+
+        def judge_phase_transition(self, phase_context):
+            return PhaseTransition(COMPLETE_TASK, "repair succeeded")
 
     run_dir = tmp_path / "repair_success"
     recorder = AsyncRunLogger(run_dir)
@@ -1404,8 +1524,10 @@ def test_task_runtime_stabilizes_after_each_motion_step_before_observation(tmp_p
                     PlannedStep.tool_step("uav.move_body", {"direction": "forward", "duration": 1.0}, "move"),
                     PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10.0}, "turn"),
                 ],
-                PhaseTransition(COMPLETE_TASK, "done"),
             )
+
+        def judge_phase_transition(self, phase_context):
+            return PhaseTransition(COMPLETE_TASK, "done")
 
     run_dir = tmp_path / "stabilizes_between_steps"
     recorder = AsyncRunLogger(run_dir)

@@ -3,14 +3,27 @@
 from __future__ import annotations
 
 from src.agent.mission_state import MissionState
-from src.uav import pose_measurements
-from src.agent.semantic.schemas import SemanticGoal, SemanticPhase, SemanticPlan, SemanticTarget
+from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal
 from src.agent.semantic.task_parser import TaskParser
+from src.uav import pose_measurements
 
 
 def make_state() -> MissionState:
     result = TaskParser(mode="rule_based").parse("前面右转会有一个黑色的路灯，右转面向路灯后停下")
     return MissionState("run_test", result.instruction, result.plan)
+
+
+def movement_phase(index: int, total: int, name: str, goal: str) -> SemanticPhase:
+    return SemanticPhase(
+        index=index,
+        total=total,
+        name=name,
+        goal=goal,
+        done_when=[f"{goal} is complete"],
+        observe=["phase_execution_summary"],
+        continue_when=[f"{goal} is incomplete"],
+        metrics=[],
+    )
 
 
 def test_mission_state_advances_phase():
@@ -85,10 +98,10 @@ def test_mission_state_tracks_phase_execution_facts():
 def test_mission_state_uses_phase_index_to_separate_duplicate_phase_names():
     plan = SemanticPlan(
         intent="movement",
-        goal=SemanticGoal(SemanticTarget("move forward twice", {}), "hover_after_movement"),
+        task_goal=TaskGoal("move forward twice", "hover_after_movement"),
         phases=[
-            SemanticPhase(1, 2, "move_forward", "first forward segment"),
-            SemanticPhase(2, 2, "move_forward", "second forward segment"),
+            movement_phase(1, 2, "move_forward", "first forward segment"),
+            movement_phase(2, 2, "move_forward", "second forward segment"),
         ],
     )
     state = MissionState("run_test", "move twice", plan)
@@ -110,8 +123,8 @@ def test_mission_state_uses_phase_index_to_separate_duplicate_phase_names():
 def test_phase_local_projection_uses_phase_start_yaw():
     plan = SemanticPlan(
         intent="movement",
-        goal=SemanticGoal(SemanticTarget("move forward", {}), "hover_after_movement"),
-        phases=[SemanticPhase(1, 1, "move_forward", "move forward")],
+        task_goal=TaskGoal("move forward", "hover_after_movement"),
+        phases=[movement_phase(1, 1, "move_forward", "move forward")],
     )
     state = MissionState("run_test", "move forward", plan)
     state.record_phase_window_started()
@@ -126,8 +139,8 @@ def test_phase_local_projection_uses_phase_start_yaw():
 def test_phase_local_projection_handles_90_degree_yaw():
     plan = SemanticPlan(
         intent="movement",
-        goal=SemanticGoal(SemanticTarget("move forward", {}), "hover_after_movement"),
-        phases=[SemanticPhase(1, 1, "move_forward", "move forward")],
+        task_goal=TaskGoal("move forward", "hover_after_movement"),
+        phases=[movement_phase(1, 1, "move_forward", "move forward")],
     )
     state = MissionState("run_test", "move forward", plan)
     state.record_phase_window_started()

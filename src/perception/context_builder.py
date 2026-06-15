@@ -59,7 +59,7 @@ class ObservationContextBuilder:
             active_instruction=memory.active_instruction,
             semantic_plan=state.semantic_plan.to_dict(),
             current_phase=self._current_phase(state),
-            semantic_goal=state.semantic_plan.goal.to_dict(),
+            semantic_goal=state.semantic_plan.task_goal.to_dict(),
             safety_constraints=self._safety_constraints(state),
             allowed_action_constraints=self._allowed_action_constraints(),
             observation_policy=self._observation_policy(),
