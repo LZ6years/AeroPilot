@@ -54,7 +54,7 @@ flowchart TD
 - `ContextComposer` 只合并、排序、裁剪和加入规则。
 - `ModelActionPlanner` 只消费 `PlannerContext` 并输出 tool-only action plan。
 - `ToolContractValidator` 根据 `PlannerContext.allowed_action_constraints` 校验模型动作。
-- 阶段推进不在 action plan 内输出，而是在执行后由 runtime 构造 post-action context 给模型判断。
+- 阶段推进由 coupled planner 在同一次模型调用中和动作计划一起判断。
 
 ## 3. ContextFragment 外壳
 
@@ -162,7 +162,7 @@ ModelActionPlanner:
   基于 PlannerContext 输出 tool-only action plan
 
 TaskRuntime:
-  执行动作、自动观察，然后构造 post-action phase context
+  构造 coupled planner context，执行动作并自动观察
 
 PhaseTransition judge:
   基于执行后的 state + 历史判断 continue / advance / complete

@@ -109,13 +109,14 @@ def _run_real_skill_selection(run_dir: Path, cases_path: Path) -> dict[str, Any]
         expected_any = list(case.get("expected_any", []))
         forbidden = list(case.get("forbidden", []))
         max_selected = int(case.get("max_selected", 99))
+        skills_metadata = fragment.get("metadata", {})
         result = {
             "instruction": instruction,
             "expected_any": expected_any,
             "forbidden": forbidden,
             "max_selected": max_selected,
-            "available_skill_count": len(fragment["content"]["available_skills"]),
-            "selection": fragment["content"]["selection"],
+            "available_skill_count": len(skills_metadata.get("available_skill_names", [])),
+            "selection": skills_metadata.get("selection", {}),
             "selected_skill_names": selected,
             "expected_hit": not expected_any or bool(set(selected) & set(expected_any)),
             "forbidden_hits": sorted(set(selected) & set(forbidden)),
@@ -150,7 +151,7 @@ def _run_context_injection(run_dir: Path, rgb_path: Path) -> dict[str, Any]:
         "skills_selected_skill_names": [
             item["name"] for item in skills.get("content", {}).get("selected_skills", [])
         ],
-        "skills_selection": skills.get("content", {}).get("selection", {}),
+        "skills_selection": skills.get("metadata", {}).get("selection", {}),
         "skills_facts_count": len(skills.get("facts", [])),
         "image_recent_rgb_count": len(image.get("content", {}).get("recent_rgb_frame_metadata", [])),
         "pose_fragment_present": _fragment(context, "pose") is not None,

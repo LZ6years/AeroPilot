@@ -12,7 +12,7 @@ from src.agent.messages import AgentMessage
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
-from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.agent.planning.schemas import CoupledActionPhasePlan, PlannedStep, ShortHorizonPlan
 from src.agent.safety import SafetyDecision, SafetySupervisor
 from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal, TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
@@ -22,6 +22,7 @@ from src.env_client.schemas import MapPackage
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
+from src.runtime.context import PhaseWindowContextBuilder
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.configs.model_config import ModelConfig
 from src.uav import pose_measurements
@@ -108,6 +109,65 @@ def make_visual_target_parse_result(
     )
 
 
+def make_approach_parse_result() -> TaskParseResult:
+    return TaskParseResult(
+        instruction="approach the sunshade",
+        parser_mode="test",
+        plan=SemanticPlan(
+            intent="navigate_by_visual_landmark",
+            task_goal=TaskGoal(target="sunshade", final_state="near_sunshade"),
+            phases=[
+                SemanticPhase(
+                    index=1,
+                    total=1,
+                    name="approach_sunshade",
+                    goal="approach the sunshade",
+                    done_when=[
+                        "sunshade is clearly visible",
+                        "UAV has moved meaningfully closer to sunshade than at phase start",
+                    ],
+                    observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
+                    continue_when=["UAV has not moved closer yet"],
+                    metrics=[],
+                )
+            ],
+        ),
+    )
+
+
+def make_two_phase_parse_result() -> TaskParseResult:
+    return TaskParseResult(
+        instruction="two phase task",
+        parser_mode="test",
+        plan=SemanticPlan(
+            intent="test_two_phase",
+            task_goal=TaskGoal(target="test target", final_state="done"),
+            phases=[
+                SemanticPhase(
+                    index=1,
+                    total=2,
+                    name="phase_one",
+                    goal="finish phase one",
+                    done_when=["phase one is complete"],
+                    observe=["latest_observation", "phase_execution_summary"],
+                    continue_when=["phase one is not complete"],
+                    metrics=[],
+                ),
+                SemanticPhase(
+                    index=2,
+                    total=2,
+                    name="phase_two",
+                    goal="finish phase two",
+                    done_when=["phase two is complete"],
+                    observe=["latest_observation", "phase_execution_summary"],
+                    continue_when=["phase two is not complete"],
+                    metrics=[],
+                ),
+            ],
+        ),
+    )
+
+
 def load_event_records(run_dir):
     events = [json.loads(line) for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()]
     debug_path = run_dir / "debug" / "debug_events.jsonl"
@@ -124,26 +184,126 @@ def write_tiny_png(path):
     )
 
 
+def coupled_continue_from_short_plan(plan: ShortHorizonPlan, reason: str = "test coupled planner continues") -> CoupledActionPhasePlan:
+    return CoupledActionPhasePlan(
+        phase=plan.phase,
+        phase_decision=PhaseTransition(CONTINUE_CURRENT_PHASE, reason),
+        steps=list(plan.steps),
+        action_window=plan.action_window,
+        agent_messages=list(plan.agent_messages),
+    )
+
+
 class HoverOnlyPlanner:
     planner_mode = "test"
 
     def __init__(self) -> None:
-        self._next_transition = PhaseTransition(COMPLETE_TASK, "test planner completed final phase")
+        self._phase_calls: dict[str, int] = {}
 
-    def plan_next(self, state, context=None):
+    def plan_next_with_phase_decision(self, state, context=None):
+        phase_key = state.current_phase_key
+        calls = self._phase_calls.get(phase_key, 0)
+        self._phase_calls[phase_key] = calls + 1
+        if calls == 0:
+            return CoupledActionPhasePlan(
+                phase=state.current_phase_name,
+                phase_decision=PhaseTransition(CONTINUE_CURRENT_PHASE, "test planner records one hover window"),
+                steps=[PlannedStep.tool_step("uav.hover", {}, "test planner holds position")],
+                agent_messages=[],
+            )
         decision = COMPLETE_TASK
         reason = "test planner completed final phase"
         if state.current_phase_index < len(state.semantic_plan.phases) - 1:
             decision = ADVANCE_TO_NEXT_PHASE
             reason = "test planner completed current phase"
-        self._next_transition = PhaseTransition(decision, reason)
-        return ShortHorizonPlan(
-            state.current_phase_name,
-            [PlannedStep.tool_step("uav.hover", {}, "test planner holds position")],
+        return CoupledActionPhasePlan(
+            phase=state.current_phase_name,
+            phase_decision=PhaseTransition(decision, reason),
+            steps=[],
+            agent_messages=[],
         )
 
-    def judge_phase_transition(self, phase_context):
-        return self._next_transition
+
+class CoupledPlannerStub:
+    planner_mode = "model"
+
+    def __init__(self, decisions: list[str]) -> None:
+        self.decisions = list(decisions)
+        self.contexts = []
+        self.judge_calls = 0
+
+    def plan_next_with_phase_decision(self, state, context=None):
+        self.contexts.append(context)
+        decision = self.decisions.pop(0) if self.decisions else COMPLETE_TASK
+        if decision == CONTINUE_CURRENT_PHASE:
+            return CoupledActionPhasePlan.from_dict(
+                {
+                    "phase": state.current_phase_name,
+                    "phase_decision": {"decision": CONTINUE_CURRENT_PHASE, "reason": "need one more tool window"},
+                    "action_window": {
+                        "intent": "continue current phase with one hover",
+                        "scope": "current_phase_only",
+                        "requires_intermediate_observation": False,
+                        "expected_effect": "collect progress after a stable hover",
+                    },
+                    "agent_messages": [
+                        {
+                            "type": "progress",
+                            "content": "当前阶段还需要继续，我先保持悬停确认。",
+                            "evidence_refs": [],
+                            "confidence": "medium",
+                            "requires_user_reply": False,
+                        }
+                    ],
+                    "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+                },
+                require_agent_messages=True,
+            )
+        return CoupledActionPhasePlan.from_dict(
+            {
+                "phase": state.current_phase_name,
+                "phase_decision": {"decision": decision, "reason": f"coupled planner decided {decision}"},
+                "agent_messages": [
+                    {
+                        "type": "final" if decision == COMPLETE_TASK else "progress",
+                        "content": "阶段证据已经足够，我将切换阶段。",
+                        "evidence_refs": [],
+                        "confidence": "high",
+                        "requires_user_reply": False,
+                    }
+                ],
+                "steps": [],
+            },
+            require_agent_messages=True,
+        )
+
+
+class CoupledPlannerWithRepairEvent(CoupledPlannerStub):
+    def __init__(self) -> None:
+        super().__init__([CONTINUE_CURRENT_PHASE, COMPLETE_TASK])
+        self._repair_event_available = True
+        self.last_repair_attempts = [
+            {
+                "attempt": 1,
+                "status": "repaired",
+                "repair_context": {
+                    "phase": "final_phase",
+                    "violation": {"code": "action_window_intermediate_observation_requires_single_step"},
+                },
+                "repaired_plan": {
+                    "phase": "final_phase",
+                    "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "repaired"}],
+                },
+            }
+        ]
+
+    def plan_next_with_phase_decision(self, state, context=None):
+        result = super().plan_next_with_phase_decision(state, context)
+        if self._repair_event_available:
+            self._repair_event_available = False
+        else:
+            self.last_repair_attempts = []
+        return result
 
 
 def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
@@ -197,7 +357,7 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert "preflight_hover_completed" in event_names
     assert "initial_observation_updated" in event_names
     assert "short_horizon_planned" in event_names
-    assert "step_completed" in event_names
+    assert "tool_call_completed" in event_names
     assert "automatic_observation_policy_applied" in event_names
     assert "automatic_observation_updated" in event_names
     assert "shutdown_started" in event_names
@@ -276,6 +436,236 @@ def test_task_runtime_can_reuse_existing_parse_result(tmp_path):
     assert semantic_plan["plan"] == parse_result.plan.to_dict()
 
 
+def test_task_runtime_coupled_advance_skips_tool_and_phase_judge(tmp_path):
+    run_dir = tmp_path / "coupled_advance_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = CoupledPlannerStub([ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK])
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+        enable_action_planner_debug=True,
+    )
+
+    state = runtime.run_parsed_task("m1", make_two_phase_parse_result())
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+    debug_payload = json.loads(sorted((run_dir / "debug" / "action_planner").glob("*.json"))[0].read_text(encoding="utf-8"))
+
+    assert state.completed
+    assert planner.judge_calls == 0
+    assert "coupled_planner_phase_decided" in event_names
+    assert "model_phase_transition_judged" not in event_names
+    assert "tool_step_completed" not in event_names
+    assert debug_payload["coupled_phase_decision"]["decision"] == ADVANCE_TO_NEXT_PHASE
+    applied = [record for record in events if record["event"] == "phase_transition_applied"]
+    assert applied[0]["payload"]["transition_source"] == "coupled_planner"
+
+
+def test_task_runtime_coupled_complete_final_phase(tmp_path):
+    run_dir = tmp_path / "coupled_complete_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = CoupledPlannerStub([COMPLETE_TASK])
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    applied = [record for record in events if record["event"] == "phase_transition_applied"]
+
+    assert state.completed
+    assert planner.judge_calls == 0
+    assert applied[-1]["payload"]["decision"] == COMPLETE_TASK
+    assert applied[-1]["payload"]["transition_source"] == "coupled_planner"
+
+
+def test_task_runtime_coupled_complete_before_final_downgrades_to_advance(tmp_path):
+    run_dir = tmp_path / "coupled_downgrade_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = CoupledPlannerStub([COMPLETE_TASK, COMPLETE_TASK])
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task("m1", make_two_phase_parse_result())
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    applied = [record for record in events if record["event"] == "phase_transition_applied"]
+
+    assert state.completed
+    assert applied[0]["payload"]["original_decision"] == COMPLETE_TASK
+    assert applied[0]["payload"]["applied_decision"] == ADVANCE_TO_NEXT_PHASE
+    assert applied[0]["payload"]["transition_source"] == "coupled_planner"
+
+
+def test_task_runtime_coupled_continue_executes_tool_and_observes(tmp_path):
+    run_dir = tmp_path / "coupled_continue_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = CoupledPlannerStub([CONTINUE_CURRENT_PHASE, COMPLETE_TASK])
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+    continued = [record for record in events if record["event"] == "phase_transition_continued"]
+
+    assert state.completed
+    assert planner.judge_calls == 0
+    assert "tool_step_completed" in event_names
+    assert "automatic_observation_updated" in event_names
+    assert continued[0]["payload"]["transition_source"] == "coupled_planner"
+    assert "phase_progress_evidence" in planner.contexts[0]
+    assert "motion_progress" in planner.contexts[0]["phase_progress_evidence"]
+    assert "model_phase_transition_judged" not in event_names
+
+
+def test_task_runtime_phase_progress_evidence_marks_yaw_only_approach_progress():
+    state = MissionState(
+        run_id="run_yaw_only",
+        user_instruction="approach the sunshade",
+        semantic_plan=make_approach_parse_result().plan,
+    )
+    state.current_phase_progress = {
+        "phase_key": "1:approach_sunshade",
+        "phase": "approach_sunshade",
+        "window_count": 3,
+        "measurements": {
+            "forward_m": 0.0,
+            "right_m": 0.0,
+            "up_m": 0.0,
+            "planar_m": 0.0,
+            "yaw_delta_deg": 18.0,
+        },
+        "tool_facts": {
+            "turn_yaw_success_sum_deg": 18.0,
+            "move_duration_success_sum_sec": 0.0,
+            "tools_executed": {"uav.turn_relative": 3},
+        },
+    }
+    evidence = PhaseWindowContextBuilder().phase_progress_evidence(state)
+
+    assert evidence["motion_progress"]["has_translation"] is False
+    assert evidence["motion_progress"]["yaw_only_so_far"] is True
+    approach_support = [
+        item for item in evidence["done_when_support"] if item["requires_translation"]
+    ]
+    assert approach_support
+    assert approach_support[0]["supported_by_motion"] is False
+    assert "No successful move_body" in approach_support[0]["note"]
+
+
+def test_task_runtime_phase_progress_evidence_marks_translation_progress():
+    state = MissionState(
+        run_id="run_move",
+        user_instruction="approach the sunshade",
+        semantic_plan=make_approach_parse_result().plan,
+    )
+    state.current_phase_progress = {
+        "phase_key": "1:approach_sunshade",
+        "phase": "approach_sunshade",
+        "window_count": 1,
+        "measurements": {
+            "forward_m": 2.0,
+            "right_m": 0.0,
+            "up_m": 0.0,
+            "planar_m": 2.0,
+            "yaw_delta_deg": 0.0,
+        },
+        "tool_facts": {
+            "turn_yaw_success_sum_deg": 0.0,
+            "move_duration_success_sum_sec": 1.0,
+            "tools_executed": {"uav.move_body": 1},
+        },
+    }
+    evidence = PhaseWindowContextBuilder().phase_progress_evidence(state)
+
+    assert evidence["motion_progress"]["has_translation"] is True
+    assert evidence["motion_progress"]["yaw_only_so_far"] is False
+    approach_support = [
+        item for item in evidence["done_when_support"] if item["requires_translation"]
+    ]
+    assert approach_support[0]["supported_by_motion"] is True
+
+
+def test_task_runtime_coupled_records_contract_repair_events(tmp_path):
+    run_dir = tmp_path / "coupled_repair_event_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = CoupledPlannerWithRepairEvent()
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+
+    assert state.completed
+    assert "model_action_contract_repair_requested" in event_names
+    assert "model_action_contract_repaired" in event_names
+    assert "model_phase_transition_judged" not in event_names
+
+
+def test_task_runtime_default_mode_uses_coupled_planner_decision(tmp_path):
+    run_dir = tmp_path / "default_judge_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = HoverOnlyPlanner()
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+
+    assert state.completed
+    assert "coupled_planner_phase_decided" in event_names
+    assert "model_phase_transition_judged" not in event_names
+    applied = [record for record in events if record["event"] == "phase_transition_applied"]
+    assert applied[-1]["payload"]["transition_source"] == "coupled_planner"
+
+
 def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_path):
     class FakeModelPlanner:
         planner_mode = "model"
@@ -283,14 +673,15 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
         def __init__(self) -> None:
             self.contexts = []
 
-        def plan_next(self, state, context=None):
+        def plan_next_with_phase_decision(self, state, context=None):
             self.contexts.append(context)
-            return ShortHorizonPlan(
+            plan = ShortHorizonPlan(
                 state.current_phase_name,
                 [
                     PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 999.0}, "oversized model suggestion"),
                 ],
             )
+            return coupled_continue_from_short_plan(plan, "keep testing model plan safety review")
 
     run_dir = tmp_path / "model_planner_task_run"
     recorder = AsyncRunLogger(run_dir)
@@ -362,11 +753,12 @@ def test_task_runtime_action_planner_debug_writes_redacted_context(tmp_path):
     class OneTurnPlanner:
         planner_mode = "model"
 
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
+        def plan_next_with_phase_decision(self, state, context=None):
+            plan = ShortHorizonPlan(
                 state.current_phase_name,
                 [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 5.0}, "debug turn")],
             )
+            return coupled_continue_from_short_plan(plan, "write planner debug for current phase")
 
     run_dir = tmp_path / "planner_debug_run"
     recorder = AsyncRunLogger(run_dir)
@@ -399,19 +791,24 @@ def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path
     class MessagePlanner:
         planner_mode = "test"
 
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.hover", {}, "hold")],
-                agent_messages=[
-                    AgentMessage("progress", "我会先悬停并采集新的观察结果。", confidence="medium"),
-                ],
-            )
+        def __init__(self) -> None:
+            self.calls = 0
 
-        def judge_phase_transition(self, phase_context):
-            return PhaseTransition(
-                COMPLETE_TASK,
-                "final state reached",
+        def plan_next_with_phase_decision(self, state, context=None):
+            self.calls += 1
+            if self.calls == 1:
+                return CoupledActionPhasePlan(
+                    state.current_phase_name,
+                    PhaseTransition(CONTINUE_CURRENT_PHASE, "continue once"),
+                    [PlannedStep.tool_step("uav.hover", {}, "hold")],
+                    agent_messages=[
+                        AgentMessage("progress", "我会先悬停并采集新的观察结果。", confidence="medium"),
+                    ],
+                )
+            return CoupledActionPhasePlan(
+                state.current_phase_name,
+                PhaseTransition(COMPLETE_TASK, "final state reached"),
+                [],
                 agent_messages=[
                     AgentMessage("final", "任务完成，我已保持悬停。", confidence="high"),
                 ],
@@ -492,22 +889,26 @@ def test_task_runtime_agent_message_cache_resets_between_instructions(tmp_path):
     class InstructionMessagePlanner:
         planner_mode = "test"
 
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.hover", {}, "hold")],
-                agent_messages=[
-                    AgentMessage("progress", f"开始执行：{state.user_instruction}", confidence="medium"),
-                ],
-            )
+        def __init__(self) -> None:
+            self.calls_by_instruction = {}
 
-        def judge_phase_transition(self, phase_context):
-            return PhaseTransition(
-                COMPLETE_TASK,
-                "done",
-                agent_messages=[
-                    AgentMessage("final", "本轮完成。", confidence="high"),
-                ],
+        def plan_next_with_phase_decision(self, state, context=None):
+            calls = self.calls_by_instruction.get(state.user_instruction, 0)
+            self.calls_by_instruction[state.user_instruction] = calls + 1
+            if calls == 0:
+                return CoupledActionPhasePlan(
+                    state.current_phase_name,
+                    PhaseTransition(CONTINUE_CURRENT_PHASE, "continue once"),
+                    [PlannedStep.tool_step("uav.hover", {}, "hold")],
+                    agent_messages=[
+                        AgentMessage("progress", f"开始执行：{state.user_instruction}", confidence="medium"),
+                    ],
+                )
+            return CoupledActionPhasePlan(
+                state.current_phase_name,
+                PhaseTransition(COMPLETE_TASK, "done"),
+                [],
+                agent_messages=[AgentMessage("final", "本轮完成。", confidence="high")],
             )
 
     run_dir = tmp_path / "agent_message_cache_reset"
@@ -539,11 +940,12 @@ def test_task_runtime_passes_action_config_to_planner_context(tmp_path):
         def __init__(self) -> None:
             self.contexts = []
 
-        def plan_next(self, state, context=None):
+        def plan_next_with_phase_decision(self, state, context=None):
             self.contexts.append(context)
-            return ShortHorizonPlan(
+            return CoupledActionPhasePlan(
                 state.current_phase_name,
-                [PlannedStep.tool_step("uav.hover", {}, "capture context")],
+                PhaseTransition(COMPLETE_TASK, "context captured"),
+                [],
             )
 
     run_dir = tmp_path / "action_config_context"
@@ -657,10 +1059,11 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
                 )
             )
 
-        def _call_openai_compatible(self, context: dict):
+        def _call_coupled_action_phase_openai_compatible(self, context: dict):
             self.contexts.append(context)
             return {
                 "phase": context["current_phase"]["name"],
+                "phase_decision": {"decision": ADVANCE_TO_NEXT_PHASE, "reason": "context verification phase complete"},
                 "action_window": {
                     "intent": "hold while checking context windows",
                     "scope": "current_phase_only",
@@ -676,13 +1079,8 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
                         "requires_user_reply": False,
                     }
                 ],
-                "steps": [
-                    {"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold for context verification"},
-                ],
+                "steps": [],
             }
-
-        def judge_phase_transition(self, phase_context: dict):
-            return PhaseTransition(ADVANCE_TO_NEXT_PHASE, "context verification phase complete")
 
     instructions = [
         "右转寻找黑色路灯",
@@ -742,451 +1140,6 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     assert "model_action_planned" in [record["event"] for record in events]
 
 
-def test_task_runtime_continue_transition_keeps_same_phase_for_next_window(tmp_path):
-    class ContinueThenCompletePlanner:
-        planner_mode = "test"
-
-        def __init__(self) -> None:
-            self.seen_phases = []
-
-        def plan_next(self, state, context=None):
-            self.seen_phases.append(context["current_phase"]["name"])
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.hover", {}, "hold while checking current phase")],
-            )
-
-        def judge_phase_transition(self, phase_context):
-            decision = CONTINUE_CURRENT_PHASE if len(self.seen_phases) == 1 else COMPLETE_TASK
-            return PhaseTransition(decision, "test transition")
-
-    run_dir = tmp_path / "continue_transition"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    planner = ContinueThenCompletePlanner()
-    runtime = TaskRuntime(
-        LocalEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=planner,
-        shutdown_policy="none",
-    )
-
-    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("complete now", "final_phase"))
-    recorder.close()
-
-    event_names = [record["event"] for record in load_event_records(run_dir)]
-    assert state.completed
-    assert planner.seen_phases[:2] == [planner.seen_phases[0], planner.seen_phases[0]]
-    assert "phase_transition_continued" in event_names
-    assert "phase_transition_applied" in event_names
-
-
-def test_task_runtime_complete_transition_finishes_without_advancing_phase(tmp_path):
-    class CompletePlanner:
-        planner_mode = "test"
-
-        def __init__(self) -> None:
-            self.calls = 0
-
-        def plan_next(self, state, context=None):
-            self.calls += 1
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.hover", {}, "final state reached")],
-            )
-
-        def judge_phase_transition(self, phase_context):
-            return PhaseTransition(COMPLETE_TASK, "task final state reached")
-
-    run_dir = tmp_path / "complete_transition"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    planner = CompletePlanner()
-    runtime = TaskRuntime(
-        LocalEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=planner,
-        shutdown_policy="none",
-    )
-
-    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("post action complete", "final_phase"))
-    recorder.close()
-
-    assert state.completed
-    assert state.current_phase_index == 0
-    assert planner.calls == 1
-
-
-def test_task_runtime_allows_judge_completion_after_yaw_budget_hover(tmp_path):
-    class YawBudgetCompletePlanner:
-        planner_mode = "test"
-
-        def __init__(self) -> None:
-            self.judge_contexts = []
-
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10.0}, "scan toward target")],
-            )
-
-        def judge_phase_transition(self, phase_context):
-            self.judge_contexts.append(phase_context)
-            return PhaseTransition(COMPLETE_TASK, "latest visual evidence satisfies the phase")
-
-    run_dir = tmp_path / "yaw_budget_hover_complete"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    planner = YawBudgetCompletePlanner()
-    runtime = TaskRuntime(
-        LocalEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=planner,
-        safety=SafetySupervisor(UavSafetyConfig(max_yaw_scan_accum_deg=0.0)),
-        shutdown_policy="none",
-    )
-
-    state = runtime.run_parsed_task("m1", make_visual_target_parse_result())
-    recorder.close()
-
-    event_names = [record["event"] for record in load_event_records(run_dir)]
-    assert state.completed
-    assert not state.stopped
-    assert planner.judge_contexts
-    assert planner.judge_contexts[0]["visual_phase_budget_exhausted"] is True
-    assert planner.judge_contexts[0]["safety_intervention_summary"]["reasons"] == ["yaw_scan_budget_exceeded"]
-    assert planner.judge_contexts[0]["recent_executed_tools"] == ["uav.hover"]
-    assert "phase_transition_applied" in event_names
-    assert "phase_transition_suppressed_by_safety" not in event_names
-
-
-def test_task_runtime_stops_visual_phase_when_yaw_budget_exhausted_and_judge_continues(tmp_path):
-    class YawBudgetContinuePlanner:
-        planner_mode = "test"
-
-        def __init__(self) -> None:
-            self.calls = 0
-            self.judge_contexts = []
-
-        def plan_next(self, state, context=None):
-            self.calls += 1
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10.0}, "continue visual search")],
-            )
-
-        def judge_phase_transition(self, phase_context):
-            self.judge_contexts.append(phase_context)
-            return PhaseTransition(CONTINUE_CURRENT_PHASE, "target is not visually confirmed")
-
-    run_dir = tmp_path / "yaw_budget_visual_stop"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    planner = YawBudgetContinuePlanner()
-    runtime = TaskRuntime(
-        LocalEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=planner,
-        safety=SafetySupervisor(UavSafetyConfig(max_yaw_scan_accum_deg=0.0)),
-        shutdown_policy="none",
-        runtime_loop_guard_windows=100,
-    )
-
-    state = runtime.run_parsed_task("m1", make_visual_target_parse_result())
-    recorder.close()
-
-    event_names = [record["event"] for record in load_event_records(run_dir)]
-    assert not state.completed
-    assert state.stopped
-    assert state.stopped_reason == "visual_search_budget_exhausted"
-    assert state.stop_source == "safety_yaw_scan_budget"
-    assert planner.calls == 1
-    assert planner.judge_contexts[0]["phase_completion_evaluation"]["model_judged_count"] == 1
-    assert "visual_search_budget_exhausted" in event_names
-    assert "runtime_loop_guard_reached" not in event_names
-    assert "phase_transition_suppressed_by_safety" not in event_names
-
-
-def test_task_runtime_complete_task_before_final_phase_advances_instead_of_finishing(tmp_path):
-    class EarlyCompletePlanner:
-        planner_mode = "test"
-
-        def __init__(self) -> None:
-            self.seen_phases = []
-
-        def plan_next(self, state, context=None):
-            self.seen_phases.append(state.current_phase_name)
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.hover", {}, "hold")],
-            )
-
-        def judge_phase_transition(self, phase_context):
-            return PhaseTransition(COMPLETE_TASK, "model tried to finish the task")
-
-    parse_result = TaskParseResult(
-        instruction="move, then turn",
-        parser_mode="test",
-        plan=SemanticPlan(
-            intent="test_multi_phase_completion_guard",
-            task_goal=TaskGoal(
-                target="two phase target",
-                final_state="turned",
-            ),
-            phases=[
-                SemanticPhase(
-                    index=1,
-                    total=2,
-                    name="move_forward",
-                    goal="move forward",
-                    done_when=["forward movement is complete"],
-                    observe=["phase_execution_summary"],
-                    continue_when=["forward movement is incomplete"],
-                    metrics=[],
-                ),
-                SemanticPhase(
-                    index=2,
-                    total=2,
-                    name="rotate_right",
-                    goal="turn right",
-                    done_when=["right turn is complete"],
-                    observe=["phase_execution_summary"],
-                    continue_when=["right turn is incomplete"],
-                    metrics=[],
-                ),
-            ],
-        ),
-    )
-    run_dir = tmp_path / "early_complete_guard"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    planner = EarlyCompletePlanner()
-    runtime = TaskRuntime(
-        LocalEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=planner,
-        shutdown_policy="none",
-    )
-
-    state = runtime.run_parsed_task("m1", parse_result)
-    recorder.close()
-
-    event_records = load_event_records(run_dir)
-    event_names = [record["event"] for record in event_records]
-    applied_events = [record["payload"] for record in event_records if record["event"] == "phase_transition_applied"]
-    assert state.completed
-    assert state.current_phase_index == 1
-    assert planner.seen_phases == ["move_forward", "rotate_right"]
-    assert "phase_complete_task_downgraded" in event_names
-    assert applied_events[0]["original_decision"] == COMPLETE_TASK
-    assert applied_events[0]["applied_decision"] == ADVANCE_TO_NEXT_PHASE
-
-
-def test_task_runtime_uses_post_action_model_transition_to_continue_phase(tmp_path):
-    class PostActionContinuePlanner:
-        planner_mode = "test"
-
-        def __init__(self) -> None:
-            self.judge_contexts = []
-
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.move_body", {"direction": "forward", "duration": 1.0}, "move forward")],
-            )
-
-        def judge_phase_transition(self, phase_context):
-            self.judge_contexts.append(phase_context)
-            return PhaseTransition(CONTINUE_CURRENT_PHASE, "post-action evidence says keep moving")
-
-    parse_result = TaskParseResult(
-        instruction="向前飞行5米，然后悬停",
-        parser_mode="test",
-        plan=SemanticPlan(
-            intent="navigate_by_movement",
-            task_goal=TaskGoal(
-                target="position 5 meters forward",
-                target_attributes={"direction": "forward", "distance_m": 5.0},
-                final_state="hover_after_movement",
-            ),
-            phases=[
-                SemanticPhase(
-                    index=1,
-                    total=1,
-                    name="move_forward",
-                    goal="advance forward by 5 meters",
-                    done_when=["forward distance reaches about five meters"],
-                    observe=["phase_execution_summary"],
-                    continue_when=["forward progress is below the target"],
-                    metrics=[
-                        {
-                            "name": "forward_distance",
-                            "target": 5.0,
-                            "unit": "m",
-                            "tolerance": 1.0,
-                            "correction_allowed": True,
-                        }
-                    ],
-                )
-            ],
-        ),
-    )
-    run_dir = tmp_path / "post_action_continue"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    planner = PostActionContinuePlanner()
-    runtime = TaskRuntime(
-        LocalEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=planner,
-        shutdown_policy="none",
-        runtime_loop_guard_windows=2,
-    )
-
-    state = runtime.run_parsed_task("m1", parse_result)
-    recorder.close()
-
-    events = load_event_records(run_dir)
-    event_names = [record["event"] for record in events]
-    assert not state.completed
-    assert state.stopped
-    assert state.stopped_reason == "runtime_loop_guard_reached"
-    assert planner.judge_contexts
-    assert "phase_transition_judge_context_built" in event_names
-    assert "runtime_loop_guard_reached" in event_names
-    assert "phase_transition_window_limit_reached" in event_names
-    assert planner.judge_contexts[0]["executed_steps"][0]["step"]["tool"] == "uav.move_body"
-    assert planner.judge_contexts[0]["action_window"]["scope"] == "current_phase_only"
-    assert planner.judge_contexts[0]["action_window"]["intent"]
-    assert "planar_displacement_m" in planner.judge_contexts[0]["measurements"]
-    assert "phase_execution_summary" in planner.judge_contexts[0]
-    assert planner.judge_contexts[0]["phase_metrics"][0]["name"] == "forward_distance"
-    assert planner.judge_contexts[0]["phase_completion_evaluation"]["metrics_count"] == 1
-    assert "velocity" not in planner.judge_contexts[0]["observation_before"].get("pose", {})
-    assert "velocity" not in planner.judge_contexts[0]["observation_after"].get("pose", {})
-    summary = planner.judge_contexts[0]["phase_execution_summary"]
-    assert summary["phase"] == "move_forward"
-    assert summary["window_count"] == 1
-    assert summary["tool_facts"]["move_duration_by_direction_success"]["forward"] == 1.0
-    assert summary["last_window"]["planar_m"] >= 0.0
-    raw_context = json.loads((run_dir / "contexts" / "latest_phase_transition_context.json").read_text(encoding="utf-8"))
-    model_context = json.loads((run_dir / "contexts" / "latest_phase_transition_model_context.json").read_text(encoding="utf-8"))
-    debug_ref = [record["payload"]["context_ref"] for record in events if record["event"] == "phase_transition_judge_context_built"][-1]
-    debug_context = json.loads((run_dir / debug_ref).read_text(encoding="utf-8"))
-    assert raw_context["action_window"]["scope"] == "current_phase_only"
-    assert raw_context["planner_context_summary"]["phase_judge_model_input_count"] >= 0
-    assert debug_context["action_window"]["scope"] == "current_phase_only"
-    assert debug_context["model_context"] == model_context
-    assert model_context["executed_steps"][0]["tool"] == "uav.move_body"
-    assert model_context["observation_after"]["has_rgb"] is True
-    for debug_key in [
-        "action_window",
-        "planner_context_summary",
-        "action_plan",
-        "safety_intervention_summary",
-        "yaw_scan_remaining_deg",
-        "visual_phase_budget_exhausted",
-        "recent_executed_tools",
-        "recent_safety_reasons",
-        "safety_interventions",
-        "recent_history",
-        "observation_before",
-        "phase_window_count",
-        "max_phase_window_count",
-    ]:
-        assert debug_key not in model_context
-    assert "frames" not in model_context["observation_after"]
-
-
-def test_task_runtime_uses_post_action_model_transition_to_complete_task(tmp_path):
-    class PostActionCompletePlanner:
-        planner_mode = "test"
-
-        def __init__(self) -> None:
-            self.judge_contexts = []
-
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.hover", {}, "hold final state")],
-            )
-
-        def judge_phase_transition(self, phase_context):
-            self.judge_contexts.append(phase_context)
-            return PhaseTransition(COMPLETE_TASK, "post-action evidence satisfies final state")
-
-    run_dir = tmp_path / "post_action_complete"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    planner = PostActionCompletePlanner()
-    runtime = TaskRuntime(
-        LocalEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=planner,
-        shutdown_policy="none",
-    )
-
-    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("accumulate two windows", "rotate_right"))
-    recorder.close()
-
-    event_names = [record["event"] for record in load_event_records(run_dir)]
-    assert state.completed
-    assert state.current_phase_index == 0
-    assert planner.judge_contexts[0]["action_plan"]["steps"][0]["tool"] == "uav.hover"
-    assert "model_phase_transition_judged" in event_names
-
-
-def test_task_runtime_phase_execution_summary_accumulates_windows(tmp_path):
-    class ContinueTwiceThenCompletePlanner:
-        planner_mode = "test"
-
-        def __init__(self) -> None:
-            self.judge_contexts = []
-
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10.0}, "small yaw")],
-            )
-
-        def judge_phase_transition(self, phase_context):
-            self.judge_contexts.append(phase_context)
-            decision = COMPLETE_TASK if len(self.judge_contexts) == 2 else CONTINUE_CURRENT_PHASE
-            return PhaseTransition(decision, "test transition")
-
-    run_dir = tmp_path / "phase_summary_accumulates"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    planner = ContinueTwiceThenCompletePlanner()
-    runtime = TaskRuntime(
-        LocalEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=planner,
-        shutdown_policy="none",
-    )
-
-    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("repair succeeds", "final_phase"))
-    recorder.close()
-
-    latest_summary = planner.judge_contexts[-1]["phase_execution_summary"]
-    assert state.completed
-    assert latest_summary["window_count"] == 2
-    assert latest_summary["tool_facts"]["turn_yaw_success_sum_deg"] == 20.0
-    assert latest_summary["last_window"]["yaw_delta_deg"] is not None
-    mission_state = json.loads((run_dir / "state/latest_state.json").read_text(encoding="utf-8"))
-    assert "phase_start_observations" not in mission_state
-    assert "phase_execution_summaries" not in mission_state
-    assert "current_phase_progress" in mission_state
-
-
 def test_task_runtime_normalizes_yaw_wraparound_delta(tmp_path):
     recorder = AsyncRunLogger(tmp_path / "yaw_wrap")
     server = LocalSimulationServer([make_package()], run_dir=tmp_path / "yaw_wrap")
@@ -1205,14 +1158,12 @@ def test_task_runtime_continue_transition_window_limit_stops_without_advancing_p
     class AlwaysContinuePlanner:
         planner_mode = "test"
 
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
+        def plan_next_with_phase_decision(self, state, context=None):
+            plan = ShortHorizonPlan(
                 state.current_phase_name,
                 [PlannedStep.tool_step("uav.hover", {}, "keep checking current phase")],
             )
-
-        def judge_phase_transition(self, phase_context):
-            return PhaseTransition(CONTINUE_CURRENT_PHASE, "not enough evidence")
+            return coupled_continue_from_short_plan(plan, "not enough evidence")
 
     run_dir = tmp_path / "continue_loop_guard"
     recorder = AsyncRunLogger(run_dir)
@@ -1245,225 +1196,23 @@ def test_task_runtime_continue_transition_window_limit_stops_without_advancing_p
     assert "current_phase_window_count" in mission_state
 
 
-def test_task_runtime_without_post_action_judge_continues_conservatively(tmp_path):
-    class NoJudgePlanner:
-        planner_mode = "test"
-
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.hover", {}, "hold without judge")],
-            )
-
-    run_dir = tmp_path / "no_post_action_judge"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(
-        LocalEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=NoJudgePlanner(),
-        shutdown_policy="none",
-        runtime_loop_guard_windows=1,
-    )
-
-    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("no judge", "final_phase"))
-    recorder.close()
-
-    events = load_event_records(run_dir)
-    event_names = [record["event"] for record in events]
-    unavailable_events = [
-        record["payload"]
-        for record in events
-        if record["event"] == "post_action_phase_judge_unavailable"
-    ]
-    assert not state.completed
-    assert state.stopped
-    assert state.stopped_reason == "runtime_loop_guard_reached"
-    assert unavailable_events
-    assert unavailable_events[-1]["reason"] == "post-action phase judge unavailable; continue current phase conservatively"
-    assert "phase_transition_continued" in event_names
-    assert "phase_transition_applied" not in event_names
-
-
-def test_post_action_phase_context_attaches_latest_rgb_model_input(tmp_path):
-    run_dir = tmp_path / "phase_judge_image"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
-    parse_result = make_single_phase_parse_result("inspect latest frame", "locate_person")
-    state = MissionState(
-        run_id="run_with_image",
-        user_instruction=parse_result.instruction,
-        semantic_plan=parse_result.plan,
-        max_phase_window_count=3,
-    )
-    runtime._state_flight_memories[state.run_id] = FlightMemory(
-        run_id=state.run_id,
-        map_id="m1",
-        scene_instance_id="scene",
-        agent_id="uav",
-    )
-    image_path = tmp_path / "latest.png"
-    write_tiny_png(image_path)
-    plan = ShortHorizonPlan(
-        state.current_phase_name,
-        [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10}, "scan")],
-    )
-
-    phase_context = runtime._build_post_action_phase_context(
-        state,
-        {"current_phase": parse_result.plan.phases[0].to_dict(), "fragments": [{"name": "image"}]},
-        plan,
-        SafetyDecision(plan),
-        {"pose": {"x": 0, "y": 0, "z": 0}},
-        {
-            "pose": {"x": 0, "y": 0, "z": 0},
-            "source": "automatic_phase_window",
-            "frames": {
-                "rgb": {
-                    "path": str(image_path),
-                    "width": 1,
-                    "height": 1,
-                    "mock": False,
-                    "artifact_ref": str(image_path),
-                }
-            },
-        },
-        [],
-    )
-    recorder.close()
-
-    fragment = phase_context["fragments"][0]
-    model_input = fragment["model_inputs"][0]
-    assert fragment["name"] == "image"
-    assert fragment["source"] == "PostActionObservationImageContext"
-    assert model_input["encoding"] == "data_url"
-    assert model_input["data"].startswith("data:image/png;base64,")
-    assert set(model_input) == {"type", "input_id", "role", "usage", "mime_type", "encoding", "data"}
-    assert model_input["role"] == "current_observation"
-    assert (
-        fragment["content"]["visual_evidence"]["interpretation_status"]
-        == "image_attached_for_direct_judge_inspection"
-    )
-    assert fragment["content"]["visual_evidence"]["attached_image_count"] == 1
-    assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 1
-
-
-def test_post_action_phase_context_attaches_key_rgb_model_inputs_from_memory(tmp_path):
-    run_dir = tmp_path / "phase_judge_key_images"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
-    parse_result = make_single_phase_parse_result("inspect key frames", "locate_person")
-    state = MissionState(
-        run_id="run_with_key_images",
-        user_instruction=parse_result.instruction,
-        semantic_plan=parse_result.plan,
-        max_phase_window_count=3,
-    )
-    memory = FlightMemory(
-        run_id=state.run_id,
-        map_id="m1",
-        scene_instance_id="scene",
-        agent_id="uav",
-        memory_reader=MemoryRecordReader(run_dir),
-    )
-    writer = MemoryEventWriter(run_dir)
-    paths = []
-    for index in range(6):
-        image_path = tmp_path / f"phase_{index}.png"
-        write_tiny_png(image_path)
-        paths.append(str(image_path))
-        result = writer.write_observation(
-            {
-                "source": "automatic_phase_window",
-                "timestamp": f"t{index}",
-                "modalities": ["rgb"],
-                "frames": {"rgb": {"path": str(image_path), "mock": False, "artifact_ref": str(image_path)}},
-            }
-        )
-        memory.append_observation_ref(result["observation_ref"])
-        memory.append_frame_refs(result["frame_refs"])
-    runtime._state_flight_memories[state.run_id] = memory
-    plan = ShortHorizonPlan(state.current_phase_name, [PlannedStep.tool_step("uav.hover", {}, "hold")])
-
-    phase_context = runtime._build_post_action_phase_context(
-        state,
-        {"current_phase": parse_result.plan.phases[0].to_dict(), "fragments": [{"name": "image"}]},
-        plan,
-        SafetyDecision(plan),
-        {"pose": {"x": 0, "y": 0, "z": 0}},
-        {
-            "pose": {"x": 0, "y": 0, "z": 0},
-            "source": "automatic_phase_window",
-            "frames": {"rgb": {"path": paths[-1], "mock": False, "artifact_ref": paths[-1]}},
-        },
-        [],
-    )
-    recorder.close()
-
-    fragment = phase_context["fragments"][0]
-    roles = [item["role"] for item in fragment["content"]["selected_frames"]]
-    source_paths = [item["path"] for item in fragment["metadata"]["selected_frame_metadata"]]
-    assert roles == [
-        "current_observation",
-        "phase_start_reference",
-    ]
-    assert source_paths == [paths[5], paths[0]]
-    assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 2
-
-
-def test_post_action_phase_context_keeps_metadata_without_mock_or_missing_image_inputs(tmp_path):
-    run_dir = tmp_path / "phase_judge_no_image"
-    recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
-    parse_result = make_single_phase_parse_result("inspect latest frame", "locate_person")
-    state = MissionState(
-        run_id="run_without_image",
-        user_instruction=parse_result.instruction,
-        semantic_plan=parse_result.plan,
-        max_phase_window_count=3,
-    )
-    runtime._state_flight_memories[state.run_id] = FlightMemory(
-        run_id=state.run_id,
-        map_id="m1",
-        scene_instance_id="scene",
-        agent_id="uav",
-    )
-    plan = ShortHorizonPlan(state.current_phase_name, [PlannedStep.tool_step("uav.hover", {}, "hold")])
-
-    for rgb_frame in (
-        {"path": str(tmp_path / "missing.png"), "mock": False},
-        {"path": str(tmp_path / "mock.png"), "mock": True},
-    ):
-        phase_context = runtime._build_post_action_phase_context(
-            state,
-            {"current_phase": parse_result.plan.phases[0].to_dict(), "fragments": []},
-            plan,
-            SafetyDecision(plan),
-            {"pose": {"x": 0, "y": 0, "z": 0}},
-            {"pose": {"x": 0, "y": 0, "z": 0}, "frames": {"rgb": rgb_frame}},
-            [],
-        )
-        fragment = phase_context["fragments"][0]
-        assert fragment["name"] == "image"
-        assert fragment["content"]["visual_evidence"]["has_rgb"] is True
-        assert fragment["model_inputs"] == []
-        assert fragment["content"]["visual_evidence"]["attached_image_count"] == 0
-        assert phase_context["planner_context_summary"]["phase_judge_model_input_count"] == 0
-    recorder.close()
-
-
 def test_task_runtime_logs_contract_repair_success_and_continues_to_safety(tmp_path):
     class RepairSuccessPlanner:
         planner_mode = "model"
 
         def __init__(self) -> None:
             self.last_repair_attempts = []
+            self.calls = 0
 
-        def plan_next(self, state, context=None):
+        def plan_next_with_phase_decision(self, state, context=None):
+            self.calls += 1
+            if self.calls > 1:
+                self.last_repair_attempts = []
+                return CoupledActionPhasePlan(
+                    state.current_phase_name,
+                    PhaseTransition(COMPLETE_TASK, "repair path verified"),
+                    [],
+                )
             self.last_repair_attempts = [
                 {
                     "attempt": 1,
@@ -1482,13 +1231,11 @@ def test_task_runtime_logs_contract_repair_success_and_continues_to_safety(tmp_p
                     },
                 },
             ]
-            return ShortHorizonPlan(
+            plan = ShortHorizonPlan(
                 state.current_phase_name,
                 [PlannedStep.tool_step("uav.hover", {}, "repaired safe hover")],
             )
-
-        def judge_phase_transition(self, phase_context):
-            return PhaseTransition(COMPLETE_TASK, "repair succeeded")
+            return coupled_continue_from_short_plan(plan, "execute repaired action once")
 
     run_dir = tmp_path / "repair_success"
     recorder = AsyncRunLogger(run_dir)
@@ -1517,17 +1264,25 @@ def test_task_runtime_stabilizes_after_each_motion_step_before_observation(tmp_p
     class MultiMotionPlanner:
         planner_mode = "test"
 
-        def plan_next(self, state, context=None):
-            return ShortHorizonPlan(
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def plan_next_with_phase_decision(self, state, context=None):
+            self.calls += 1
+            if self.calls > 1:
+                return CoupledActionPhasePlan(
+                    state.current_phase_name,
+                    PhaseTransition(COMPLETE_TASK, "stabilization verified"),
+                    [],
+                )
+            plan = ShortHorizonPlan(
                 state.current_phase_name,
                 [
                     PlannedStep.tool_step("uav.move_body", {"direction": "forward", "duration": 1.0}, "move"),
                     PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 10.0}, "turn"),
                 ],
             )
-
-        def judge_phase_transition(self, phase_context):
-            return PhaseTransition(COMPLETE_TASK, "done")
+            return coupled_continue_from_short_plan(plan, "execute both motion steps")
 
     run_dir = tmp_path / "stabilizes_between_steps"
     recorder = AsyncRunLogger(run_dir)
@@ -1567,7 +1322,7 @@ def test_task_runtime_logs_contract_repair_failure_then_best_effort_hover(tmp_pa
     class RepairFailPlanner:
         planner_mode = "model"
 
-        def plan_next(self, state, context=None):
+        def plan_next_with_phase_decision(self, state, context=None):
             attempts = [
                 {
                     "attempt": 1,

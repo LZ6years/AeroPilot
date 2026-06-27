@@ -1,4 +1,4 @@
-"""Tests for UAV-Flow static reports and leak checks."""
+"""Tests for UAV-Flow static reports."""
 
 from __future__ import annotations
 
@@ -7,7 +7,6 @@ import re
 from pathlib import Path
 
 from evaluation.benchmarks.uav_flow.reports import (
-    evaluation_truth_leak_check,
     failure_counts,
     run_artifact_summary,
     write_case_review,
@@ -30,17 +29,6 @@ def make_case() -> UavFlowCase:
         initial_pos=[0, 0, 100, 0, 0, 0],
         reference_path_preprocessed=[[0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 10, 0]],
     )
-
-
-def test_leak_check_flags_evaluation_truth_terms(tmp_path):
-    context_path = tmp_path / "contexts" / "latest_context.json"
-    context_path.parent.mkdir(parents=True)
-    context_path.write_text(json.dumps({"safe": True, "target_pos": [1, 2, 3]}), encoding="utf-8")
-
-    result = evaluation_truth_leak_check(tmp_path)
-
-    assert result["status"] == "failed"
-    assert result["leaked_terms"] == ["target_pos"]
 
 
 def test_run_artifact_summary_extracts_rgb_actions_and_agent_messages(tmp_path):
@@ -123,7 +111,6 @@ def test_case_review_and_summary_are_text_only(tmp_path):
             },
         },
         "sr_judge": {"status": "skipped"},
-        "evaluation_truth_leak_check": {"status": "passed", "leaked_terms": []},
     }
 
     review_path = write_case_review(tmp_path, payload)
@@ -194,6 +181,17 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                     "active_instruction": "Turn to the direction of the person.",
                     "current_phase": {"name": "p"},
                     "phase_metrics": [],
+                    "phase_progress_evidence": {
+                        "motion_progress": {
+                            "has_translation": False,
+                            "yaw_only_so_far": True,
+                            "forward_m": 0.0,
+                            "planar_m": 0.0,
+                            "yaw_delta_deg": 10.0,
+                            "move_duration_success_sum_sec": 0.0,
+                            "tools_executed": {"uav.turn_relative": 1},
+                        }
+                    },
                     "phase_execution_summary": {"window_count": 0},
                     "fragments": [
                         {
@@ -223,76 +221,17 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                     "agent_messages": [{"content": "raw message"}],
                     "steps": [{"kind": "tool", "tool": "uav.turn_relative", "args": {"yaw_deg": 5}}],
                 },
-                "safe_plan": {
-                    "action_window": {"intent": "debug safe"},
-                    "agent_messages": [{"content": "safe message"}],
-                    "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}}],
-                },
-                "safety_decision": {"interventions": [{"reason": "test"}], "plan_changed": True},
-            },
-            ensure_ascii=False,
-        ),
-        encoding="utf-8",
-    )
-    phase_debug_dir = run_dir / "debug" / "phase_transition"
-    phase_debug_dir.mkdir(parents=True)
-    (phase_debug_dir / "p_window_000.json").write_text(
-        json.dumps(
-            {
-                "active_instruction": "Turn to the direction of the person.",
-                "current_phase": {"name": "p"},
-                "phase_window_count": 1,
-                "phase_metrics": [],
-                "action_window": {"intent": "raw action window should stay out of model-facing block"},
-                "phase_execution_summary": {"window_count": 1},
-                "action_plan": {"steps": [{"tool": "uav.turn_relative", "args": {"yaw_deg": -10}}]},
-                "executed_steps": [
-                    {
-                        "phase": "p",
-                        "step_index": 0,
-                        "step": {"tool": "uav.turn_relative", "args": {"yaw_deg": -10}},
-                        "result": {"ok": True, "message": "turned"},
-                    }
-                ],
-                "measurements": {"yaw_delta_deg": -10},
-                "safety_intervention_summary": {"intervention_count": 0},
-                "yaw_scan_remaining_deg": 340,
-                "visual_phase_budget_exhausted": False,
-                "model_context": {
-                    "active_instruction": "Turn to the direction of the person.",
-                    "model_context_marker": "phase_model_context_wins",
-                    "executed_steps": [
-                        {
-                            "phase": "p",
-                            "step_index": 0,
-                            "tool": "uav.turn_relative",
-                            "args": {"yaw_deg": -10},
-                            "ok": True,
-                            "message": "turned",
-                        }
-                    ],
-                    "observation_after": {
-                        "source": "automatic_phase_window",
-                        "modalities": ["rgb"],
-                        "has_rgb": True,
-                        "has_depth": False,
+                    "safe_plan": {
+                        "action_window": {"intent": "debug safe"},
+                        "agent_messages": [{"content": "safe message"}],
+                        "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}}],
                     },
-                    "fragments": [],
+                    "coupled_phase_decision": {
+                        "decision": "continue_current_phase",
+                        "reason": "target still unclear",
+                    },
+                    "safety_decision": {"interventions": [{"reason": "test"}], "plan_changed": True},
                 },
-                "fragments": [
-                    {
-                        "name": "image",
-                        "metadata": {"selection": "phase_judge_debug_marker"},
-                        "model_inputs": [
-                            {
-                                "type": "image",
-                                "role": "latest",
-                                "data": "<omitted encoded image data: 456 chars>",
-                            }
-                        ],
-                    }
-                ],
-            },
             ensure_ascii=False,
         ),
         encoding="utf-8",
@@ -302,7 +241,7 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
             [
                 json.dumps(
                     {
-                        "event": "model_phase_transition_judged",
+                        "event": "coupled_planner_phase_decided",
                         "payload": {
                             "phase": "p",
                             "decision": "continue_current_phase",
@@ -394,7 +333,6 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                 "sr_judge": {"status": "ok", "success": True, "confidence": 0.8},
                 "visual_diagnostics": {"status": "ok", "enabled": True, "judged_count": 3, "frame_count": 3},
                 "plot_result": {"trajectory_2d": str(case_dir / "plots" / "trajectory_2d.png")},
-                "evaluation_truth_leak_check": {"status": "passed"},
             }
         ],
     }
@@ -407,6 +345,9 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
     assert "c1" in index
     assert "0.42" in index
     assert "Case Evidence" in index
+    assert "Windows" in index
+    assert "Flags" in index
+    assert "alternating yaw" in index
     assert "Initial" in index
     assert "After first action" in index
     assert "Before" in index
@@ -421,18 +362,22 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
     assert "frame_000002.png" in case_html
     assert "Before RGB" in case_html
     assert "After RGB" in case_html
-    assert "Action Planner Debug" in case_html
+    assert "Decision Timeline" in case_html
+    assert "Tool Timeline" in case_html
+    assert "Tool execution" in case_html
+    assert "Executed uav.hover" in case_html
+    assert "Coupled Planner Debug" in case_html
+    assert "Decision Summary" in case_html
     assert "Model-Facing Context" in case_html
-    assert "Phase Judge Debug" in case_html
-    assert "Runtime Phase Transition Events" in case_html
-    assert "model_phase_transition_judged" in case_html
+    assert "Runtime Applied Phase State" in case_html
+    assert "Runtime Applied Phase State Events" in case_html
+    assert "coupled_planner_phase_decided" in case_html
     assert "phase_transition_continued" in case_html
-    assert "Planner output is only the current action window" in case_html
-    assert "Judge Context Summary" in case_html
-    assert "Executed Window" in case_html
-    assert "open full phase judge json" in case_html
-    phase_model_blocks = re.findall(r"<h3>Model-Facing Context</h3>\s*<pre>(.*?)</pre>", case_html, flags=re.S)
-    assert any("phase_model_context_wins" in block for block in phase_model_blocks)
+    assert "Coupled mode: one model call made both the phase decision and action decision" in case_html
+    assert "Judge Context Summary" not in case_html
+    assert "Executed Window" not in case_html
+    assert "open full phase decision json" not in case_html
+    phase_model_blocks = re.findall(r"<summary>Model-Facing Context</summary>\s*<pre>(.*?)</pre>", case_html, flags=re.S)
     assert all("raw action window should stay out of model-facing block" not in block for block in phase_model_blocks)
     assert all("yaw_scan_remaining_deg" not in block for block in phase_model_blocks)
     assert "debug raw" in case_html
@@ -440,6 +385,11 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
     assert "image_1_current_observation" in case_html
     assert "current_observation" in case_html
     assert "alternating_yaw" in case_html
+    assert "alternating yaw" in case_html
+    assert "yaw-only so far" in case_html
+    assert "Phase progress evidence" in case_html
+    assert "yaw_only_so_far" in case_html
+    assert "has_translation" in case_html
     assert "yaw_scan_remaining_deg" not in case_html
     assert "skill_selection_debug_marker" not in case_html
     assert "phase_judge_debug_marker" not in case_html
@@ -476,6 +426,102 @@ def test_html_review_handles_missing_rgb_actions_and_messages(tmp_path):
     assert "No RGB frames found." in case_html
     assert "No tool actions recorded." in case_html
     assert "No agent messages recorded." in case_html
+
+
+def test_html_review_displays_coupled_planner_decision(tmp_path):
+    eval_dir = tmp_path / "eval"
+    case_dir = eval_dir / "cases" / "coupled"
+    run_dir = tmp_path / "runs" / "coupled"
+    (run_dir / "debug" / "action_planner").mkdir(parents=True)
+    case_dir.mkdir(parents=True)
+    (run_dir / "debug" / "action_planner" / "p_window_001.json").write_text(
+        json.dumps(
+            {
+                "phase": "p",
+                "window_index": 1,
+                "model_context": {
+                    "active_instruction": "Turn",
+                    "current_phase": {"name": "p"},
+                    "phase_progress_evidence": {
+                        "motion_progress": {
+                            "has_translation": False,
+                            "yaw_only_so_far": True,
+                            "forward_m": 0.0,
+                            "planar_m": 0.0,
+                            "tools_executed": {"uav.turn_relative": 2},
+                        }
+                    },
+                    "fragments": [],
+                },
+                "raw_plan": {"steps": [], "action_window": {}, "agent_messages": []},
+                "safe_plan": {"steps": [], "action_window": {}, "agent_messages": []},
+                "coupled_phase_decision": {
+                    "decision": "advance_to_next_phase",
+                    "reason": "target already aligned",
+                    "agent_messages": [],
+                },
+                "safety_decision": {"interventions": [], "plan_changed": False},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "events.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "event": "coupled_planner_phase_decided",
+                        "payload": {"phase": "p", "decision": "advance_to_next_phase", "reason": "target aligned"},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "event": "phase_transition_applied",
+                        "payload": {
+                            "phase": "p",
+                            "decision": "advance_to_next_phase",
+                            "reason": "target aligned",
+                            "transition_source": "coupled_planner",
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (case_dir / "case.json").write_text(
+        json.dumps({"case": {"case_id": "coupled", "selected_instruction": "Turn", "class_name": "Turn"}}),
+        encoding="utf-8",
+    )
+    summary = {
+        "metrics": {"case_count": 1},
+        "failure_counts": {},
+        "cases": [
+            {
+                "case_id": "coupled",
+                "class_name": "Turn",
+                "status": "ok",
+                "case_dir": str(case_dir),
+                "run_dir": str(run_dir),
+                "run_artifacts": {"actions": []},
+                "ndtw": {},
+                "sr_judge": {},
+            }
+        ],
+    }
+
+    write_html_review(eval_dir, summary)
+
+    case_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    assert "Coupled Planner Decision" in case_html
+    assert "coupled_planner_phase_decided" in case_html
+    assert "coupled_planner" in case_html
+    assert "No UAV tool is executed" in case_html
+    assert "Phase progress evidence" in case_html
+    assert "yaw_only_so_far" in case_html
 
 
 def test_html_review_marks_missing_after_frame_without_reusing_last_rgb(tmp_path):
@@ -601,14 +647,13 @@ def test_failure_counts_classifies_common_failures():
     counts = failure_counts(
         [
             {"status": "error", "error": {"error": "gym env failed"}, "ndtw": {"status": "skipped"}, "sr_judge": {"status": "skipped"}},
-            {"status": "invalid_context_leak", "ndtw": {"status": "ok"}, "sr_judge": {"status": "ok"}},
         ]
     )
 
     assert counts["env_start_failed"] == 1
     assert counts["metric_skipped"] == 1
     assert counts["sr_skipped"] == 1
-    assert counts["invalid_context_leak"] == 1
+    assert "invalid_context_leak" not in counts
 
 
 def test_failure_counts_tracks_runtime_loop_guard_stop():

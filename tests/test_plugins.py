@@ -22,6 +22,8 @@ EXPECTED_UAV_FLIGHT_SKILLS = {
     "approach_and_standoff",
     "obstacle_and_safety_awareness",
     "task_completion_evidence",
+    "vertical_landing_and_altitude_control",
+    "route_traversal_and_passage",
 }
 
 REMOVED_UAV_FLIGHT_SKILLS = {
@@ -132,6 +134,102 @@ def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmati
     assert "30-45 degrees is broad search, not a small/local confirmation turn" in normalized_reference_text
     assert "switch from broad sweep to hover or a small 5-15 degree yaw" in normalized_reference_text
     assert "continue a 30-45 degree broad sweep as if it were confirmation" in normalized_reference_text
+
+
+def test_vertical_landing_skill_contains_controlled_stopping_guidance_without_internal_fields():
+    skill_text = Path(
+        "plugins/knowledge/uav_flight/vertical_landing_and_altitude_control/SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(skill_text.split())
+
+    assert "controlled descent" in normalized
+    assert "angled descent" in normalized
+    assert "Stop descending" in normalized
+    assert "requested drop is reached" in normalized
+    assert "landing surface is near enough" in normalized
+    assert "shorten each vertical step" in normalized
+    assert "prefer hover" in normalized
+    assert "landing region" in normalized
+    assert "altitude or surface-related progress" in normalized
+    assert "near a surface" in normalized
+    assert "vertical error" in normalized
+    assert "vertical flight-path angle relative to the horizontal plane" in normalized
+    assert "abs(vertical_speed) / horizontal_speed = tan(angle)" in normalized
+    assert "vz = -horizontal_speed * tan(angle)" in normalized
+    assert "does not mean the UAV should turn in the horizontal plane" in normalized
+    assert "yaw, heading, vehicle pitch, or camera angle" in normalized
+    assert "shallow ascent or descent angles" in normalized
+    assert "tiny repeated vertical steps" in normalized
+    assert "effective bounded step" in normalized
+    assert "inside the reasonable tolerance band" in normalized
+    assert "decimal-level correction" in normalized
+    assert "Do not keep descending only because the word \"land\" appears" in normalized
+    forbidden_terms = [
+        "UAV-Flow",
+        "UnrealCV",
+        "phase_progress_evidence",
+        "current_phase",
+        "context",
+        "case id",
+    ]
+    for term in forbidden_terms:
+        assert term not in skill_text
+
+
+def test_route_traversal_skill_contains_passage_guidance_without_overlapping_internals():
+    skill_text = Path(
+        "plugins/knowledge/uav_flight/route_traversal_and_passage/SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(skill_text.split())
+
+    assert "route progress" in normalized
+    assert "pass through" in normalized
+    assert "gap" in normalized
+    assert "Passage tasks are about route progress, not perfect visual centering" in normalized
+    assert "bounded translation" in normalized
+    assert "visual change over time as route evidence" in normalized
+    assert "first useful view of the route with the latest view" in normalized
+    assert "landmark itself as the destination" in normalized
+    assert "exact geometric boundary, axis, or entrance line" in normalized
+    assert "spatial route relation" in normalized
+    assert "Yaw can inspect that relation, but it cannot by itself place the UAV" in normalized
+    assert "Side relations usually need lateral or forward movement evidence" in normalized
+    assert "Do not treat one small translation or a visually plausible side relation" in normalized
+    assert "next semantic step" not in normalized
+    assert "good enough to continue" not in normalized
+    forbidden_terms = [
+        "UAV-Flow",
+        "UnrealCV",
+        "phase_progress_evidence",
+        "current_phase",
+        "context",
+        "case id",
+    ]
+    for term in forbidden_terms:
+        assert term not in skill_text
+
+
+def test_flyagent_contains_visual_direction_basics_without_case_specific_terms():
+    rules = Path("memory/FLYAGENT.md").read_text(encoding="utf-8")
+
+    assert "视觉方向与动作一致性" in rules
+    assert "画面左侧对应左向调整" in rules
+    assert "画面右侧对应右向调整" in rules
+    assert "负 yaw 表示向左转" in rules
+    assert "正 yaw 表示向右转" in rules
+    assert "不能同时说向右转是为了让它居中" in rules
+    assert "空间关系与路线关系" in rules
+    forbidden_terms = [
+        "UAV-Flow",
+        "case id",
+        "coupled planner",
+        "phase judge",
+        "model_inputs",
+        "phase_progress_evidence",
+        "current_phase",
+    ]
+    for term in forbidden_terms:
+        assert term not in rules
 
 
 def test_skill_catalog_accepts_unique_qualified_skill_names():

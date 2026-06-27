@@ -4,7 +4,7 @@
 
 核心结论：
 
-- `TaskRuntime phase loop` 负责真实任务闭环：观察、规划、执行、phase judge、完成或停止。
+- `TaskRuntime phase loop` 负责真实任务闭环：观察、规划、执行、coupled phase decision、完成或停止。
 - `Agent Recovery` 负责模型模块的错误恢复：把错误封装成 `RecoveryRequest`，让 selector 在候选 `RecoveryTool` 中选择修复方式。
 - `Safety` 只做硬安全和动作裁剪，不判断任务语义完成，也不替模型修 schema。
 - 第一版同时覆盖 `TaskParser` 和 `ModelActionPlanner`，不保留旧 `ModelRepairPlanner` 作为长期并行分支。

@@ -56,6 +56,31 @@ def test_phase_completion_uses_signed_right_and_up_targets():
     assert [item["target"] for item in result["evaluations"]] == [-2.0, -1.0]
 
 
+def test_phase_completion_accepts_forward_right_displacement_metrics_together():
+    result = evaluate_phase_completion(
+        [
+            {"name": "forward_distance", "target": 7.37, "unit": "m", "tolerance": 0.25},
+            {"name": "right_distance", "target": -5.16, "unit": "m", "tolerance": 0.25},
+        ],
+        {"measurements": {"forward_m": 7.4, "right_m": -5.1, "yaw_delta_deg": 35.0}},
+    )
+
+    assert result["all_within_tolerance"] is True
+    assert result["measurable_count"] == 2
+    assert [item["metric"]["name"] for item in result["evaluations"]] == ["forward_distance", "right_distance"]
+
+
+def test_phase_completion_accepts_canonical_descend_target():
+    result = evaluate_phase_completion(
+        [{"name": "up_distance", "target": -9.0, "unit": "m", "tolerance": 0.5}],
+        {"measurements": {"up_m": -9.0, "vertical_m": -9.0}},
+    )
+
+    assert result["all_within_tolerance"] is True
+    assert result["evaluations"][0]["actual"] == -9.0
+    assert result["evaluations"][0]["status"] == "within_tolerance"
+
+
 def test_phase_completion_without_metrics_requires_model_judgment():
     result = evaluate_phase_completion(
         [],

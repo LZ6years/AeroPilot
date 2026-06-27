@@ -93,10 +93,10 @@ def _index_page(eval_path: Path, summary: dict[str, Any]) -> str:
     <thead>
       <tr>
         <th>Case</th><th>Class</th><th>Status</th><th>Completed</th><th>nDTW</th>
-        <th>SR</th><th>RGB</th><th>Turn</th><th>Move</th><th>Hover</th><th>Links</th>
+        <th>SR</th><th>RGB</th><th>Turn</th><th>Move</th><th>Hover</th><th>Windows</th><th>Flags</th><th>Links</th>
       </tr>
     </thead>
-    <tbody>{rows or '<tr><td colspan="11">No cases.</td></tr>'}</tbody>
+    <tbody>{rows or '<tr><td colspan="13">No cases.</td></tr>'}</tbody>
   </table>
 </section>
 <section>
@@ -115,6 +115,9 @@ def _case_row(eval_path: Path, result: dict[str, Any]) -> str:
     counts = _action_counts(artifacts.get("actions", []))
     case_dir = _path_from_result(result.get("case_dir"), eval_path / "cases" / case_id)
     run_dir = _path_from_result(result.get("run_dir"), None)
+    planner_records = _action_planner_debug_records(run_dir)
+    decision_stats = _decision_stats(planner_records)
+    flags = _behavior_flags(artifacts.get("actions", []), planner_records)
     case_html = case_dir / "review.html"
     links = [
         _link(eval_path, case_html, "case"),
@@ -134,6 +137,8 @@ def _case_row(eval_path: Path, result: dict[str, Any]) -> str:
   <td>{turn}</td>
   <td>{move}</td>
   <td>{hover}</td>
+  <td>{windows}</td>
+  <td>{flags}</td>
   <td>{links}</td>
 </tr>
 """.format(
@@ -147,6 +152,8 @@ def _case_row(eval_path: Path, result: dict[str, Any]) -> str:
         turn=_e(counts.get("uav.turn_relative", 0)),
         move=_e(counts.get("uav.move_body", 0)),
         hover=_e(counts.get("uav.hover", 0)),
+        windows=_e(decision_stats.get("window_count")),
+        flags=_flag_badges(flags),
         links=" ".join(links),
     )
 
@@ -170,7 +177,10 @@ def _case_evidence_card(eval_path: Path, result: dict[str, Any]) -> str:
     frames = _rgb_frames(result, artifacts)
     actions = artifacts.get("actions", []) if isinstance(artifacts.get("actions"), list) else []
     messages = _agent_messages(run_dir, artifacts)
+    planner_records = _action_planner_debug_records(run_dir)
     counts = _action_counts(actions)
+    decision_stats = _decision_stats(planner_records)
+    flags = _behavior_flags(actions, planner_records)
     display_actions = _display_actions(actions)
     action_preview = _action_preview(eval_path, display_actions, frames)
     message_preview = _message_preview(messages)
@@ -194,6 +204,9 @@ def _case_evidence_card(eval_path: Path, result: dict[str, Any]) -> str:
     {_kv("nDTW", ndtw.get("ndtw"))}
     {_kv("SR", sr.get("success"))}
     {_kv("turn/move/hover", f"{counts.get('uav.turn_relative', 0)} / {counts.get('uav.move_body', 0)} / {counts.get('uav.hover', 0)}")}
+    {_kv("windows", decision_stats.get("window_count"))}
+    {_kv("decisions", _decision_counts_text(decision_stats))}
+    {_kv("flags", ", ".join(flags) if flags else "none")}
   </dl>
   <div class="evidence-grid">
     <div class="rgb-panel">
@@ -225,14 +238,14 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
     sr = result.get("sr_judge", {}) if isinstance(result.get("sr_judge"), dict) else {}
     visual = result.get("visual_diagnostics", {}) if isinstance(result.get("visual_diagnostics"), dict) else {}
     plot = result.get("plot_result", {}) if isinstance(result.get("plot_result"), dict) else {}
-    leak = result.get("evaluation_truth_leak_check", {}) if isinstance(result.get("evaluation_truth_leak_check"), dict) else {}
     rgb_frames = _rgb_frames(result, artifacts)
     actions = artifacts.get("actions", []) if isinstance(artifacts.get("actions"), list) else []
     run_dir = _path_from_result(result.get("run_dir"), None)
     messages = _agent_messages(run_dir, artifacts)
     planner_debug = _action_planner_debug_records(run_dir)
-    phase_debug = _phase_transition_debug_records(run_dir)
     phase_events = _phase_transition_events(run_dir)
+    decision_stats = _decision_stats(planner_debug)
+    flags = _behavior_flags(actions, planner_debug)
     return _page(
         title=f"UAV-Flow Case {case_id}",
         body=f"""
@@ -259,8 +272,10 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
       {_kv("Metric mode", (ndtw.get("metric_interpretation") or {}).get("mode"))}
       {_kv("SR status", sr.get("status"))}
       {_kv("SR failure", sr.get("failure_type"))}
-      {_kv("Truth leak", leak.get("status"))}
       {_kv("Visual diagnostics", _visual_summary(visual))}
+      {_kv("Planner windows", decision_stats.get("window_count"))}
+      {_kv("Decisions", _decision_counts_text(decision_stats))}
+      {_kv("Behavior flags", ", ".join(flags) if flags else "none")}
     </dl>
   </article>
   <article>
@@ -279,17 +294,21 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
   </details>
 </section>
 <section>
-  <h2>Timeline</h2>
+  <h2>Decision Timeline</h2>
+  {_decision_timeline(planner_debug)}
+</section>
+<section>
+  <h2>Tool Timeline</h2>
+  <p class="empty">This timeline shows real UAV tool actions only. Phase-only transition windows are shown above.</p>
   {_timeline(case_dir, actions, rgb_frames)}
 </section>
 <section>
-  <h2>Action Planner Debug</h2>
+  <h2>Coupled Planner Debug</h2>
   {_planner_debug(case_dir, planner_debug)}
 </section>
 <section>
-  <h2>Phase Judge Debug</h2>
+  <h2>Runtime Applied Phase State</h2>
   {_phase_transition_events_panel(phase_events)}
-  {_phase_judge_debug(case_dir, phase_debug)}
 </section>
 <section>
   <h2>Messages</h2>
@@ -613,29 +632,13 @@ def _action_planner_debug_records(run_dir: Path | None) -> list[dict[str, Any]]:
     return records
 
 
-def _phase_transition_debug_records(run_dir: Path | None) -> list[dict[str, Any]]:
-    if run_dir is None:
-        return []
-    debug_dir = run_dir / "debug" / "phase_transition"
-    if not debug_dir.exists():
-        return []
-    records: list[dict[str, Any]] = []
-    for path in sorted(debug_dir.glob("*.json")):
-        payload = _read_json(path)
-        if not payload:
-            continue
-        payload["_path"] = str(path)
-        records.append(payload)
-    return records
-
-
 def _phase_transition_events(run_dir: Path | None) -> list[dict[str, Any]]:
     """Return runtime transition events that represent the applied phase state."""
 
     if run_dir is None:
         return []
     names = {
-        "model_phase_transition_judged",
+        "coupled_planner_phase_decided",
         "phase_transition_applied",
         "phase_transition_continued",
     }
@@ -645,6 +648,173 @@ def _phase_transition_events(run_dir: Path | None) -> list[dict[str, Any]]:
         if event in names:
             records.append({"event": event, "payload": item.get("payload", {})})
     return records
+
+
+def _decision_timeline(records: list[dict[str, Any]]) -> str:
+    if not records:
+        return '<p class="empty">No coupled planner windows recorded.</p>'
+    rows = []
+    for record in records:
+        raw_plan = record.get("raw_plan", {}) if isinstance(record.get("raw_plan"), dict) else {}
+        safe_plan = record.get("safe_plan", {}) if isinstance(record.get("safe_plan"), dict) else {}
+        coupled_decision = (
+            record.get("coupled_phase_decision")
+            if isinstance(record.get("coupled_phase_decision"), dict)
+            else {}
+        )
+        raw_tools = _plan_tools(raw_plan)
+        safe_tools = _plan_tools(safe_plan)
+        decision = coupled_decision.get("decision") or ""
+        rows.append(
+            """
+<tr>
+  <td>{window}</td><td>{phase}</td><td>{decision}</td><td>{execution}</td>
+  <td><code>{raw_tools}</code></td><td><code>{safe_tools}</code></td><td>{reason}</td>
+</tr>
+""".format(
+                window=_e(record.get("window_index")),
+                phase=_e(record.get("phase")),
+                decision=_badge(decision) if decision else "",
+                execution=_e(_tool_execution_label(coupled_decision, safe_tools)),
+                raw_tools=_e(json.dumps(raw_tools, ensure_ascii=False)),
+                safe_tools=_e(json.dumps(safe_tools, ensure_ascii=False)),
+                reason=_e(coupled_decision.get("guard_reason") or coupled_decision.get("reason")),
+            )
+        )
+    return """
+<table class="compact-table">
+  <thead><tr><th>Window</th><th>Phase</th><th>Decision</th><th>Tool execution</th><th>Raw tools</th><th>Safe tools</th><th>Reason</th></tr></thead>
+  <tbody>{}</tbody>
+</table>
+""".format("\n".join(rows))
+
+
+def _decision_stats(records: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {"continue_current_phase": 0, "advance_to_next_phase": 0, "complete_task": 0}
+    no_tool_transition_count = 0
+    for record in records:
+        decision = record.get("coupled_phase_decision")
+        decision = decision if isinstance(decision, dict) else {}
+        name = str(decision.get("decision") or "")
+        if name in counts:
+            counts[name] += 1
+        safe_plan = record.get("safe_plan", {}) if isinstance(record.get("safe_plan"), dict) else {}
+        if name in {"advance_to_next_phase", "complete_task"} and not _plan_tools(safe_plan):
+            no_tool_transition_count += 1
+    return {
+        "window_count": len(records),
+        "continue_count": counts["continue_current_phase"],
+        "advance_count": counts["advance_to_next_phase"],
+        "complete_count": counts["complete_task"],
+        "no_tool_transition_count": no_tool_transition_count,
+    }
+
+
+def _decision_counts_text(stats: dict[str, Any]) -> str:
+    if not stats:
+        return ""
+    return (
+        f"continue={stats.get('continue_count', 0)} "
+        f"advance={stats.get('advance_count', 0)} "
+        f"complete={stats.get('complete_count', 0)} "
+        f"no-tool={stats.get('no_tool_transition_count', 0)}"
+    )
+
+
+def _behavior_flags(actions: Any, records: list[dict[str, Any]]) -> list[str]:
+    flags: list[str] = []
+    if _has_repeated_large_yaw(actions):
+        flags.append("repeated large yaw")
+    if _has_alternating_yaw(actions, records):
+        flags.append("alternating yaw")
+    if any(_compact_progress_evidence(_record_progress(record)).get("yaw_only_so_far") for record in records):
+        flags.append("yaw-only so far")
+    if any(_is_no_tool_transition(record) for record in records):
+        flags.append("transition without tool")
+    return flags
+
+
+def _has_repeated_large_yaw(actions: Any) -> bool:
+    if not isinstance(actions, list):
+        return False
+    streak_sign: int | None = None
+    streak_count = 0
+    for action in actions:
+        if not isinstance(action, dict) or action.get("tool") != "uav.turn_relative":
+            streak_sign = None
+            streak_count = 0
+            continue
+        yaw = _float_or_none((action.get("args") or {}).get("yaw_deg") if isinstance(action.get("args"), dict) else None)
+        if yaw is None or abs(yaw) < 25:
+            streak_sign = None
+            streak_count = 0
+            continue
+        sign = 1 if yaw > 0 else -1
+        streak_count = streak_count + 1 if sign == streak_sign else 1
+        streak_sign = sign
+        if streak_count >= 3:
+            return True
+    return False
+
+
+def _has_alternating_yaw(actions: Any, records: list[dict[str, Any]]) -> bool:
+    for record in records:
+        model_context = record.get("model_context") if isinstance(record.get("model_context"), dict) else {}
+        fragments = {
+            item.get("name"): item
+            for item in model_context.get("fragments", [])
+            if isinstance(item, dict)
+        }
+        action = fragments.get("action", {})
+        content = action.get("content", {}) if isinstance(action.get("content"), dict) else {}
+        motion_pattern = (content.get("action_trend", {}) or {}).get("motion_pattern", {})
+        if isinstance(motion_pattern, dict) and motion_pattern.get("type") == "alternating_yaw":
+            return True
+    signs: list[int] = []
+    if isinstance(actions, list):
+        for action in actions:
+            if not isinstance(action, dict) or action.get("tool") != "uav.turn_relative":
+                continue
+            yaw = _float_or_none((action.get("args") or {}).get("yaw_deg") if isinstance(action.get("args"), dict) else None)
+            if yaw is not None and abs(yaw) >= 1:
+                signs.append(1 if yaw > 0 else -1)
+    return len(signs) >= 4 and all(signs[index] != signs[index - 1] for index in range(1, min(len(signs), 6)))
+
+
+def _is_no_tool_transition(record: dict[str, Any]) -> bool:
+    decision = record.get("coupled_phase_decision") if isinstance(record.get("coupled_phase_decision"), dict) else {}
+    safe_plan = record.get("safe_plan", {}) if isinstance(record.get("safe_plan"), dict) else {}
+    return decision.get("decision") in {"advance_to_next_phase", "complete_task"} and not _plan_tools(safe_plan)
+
+
+def _record_progress(record: dict[str, Any]) -> dict[str, Any]:
+    model_context = record.get("model_context") if isinstance(record.get("model_context"), dict) else {}
+    progress = model_context.get("phase_progress_evidence", {})
+    return progress if isinstance(progress, dict) else {}
+
+
+def _tool_execution_label(coupled_decision: dict[str, Any], safe_tools: list[str]) -> str:
+    decision = coupled_decision.get("decision")
+    if decision in {"advance_to_next_phase", "complete_task"} and not safe_tools:
+        return "No UAV tool executed"
+    if safe_tools:
+        return "Executed " + ", ".join(safe_tools)
+    if decision == "continue_current_phase":
+        return "No UAV tool planned"
+    return ""
+
+
+def _flag_badges(flags: list[str]) -> str:
+    if not flags:
+        return '<span class="empty">none</span>'
+    return " ".join(f'<span class="flag">{_e(flag)}</span>' for flag in flags)
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
@@ -658,31 +828,45 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
         fragments = {item.get("name"): item for item in model_context.get("fragments", []) if isinstance(item, dict)}
         image = fragments.get("image", {})
         action = fragments.get("action", {})
+        progress = model_context.get("phase_progress_evidence", {})
         raw_plan = record.get("raw_plan", {}) if isinstance(record.get("raw_plan"), dict) else {}
         safe_plan = record.get("safe_plan", {}) if isinstance(record.get("safe_plan"), dict) else {}
+        coupled_decision = (
+            record.get("coupled_phase_decision")
+            if isinstance(record.get("coupled_phase_decision"), dict)
+            else {}
+        )
         safety = record.get("safety_decision", {}) if isinstance(record.get("safety_decision"), dict) else {}
         items.append(
             """
 <details class="planner-debug">
-  <summary>Window {window} · {phase} · raw tools {raw_tools} · safe tools {safe_tools}</summary>
+  <summary>Window {window} · {phase} · {decision} · {execution}</summary>
   <div class="debug-grid">
     <article>
-      <h3>Model-Facing Context</h3>
-      <pre>{model_context}</pre>
-      <h3>Context Summary</h3>
+      <h3>Decision Summary</h3>
       <dl class="kv">
         {_active}
         {_phase}
+        {_decision}
+        {_execution}
+        {_reason}
         {_metrics}
         {_exec}
+        {_progress}
         {_image_roles}
         {_action_trend}
+        {_tool_diff}
       </dl>
       <div class="links compact">{artifact}</div>
+      <details>
+        <summary>Model-Facing Context</summary>
+        <pre>{model_context}</pre>
+      </details>
     </article>
     <article>
       <h3>Planner Output</h3>
-      <p class="empty">Planner output is only the current action window; phase switching is decided by Phase Judge events.</p>
+      <p class="empty">{planner_note}</p>
+      {coupled_block}
       <h4>Raw plan</h4>
       {_plan_raw}
       <h4>Safety-reviewed plan</h4>
@@ -695,16 +879,23 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
 """.format(
                 window=_e(record.get("window_index")),
                 phase=_e(record.get("phase")),
-                raw_tools=_e(_plan_tools(raw_plan)),
-                safe_tools=_e(_plan_tools(safe_plan)),
+                decision=_e(coupled_decision.get("decision")),
+                execution=_e(_tool_execution_label(coupled_decision, _plan_tools(safe_plan))),
                 _active=_kv("Instruction", context.get("active_instruction")),
                 _phase=_kv("Current phase", (context.get("current_phase") or {}).get("name") if isinstance(context.get("current_phase"), dict) else context.get("current_phase")),
+                _decision=_kv("Phase decision", coupled_decision.get("decision")),
+                _execution=_kv("Tool execution", _tool_execution_label(coupled_decision, _plan_tools(safe_plan))),
+                _reason=_kv("Decision reason", coupled_decision.get("guard_reason") or coupled_decision.get("reason")),
                 _metrics=_kv("Phase metrics", json.dumps(context.get("phase_metrics", []), ensure_ascii=False)),
                 _exec=_kv("Phase execution summary", json.dumps(_compact_phase_execution(context.get("phase_execution_summary", {})), ensure_ascii=False)),
+                _progress=_kv("Phase progress evidence", json.dumps(_compact_progress_evidence(progress), ensure_ascii=False)),
                 _image_roles=_kv("Image model inputs", json.dumps(_fragment_model_input_roles(model_context), ensure_ascii=False)),
                 _action_trend=_kv("Action trend", json.dumps((action.get("content", {}) if isinstance(action.get("content"), dict) else {}).get("action_trend", {}), ensure_ascii=False)),
+                _tool_diff=_kv("Raw -> safe tools", f"{_plan_tools(raw_plan)} -> {_plan_tools(safe_plan)}"),
                 artifact=_link(base, _path_from_result(record.get("_path"), None), "open full debug json"),
                 model_context=_e(model_context_text),
+                planner_note=_e(_planner_output_note(coupled_decision)),
+                coupled_block=_coupled_decision_block(coupled_decision),
                 _plan_raw=_plan_block(raw_plan),
                 _plan_safe=_plan_block(safe_plan),
                 safety=_e(json.dumps(_compact_safety(safety), ensure_ascii=False, indent=2)),
@@ -715,95 +906,35 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
 
 def _phase_transition_events_panel(events: list[dict[str, Any]]) -> str:
     if not events:
-        return '<p class="empty">No runtime phase transition events recorded.</p>'
+        return '<p class="empty">No runtime applied phase-state events recorded.</p>'
     rows = []
     for index, item in enumerate(events):
         payload = item.get("payload", {}) if isinstance(item.get("payload"), dict) else {}
         rows.append(
             """
 <tr>
-  <td>{idx}</td><td><code>{event}</code></td><td>{phase}</td><td>{decision}</td><td>{reason}</td>
+  <td>{idx}</td><td><code>{event}</code></td><td>{phase}</td><td>{decision}</td><td>{source}</td><td>{reason}</td>
 </tr>
 """.format(
                 idx=_e(index),
                 event=_e(item.get("event")),
                 phase=_e(payload.get("phase")),
                 decision=_e(payload.get("applied_decision") or payload.get("decision")),
+                source=_e(payload.get("transition_source")),
                 reason=_e(payload.get("guard_reason") or payload.get("reason")),
             )
         )
     return """
 <article>
-  <h3>Runtime Phase Transition Events</h3>
-  <p class="empty">These events, not planner action_window fields, represent phase continuation or switching.</p>
+  <h3>Runtime Applied Phase State Events</h3>
+  <p class="empty">These events show coupled planner decisions and the phase state actually applied by runtime.</p>
   <table class="compact-table">
-    <thead><tr><th>#</th><th>Event</th><th>Phase</th><th>Decision</th><th>Reason</th></tr></thead>
+    <thead><tr><th>#</th><th>Event</th><th>Phase</th><th>Decision</th><th>Source</th><th>Reason</th></tr></thead>
     <tbody>{}</tbody>
   </table>
 </article>
 """.format("\n".join(rows))
 
-
-def _phase_judge_debug(base: Path, records: list[dict[str, Any]]) -> str:
-    if not records:
-        return '<p class="empty">Phase transition judge debug was not enabled for this run.</p>'
-    items = []
-    for record in records:
-        model_context = record.get("model_context") if isinstance(record.get("model_context"), dict) else record
-        model_context_text = _model_facing_context_text(model_context)
-        action_plan = record.get("action_plan", {}) if isinstance(record.get("action_plan"), dict) else {}
-        executed_steps = record.get("executed_steps", []) if isinstance(record.get("executed_steps"), list) else []
-        summary = record.get("phase_execution_summary", {}) if isinstance(record.get("phase_execution_summary"), dict) else {}
-        items.append(
-            """
-<details class="planner-debug">
-  <summary>Window {window} · {phase} · executed tools {tools}</summary>
-  <div class="debug-grid">
-    <article>
-      <h3>Model-Facing Context</h3>
-      <pre>{model_context}</pre>
-      <h3>Judge Context Summary</h3>
-      <dl class="kv">
-        {_active}
-        {_phase}
-        {_metrics}
-        {_action_window}
-        {_exec}
-        {_measurements}
-        {_safety}
-      </dl>
-      <div class="links compact">{artifact}</div>
-    </article>
-    <article>
-      <h3>Executed Window</h3>
-      <h4>Action plan</h4>
-      <pre>{action_plan}</pre>
-      <h4>Executed steps</h4>
-      <pre>{executed_steps}</pre>
-      <h4>Observation roles</h4>
-      <pre>{image_roles}</pre>
-    </article>
-  </div>
-</details>
-""".format(
-                window=_e(record.get("phase_window_count")),
-                phase=_e((record.get("current_phase") or {}).get("name") if isinstance(record.get("current_phase"), dict) else record.get("current_phase")),
-                tools=_e(_executed_tools(executed_steps)),
-                model_context=_e(model_context_text),
-                _active=_kv("Instruction", record.get("active_instruction")),
-                _phase=_kv("Current phase", (record.get("current_phase") or {}).get("name") if isinstance(record.get("current_phase"), dict) else record.get("current_phase")),
-                _metrics=_kv("Phase metrics", json.dumps(record.get("phase_metrics", []), ensure_ascii=False)),
-                _action_window=_kv("Planner action_window (debug-only)", json.dumps(record.get("action_window", {}), ensure_ascii=False)),
-                _exec=_kv("Phase execution summary", json.dumps(_compact_phase_execution(summary), ensure_ascii=False)),
-                _measurements=_kv("Measurements", json.dumps(record.get("measurements", {}), ensure_ascii=False)),
-                _safety=_kv("Safety summary", json.dumps(_compact_phase_safety(record), ensure_ascii=False)),
-                artifact=_link(base, _path_from_result(record.get("_path"), None), "open full phase judge json"),
-                action_plan=_e(json.dumps(action_plan, ensure_ascii=False, indent=2)),
-                executed_steps=_e(json.dumps(_compact_executed_steps(executed_steps), ensure_ascii=False, indent=2)),
-                image_roles=_e(json.dumps(_fragment_model_input_roles(record), ensure_ascii=False, indent=2)),
-            )
-        )
-    return "\n".join(items)
 
 
 def _model_facing_context_text(context: dict[str, Any]) -> str:
@@ -895,6 +1026,26 @@ def _fragment_model_input_roles(record: dict[str, Any]) -> list[dict[str, Any]]:
     return roles
 
 
+def _planner_output_note(coupled_decision: dict[str, Any]) -> str:
+    if coupled_decision:
+        decision = coupled_decision.get("decision")
+        if decision in {"advance_to_next_phase", "complete_task"}:
+            return "Coupled mode: one model call made both the phase decision and action decision; No UAV tool is executed for this transition window."
+        return "Coupled mode: one model call made both the phase decision and action decision; runtime executed the safety-reviewed action window."
+    return "Planner output is a legacy debug record without a coupled phase decision."
+
+
+def _coupled_decision_block(coupled_decision: dict[str, Any]) -> str:
+    if not coupled_decision:
+        return ""
+    return """
+      <h4>Coupled Planner Decision</h4>
+      <pre>{decision}</pre>
+""".format(
+        decision=_e(json.dumps(coupled_decision, ensure_ascii=False, indent=2))
+    )
+
+
 def _plan_block(plan: dict[str, Any]) -> str:
     if not plan:
         return '<p class="empty">missing</p>'
@@ -917,6 +1068,21 @@ def _compact_phase_execution(summary: Any) -> dict[str, Any]:
         "measurements": summary.get("measurements"),
         "last_window": summary.get("last_window"),
         "tool_facts": summary.get("tool_facts"),
+    }
+
+
+def _compact_progress_evidence(progress: Any) -> dict[str, Any]:
+    if not isinstance(progress, dict):
+        return {}
+    motion = progress.get("motion_progress", {}) if isinstance(progress.get("motion_progress"), dict) else {}
+    return {
+        "has_translation": motion.get("has_translation"),
+        "yaw_only_so_far": motion.get("yaw_only_so_far"),
+        "forward_m": motion.get("forward_m"),
+        "planar_m": motion.get("planar_m"),
+        "yaw_delta_deg": motion.get("yaw_delta_deg"),
+        "move_duration_success_sum_sec": motion.get("move_duration_success_sum_sec"),
+        "tools_executed": motion.get("tools_executed"),
     }
 
 
@@ -989,6 +1155,7 @@ def _page(title: str, body: str) -> str:
     a {{ color: #075f73; text-decoration: none; font-weight: 600; }}
     a:hover {{ text-decoration: underline; }}
     .badge {{ display: inline-block; padding: 2px 7px; border-radius: 999px; background: #e8f4f7; color: #075f73; font-weight: 700; }}
+    .flag {{ display: inline-block; padding: 2px 6px; border-radius: 6px; background: #fff3d6; color: #7a4d00; font-size: 12px; font-weight: 700; margin: 1px 3px 1px 0; }}
     .links {{ display: flex; flex-wrap: wrap; gap: 8px; }}
     .links a, td a {{ display: inline-block; margin: 2px 4px 2px 0; }}
     .stat-list {{ list-style: none; padding: 0; margin: 0; }}

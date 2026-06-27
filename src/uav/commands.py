@@ -2,8 +2,10 @@
 
 Backends still own simulator-specific execution, but direction names such as
 ``forward`` or ``up`` should resolve to the same body-frame velocity contract
-everywhere. The vertical sign is explicit because AirSim uses NED Z while
-UnrealCV camera motion uses a positive-up convention in this project.
+everywhere. Model-facing code uses FlyAgent's canonical vertical convention:
+positive ``vz`` means up and negative ``vz`` means down. Backends pass a
+different ``vertical_sign`` only when converting that canonical command into a
+simulator-specific raw velocity.
 """
 
 from __future__ import annotations
@@ -12,6 +14,7 @@ from typing import Any
 
 
 AIRSIM_NED_VERTICAL_SIGN = -1.0
+CANONICAL_VERTICAL_SIGN = 1.0
 UNREALCV_VERTICAL_SIGN = 1.0
 
 
@@ -19,7 +22,7 @@ def move_body_velocity_from_args(
     args: dict[str, Any],
     action_config: Any,
     *,
-    vertical_sign: float = AIRSIM_NED_VERTICAL_SIGN,
+    vertical_sign: float = CANONICAL_VERTICAL_SIGN,
 ) -> tuple[float, float, float, float]:
     """Resolve move_body args into body-frame ``vx, vy, vz, duration``."""
 
@@ -31,7 +34,7 @@ def move_body_velocity_from_args(
     return (
         float(args.get("vx", action_config.linear_velocity_mps)),
         float(args.get("vy", 0.0)),
-        float(args.get("vz", 0.0)),
+        vertical_sign * float(args.get("vz", 0.0)),
         duration,
     )
 
@@ -40,7 +43,7 @@ def velocity_for_direction(
     direction: str,
     action_config: Any,
     *,
-    vertical_sign: float = AIRSIM_NED_VERTICAL_SIGN,
+    vertical_sign: float = CANONICAL_VERTICAL_SIGN,
 ) -> tuple[float, float, float]:
     """Return body-frame velocity for a named movement direction."""
 

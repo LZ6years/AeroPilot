@@ -12,9 +12,9 @@ confirmation before meaningful movement.
 
 First establish or refresh the target relation. If the target is visible, reason
 qualitatively about direction, visual scale, depth evidence when available, free
-space, and whether moving forward, backward, or laterally better satisfies the
-requested relation. If the target is not visible, search or stabilize before
-moving toward an assumed location.
+space, and whether closing distance, increasing distance, or repositioning
+laterally better satisfies the requested relation. If the target is not visible,
+search or stabilize before moving toward an assumed location.
 
 Prefer short, verifiable moves when distance or path clearance is uncertain.
 After moving, use the next observation to update whether the UAV is closer,
@@ -30,6 +30,12 @@ Approach and standoff decisions should consider target visibility and qualitativ
 bearing, whether there is clear free space between the UAV and target, whether
 the requested relation is "near", "at a distance", "follow", or "inspect", and
 whether recent movement already changed the relation enough to re-observe.
+
+Side relations such as left side, right side, front side, beside, or adjacent are
+spatial relations, not just visual centering requests. Turning can help inspect
+the relation, but it does not by itself place the UAV on a requested side. Use
+translation evidence and current visual relation to decide whether the UAV is
+actually approaching, offsetting, or holding the requested side.
 
 For people and vehicles, keep movements conservative unless the task explicitly
 requires close inspection.

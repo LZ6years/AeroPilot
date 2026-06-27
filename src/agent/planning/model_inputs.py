@@ -101,9 +101,10 @@ def sanitize_context_for_model_text(context: dict[str, Any]) -> dict[str, Any]:
 
     sanitized = copy.deepcopy(context)
     _remove_debug_only_top_level_fields(sanitized)
+    _remove_model_facing_direction_shorthand(sanitized)
     fragments = sanitized.get("fragments", [])
     if not isinstance(fragments, list):
-        return sanitized
+        return _order_model_text_context(sanitized)
     for fragment in fragments:
         if not isinstance(fragment, dict):
             continue
@@ -117,18 +118,42 @@ def sanitize_context_for_model_text(context: dict[str, Any]) -> dict[str, Any]:
             item.pop("metadata", None)
             if "data" in item:
                 item["data"] = _omitted_data_marker(item.get("data"))
-    return sanitized
+    return _order_model_text_context(sanitized)
+
+
+def _order_model_text_context(context: dict[str, Any]) -> dict[str, Any]:
+    """Put global flight rules before task-specific fragments in model text."""
+
+    preferred_order = (
+        "rules",
+        "active_instruction",
+        "current_phase",
+        "semantic_goal",
+        "phase_progress_evidence",
+        "fragments",
+        "allowed_action_constraints",
+        "phase_execution_summary",
+        "user_preferences",
+        "context_schema",
+        "metadata",
+    )
+    ordered: dict[str, Any] = {}
+    for key in preferred_order:
+        if key in context:
+            ordered[key] = context[key]
+    for key, value in context.items():
+        if key not in ordered:
+            ordered[key] = value
+    return ordered
 
 
 def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
     """Keep runtime/safety audit data out of the model-facing text payload.
 
     Safety constraints and observation policy remain in the recorder/debug
-    context. The action planner only needs the tool contract and the rule that
-    observation is automatic; the SafetySupervisor enforces live safety limits.
-    Post-action phase judgment keeps full audit payloads on disk, while the
-    model-facing text sees only semantic progress, executed actions, compact
-    observations, measurements, preferences, and attached visual evidence.
+    context. The coupled planner only needs the tool contract and compact
+    evidence that supports the next phase decision; the SafetySupervisor
+    enforces live safety limits.
     """
 
     context.pop("safety_constraints", None)
@@ -175,10 +200,78 @@ def _compact_executed_step(item: Any) -> dict[str, Any]:
         "phase": item.get("phase"),
         "step_index": item.get("step_index"),
         "tool": step.get("tool"),
-        "args": step.get("args"),
+        "args": _model_facing_tool_args(step.get("tool"), step.get("args")),
         "ok": result.get("ok"),
         "message": result.get("message"),
     }
+
+
+def _remove_model_facing_direction_shorthand(context: dict[str, Any]) -> None:
+    """Strip legacy move direction shorthands from model-facing JSON only."""
+
+    constraints = context.get("allowed_action_constraints")
+    if isinstance(constraints, dict):
+        action_schemas = constraints.get("action_schemas")
+        if isinstance(action_schemas, dict):
+            move_schema = action_schemas.get("uav.move_body")
+            if isinstance(move_schema, dict):
+                _sanitize_move_body_schema(move_schema)
+
+    summary = context.get("phase_execution_summary")
+    if isinstance(summary, dict):
+        _sanitize_phase_execution_summary(summary)
+
+    fragments = context.get("fragments")
+    if isinstance(fragments, list):
+        for fragment in fragments:
+            if isinstance(fragment, dict):
+                _sanitize_action_fragment(fragment)
+
+
+def _sanitize_move_body_schema(schema: dict[str, Any]) -> None:
+    args_one_of = schema.get("args_one_of")
+    if not isinstance(args_one_of, list):
+        return
+    numeric_options = [
+        item
+        for item in args_one_of
+        if isinstance(item, dict) and "direction" not in item
+    ]
+    schema["args_one_of"] = numeric_options or [
+        {"vx": "number", "vy": "number", "vz": "number", "duration": "number"}
+    ]
+
+
+def _sanitize_phase_execution_summary(summary: dict[str, Any]) -> None:
+    tool_facts = summary.get("tool_facts")
+    if not isinstance(tool_facts, dict):
+        return
+    tool_facts.pop("move_duration_by_direction_success", None)
+    tool_facts.pop("move_duration_by_direction_attempted", None)
+
+
+def _sanitize_action_fragment(fragment: dict[str, Any]) -> None:
+    if fragment.get("name") != "action":
+        return
+    content = fragment.get("content")
+    if not isinstance(content, dict):
+        return
+    recent_actions = content.get("recent_actions")
+    if isinstance(recent_actions, list):
+        for item in recent_actions:
+            if not isinstance(item, dict):
+                continue
+            item["args"] = _model_facing_tool_args(item.get("tool"), item.get("args"))
+
+
+def _model_facing_tool_args(tool: Any, args: Any) -> dict[str, Any]:
+    if not isinstance(args, dict):
+        return {}
+    compact = dict(args)
+    if tool == "uav.move_body" and "direction" in compact:
+        compact.pop("direction", None)
+        compact["legacy_named_motion"] = True
+    return compact
 
 
 def _compact_observation(observation: dict[str, Any]) -> dict[str, Any]:

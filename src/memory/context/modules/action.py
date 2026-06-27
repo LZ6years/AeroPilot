@@ -69,12 +69,30 @@ class DefaultActionContextModule(ContextModule):
 
 def _compact_action(action: dict[str, Any]) -> dict[str, Any]:
     result = action.get("result", {}) if isinstance(action, dict) else {}
+    tool = action.get("tool")
     return {
-        "tool": action.get("tool"),
-        "args": dict(action.get("args", {})),
+        "tool": tool,
+        "args": _model_facing_action_args(tool, action.get("args", {})),
         "ok": result.get("ok"),
         "history_only": True,
     }
+
+
+def _model_facing_action_args(tool: Any, args: Any) -> dict[str, Any]:
+    """Remove legacy named-motion shorthands from model-facing history.
+
+    The command layer still accepts old named motions for manual/internal
+    compatibility, but planner context should teach the model only the numeric
+    velocity contract.
+    """
+
+    if not isinstance(args, dict):
+        return {}
+    compact = dict(args)
+    if tool == "uav.move_body" and "direction" in compact:
+        compact.pop("direction", None)
+        compact["legacy_named_motion"] = True
+    return compact
 
 
 def _action_trend(actions: list[dict[str, Any]]) -> dict[str, Any]:
@@ -141,11 +159,12 @@ def _motion_pattern(actions: list[dict[str, Any]]) -> dict[str, str]:
         for item in actions
         if item.get("tool") == "uav.turn_relative"
     ]
-    move_directions = [
-        str(item.get("args", {}).get("direction"))
+    move_signatures = [
+        _move_signature(item.get("args", {}))
         for item in actions
-        if item.get("tool") == "uav.move_body" and item.get("args", {}).get("direction")
+        if item.get("tool") == "uav.move_body"
     ]
+    move_signatures = [signature for signature in move_signatures if signature]
     if len(yaw_values) >= 3 and _alternates_sign(yaw_values):
         return {
             "type": "alternating_yaw",
@@ -163,10 +182,10 @@ def _motion_pattern(actions: list[dict[str, Any]]) -> dict[str, str]:
             "summary": "Recent yaw commands include both positive and negative turns; treat them as history-only mixed corrections.",
             "confidence": "medium",
         }
-    if len(move_directions) >= 2 and len(set(move_directions[-2:])) == 1:
+    if len(move_signatures) >= 2 and len(set(move_signatures[-2:])) == 1:
         return {
             "type": "repeated_move",
-            "summary": f"Recent move_body commands repeatedly move {move_directions[-1]}.",
+            "summary": "Recent move_body commands repeat a similar body-frame velocity pattern.",
             "confidence": "medium",
         }
     if len(set(item.get("tool") for item in actions if item.get("tool"))) > 1:
@@ -210,6 +229,28 @@ def _numeric_arg(action: dict[str, Any], name: str) -> float:
         return float(action.get("args", {}).get(name, 0.0) or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _move_signature(args: dict[str, Any]) -> str:
+    if not isinstance(args, dict):
+        return ""
+    if {"vx", "vy", "vz"}.issubset(args):
+        return "|".join(_component_sign(args.get(key)) for key in ("vx", "vy", "vz"))
+    if args.get("legacy_named_motion") is True:
+        return "legacy_named_motion"
+    return ""
+
+
+def _component_sign(value: Any) -> str:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return "unknown"
+    if numeric > 0:
+        return "+"
+    if numeric < 0:
+        return "-"
+    return "0"
 
 
 def _alternates_sign(values: list[float]) -> bool:

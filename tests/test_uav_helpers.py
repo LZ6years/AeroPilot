@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.runtime.configs.action_config import UavActionConfig
 from src.uav import (
     AIRSIM_NED_VERTICAL_SIGN,
+    CANONICAL_VERTICAL_SIGN,
     UNREALCV_VERTICAL_SIGN,
     move_body_velocity_from_args,
     normalize_yaw_delta_deg,
@@ -52,10 +53,26 @@ def test_pose_measurements_cover_cardinal_yaws():
     )["forward_displacement_m"] == 5.0
 
 
+def test_pose_measurements_use_canonical_positive_up_vertical():
+    up = pose_measurements({"z": 0.0}, {"z": 3.0})
+    down = pose_measurements({"z": 0.0}, {"z": -2.0})
+
+    assert up["up_displacement_m"] == 3.0
+    assert up["vertical_delta_m"] == 3.0
+    assert down["up_displacement_m"] == -2.0
+    assert down["vertical_delta_m"] == -2.0
+
+
 def test_move_body_direction_vertical_sign_conventions():
     config = UavActionConfig(linear_velocity_mps=2.0, vertical_velocity_mps=1.5, move_duration_sec=3.0)
 
     assert move_body_velocity_from_args({"direction": "forward"}, config) == (2.0, 0.0, 0.0, 3.0)
+    assert move_body_velocity_from_args({"direction": "up"}, config, vertical_sign=CANONICAL_VERTICAL_SIGN) == (
+        0.0,
+        0.0,
+        1.5,
+        3.0,
+    )
     assert move_body_velocity_from_args({"direction": "up"}, config, vertical_sign=AIRSIM_NED_VERTICAL_SIGN) == (
         0.0,
         0.0,
@@ -68,6 +85,15 @@ def test_move_body_direction_vertical_sign_conventions():
         1.5,
         3.0,
     )
+    assert move_body_velocity_from_args(
+        {"vx": 0.0, "vy": 0.0, "vz": -0.5, "duration": 2.0},
+        config,
+    ) == (0.0, 0.0, -0.5, 2.0)
+    assert move_body_velocity_from_args(
+        {"vx": 0.0, "vy": 0.0, "vz": -0.5, "duration": 2.0},
+        config,
+        vertical_sign=AIRSIM_NED_VERTICAL_SIGN,
+    ) == (0.0, 0.0, 0.5, 2.0)
 
 
 def test_velocity_norm_mps_reads_airsim_velocity_shape():

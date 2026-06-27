@@ -1,0 +1,339 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1800" height="1000" viewBox="0 0 1800 1000">
+  <defs>
+    <marker id="arrow-gray" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#777777"/>
+    </marker>
+    <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#0d2b67"/>
+    </marker>
+    <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#2e7d32"/>
+    </marker>
+    <style>
+      .title { font-family: Arial, Helvetica, sans-serif; font-size: 40px; font-weight: 700; fill: #081a46; }
+      .panel-title-red { font-family: Arial, Helvetica, sans-serif; font-size: 30px; font-weight: 700; fill: #b20f0f; }
+      .panel-title-green { font-family: Arial, Helvetica, sans-serif; font-size: 30px; font-weight: 700; fill: #1b5e20; }
+      .subtitle { font-family: Arial, Helvetica, sans-serif; font-size: 22px; font-style: italic; fill: #10213f; }
+      .label { font-family: Arial, Helvetica, sans-serif; font-size: 19px; font-weight: 700; fill: #071933; }
+      .small { font-family: Arial, Helvetica, sans-serif; font-size: 16px; font-weight: 700; fill: #071933; }
+      .tiny { font-family: Arial, Helvetica, sans-serif; font-size: 14px; font-weight: 700; fill: #071933; }
+      .caption { font-family: Georgia, 'Times New Roman', serif; font-size: 25px; fill: #000000; }
+    </style>
+  </defs>
+
+  <rect width="1800" height="1000" fill="#ffffff"/>
+  <text x="900" y="48" text-anchor="middle" class="title">Comparison: Task-specific UAV-VLN Pipelines vs. Unified UAV-Agent Runtime</text>
+
+  <!-- LEFT: existing methods -->
+  <rect x="18" y="76" width="715" height="805" rx="16" fill="#fffdfc" stroke="#f05b47" stroke-width="2" stroke-dasharray="9 9"/>
+  <text x="375" y="121" text-anchor="middle" class="panel-title-red">Existing Task-specific Paradigms</text>
+  <text x="375" y="152" text-anchor="middle" class="subtitle">One task, one dataset, one pipeline</text>
+
+  <!-- Existing pipeline rows -->
+  <g id="existing-route">
+    <rect x="38" y="178" width="675" height="126" rx="12" fill="#ffffff" stroke="#f05b47" stroke-width="1.7" stroke-dasharray="9 7"/>
+    <g transform="translate(76 205)">
+      <circle cx="0" cy="18" r="9" fill="#163a5f"/>
+      <path d="M0 27 C0 44 -20 43 -20 58" fill="none" stroke="#163a5f" stroke-width="4"/>
+      <path d="M0 27 C0 44 28 42 28 58" fill="none" stroke="#163a5f" stroke-width="4"/>
+      <circle cx="90" cy="2" r="8" fill="#163a5f"/>
+      <path d="M90 10 C88 28 70 34 52 36" fill="none" stroke="#163a5f" stroke-width="4"/>
+      <path d="M10 48 C40 16 58 52 82 26" fill="none" stroke="#163a5f" stroke-width="3" stroke-dasharray="5 5"/>
+      <path d="M64 6 L78 2 L92 6 L90 14 L66 14 Z" fill="#071933"/>
+      <line x1="78" y1="14" x2="78" y2="32" stroke="#071933" stroke-width="3"/>
+      <line x1="50" y1="20" x2="106" y2="20" stroke="#071933" stroke-width="3"/>
+    </g>
+    <text x="75" y="292" class="label">Route Following</text>
+    <line x1="258" y1="238" x2="315" y2="238" stroke="#777777" stroke-width="5" marker-end="url(#arrow-gray)"/>
+    <g transform="translate(365 207)">
+      <ellipse cx="30" cy="12" rx="32" ry="12" fill="#de4a36" stroke="#8f1d14" stroke-width="2"/>
+      <rect x="-2" y="12" width="64" height="54" fill="#e24e39" stroke="#8f1d14" stroke-width="2"/>
+      <ellipse cx="30" cy="66" rx="32" ry="12" fill="#cf3928" stroke="#8f1d14" stroke-width="2"/>
+      <line x1="-2" y1="31" x2="62" y2="31" stroke="#ffffff" stroke-width="2"/>
+      <line x1="-2" y1="50" x2="62" y2="50" stroke="#ffffff" stroke-width="2"/>
+    </g>
+    <text x="365" y="292" class="label">Dataset A</text>
+    <line x1="478" y1="238" x2="535" y2="238" stroke="#777777" stroke-width="5" marker-end="url(#arrow-gray)"/>
+    <g transform="translate(595 216)">
+      <circle cx="0" cy="0" r="9" fill="#d83a2e"/>
+      <circle cx="45" cy="0" r="9" fill="#d83a2e"/>
+      <circle cx="22" cy="37" r="9" fill="#d83a2e"/>
+      <circle cx="-20" cy="37" r="9" fill="#d83a2e"/>
+      <circle cx="65" cy="37" r="9" fill="#d83a2e"/>
+      <line x1="0" y1="0" x2="22" y2="37" stroke="#d83a2e" stroke-width="4"/>
+      <line x1="45" y1="0" x2="22" y2="37" stroke="#d83a2e" stroke-width="4"/>
+      <line x1="-20" y1="37" x2="22" y2="37" stroke="#d83a2e" stroke-width="4"/>
+      <line x1="65" y1="37" x2="22" y2="37" stroke="#d83a2e" stroke-width="4"/>
+    </g>
+    <text x="580" y="292" class="label">Policy A</text>
+  </g>
+
+  <g id="existing-object">
+    <rect x="38" y="322" width="675" height="126" rx="12" fill="#ffffff" stroke="#f05b47" stroke-width="1.7" stroke-dasharray="9 7"/>
+    <g transform="translate(78 358)">
+      <circle cx="24" cy="24" r="25" fill="none" stroke="#071933" stroke-width="6"/>
+      <line x1="42" y1="43" x2="68" y2="70" stroke="#071933" stroke-width="8" stroke-linecap="round"/>
+      <rect x="15" y="15" width="18" height="18" fill="#f0a35d" stroke="#8c4c0e" stroke-width="2"/>
+    </g>
+    <text x="85" y="435" class="label">Object Search</text>
+    <line x1="258" y1="382" x2="315" y2="382" stroke="#777777" stroke-width="5" marker-end="url(#arrow-gray)"/>
+    <g transform="translate(365 351)">
+      <ellipse cx="30" cy="12" rx="32" ry="12" fill="#f29b4b" stroke="#9b4d11" stroke-width="2"/>
+      <rect x="-2" y="12" width="64" height="54" fill="#f39c4d" stroke="#9b4d11" stroke-width="2"/>
+      <ellipse cx="30" cy="66" rx="32" ry="12" fill="#e78a36" stroke="#9b4d11" stroke-width="2"/>
+      <line x1="-2" y1="31" x2="62" y2="31" stroke="#ffffff" stroke-width="2"/>
+      <line x1="-2" y1="50" x2="62" y2="50" stroke="#ffffff" stroke-width="2"/>
+    </g>
+    <text x="365" y="435" class="label">Dataset B</text>
+    <line x1="478" y1="382" x2="535" y2="382" stroke="#777777" stroke-width="5" marker-end="url(#arrow-gray)"/>
+    <g transform="translate(585 348)">
+      <path d="M0 20 L0 6 L14 6" fill="none" stroke="#d35b1f" stroke-width="4"/>
+      <path d="M72 20 L72 6 L58 6" fill="none" stroke="#d35b1f" stroke-width="4"/>
+      <path d="M0 58 L0 72 L14 72" fill="none" stroke="#d35b1f" stroke-width="4"/>
+      <path d="M72 58 L72 72 L58 72" fill="none" stroke="#d35b1f" stroke-width="4"/>
+      <circle cx="36" cy="39" r="16" fill="none" stroke="#d35b1f" stroke-width="5"/>
+      <line x1="36" y1="13" x2="36" y2="65" stroke="#d35b1f" stroke-width="3"/>
+      <line x1="10" y1="39" x2="62" y2="39" stroke="#d35b1f" stroke-width="3"/>
+    </g>
+    <text x="580" y="421" text-anchor="middle" class="label">Detector /</text>
+    <text x="580" y="445" text-anchor="middle" class="label">Search Strategy B</text>
+  </g>
+
+  <g id="existing-control">
+    <rect x="38" y="466" width="675" height="126" rx="12" fill="#ffffff" stroke="#f05b47" stroke-width="1.7" stroke-dasharray="9 7"/>
+    <g transform="translate(82 493)">
+      <path d="M40 10 L56 4 L72 10 L70 20 L42 20 Z" fill="#071933"/>
+      <line x1="56" y1="20" x2="56" y2="44" stroke="#071933" stroke-width="4"/>
+      <line x1="20" y1="24" x2="92" y2="24" stroke="#071933" stroke-width="4"/>
+      <path d="M0 55 C22 20 55 86 100 42" fill="none" stroke="#071933" stroke-width="4" stroke-dasharray="7 6"/>
+      <path d="M130 58 A35 35 0 0 1 200 58" fill="none" stroke="#071933" stroke-width="5"/>
+      <line x1="165" y1="58" x2="188" y2="32" stroke="#071933" stroke-width="5" stroke-linecap="round"/>
+      <circle cx="165" cy="58" r="5" fill="#071933"/>
+    </g>
+    <text x="56" y="575" class="label">Fine-grained Control</text>
+    <line x1="258" y1="526" x2="315" y2="526" stroke="#777777" stroke-width="5" marker-end="url(#arrow-gray)"/>
+    <g transform="translate(365 495)">
+      <ellipse cx="30" cy="12" rx="32" ry="12" fill="#f3c94c" stroke="#9b7a10" stroke-width="2"/>
+      <rect x="-2" y="12" width="64" height="54" fill="#f4ca4d" stroke="#9b7a10" stroke-width="2"/>
+      <ellipse cx="30" cy="66" rx="32" ry="12" fill="#e4b937" stroke="#9b7a10" stroke-width="2"/>
+      <line x1="-2" y1="31" x2="62" y2="31" stroke="#ffffff" stroke-width="2"/>
+      <line x1="-2" y1="50" x2="62" y2="50" stroke="#ffffff" stroke-width="2"/>
+    </g>
+    <text x="365" y="575" class="label">Dataset C</text>
+    <line x1="478" y1="526" x2="535" y2="526" stroke="#777777" stroke-width="5" marker-end="url(#arrow-gray)"/>
+    <g transform="translate(585 502)">
+      <line x1="0" y1="10" x2="76" y2="10" stroke="#c07d00" stroke-width="5"/>
+      <line x1="0" y1="38" x2="76" y2="38" stroke="#c07d00" stroke-width="5"/>
+      <line x1="0" y1="66" x2="76" y2="66" stroke="#c07d00" stroke-width="5"/>
+      <circle cx="20" cy="10" r="8" fill="#f3c94c" stroke="#8a5a00" stroke-width="3"/>
+      <circle cx="55" cy="38" r="8" fill="#f3c94c" stroke="#8a5a00" stroke-width="3"/>
+      <circle cx="36" cy="66" r="8" fill="#f3c94c" stroke="#8a5a00" stroke-width="3"/>
+    </g>
+    <text x="580" y="575" class="label">Control Policy C</text>
+  </g>
+
+  <g id="existing-dialogue">
+    <rect x="38" y="610" width="675" height="126" rx="12" fill="#ffffff" stroke="#f05b47" stroke-width="1.7" stroke-dasharray="9 7"/>
+    <g transform="translate(78 642)">
+      <circle cx="22" cy="23" r="16" fill="#1d547a"/>
+      <path d="M-8 76 C-4 47 49 47 54 76 Z" fill="#1d547a"/>
+      <rect x="54" y="0" width="54" height="36" rx="8" fill="#f5fbff" stroke="#071933" stroke-width="4"/>
+      <circle cx="70" cy="18" r="3.5" fill="#071933"/>
+      <circle cx="82" cy="18" r="3.5" fill="#071933"/>
+      <circle cx="94" cy="18" r="3.5" fill="#071933"/>
+    </g>
+    <text x="70" y="717" class="label">Dialogue Navigation</text>
+    <line x1="258" y1="670" x2="315" y2="670" stroke="#777777" stroke-width="5" marker-end="url(#arrow-gray)"/>
+    <g transform="translate(365 639)">
+      <ellipse cx="30" cy="12" rx="32" ry="12" fill="#de4a36" stroke="#8f1d14" stroke-width="2"/>
+      <rect x="-2" y="12" width="64" height="54" fill="#e24e39" stroke="#8f1d14" stroke-width="2"/>
+      <ellipse cx="30" cy="66" rx="32" ry="12" fill="#cf3928" stroke="#8f1d14" stroke-width="2"/>
+      <line x1="-2" y1="31" x2="62" y2="31" stroke="#ffffff" stroke-width="2"/>
+      <line x1="-2" y1="50" x2="62" y2="50" stroke="#ffffff" stroke-width="2"/>
+    </g>
+    <text x="365" y="717" class="label">Dataset D</text>
+    <line x1="478" y1="670" x2="535" y2="670" stroke="#777777" stroke-width="5" marker-end="url(#arrow-gray)"/>
+    <g transform="translate(585 644)">
+      <rect x="0" y="0" width="56" height="36" rx="8" fill="#d83a2e"/>
+      <path d="M15 36 L8 48 L26 36 Z" fill="#d83a2e"/>
+      <rect x="42" y="22" width="55" height="35" rx="8" fill="#ffffff" stroke="#d83a2e" stroke-width="4"/>
+      <path d="M74 57 L88 68 L83 57 Z" fill="#ffffff" stroke="#d83a2e" stroke-width="4"/>
+      <circle cx="17" cy="18" r="3" fill="#ffffff"/>
+      <circle cx="28" cy="18" r="3" fill="#ffffff"/>
+      <circle cx="39" cy="18" r="3" fill="#ffffff"/>
+    </g>
+    <text x="580" y="700" text-anchor="middle" class="label">Help /</text>
+    <text x="580" y="724" text-anchor="middle" class="label">Dialogue Rule D</text>
+  </g>
+
+  <g id="left-warning">
+    <rect x="38" y="755" width="675" height="121" rx="12" fill="#fff7f4" stroke="#f05b47" stroke-width="2"/>
+    <path d="M116 782 L153 850 L79 850 Z" fill="#d73325"/>
+    <rect x="113" y="807" width="10" height="26" rx="5" fill="#ffffff"/>
+    <circle cx="118" cy="842" r="5" fill="#ffffff"/>
+    <text x="198" y="795" class="panel-title-red">Hard to Transfer</text>
+    <text x="198" y="827" class="panel-title-red">High Adaptation Cost</text>
+    <text x="198" y="859" class="panel-title-red">New Task Requires New Pipeline</text>
+  </g>
+
+  <!-- Center arrow -->
+  <g id="center-arrow">
+    <text x="825" y="378" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#071933">From</text>
+    <text x="825" y="407" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#071933">task-specific</text>
+    <text x="825" y="436" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#071933">pipelines to</text>
+    <text x="825" y="465" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#071933">unified agent</text>
+    <text x="825" y="494" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#071933">runtime</text>
+    <line x1="748" y1="525" x2="880" y2="525" stroke="#0d2b67" stroke-width="16" marker-end="url(#arrow-blue)"/>
+  </g>
+
+  <!-- RIGHT: proposed runtime -->
+  <rect x="900" y="76" width="885" height="805" rx="16" fill="#fbfffb" stroke="#2e7d32" stroke-width="2.5"/>
+  <text x="1342" y="121" text-anchor="middle" class="panel-title-green">Proposed Unified UAV-Agent Runtime</text>
+  <text x="1342" y="152" text-anchor="middle" class="subtitle">Many tasks, one extensible agent framework</text>
+
+  <!-- right task cards -->
+  <g id="right-inputs">
+    <rect x="920" y="182" width="220" height="116" rx="10" fill="#ffffff" stroke="#2e7d32" stroke-width="1.6"/>
+    <path d="M947 222 C978 182 1015 252 1050 205" fill="none" stroke="#163a5f" stroke-width="4" stroke-dasharray="6 5"/>
+    <circle cx="946" cy="218" r="8" fill="#163a5f"/>
+    <path d="M1082 198 L1098 193 L1114 198 L1110 207 L1086 207 Z" fill="#071933"/>
+    <text x="1030" y="282" text-anchor="middle" class="label">Route Following</text>
+
+    <rect x="920" y="320" width="220" height="116" rx="10" fill="#ffffff" stroke="#2e7d32" stroke-width="1.6"/>
+    <circle cx="961" cy="361" r="25" fill="none" stroke="#071933" stroke-width="6"/>
+    <line x1="980" y1="379" x2="1006" y2="405" stroke="#071933" stroke-width="8" stroke-linecap="round"/>
+    <rect x="952" y="352" width="18" height="18" fill="#f0a35d" stroke="#8c4c0e" stroke-width="2"/>
+    <path d="M1078 354 L1093 348 L1108 354 L1105 363 L1081 363 Z" fill="#071933"/>
+    <line x1="1093" y1="363" x2="1093" y2="383" stroke="#071933" stroke-width="3"/>
+    <path d="M1066 390 L1090 366 L1115 394" fill="none" stroke="#2e7d32" stroke-width="3" stroke-dasharray="5 5"/>
+    <text x="1030" y="421" text-anchor="middle" class="label">Object Search</text>
+
+    <rect x="920" y="458" width="220" height="116" rx="10" fill="#ffffff" stroke="#2e7d32" stroke-width="1.6"/>
+    <path d="M952 493 L968 487 L984 493 L981 502 L955 502 Z" fill="#071933"/>
+    <line x1="968" y1="502" x2="968" y2="522" stroke="#071933" stroke-width="3"/>
+    <path d="M934 540 C952 510 989 570 1032 520" fill="none" stroke="#071933" stroke-width="3" stroke-dasharray="6 5"/>
+    <path d="M1056 526 A34 34 0 0 1 1122 526" fill="none" stroke="#071933" stroke-width="4"/>
+    <line x1="1089" y1="526" x2="1112" y2="500" stroke="#071933" stroke-width="4"/>
+    <text x="1030" y="560" text-anchor="middle" class="label">Fine-grained Control</text>
+
+    <rect x="920" y="596" width="220" height="116" rx="10" fill="#ffffff" stroke="#2e7d32" stroke-width="1.6"/>
+    <circle cx="952" cy="642" r="16" fill="#1d547a"/>
+    <path d="M925 696 C929 666 978 666 983 696 Z" fill="#1d547a"/>
+    <rect x="985" y="612" width="54" height="36" rx="8" fill="#f5fbff" stroke="#071933" stroke-width="4"/>
+    <circle cx="1001" cy="630" r="3.5" fill="#071933"/>
+    <circle cx="1013" cy="630" r="3.5" fill="#071933"/>
+    <circle cx="1025" cy="630" r="3.5" fill="#071933"/>
+    <path d="M1076 630 L1093 624 L1110 630 L1106 639 L1080 639 Z" fill="#071933"/>
+    <text x="1030" y="696" text-anchor="middle" class="label">Dialogue Navigation</text>
+  </g>
+
+  <!-- arrows from input cards -->
+  <line x1="1140" y1="240" x2="1180" y2="240" stroke="#2e7d32" stroke-width="4" marker-end="url(#arrow-green)"/>
+  <line x1="1140" y1="378" x2="1180" y2="378" stroke="#2e7d32" stroke-width="4" marker-end="url(#arrow-green)"/>
+  <line x1="1140" y1="516" x2="1180" y2="516" stroke="#2e7d32" stroke-width="4" marker-end="url(#arrow-green)"/>
+  <line x1="1140" y1="654" x2="1180" y2="654" stroke="#2e7d32" stroke-width="4" marker-end="url(#arrow-green)"/>
+
+  <!-- Unified runtime box -->
+  <rect x="1180" y="182" width="365" height="480" rx="14" fill="#f7fbff" stroke="#1f4e79" stroke-width="2"/>
+  <text x="1362" y="220" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="700" fill="#071933">Unified UAV-Agent Runtime</text>
+  <g id="runtime-modules">
+    <rect x="1205" y="238" width="315" height="73" rx="8" fill="#ffffff" stroke="#6d8eb8" stroke-width="1.8"/>
+    <path d="M1230 275 h18 v-18 h18 v18 h18 v18 h-18 v18 h-18 v-18 h-18 z" fill="#70b761" stroke="#2e7d32" stroke-width="2"/>
+    <text x="1330" y="282" class="label">Task Adapter</text>
+
+    <rect x="1205" y="324" width="315" height="73" rx="8" fill="#ffffff" stroke="#6d8eb8" stroke-width="1.8"/>
+    <path d="M1230 347 q24 -15 48 0 v44 q-24 -15 -48 0 z" fill="#ffffff" stroke="#071933" stroke-width="4"/>
+    <path d="M1278 347 q24 -15 48 0 v44 q-24 -15 -48 0 z" fill="#ffffff" stroke="#071933" stroke-width="4"/>
+    <text x="1330" y="368" class="label">Skill Knowledge</text>
+
+    <rect x="1205" y="410" width="315" height="73" rx="8" fill="#ffffff" stroke="#6d8eb8" stroke-width="1.8"/>
+    <ellipse cx="1265" cy="433" rx="28" ry="10" fill="#9d8bd8" stroke="#3b2f7a" stroke-width="2"/>
+    <rect x="1237" y="433" width="56" height="34" fill="#9d8bd8" stroke="#3b2f7a" stroke-width="2"/>
+    <ellipse cx="1265" cy="467" rx="28" ry="10" fill="#8f7ed0" stroke="#3b2f7a" stroke-width="2"/>
+    <text x="1330" y="454" class="label">Multimodal Memory</text>
+
+    <rect x="1205" y="496" width="315" height="73" rx="8" fill="#ffffff" stroke="#6d8eb8" stroke-width="1.8"/>
+    <path d="M1265 510 L1295 524 L1288 556 L1265 571 L1242 556 L1235 524 Z" fill="#4c8f9f" stroke="#15485a" stroke-width="3"/>
+    <path d="M1253 541 l9 10 l19 -25" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round"/>
+    <text x="1330" y="540" class="label">Safe Execution</text>
+
+    <rect x="1205" y="582" width="315" height="62" rx="8" fill="#ffffff" stroke="#6d8eb8" stroke-width="1.8"/>
+    <rect x="1230" y="596" width="58" height="36" rx="8" fill="#1c62b5"/>
+    <path d="M1246 632 L1238 644 L1260 632 Z" fill="#1c62b5"/>
+    <circle cx="1247" cy="614" r="4" fill="#ffffff"/>
+    <circle cx="1260" cy="614" r="4" fill="#ffffff"/>
+    <circle cx="1273" cy="614" r="4" fill="#ffffff"/>
+    <text x="1330" y="621" class="label">AgentMessage</text>
+  </g>
+
+  <!-- Outputs on right -->
+  <g id="right-outcomes">
+    <line x1="1545" y1="385" x2="1595" y2="385" stroke="#2e7d32" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrow-green)"/>
+    <line x1="1545" y1="455" x2="1595" y2="455" stroke="#2e7d32" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrow-green)"/>
+    <line x1="1545" y1="525" x2="1595" y2="525" stroke="#2e7d32" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrow-green)"/>
+
+    <rect x="1595" y="220" width="150" height="110" rx="10" fill="#ffffff" stroke="#2e7d32" stroke-width="1.8"/>
+    <path d="M1630 295 v-50" stroke="#071933" stroke-width="4"/>
+    <rect x="1642" y="275" width="12" height="20" fill="#1f4e79"/>
+    <rect x="1660" y="260" width="12" height="35" fill="#1f4e79"/>
+    <rect x="1678" y="240" width="12" height="55" fill="#1f4e79"/>
+    <path d="M1628 252 C1658 248 1680 230 1700 205" fill="none" stroke="#1f4e79" stroke-width="4" marker-end="url(#arrow-blue)"/>
+    <text x="1670" y="345" text-anchor="middle" class="small">Generalize to</text>
+    <text x="1670" y="367" text-anchor="middle" class="small">New Tasks</text>
+
+    <rect x="1595" y="390" width="150" height="110" rx="10" fill="#ffffff" stroke="#2e7d32" stroke-width="1.8"/>
+    <path d="M1652 430 h18 v-18 h18 v18 h18 v18 h-18 v18 h-18 v-18 h-18 z" fill="#70b761" stroke="#2e7d32" stroke-width="2"/>
+    <text x="1670" y="515" text-anchor="middle" class="small">Plug-in New</text>
+    <text x="1670" y="537" text-anchor="middle" class="small">Skills / Tools</text>
+
+    <rect x="1595" y="560" width="150" height="110" rx="10" fill="#ffffff" stroke="#2e7d32" stroke-width="1.8"/>
+    <rect x="1640" y="585" width="60" height="60" rx="5" fill="#f7fbff" stroke="#071933" stroke-width="3"/>
+    <line x1="1650" y1="603" x2="1688" y2="603" stroke="#071933" stroke-width="3"/>
+    <line x1="1650" y1="620" x2="1678" y2="620" stroke="#071933" stroke-width="3"/>
+    <path d="M1650 640 l10 8 l18 -24" fill="none" stroke="#1f4e79" stroke-width="4"/>
+    <text x="1670" y="690" text-anchor="middle" class="small">Evidence-based</text>
+    <text x="1670" y="712" text-anchor="middle" class="small">Evaluation</text>
+  </g>
+
+  <!-- Runtime shared loop -->
+  <g id="runtime-loop">
+    <rect x="1037" y="700" width="680" height="80" rx="12" fill="#f7fff7" stroke="#2e7d32" stroke-width="2"/>
+    <text x="1075" y="765" class="tiny">Observe</text>
+    <ellipse cx="1084" cy="724" rx="21" ry="13" fill="none" stroke="#071933" stroke-width="4"/>
+    <circle cx="1084" cy="724" r="6" fill="#071933"/>
+    <line x1="1130" y1="734" x2="1180" y2="734" stroke="#2e7d32" stroke-width="4" marker-end="url(#arrow-green)"/>
+    <text x="1200" y="765" class="tiny">Plan</text>
+    <circle cx="1215" cy="724" r="22" fill="#e6f0ff" stroke="#071933" stroke-width="3"/>
+    <path d="M1200 724 h30 M1215 709 v30" stroke="#071933" stroke-width="3"/>
+    <line x1="1250" y1="734" x2="1300" y2="734" stroke="#2e7d32" stroke-width="4" marker-end="url(#arrow-green)"/>
+    <text x="1312" y="765" class="tiny">Execute</text>
+    <path d="M1328 710 L1345 704 L1362 710 L1358 720 L1332 720 Z" fill="#071933"/>
+    <line x1="1345" y1="720" x2="1345" y2="745" stroke="#071933" stroke-width="3"/>
+    <line x1="1375" y1="734" x2="1425" y2="734" stroke="#2e7d32" stroke-width="4" marker-end="url(#arrow-green)"/>
+    <text x="1438" y="765" class="tiny">Reply</text>
+    <rect x="1445" y="704" width="55" height="36" rx="8" fill="#ffffff" stroke="#071933" stroke-width="3"/>
+    <path d="M1460 740 L1450 752 L1478 740 Z" fill="#ffffff" stroke="#071933" stroke-width="3"/>
+    <line x1="1515" y1="734" x2="1565" y2="734" stroke="#2e7d32" stroke-width="4" marker-end="url(#arrow-green)"/>
+    <text x="1580" y="765" class="tiny">Update Memory</text>
+    <ellipse cx="1605" cy="710" rx="25" ry="8" fill="#16476a" stroke="#071933" stroke-width="2"/>
+    <rect x="1580" y="710" width="50" height="35" fill="#16476a" stroke="#071933" stroke-width="2"/>
+    <ellipse cx="1605" cy="745" rx="25" ry="8" fill="#123b58" stroke="#071933" stroke-width="2"/>
+  </g>
+
+  <!-- Success box -->
+  <g id="success-box">
+    <rect x="920" y="792" width="785" height="70" rx="10" fill="#f4fff1" stroke="#2e7d32" stroke-width="2"/>
+    <circle cx="1075" cy="827" r="28" fill="#2e7d32"/>
+    <path d="M1062 827 l10 11 l22 -26" fill="none" stroke="#ffffff" stroke-width="7" stroke-linecap="round"/>
+    <text x="1370" y="820" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700" fill="#1b5e20">Reusable Across Tasks</text>
+    <text x="1370" y="848" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700" fill="#1b5e20">Plug-in Adaptation · Evidence-based Interaction</text>
+  </g>
+
+  <!-- Bottom caption -->
+  <text x="55" y="925" class="caption">
+    Figure 1. Existing UAV-VLN methods often design dedicated datasets and strategies for each task, while our UAV-Agent unifies task adaptation,
+  </text>
+  <text x="55" y="957" class="caption">
+    knowledge injection, memory, safe execution, and human-agent communication.
+  </text>
+</svg>

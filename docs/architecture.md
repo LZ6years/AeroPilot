@@ -1,6 +1,6 @@
 # FlyAgent 架构说明
 
-> Update: Runtime stop now distinguishes semantic completion from abnormal loop-guard stop. A task normally ends when the post-action phase judge returns `complete_task`, or when all semantic phases naturally advance. If a phase exceeds the runtime loop guard, runtime writes `runtime_loop_guard_reached`, hovers, and marks the mission `stopped/incomplete`; it does not auto-advance the phase. `SafetySupervisor` remains a hard safety layer for tool whitelist, yaw/velocity/duration clipping, and yaw scan budget, not a semantic stop rule.
+> Update: Runtime stop now distinguishes semantic completion from abnormal loop-guard stop. A task normally ends when the coupled phase decision returns `complete_task`, or when all semantic phases naturally advance. If a phase exceeds the runtime loop guard, runtime writes `runtime_loop_guard_reached`, hovers, and marks the mission `stopped/incomplete`; it does not auto-advance the phase. `SafetySupervisor` remains a hard safety layer for tool whitelist, yaw/velocity/duration clipping, and yaw scan budget, not a semantic stop rule.
 
 ## 1. 总体思路
 
@@ -24,7 +24,7 @@ flowchart TD
     SIM --> OBS["RGB / depth / pose"]
     OBS --> MEM["FlightMemory + memory/*.jsonl"]
     MEM --> CB
-    RT --> PTJ["Post-action phase transition judge"]
+    RT --> PTJ["Coupled planner/phase decision"]
     PTJ --> MS
 ```
 
@@ -207,7 +207,7 @@ flowchart TD
     RP --> TCV
     SS --> TD["ToolDispatcher"]
     TD --> OBS["Automatic observation"]
-    OBS --> J["Post-action phase transition judge"]
+    OBS --> J["Coupled planner/phase decision"]
 ```
 
 `ToolContractViolation` 保留结构化错误信息，例如 `code`、`message`、`step_index`、`tool`、`field`、`expected`、`actual`。repair planner 消费这些结构化信息，而不是解析自然语言错误。

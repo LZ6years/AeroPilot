@@ -94,7 +94,7 @@ def test_real_engine_demo_action_sequence_reads_events():
     ]
 
 
-def test_real_engine_demo_action_sequence_prefers_debug_step_args_over_compact_events():
+def test_real_engine_demo_action_sequence_prefers_debug_tool_call_args_over_compact_events():
     events = [
         {
             "event": "tool_step_completed",
@@ -106,10 +106,11 @@ def test_real_engine_demo_action_sequence_prefers_debug_step_args_over_compact_e
             },
         },
         {
-            "event": "step_completed",
+            "event": "tool_call_completed",
             "payload": {
                 "phase": "move_forward",
-                "step": {"tool": "uav.move_body", "args": {"direction": "forward", "duration": 1.0}},
+                "tool": "uav.move_body",
+                "args": {"direction": "forward", "duration": 1.0},
                 "result": {"ok": True},
             },
         }

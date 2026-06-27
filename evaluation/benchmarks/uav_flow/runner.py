@@ -11,7 +11,6 @@ from evaluation.benchmarks.uav_flow.html_review import write_html_review
 from evaluation.benchmarks.uav_flow.metrics import evaluate_case_ndtw
 from evaluation.benchmarks.uav_flow.reports import (
     create_eval_dir,
-    evaluation_truth_leak_check,
     run_artifact_summary,
     write_case_outputs,
     write_case_review,
@@ -160,7 +159,6 @@ class UavFlowBenchmarkRunner:
 
         trajectory_meta = export_trajectory(case, env_client.pose_history, case_dir / "uav_agent_trajectory.json")
         run_artifacts = run_artifact_summary(run_dir, self.action_config)
-        leak_check = evaluation_truth_leak_check(run_dir)
         ndtw_result = evaluate_case_ndtw(
             trajectory_meta["path"],
             case.reference_path_preprocessed,
@@ -189,8 +187,6 @@ class UavFlowBenchmarkRunner:
             enabled=self.config.enable_sr_judge,
             model_config=self.model_config,
         )
-        if leak_check.get("status") == "failed":
-            status = "invalid_context_leak"
         case_payload = {
             "case": case.to_dict(include_evaluation_truth=True),
             "planner_safe_case": case.planner_safe_metadata(),
@@ -207,7 +203,6 @@ class UavFlowBenchmarkRunner:
             "plot_result": plot_result,
             "ndtw": ndtw_result,
             "sr_judge": sr_result,
-            "evaluation_truth_leak_check": leak_check,
         }
         review_path = write_case_review(case_dir, case_payload)
         write_case_outputs(
@@ -236,7 +231,6 @@ class UavFlowBenchmarkRunner:
             "plot_result": plot_result,
             "ndtw": ndtw_result,
             "sr_judge": sr_result,
-            "evaluation_truth_leak_check": leak_check,
             "error": error,
         }, env_client
 

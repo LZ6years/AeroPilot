@@ -13,8 +13,8 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.agent.semantic.task_parser import TaskParser
-from src.agent.phase import ADVANCE_TO_NEXT_PHASE, PhaseTransition
-from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
+from src.agent.planning.schemas import ActionWindow, CoupledActionPhasePlan, PlannedStep
 from src.env_client.local_client import LocalEnvClient
 from src.env_client.schemas import MapPackage
 from src.runtime.logging.async_run_logger import AsyncRunLogger
@@ -34,21 +34,35 @@ class DemoHoverPlanner:
     """Deterministic planner used only to exercise the memory-writing path.
 
     This is not meant to be a smart planner. It emits one safe ``uav.hover``
-    step for each phase, then asks the runtime to advance. That keeps the demo
-    focused on TaskRuntime -> FlightMemory -> Context Modules -> ContextComposer
-    rather than on model quality or UAV control.
+    step the first time it sees a phase, then advances on the next window. That
+    keeps the demo focused on TaskRuntime -> FlightMemory -> Context Modules ->
+    ContextComposer rather than on model quality or UAV control.
     """
 
     planner_mode = "demo"
 
-    def plan_next(self, state, context=None):
-        # Copy the current phase name into the plan so downstream events and
-        # memory records look like a normal planner run. The action itself is
-        # fixed to hover so the generated history stays predictable.
-        return ShortHorizonPlan(
-            state.current_phase_name,
+    def __init__(self) -> None:
+        self._phase_calls: dict[str, int] = {}
+
+    def plan_next_with_phase_decision(self, state, context=None):
+        phase = state.current_phase_name
+        calls = self._phase_calls.get(phase, 0)
+        self._phase_calls[phase] = calls + 1
+        if calls > 0:
+            decision = COMPLETE_TASK if state.is_final_phase else ADVANCE_TO_NEXT_PHASE
+            return CoupledActionPhasePlan(
+                phase,
+                PhaseTransition(decision, "memory demo phase evidence is sufficient"),
+                [],
+            )
+        return CoupledActionPhasePlan(
+            phase,
+            PhaseTransition(CONTINUE_CURRENT_PHASE, "memory demo records one safe action window"),
             [PlannedStep.tool_step("uav.hover", {}, "memory demo holds position")],
-            PhaseTransition(ADVANCE_TO_NEXT_PHASE, "memory demo advances one phase per window"),
+            action_window=ActionWindow(
+                intent="record one predictable memory demo action",
+                expected_effect="memory demo writes one safe hover action and refreshed observation",
+            ),
         )
 
 

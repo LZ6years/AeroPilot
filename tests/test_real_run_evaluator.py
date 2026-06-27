@@ -53,11 +53,11 @@ def observation_event(rgb: Path, depth: Path) -> dict:
     }
 
 
-def phase_context_event(phase: str, measurements: dict, facts: dict | None = None) -> dict:
+def phase_window_event(phase: str, measurements: dict, facts: dict | None = None) -> dict:
     return {
-        "event": "phase_transition_judge_context_built",
+        "event": "phase_window_recorded",
         "payload": {
-            "current_phase": {"name": phase},
+            "phase": phase,
             "action_window": {
                 "intent": f"advance {phase}",
                 "scope": "current_phase_only",
@@ -78,10 +78,11 @@ def phase_context_event(phase: str, measurements: dict, facts: dict | None = Non
 
 def step_event(phase: str, tool: str, args: dict) -> dict:
     return {
-        "event": "step_completed",
+        "event": "tool_call_completed",
         "payload": {
             "phase": phase,
-            "step": {"tool": tool, "args": args},
+            "tool": tool,
+            "args": args,
             "result": {"ok": True},
         },
     }
@@ -122,7 +123,6 @@ def agent_message_pair() -> list[dict]:
 def write_completed_run_boilerplate(run_dir: Path) -> None:
     write_json(run_dir / "latest_state.json", {"completed": True, "connected": True, "airborne": True})
     write_json(run_dir / "contexts" / "latest_context.json", {"phase_execution_summary": {}})
-    write_json(run_dir / "contexts" / "latest_phase_transition_context.json", {"phase_execution_summary": {}})
 
 
 def test_evaluator_extracts_compound_task_metrics_and_artifacts(tmp_path):
@@ -132,13 +132,13 @@ def test_evaluator_extracts_compound_task_metrics_and_artifacts(tmp_path):
         task_event(FORWARD_TURN_FORWARD),
         step_event("move_forward", "uav.move_body", {"direction": "forward", "duration": 2.5}),
         observation_event(*artifacts[0]),
-        phase_context_event("move_forward", {"forward_displacement_m": 5.1}, {"move_body_duration_by_direction_success": {"forward": 2.5}}),
+        phase_window_event("move_forward", {"forward_displacement_m": 5.1}, {"move_body_duration_by_direction_success": {"forward": 2.5}}),
         step_event("rotate_right", "uav.turn_relative", {"yaw_deg": 40.0}),
         observation_event(*artifacts[1]),
-        phase_context_event("rotate_right", {"yaw_delta_deg": 40.0}, {"turn_relative_yaw_deg_success_sum": 40.0}),
+        phase_window_event("rotate_right", {"yaw_delta_deg": 40.0}, {"turn_relative_yaw_deg_success_sum": 40.0}),
         step_event("move_forward_again", "uav.move_body", {"direction": "forward", "duration": 1.0}),
         observation_event(*artifacts[2]),
-        phase_context_event("move_forward_again", {"forward_displacement_m": 2.0}),
+        phase_window_event("move_forward_again", {"forward_displacement_m": 2.0}),
         *agent_message_pair(),
         phase_applied_complete(),
     ]
@@ -167,13 +167,13 @@ def test_evaluator_uses_phase_aliases_and_sequential_fallback(tmp_path):
             task_event(STRAFE_LEFT_FORWARD_RIGHT),
             step_event("strafe_left", "uav.move_body", {"direction": "left", "duration": 1.0}),
             observation_event(*artifacts[0]),
-            phase_context_event("strafe_left", {"right_displacement_m": -2.1}),
+            phase_window_event("strafe_left", {"right_displacement_m": -2.1}),
             step_event("move_forward_then_hover", "uav.move_body", {"direction": "forward", "duration": 1.5}),
             observation_event(*artifacts[1]),
-            phase_context_event("move_forward_then_hover", {"forward_displacement_m": 3.0}),
+            phase_window_event("move_forward_then_hover", {"forward_displacement_m": 3.0}),
             step_event("rotate_right_and_stabilize", "uav.turn_relative", {"yaw_deg": 30.0}),
             observation_event(*artifacts[2]),
-            phase_context_event("rotate_right_and_stabilize", {"yaw_delta_deg": 30.0}, {"turn_relative_yaw_deg_success_sum": 30.0}),
+            phase_window_event("rotate_right_and_stabilize", {"yaw_delta_deg": 30.0}, {"turn_relative_yaw_deg_success_sum": 30.0}),
             *agent_message_pair(),
             phase_applied_complete(),
         ],
@@ -226,13 +226,13 @@ def test_evaluator_writes_metrics_report_and_csv(tmp_path):
             task_event(FORWARD_LEFT_FORWARD),
             step_event("move_forward", "uav.move_body", {"direction": "forward", "duration": 1.5}),
             observation_event(*artifacts[0]),
-            phase_context_event("move_forward", {"forward_displacement_m": 3.0}),
+            phase_window_event("move_forward", {"forward_displacement_m": 3.0}),
             step_event("rotate_left", "uav.turn_relative", {"yaw_deg": -30.0}),
             observation_event(*artifacts[1]),
-            phase_context_event("rotate_left", {"yaw_delta_deg": -30.0}, {"turn_relative_yaw_deg_success_sum": -30.0}),
+            phase_window_event("rotate_left", {"yaw_delta_deg": -30.0}, {"turn_relative_yaw_deg_success_sum": -30.0}),
             step_event("move_forward_again", "uav.move_body", {"direction": "forward", "duration": 1.5}),
             observation_event(*artifacts[2]),
-            phase_context_event("move_forward_again", {"forward_displacement_m": 3.0}),
+            phase_window_event("move_forward_again", {"forward_displacement_m": 3.0}),
             *agent_message_pair(),
             phase_applied_complete(),
         ],
@@ -257,13 +257,13 @@ def test_continuous_evaluator_reports_each_instruction(tmp_path):
             task_event(FORWARD_TURN_FORWARD),
             step_event("move_forward", "uav.move_body", {"direction": "forward", "duration": 2.5}),
             observation_event(*artifacts[0]),
-            phase_context_event("move_forward", {"forward_displacement_m": 5.0}),
+            phase_window_event("move_forward", {"forward_displacement_m": 5.0}),
             *agent_message_pair(),
             phase_applied_complete(),
             task_event(FORWARD_LEFT_FORWARD),
             step_event("rotate_left", "uav.turn_relative", {"yaw_deg": -30.0}),
             observation_event(*artifacts[1]),
-            phase_context_event("rotate_left", {"yaw_delta_deg": -30.0}),
+            phase_window_event("rotate_left", {"yaw_delta_deg": -30.0}),
             *agent_message_pair(),
             phase_applied_complete(),
         ],
@@ -293,13 +293,13 @@ def test_batch_single_run_is_evaluated_per_instruction(tmp_path):
             task_event(FORWARD_TURN_FORWARD),
             step_event("move_forward", "uav.move_body", {"direction": "forward", "duration": 2.5}),
             observation_event(*artifacts[0]),
-            phase_context_event("move_forward", {"forward_displacement_m": 5.0}),
+            phase_window_event("move_forward", {"forward_displacement_m": 5.0}),
             *agent_message_pair(),
             phase_applied_complete(),
             task_event(FORWARD_LEFT_FORWARD),
             step_event("move_forward", "uav.move_body", {"direction": "forward", "duration": 1.5}),
             observation_event(*artifacts[1]),
-            phase_context_event("move_forward", {"forward_displacement_m": 3.0}),
+            phase_window_event("move_forward", {"forward_displacement_m": 3.0}),
             *agent_message_pair(),
             phase_applied_complete(),
         ],
@@ -354,10 +354,10 @@ def test_task_suite_instruction_loader_supports_single_and_continuous(tmp_path):
     assert instructions_from_task_suite(path, "continuous", "seq") == [FORWARD_TURN_FORWARD, FORWARD_LEFT_FORWARD]
 
 
-def test_extract_action_sequence_ignores_non_step_events():
+def test_extract_action_sequence_ignores_non_action_events():
     events = [
         {"event": "noise", "payload": {}},
-        {"event": "step_completed", "payload": {"phase": "p", "step": {"tool": "uav.hover", "args": {}}, "result": {"ok": True}}},
+        {"event": "tool_call_completed", "payload": {"phase": "p", "tool": "uav.hover", "args": {}, "result": {"ok": True}}},
     ]
 
     assert extract_action_sequence(events, {}) == [{"phase": "p", "tool": "uav.hover", "args": {}, "ok": True}]

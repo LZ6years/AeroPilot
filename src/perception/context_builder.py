@@ -107,10 +107,6 @@ class ObservationContextBuilder:
             "uav.move_body": {
                 "args_one_of": [
                     {
-                        "direction": "forward|backward|left|right|up|down",
-                        "duration": "number",
-                    },
-                    {
                         "vx": "number",
                         "vy": "number",
                         "vz": "number",

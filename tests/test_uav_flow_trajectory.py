@@ -36,6 +36,13 @@ def test_world_pose_to_model_pose_uses_meters_and_local_yaw():
     assert pose["x"] == 1.0
     assert pose["z"] == 1.0
     assert pose["yaw_deg"] == 30.0
+    assert pose["coordinate_frame"] == "uav_flow_initial_local_canonical_m"
+
+
+def test_world_pose_to_model_pose_preserves_canonical_down_as_negative_z():
+    pose = world_pose_to_model_pose([100.0, 200.0, -350.0, 0.0, 90.0, 0.0], [100.0, 200.0, 50.0, 0.0, 90.0, 0.0])
+
+    assert pose["z"] == -4.0
 
 
 def test_export_trajectory_writes_uav_flow_state_shape(tmp_path):
@@ -52,4 +59,3 @@ def test_model_pose_to_uav_flow_state_defaults_missing_rotation():
     state = model_pose_to_uav_flow_state({"x": 0.5, "y": -0.25, "z": 0.0})
 
     assert state["state"] == [[50.0, -25.0, 0.0], [0.0, 0.0, 0.0]]
-

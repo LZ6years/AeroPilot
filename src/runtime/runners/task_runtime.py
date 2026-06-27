@@ -10,22 +10,15 @@ from src.agent.mission_state import MissionState
 from src.agent.messages import AgentMessage
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition, evaluate_phase_completion
 from src.agent.planning.model_action_planner import ModelActionPlanner
-from src.agent.planning.model_inputs import sanitize_context_for_model_text
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.safety import SafetySupervisor
 from src.agent.safety import SafetyDecision
-from src.agent.planning.schemas import ShortHorizonPlan
+from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
 from src.agent.semantic.schemas import TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.env_client.base import EnvClient
 from src.env_client.schemas import SceneInstance
 from src.memory.flight_memory import FlightMemory
-from src.memory.context.modules.image import (
-    frame_context_metadata,
-    rgb_model_inputs_from_frames,
-    selected_frame_summaries,
-    selected_rgb_frames_from_observations,
-)
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
@@ -33,8 +26,10 @@ from src.perception.raw_observation import RawObservation
 from src.runtime.control import UavStabilizer
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
+from src.runtime.context import PhaseWindowContextBuilder
 from src.tools.dispatcher import ToolDispatcher
-from src.uav import clean_pose_for_model, pose_measurements
+from src.runtime.middleware import ToolTelemetryMiddleware
+from src.uav import pose_measurements
 
 
 class TaskRuntime:
@@ -79,6 +74,8 @@ class TaskRuntime:
             plugin_registry=self.plugin_registry,
             enable_model_skill_selection=getattr(self.planner, "planner_mode", "") == "model",
         )
+        self.phase_window_context_builder = PhaseWindowContextBuilder()
+        self.tool_telemetry = ToolTelemetryMiddleware(self._debug_event)
         self.memory_writer = MemoryEventWriter(self.recorder.run_dir)
         self.memory_reader = MemoryRecordReader(self.recorder.run_dir)
         self._preflight_scene_ids: set[str] = set()
@@ -308,35 +305,86 @@ class TaskRuntime:
         agent_id: str,
         state: MissionState,
     ) -> tuple[ShortHorizonPlan, SafetyDecision, PhaseTransition]:
+        return self._run_coupled_phase_window(scene, agent_id, state)
+
+    def _run_coupled_phase_window(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+    ) -> tuple[ShortHorizonPlan, SafetyDecision, PhaseTransition]:
+        """Execute one model call that decides both phase status and next action."""
+
         phase_name = state.current_phase_name
         phase_key = state.current_phase_key
         observation_before = dict(state.latest_observation)
         state.ensure_current_phase_progress(observation_before)
         state.update_current_phase_progress(observation_before)
         context = self.context_builder.build(state, self._memory_for_state(state))
-        model_context = sanitize_context_for_model_text(context)
-        self.recorder.write_json("contexts/latest_context.json", context)
+        phase_window_context = self.phase_window_context_builder.build(state, context, observation_before)
+        coupled_context = phase_window_context.planner_payload
+        model_context = phase_window_context.model_context
+        self.recorder.write_json("contexts/latest_context.json", coupled_context)
         self.recorder.write_json("contexts/latest_action_planner_model_context.json", model_context)
+        planner = getattr(self.planner, "plan_next_with_phase_decision", None)
+        if not callable(planner):
+            raise RuntimeError("TaskRuntime requires planner.plan_next_with_phase_decision")
         try:
-            raw_plan = self.planner.plan_next(state, context)
+            coupled_plan: CoupledActionPhasePlan = planner(state, coupled_context)
         except ModelRepairPlannerError as exc:
             self._record_model_action_contract_repair_events(exc.repair_attempts)
             raise
         self._record_model_action_contract_repair_events(getattr(self.planner, "last_repair_attempts", []))
-        if getattr(self.planner, "planner_mode", "") == "model":
-            self._debug_event("model_action_planned", raw_plan.to_dict())
+        transition = coupled_plan.phase_decision
+        raw_plan = coupled_plan.to_short_horizon_plan()
+        self._debug_event("model_action_planned", coupled_plan.to_dict())
+        safety_decision = SafetyDecision(raw_plan, [])
+        planner_debug_ref = self._write_action_planner_debug_artifact(
+            state,
+            coupled_context,
+            model_context,
+            raw_plan,
+            raw_plan,
+            safety_decision,
+            coupled_plan=coupled_plan,
+        )
+        decision_payload = {
+            "phase": coupled_plan.phase,
+            "decision": transition.decision,
+            "reason": transition.reason,
+            "step_count": len(coupled_plan.steps),
+            "planner_debug_ref": planner_debug_ref,
+        }
+        self._debug_event("coupled_planner_phase_decided", decision_payload)
+        self._event("coupled_planner_phase_decided", decision_payload)
+        self._agent_messages(coupled_plan.agent_messages, source="coupled_planner", phase=coupled_plan.phase)
+        if transition.decision != CONTINUE_CURRENT_PHASE:
+            self._event(
+                "phase_plan_ready",
+                {
+                    "phase": raw_plan.phase,
+                    "action_window": raw_plan.action_window.to_dict(),
+                    "step_count": 0,
+                    "tools": [],
+                    "planner_debug_ref": planner_debug_ref,
+                    "coupled_phase_decision": transition.to_dict(),
+                    "note": "No UAV tool executed because coupled planner requested a phase transition.",
+                },
+            )
+            return raw_plan, safety_decision, transition
+
         safety_decision = self.safety.review(raw_plan, state)
         plan = safety_decision.plan
         planner_debug_ref = self._write_action_planner_debug_artifact(
             state,
-            context,
+            coupled_context,
             model_context,
             raw_plan,
             plan,
             safety_decision,
+            coupled_plan=coupled_plan,
         )
         self._debug_event("short_horizon_planned", plan.to_dict())
-        self._agent_messages(plan.agent_messages, source="action_planner", phase=plan.phase)
         self._event(
             "phase_plan_ready",
             {
@@ -345,6 +393,7 @@ class TaskRuntime:
                 "step_count": len(plan.steps),
                 "tools": [step.tool for step in plan.steps if step.kind == "tool"],
                 "planner_debug_ref": planner_debug_ref,
+                "coupled_phase_decision": transition.to_dict(),
             },
         )
         if safety_decision.interventions:
@@ -366,24 +415,32 @@ class TaskRuntime:
         executed_steps = []
         for index, step in enumerate(plan.steps):
             payload = {"phase": plan.phase, "step_index": index, "step": step.to_dict()}
-            self._debug_event("step_started", payload)
             if step.kind != "tool" or not step.tool:
                 raise ValueError("runtime action plan requires tool steps; observation is automatic")
-            result = self.tools.call(
-                scene.scene_instance_id,
-                agent_id,
-                step.tool,
-                step.args,
-                runtime_context={
-                    "latest_observation": dict(state.latest_observation),
-                    "observation_before": dict(observation_before),
-                    "phase": plan.phase,
-                    "run_dir": str(self.recorder.run_dir),
-                },
+            result = self.tool_telemetry.run_tool_step(
+                scene_instance_id=scene.scene_instance_id,
+                agent_id=agent_id,
+                phase=plan.phase,
+                window_index=state.current_phase_window_count,
+                step_index=index,
+                tool=step.tool,
+                args=step.args,
+                pose_before=self._pose_from_observation(state.latest_observation),
+                call_fn=lambda step=step: self.tools.call(
+                    scene.scene_instance_id,
+                    agent_id,
+                    step.tool,
+                    step.args,
+                    runtime_context={
+                        "latest_observation": dict(state.latest_observation),
+                        "observation_before": dict(observation_before),
+                        "phase": plan.phase,
+                        "run_dir": str(self.recorder.run_dir),
+                    },
+                ),
             )
             data = result.to_dict()
             self._record_action(state, step.tool, step.args, data)
-            self._debug_event("step_completed", {**payload, "result": data})
             if not result.ok:
                 raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
             stabilization = self.stabilizer.wait_after_step(scene.scene_instance_id, agent_id, plan.phase, step)
@@ -409,6 +466,7 @@ class TaskRuntime:
             "phase": phase_name,
             "window_index": state.current_phase_window_count,
             "action_window": plan.action_window.to_dict(),
+            "coupled_phase_decision": transition.to_dict(),
             "executed_steps": list(executed_steps),
             "observation_before": observation_before,
             "observation_after": observation_after,
@@ -421,6 +479,7 @@ class TaskRuntime:
             "phase_key": phase_key,
             "window_index": state.current_phase_window_count,
             "action_window": plan.action_window.to_dict(),
+            "coupled_phase_decision": transition.to_dict(),
             "executed_step_count": len(executed_steps),
             "executed_tools": [
                 executed.get("step", {}).get("tool")
@@ -438,16 +497,7 @@ class TaskRuntime:
             last_window_measurements=window_measurements,
             tool_facts_delta=self._tool_facts_from_executed_steps(executed_steps),
         )
-        transition = self._judge_phase_transition_after_execution(
-            state,
-            context,
-            plan,
-            safety_decision,
-            observation_before,
-            observation_after,
-            executed_steps,
-        )
-        return plan, safety_decision, transition
+        return plan, safety_decision, PhaseTransition.continue_current_phase(transition.reason)
 
     def _apply_phase_transition(
         self,
@@ -459,10 +509,12 @@ class TaskRuntime:
         transition: PhaseTransition,
     ) -> None:
         metrics = self._current_phase_metrics(state)
+        transition_source = "coupled_planner"
         payload = {
             "phase": plan.phase,
             "decision": transition.decision,
             "reason": transition.reason,
+            "transition_source": transition_source,
             "current_phase_window_count": state.current_phase_window_count,
             "max_phase_window_count": state.max_phase_window_count,
             "phase_metrics": metrics,
@@ -470,8 +522,9 @@ class TaskRuntime:
                 metrics,
                 state.current_phase_execution_summary,
             ),
+            "phase_progress_evidence": self._phase_progress_evidence(state),
         }
-        self._agent_messages(transition.agent_messages, source="phase_judge", phase=plan.phase)
+        self._agent_messages(transition.agent_messages, source=transition_source, phase=plan.phase)
         if safety_decision.interventions and not self._safety_allows_phase_transition(safety_decision):
             self._debug_event(
                 "phase_transition_suppressed_by_safety",
@@ -551,133 +604,11 @@ class TaskRuntime:
         self._try_hover(scene, agent_id, state)
         state.mark_stopped("visual_search_budget_exhausted", source="safety_yaw_scan_budget")
 
-    def _judge_phase_transition_after_execution(
-        self,
-        state: MissionState,
-        planner_context: dict,
-        plan: ShortHorizonPlan,
-        safety_decision: SafetyDecision,
-        observation_before: dict,
-        observation_after: dict,
-        executed_steps: list[dict],
-    ) -> PhaseTransition:
-        judge = getattr(self.planner, "judge_phase_transition", None)
-        if not callable(judge):
-            reason = (
-                "SafetySupervisor changed the action; post-action judgment is required"
-                if safety_decision.interventions
-                else "post-action phase judge unavailable; continue current phase conservatively"
-            )
-            self._debug_event(
-                "post_action_phase_judge_unavailable",
-                {
-                    "phase": plan.phase,
-                    "reason": reason,
-                    "safety_intervention_count": len(safety_decision.interventions),
-                },
-            )
-            return PhaseTransition.continue_current_phase(reason)
-        phase_context = self._build_post_action_phase_context(
-            state,
-            planner_context,
-            plan,
-            safety_decision,
-            observation_before,
-            observation_after,
-            executed_steps,
-        )
-        model_phase_context = sanitize_context_for_model_text(phase_context)
-        self.recorder.write_json("contexts/latest_phase_transition_context.json", phase_context)
-        self.recorder.write_json("contexts/latest_phase_transition_model_context.json", model_phase_context)
-        context_ref = self._write_phase_transition_debug_artifact(
-            state.current_phase_key,
-            state.current_phase_window_count,
-            {**phase_context, "model_context": model_phase_context},
-        )
-        context_summary = {
-            "phase": plan.phase,
-            "phase_key": state.current_phase_key,
-            "window_index": state.current_phase_window_count,
-            "context_ref": context_ref,
-            "action_window": phase_context.get("action_window", {}),
-            "phase_metrics": phase_context.get("phase_metrics", []),
-            "phase_execution_summary": phase_context.get("phase_execution_summary", {}),
-        }
-        self._debug_event("phase_transition_judge_context_built", context_summary)
-        self._event("phase_transition_judge_context_built", context_summary)
-        transition = judge(phase_context)
-        self._event("model_phase_transition_judged", transition.to_dict())
-        self._debug_event("model_phase_transition_judged", transition.to_dict())
-        return transition
-
-    def _build_post_action_phase_context(
-        self,
-        state: MissionState,
-        planner_context: dict,
-        plan: ShortHorizonPlan,
-        safety_decision: SafetyDecision,
-        observation_before: dict,
-        observation_after: dict,
-        executed_steps: list[dict],
-    ) -> dict:
-        before_pose = self._pose_from_observation(observation_before)
-        after_pose = self._pose_from_observation(observation_after)
-        clean_observation_before = self._clean_observation_for_model(observation_before)
-        clean_observation_after = self._clean_observation_for_model(observation_after)
-        memory = self._memory_for_state(state)
-        phase_judge_fragments = self._post_action_phase_fragments(clean_observation_after, memory)
-        phase_judge_model_input_count = sum(
-            len(fragment.get("model_inputs", []))
-            for fragment in phase_judge_fragments
-            if isinstance(fragment, dict)
-        )
-        metrics = self._current_phase_metrics(state)
-        completion_evaluation = evaluate_phase_completion(
-            metrics,
-            state.current_phase_execution_summary,
-        )
-        return {
-            "active_instruction": state.user_instruction,
-            "semantic_goal": state.semantic_plan.task_goal.to_dict(),
-            "current_phase": planner_context.get("current_phase"),
-            "phase_metrics": metrics,
-            "phase_completion_evaluation": completion_evaluation,
-            "phase_window_count": state.current_phase_window_count,
-            "max_phase_window_count": state.max_phase_window_count,
-            "action_window": plan.action_window.to_dict(),
-            "planner_context_summary": {
-                "fragment_names": [fragment.get("name") for fragment in planner_context.get("fragments", [])],
-                "phase_judge_model_input_count": phase_judge_model_input_count,
-                "safety_constraints": planner_context.get("safety_constraints", {}),
-            },
-            "fragments": phase_judge_fragments,
-            "user_preferences": planner_context.get("user_preferences", {}),
-            "safety_intervention_summary": self._safety_intervention_summary(safety_decision, state, executed_steps),
-            "yaw_scan_remaining_deg": self._yaw_scan_remaining_deg(state),
-            "visual_phase_budget_exhausted": self._visual_phase_budget_exhausted(
-                {"phase_completion_evaluation": completion_evaluation},
-                safety_decision,
-            ),
-            "recent_executed_tools": self._executed_tool_names(executed_steps)[-5:],
-            "recent_safety_reasons": self._safety_intervention_reasons(safety_decision)[-5:],
-            "phase_execution_summary": state.current_phase_execution_summary,
-            "action_plan": plan.to_dict(),
-            "executed_steps": list(executed_steps),
-            "safety_interventions": list(safety_decision.interventions),
-            "observation_before": clean_observation_before,
-            "observation_after": clean_observation_after,
-            "measurements": pose_measurements(before_pose, after_pose),
-            "recent_history": {
-                "recent_action_refs": list(memory.recent_action_refs[-5:]),
-                "recent_observation_refs": list(memory.recent_observation_refs[-3:]),
-                "note": "Full history is stored in memory/*.jsonl; MissionState keeps only latest state.",
-            },
-        }
-
     def _current_phase_metrics(self, state: MissionState) -> list[dict[str, Any]]:
-        if state.current_phase_index >= len(state.semantic_plan.phases):
-            return []
-        return [dict(item) for item in state.semantic_plan.phases[state.current_phase_index].metrics]
+        return self.phase_window_context_builder.current_phase_metrics(state)
+
+    def _phase_progress_evidence(self, state: MissionState) -> dict[str, Any]:
+        return self.phase_window_context_builder.phase_progress_evidence(state)
 
     def _safety_allows_phase_transition(self, safety_decision: SafetyDecision) -> bool:
         if not safety_decision.interventions:
@@ -746,80 +677,6 @@ class TaskRuntime:
                 names.append(str(step["tool"]))
         return names
 
-    def _post_action_phase_fragments(
-        self,
-        observation_after: dict,
-        memory: FlightMemory | None = None,
-    ) -> list[dict[str, Any]]:
-        frames = observation_after.get("frames") if isinstance(observation_after, dict) else {}
-        rgb_frame = frames.get("rgb") if isinstance(frames, dict) else None
-        latest_rgb = dict(rgb_frame) if isinstance(rgb_frame, dict) else None
-        selected_rgb_frames = []
-        observations = []
-        if memory and memory.memory_reader:
-            observations = memory.memory_reader.read_refs(memory.recent_observation_refs)
-            selected_rgb_frames = selected_rgb_frames_from_observations(
-                memory.memory_reader,
-                observations,
-                observation_anchors=getattr(memory, "observation_anchors", {}),
-            )
-        if not selected_rgb_frames and latest_rgb:
-            latest_rgb["selection_role"] = "current_observation"
-            latest_rgb["selection_reason"] = "Use as the current visual evidence for this decision."
-            latest_rgb["input_id"] = "image_1_current_observation"
-            latest_rgb["usage"] = "Use as the current visual evidence for this decision."
-            selected_rgb_frames = [latest_rgb]
-        model_inputs = rgb_model_inputs_from_frames(selected_rgb_frames)
-        has_rgb = latest_rgb is not None
-        has_mock_frames = any(frame.get("mock") is True for frame in selected_rgb_frames) or bool(
-            latest_rgb and latest_rgb.get("mock") is True
-        )
-        selected_frames = selected_frame_summaries(selected_rgb_frames)
-        return [
-            {
-                "name": "image",
-                "enabled": True,
-                "source": "PostActionObservationImageContext",
-                "content": {
-                    "selected_frames": selected_frames,
-                    "visual_evidence": {
-                        "has_rgb": has_rgb,
-                        "has_depth": False,
-                        "has_mock_frames": has_mock_frames,
-                        "latest_observation_source": observation_after.get("source"),
-                        "attached_image_count": len(model_inputs),
-                        "interpretation_status": (
-                            "image_attached_for_direct_judge_inspection"
-                            if model_inputs
-                            else "metadata_only_not_interpreted"
-                        ),
-                    },
-                },
-                "model_inputs": model_inputs,
-                "facts": [],
-                "risks": [
-                    {
-                        "type": "visual_evidence_is_mock",
-                        "value": "rgb",
-                        "source": "PostActionObservationImageContext",
-                    }
-                ]
-                if has_mock_frames
-                else [],
-                "artifact_refs": [
-                    frame.get("artifact_ref") or frame.get("path")
-                    for frame in selected_rgb_frames
-                    if frame.get("artifact_ref") or frame.get("path")
-                ],
-                "confidence": "medium" if has_rgb else "low",
-                "warnings": ["rgb_frame_is_mock"] if has_mock_frames else [],
-                "metadata": {
-                    "observation_source": observation_after.get("source"),
-                    **frame_context_metadata(observations, selected_rgb_frames, [latest_rgb] if latest_rgb else []),
-                },
-            }
-        ]
-
     def _tool_facts_from_executed_steps(self, executed_steps: list[dict]) -> dict:
         facts: dict[str, object] = {
             "total_steps": 0,
@@ -862,13 +719,6 @@ class TaskRuntime:
     def _pose_from_observation(self, observation: dict) -> dict:
         pose = observation.get("pose") if isinstance(observation, dict) else None
         return dict(pose) if isinstance(pose, dict) else {}
-
-    def _clean_observation_for_model(self, observation: dict) -> dict:
-        data = dict(observation) if isinstance(observation, dict) else {}
-        pose = data.get("pose")
-        if isinstance(pose, dict):
-            data["pose"] = clean_pose_for_model(pose)
-        return data
 
     def _apply_automatic_observation_policy(
         self,
@@ -979,6 +829,7 @@ class TaskRuntime:
         if event in {
             "instruction_started",
             "phase_plan_ready",
+            "coupled_planner_phase_decided",
             "tool_step_completed",
             "observation_updated",
             "phase_transition_applied",
@@ -1078,30 +929,27 @@ class TaskRuntime:
         raw_plan: ShortHorizonPlan,
         safe_plan: ShortHorizonPlan,
         safety_decision: SafetyDecision,
+        coupled_plan: CoupledActionPhasePlan | None = None,
     ) -> str | None:
         if not self.enable_action_planner_debug:
             return None
         name = f"debug/action_planner/{self._safe_file_part(state.current_phase_key)}_window_{state.current_phase_window_count:03d}.json"
-        self.recorder.write_json(
-            name,
-            {
-                "phase": state.current_phase_name,
-                "phase_key": state.current_phase_key,
-                "window_index": state.current_phase_window_count,
-                "planner_context": _redact_model_input_data(planner_context),
-                "model_context": model_context,
-                "raw_plan": raw_plan.to_dict(),
-                "safe_plan": safe_plan.to_dict(),
-                "safety_decision": {
-                    "interventions": list(safety_decision.interventions),
-                    "plan_changed": bool(safety_decision.interventions),
-                },
+        payload = {
+            "phase": state.current_phase_name,
+            "phase_key": state.current_phase_key,
+            "window_index": state.current_phase_window_count,
+            "planner_context": _redact_model_input_data(planner_context),
+            "model_context": model_context,
+            "raw_plan": raw_plan.to_dict(),
+            "safe_plan": safe_plan.to_dict(),
+            "safety_decision": {
+                "interventions": list(safety_decision.interventions),
+                "plan_changed": bool(safety_decision.interventions),
             },
-        )
-        return name
-
-    def _write_phase_transition_debug_artifact(self, phase_key: str, window_index: int, payload: dict) -> str:
-        name = f"debug/phase_transition/{self._safe_file_part(phase_key)}_window_{window_index:03d}.json"
+        }
+        if coupled_plan is not None:
+            payload["coupled_plan"] = coupled_plan.to_dict()
+            payload["coupled_phase_decision"] = coupled_plan.phase_decision.to_dict()
         self.recorder.write_json(name, payload)
         return name
 

@@ -2,6 +2,7 @@
 
 from src.uav.commands import (
     AIRSIM_NED_VERTICAL_SIGN,
+    CANONICAL_VERTICAL_SIGN,
     UNREALCV_VERTICAL_SIGN,
     move_body_velocity_from_args,
 )
@@ -18,6 +19,7 @@ from src.uav.motion import body_velocity_to_world_delta, pose_measurements
 
 __all__ = [
     "AIRSIM_NED_VERTICAL_SIGN",
+    "CANONICAL_VERTICAL_SIGN",
     "UNREALCV_VERTICAL_SIGN",
     "body_velocity_to_world_delta",
     "clean_pose_for_model",

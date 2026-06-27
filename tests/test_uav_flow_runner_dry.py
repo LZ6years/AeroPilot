@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
+from evaluation.benchmarks.uav_flow.cases import load_cases
 from evaluation.benchmarks.uav_flow.config import UavFlowEvalConfig
 from evaluation.benchmarks.uav_flow.runner import UavFlowBenchmarkRunner
 from evaluation.benchmarks.uav_flow.unrealcv_scenario import UavFlowBenchmarkEnvClient
 from src.agent.phase import COMPLETE_TASK, PhaseTransition
-from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.agent.planning.schemas import CoupledActionPhasePlan
 from src.agent.mission_state import MissionState
 from src.agent.semantic.schemas import TaskParseResult
 from src.agent.semantic.validator import semantic_plan_from_dict
@@ -123,17 +125,16 @@ class FakePlanner:
     def __init__(self, *args, **kwargs) -> None:
         pass
 
-    def plan_next(self, state, context) -> ShortHorizonPlan:
-        return ShortHorizonPlan(
+    def plan_next_with_phase_decision(self, state, context) -> CoupledActionPhasePlan:
+        return CoupledActionPhasePlan(
             phase="benchmark_phase",
-            steps=[PlannedStep.tool_step("uav.hover", {})],
+            phase_decision=PhaseTransition(COMPLETE_TASK, "dry runner complete"),
+            steps=[],
+            agent_messages=[],
         )
 
-    def judge_phase_transition(self, phase_context) -> PhaseTransition:
-        return PhaseTransition(COMPLETE_TASK, "dry runner complete")
 
-
-def test_runner_dry_writes_review_leak_check_and_rgb_summary(tmp_path, monkeypatch):
+def test_runner_dry_writes_review_truth_artifact_and_rgb_summary(tmp_path, monkeypatch):
     import evaluation.benchmarks.uav_flow.runner as runner_module
 
     monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
@@ -154,7 +155,7 @@ def test_runner_dry_writes_review_leak_check_and_rgb_summary(tmp_path, monkeypat
     result = runner.run_case(case, tmp_path / "eval" / "manual")
 
     assert result["status"] == "ok"
-    assert result["evaluation_truth_leak_check"]["status"] == "passed"
+    assert "evaluation_truth_leak_check" not in result
     assert result["run_artifacts"]["first_rgb"]
     assert result["visual_diagnostics"]["truth_leak_check"]["status"] == "passed"
     assert result["review_path"].endswith("review.md")
@@ -165,15 +166,55 @@ def test_runner_dry_writes_review_leak_check_and_rgb_summary(tmp_path, monkeypat
     assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "review.md").exists()
     assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "plot_result.json").exists()
     assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "visual_diagnostics.json").exists()
+    case_payload = (tmp_path / "eval" / "manual" / "cases" / case.case_id / "case.json").read_text(encoding="utf-8")
+    assert "reference_path_preprocessed" in case_payload
+    assert "evaluation_truth_leak_check" not in case_payload
 
 
 def test_config_roundtrip_includes_reuse_real_unrealcv_env():
-    config = UavFlowEvalConfig.from_dict({"real_unrealcv": True, "reuse_real_unrealcv_env": False})
+    config = UavFlowEvalConfig.from_dict(
+        {
+            "real_unrealcv": True,
+            "reuse_real_unrealcv_env": False,
+            "limit_per_class": 3,
+        }
+    )
 
     assert config.real_unrealcv is True
     assert config.reuse_real_unrealcv_env is False
+    assert config.limit_per_class == 3
     assert UavFlowEvalConfig.from_dict({}).reuse_real_unrealcv_env is True
     assert config.to_dict()["reuse_real_unrealcv_env"] is False
+
+
+def test_problem_case_config_loads_fixed_regression_cases():
+    config = UavFlowEvalConfig.from_file(
+        Path("evaluation/benchmarks/uav_flow/configs/uav_flow_problem_cases_eval.json")
+    )
+
+    cases = load_cases(
+        config.uav_flow_repo_path,
+        classes=config.classes,
+        limit_per_class=config.limit_per_class,
+        instruction_field=config.instruction_field,
+        test_jsons_path=config.test_jsons_path,
+        classified_instr_path=config.classified_instr_path,
+    )
+
+    case_ids = [case.case_id for case in cases]
+    assert case_ids == [
+        "2025-03-30_11-49-38",
+        "2025-03-30_11-52-55",
+        "2025-03-30_11-53-06",
+        "2025-05-06_22-56-36",
+        "2025-05-06_22-56-53",
+        "2025-05-06_22-57-10",
+        "2025-03-30_12-12-25",
+        "2025-05-06_23-21-33",
+        "2025-03-30_11-51-33",
+        "2025-03-30_12-12-19",
+    ]
+    assert config.metadata["shift_angled_move_expected"] == "record_only_until_task_parser_is_reworked"
 
 
 def test_runner_reuses_single_real_env_client_across_cases(tmp_path, monkeypatch):

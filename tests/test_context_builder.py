@@ -128,9 +128,9 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert "lifecycle_tools_excluded" not in action_constraints
     assert action_constraints["action_schemas"]["uav.hover"]["args"] == {}
     assert action_constraints["action_schemas"]["uav.turn_relative"]["args"] == {"yaw_deg": "number"}
-    assert action_constraints["action_schemas"]["uav.move_body"]["args_one_of"][0]["direction"] == (
-        "forward|backward|left|right|up|down"
-    )
+    assert action_constraints["action_schemas"]["uav.move_body"]["args_one_of"] == [
+        {"vx": "number", "vy": "number", "vz": "number", "duration": "number"}
+    ]
     assert "flight_memory" not in context
     assert "recent_observations" not in context
     assert "instruction_history" not in context
@@ -326,6 +326,7 @@ def test_model_user_content_omits_fragment_debug_metadata(tmp_path):
     assert "safety_constraints" not in text
     assert "observation_policy" not in text
     assert "yaw_scan_remaining_deg" not in text
+    assert '"direction"' not in text
 
 
 def test_context_builder_action_trend_summarizes_recent_actions(tmp_path):
@@ -377,6 +378,19 @@ def test_context_builder_action_trend_keeps_mixed_yaw_from_becoming_repeated(tmp
 def test_context_builder_action_trend_detects_repeated_move(tmp_path):
     state = make_state()
     actions = [
+        {"tool": "uav.move_body", "args": {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 0.3}, "result": {"ok": True}},
+        {"tool": "uav.move_body", "args": {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 0.3}, "result": {"ok": True}},
+    ]
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, actions=actions))
+
+    action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
+    assert action["content"]["action_trend"]["motion_pattern"]["type"] == "repeated_move"
+
+
+def test_context_builder_action_history_hides_legacy_move_direction(tmp_path):
+    state = make_state()
+    actions = [
         {"tool": "uav.move_body", "args": {"direction": "forward", "duration": 0.3}, "result": {"ok": True}},
         {"tool": "uav.move_body", "args": {"direction": "forward", "duration": 0.3}, "result": {"ok": True}},
     ]
@@ -384,7 +398,13 @@ def test_context_builder_action_trend_detects_repeated_move(tmp_path):
     context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, actions=actions))
 
     action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
+    recent_args = [item["args"] for item in action["content"]["recent_actions"]]
+    assert recent_args == [
+        {"duration": 0.3, "legacy_named_motion": True},
+        {"duration": 0.3, "legacy_named_motion": True},
+    ]
     assert action["content"]["action_trend"]["motion_pattern"]["type"] == "repeated_move"
+    assert "direction" not in json.dumps(action["content"], ensure_ascii=False)
 
 
 def test_context_builder_runs_custom_multimodal_image_only_when_configured(tmp_path):

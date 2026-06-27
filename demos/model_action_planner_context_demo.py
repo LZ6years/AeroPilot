@@ -29,8 +29,9 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.agent.mission_state import MissionState
 from src.agent.planning.model_action_planner import ModelActionPlanner
+from src.agent.planning.model_inputs import build_model_user_content
 from src.agent.safety import SafetySupervisor
-from src.agent.planning.schemas import ShortHorizonPlan
+from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
 from src.agent.semantic.schemas import TaskParseResult
 from src.agent.semantic.task_parser import TaskParser, _loads_json_object
 from src.memory.flight_memory import FlightMemory
@@ -54,6 +55,7 @@ DEMO_OUTPUT_FILES = {
     "debug/model_payload.json",
     "debug/raw_model_response.json",
     "debug/raw_model_content.json",
+    "debug/coupled_plan.json",
     "debug/validated_plan.json",
     "debug/repair_attempts.json",
     "debug/repair_result.json",
@@ -79,6 +81,7 @@ class DemoArtifacts:
     context: dict[str, Any]
     raw_model_response: dict[str, Any]
     raw_model_content: dict[str, Any]
+    coupled_plan: CoupledActionPhasePlan
     validated_plan: ShortHorizonPlan
     repair_attempts: list[dict[str, Any]]
     repair_result: dict[str, Any]
@@ -100,16 +103,16 @@ class RecordingModelActionPlanner(ModelActionPlanner):
         self.last_content = ""
         super().__init__(model_config)
 
-    def _call_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
+    def _call_openai_compatible_json(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
         endpoint = self.model_config.chat_completions_url()
-        # The user message is the complete PlannerContext JSON. The system
-        # prompt explains how to read that JSON and what action contract the
-        # model must obey.
+        # The user message is the complete model-facing planner context. The
+        # system prompt explains how to decide phase progress and tool actions
+        # in one coupled response.
         payload = {
             "model": self.model_config.model_name,
             "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": build_model_user_content(user_payload)},
             ],
             "temperature": 0,
             "response_format": {"type": "json_object"},
@@ -186,11 +189,13 @@ def run_demo(instruction: str, model_config: ModelConfig, run_dir: Path) -> Demo
     # action planner.
     context = ObservationContextBuilder(map_memory=map_memory).build(state, flight_memory)
 
-    # Stage 4: ModelActionPlanner calls the model, then validates schema/tool
-    # contract locally. A valid model response is still only a proposal; it has
-    # not touched the UAV.
+    # Stage 4: ModelActionPlanner calls the coupled planner/phase-decision
+    # model, then validates schema/tool contract locally when the phase
+    # continues. A valid model response is still only a proposal; it has not
+    # touched the UAV.
     planner = RecordingModelActionPlanner(model_config)
-    validated_plan = planner.plan_next(state, context)
+    coupled_plan = planner.plan_next_with_phase_decision(state, context)
+    validated_plan = coupled_plan.to_short_horizon_plan()
 
     # Stage 5: SafetySupervisor is the final safety gate before any real UAV
     # tool would run. This demo stops here, so the output is safe to inspect
@@ -209,6 +214,7 @@ def run_demo(instruction: str, model_config: ModelConfig, run_dir: Path) -> Demo
         context=context,
         raw_model_response=planner.last_raw_response,
         raw_model_content=_loads_json_object(planner.last_content),
+        coupled_plan=coupled_plan,
         validated_plan=validated_plan,
         repair_attempts=list(planner.last_repair_attempts),
         repair_result=dict(planner.last_repair_result),
@@ -317,6 +323,7 @@ def write_demo_outputs(artifacts: DemoArtifacts) -> None:
         "debug/model_payload.json": artifacts.model_payload,
         "debug/raw_model_response.json": artifacts.raw_model_response,
         "debug/raw_model_content.json": artifacts.raw_model_content,
+        "debug/coupled_plan.json": artifacts.coupled_plan.to_dict(),
         "debug/validated_plan.json": artifacts.validated_plan.to_dict(),
         "debug/repair_attempts.json": {"attempts": artifacts.repair_attempts},
         "debug/repair_result.json": artifacts.repair_result,
@@ -377,12 +384,17 @@ def build_preview_markdown(artifacts: DemoArtifacts) -> str:
             payload["messages"][0]["content"],
             "```",
             "",
-            "## Raw Model Action JSON",
+            "## Raw Coupled Model JSON",
             "```json",
             json.dumps(artifacts.raw_model_content, indent=2, ensure_ascii=False),
             "```",
             "",
-            "## Validated Planner Output",
+            "## Coupled Planner Decision",
+            "```json",
+            json.dumps(artifacts.coupled_plan.to_dict(), indent=2, ensure_ascii=False),
+            "```",
+            "",
+            "## Executable Tool Plan",
             "```json",
             json.dumps(artifacts.validated_plan.to_dict(), indent=2, ensure_ascii=False),
             "```",
@@ -399,17 +411,17 @@ def build_preview_markdown(artifacts: DemoArtifacts) -> str:
             ),
             "```",
             "",
-            "## Phase Transition Boundary",
+            "## Coupled Phase Decision Boundary",
             "",
-            "ShortHorizonPlan no longer carries a planner-side phase_transition. "
-            "Runtime applies phase changes only from the post-action phase judge.",
+            "ShortHorizonPlan remains the executable UAV tool plan. "
+            "Phase decisions come from the coupled planner response and are applied by runtime events.",
             "",
             "```json",
             json.dumps(
                 {
-                    "planner_side_phase_transition": "removed",
+                    "planner_side_transition": "removed",
+                    "phase_decision_source": "coupled_planner_phase_decided",
                     "authoritative_events": [
-                        "model_phase_transition_judged",
                         "phase_transition_applied",
                         "phase_transition_continued",
                     ],

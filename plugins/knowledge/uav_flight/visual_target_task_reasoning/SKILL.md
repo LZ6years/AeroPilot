@@ -25,8 +25,8 @@ turn. When the current intent is to face, center, or keep attention on a visible
 target:
 - left target -> left/negative yaw, or hover if the evidence is already stable.
 - right target -> right/positive yaw, or hover if the evidence is already stable.
-- centered or roughly centered target -> hover, confirm, or let the phase judge
-  advance instead of making another tiny yaw correction.
+- centered or roughly centered target -> hover, confirm, or let the current
+  phase decision advance instead of making another tiny yaw correction.
 
 Self-check before yaw: if the user-facing message or action reason says the
 target is on the left, the yaw choice for centering should also be
@@ -43,8 +43,8 @@ image-side action for a visible target.
 
 Do not chase perfect centering. If repeated small yaw corrections have already
 kept the target visible without making the relation meaningfully clearer, prefer
-hover/confirm and let the phase judge decide whether the visual-target phase is
-good enough to advance.
+hover/confirm and let the current phase decision decide whether the
+visual-target phase is good enough to advance.
 
 When recent motion history is available, use it as history only. It can warn
 that the UAV is oscillating or repeatedly applying the same small correction,

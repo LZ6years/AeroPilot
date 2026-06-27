@@ -348,7 +348,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
                 done_when=["person is identifiable", "approach remains safe"],
                 observe=["latest_observation", "phase_execution_summary"],
                 continue_when=["person identity is unclear", "safe approach relation is unclear"],
-                action_bias="approach cautiously when the person is roughly ahead and clearance is plausible",
                 metrics=[],
             )
         ],

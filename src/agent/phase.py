@@ -52,17 +52,17 @@ class PhaseTransition:
         illegal_targets = sorted(set(payload) & {"phase", "phase_name", "phase_index", "next_phase", "next_phase_index"})
         if illegal_targets:
             raise ValueError(
-                "phase_transition must not specify target phase fields: "
+                "phase_decision must not specify target phase fields: "
                 + ", ".join(illegal_targets)
             )
         decision = str(payload.get("decision", "")).strip()
         if decision not in VALID_PHASE_TRANSITIONS:
-            raise ValueError(f"Unsupported phase_transition decision: {decision}")
+            raise ValueError(f"Unsupported phase_decision decision: {decision}")
         messages_data = payload.get("agent_messages", [])
         if messages_data is None:
             messages_data = []
         if not isinstance(messages_data, list):
-            raise ValueError("phase_transition agent_messages must be a list")
+            raise ValueError("phase_decision agent_messages must be a list")
         return cls(
             decision=decision,
             reason=str(payload.get("reason", "")).strip(),

@@ -293,8 +293,8 @@ def _artifact_ref(record: dict[str, Any], frame_ref: dict[str, Any] | None) -> s
 def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Encode one latest real RGB frame for model multimodal input.
 
-    The action planner and post-action phase judge both use this helper so
-    unreadable or mock frames follow the same conservative no-image behavior.
+    The coupled planner uses this helper so unreadable or mock frames follow the
+    same conservative no-image behavior across action and phase decisions.
     """
 
     if not latest_rgb or latest_rgb.get("mock") is True:

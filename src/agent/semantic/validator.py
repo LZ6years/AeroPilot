@@ -16,8 +16,6 @@ FORBIDDEN_ACTION_TOKENS = (
     "env.observe",
     "move_body",
     "turn_relative",
-    "takeoff",
-    "land",
     "get_frames",
     "get_pose",
 )

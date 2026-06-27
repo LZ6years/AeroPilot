@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.agent.messages import AgentMessage
+from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 
 ACTION_WINDOW_SCOPE_CURRENT_PHASE = "current_phase_only"
 
@@ -142,4 +143,89 @@ class ShortHorizonPlan:
             "steps": [step.to_dict() for step in self.steps],
             "action_window": self.action_window.to_dict(),
             "agent_messages": [message.to_dict() for message in self.agent_messages],
+        }
+
+
+@dataclass(frozen=True)
+class CoupledActionPhasePlan:
+    """Experimental one-call contract that decides phase progress and action.
+
+    This schema deliberately keeps the phase decision outside ``steps``. A
+    coupled planner may either request a phase decision with no UAV tool
+    actions, or continue the current phase with a normal tool-only
+    ``ShortHorizonPlan``. It keeps transitions out of executable tool steps
+    and does not introduce control pseudo-tools.
+    """
+
+    phase: str
+    phase_decision: PhaseTransition
+    steps: list[PlannedStep] = field(default_factory=list)
+    action_window: ActionWindow = field(default_factory=ActionWindow.default)
+    agent_messages: list[AgentMessage] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(
+        cls,
+        data: dict[str, Any],
+        *,
+        require_agent_messages: bool = False,
+    ) -> "CoupledActionPhasePlan":
+        if "phase_decision" not in data:
+            raise ValueError("CoupledActionPhasePlan response requires phase_decision")
+        if require_agent_messages and "agent_messages" not in data:
+            raise ValueError("CoupledActionPhasePlan response requires agent_messages")
+        phase_decision = PhaseTransition.from_dict(dict(data.get("phase_decision") or {}))
+        raw_steps = data.get("steps", [])
+        if raw_steps is None:
+            raw_steps = []
+        if not isinstance(raw_steps, list):
+            raise ValueError("CoupledActionPhasePlan steps must be a list")
+        steps = [PlannedStep.from_dict(dict(item)) for item in raw_steps]
+        messages_data = data.get("agent_messages", [])
+        if messages_data is None:
+            messages_data = []
+        if not isinstance(messages_data, list):
+            raise ValueError("CoupledActionPhasePlan agent_messages must be a list")
+
+        action_window_data = data.get("action_window")
+        action_window = (
+            ActionWindow.from_dict(dict(action_window_data))
+            if action_window_data is not None
+            else ActionWindow.default()
+        )
+        decision = phase_decision.decision
+        if decision == CONTINUE_CURRENT_PHASE:
+            if "action_window" not in data:
+                raise ValueError("CoupledActionPhasePlan continue decision requires action_window")
+            if not 1 <= len(steps) <= 3:
+                raise ValueError("CoupledActionPhasePlan continue decision requires 1-3 tool steps")
+        elif decision in {ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK}:
+            if steps:
+                raise ValueError("CoupledActionPhasePlan transition decisions require empty steps")
+        else:  # PhaseTransition.from_dict should already protect this.
+            raise ValueError(f"Unsupported coupled phase decision: {decision}")
+
+        return cls(
+            phase=str(data.get("phase", "")).strip(),
+            phase_decision=phase_decision,
+            steps=steps,
+            action_window=action_window,
+            agent_messages=[AgentMessage.from_dict(dict(item)) for item in messages_data],
+        )
+
+    def to_short_horizon_plan(self) -> ShortHorizonPlan:
+        return ShortHorizonPlan(
+            phase=self.phase,
+            steps=list(self.steps),
+            action_window=self.action_window,
+            agent_messages=list(self.agent_messages),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "phase": self.phase,
+            "phase_decision": self.phase_decision.to_dict(),
+            "agent_messages": [message.to_dict() for message in self.agent_messages],
+            "action_window": self.action_window.to_dict(),
+            "steps": [step.to_dict() for step in self.steps],
         }

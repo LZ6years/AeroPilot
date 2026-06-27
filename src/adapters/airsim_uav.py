@@ -1,4 +1,10 @@
-"""Implement FlyAgent's own AirSim UAV primitive adapter."""
+"""Implement FlyAgent's own AirSim UAV primitive adapter.
+
+The public adapter contract uses FlyAgent's canonical vertical frame:
+positive Z and positive vertical velocity mean up. AirSim's SDK uses NED Z, so
+this adapter converts at the SDK boundary and never exposes NED values to
+runtime/model-facing layers.
+"""
 
 from __future__ import annotations
 
@@ -69,9 +75,9 @@ class AirSimUavAdapter:
         return PrimitiveResult(True, "AirSim UAV land")
 
     def move_body(self, vx: float, vy: float, vz: float, duration: float) -> PrimitiveResult:
-        # Send a short body-frame velocity command.
+        # Convert canonical positive-up velocity into AirSim's NED velocity.
         self._require_client().moveByVelocityBodyFrameAsync(
-            vx, vy, vz, duration, vehicle_name=self.vehicle_name
+            vx, vy, -vz, duration, vehicle_name=self.vehicle_name
         ).join()
         return PrimitiveResult(True, "AirSim UAV move_body")
 
@@ -93,10 +99,10 @@ class AirSimUavAdapter:
         roll_deg: float = 0.0,
         ignore_collision: bool = True,
     ) -> PrimitiveResult:
-        # Place the AirSim vehicle/camera at an absolute NED pose for fast resets.
+        # Place the AirSim vehicle/camera from a canonical positive-up pose.
         airsim = self._airsim()
         pose = airsim.Pose(
-            airsim.Vector3r(x, y, z),
+            airsim.Vector3r(x, y, -z),
             airsim.to_quaternion(
                 math.radians(pitch_deg),
                 math.radians(roll_deg),
@@ -125,12 +131,12 @@ class AirSimUavAdapter:
         )
 
     def ascend(self, speed_mps: float, duration: float) -> PrimitiveResult:
-        # Use NED negative-Z velocity for upward motion over a fixed duration.
-        return self.move_body(0.0, 0.0, -abs(speed_mps), duration)
+        # Use canonical positive-Z velocity for upward motion.
+        return self.move_body(0.0, 0.0, abs(speed_mps), duration)
 
     def descend(self, speed_mps: float, duration: float) -> PrimitiveResult:
-        # Use NED positive-Z velocity for downward motion over a fixed duration.
-        return self.move_body(0.0, 0.0, abs(speed_mps), duration)
+        # Use canonical negative-Z velocity for downward motion.
+        return self.move_body(0.0, 0.0, -abs(speed_mps), duration)
 
     def get_pose(self) -> PrimitiveResult:
         # Read AirSim kinematics and normalize them into dictionaries.
@@ -141,11 +147,7 @@ class AirSimUavAdapter:
                 True,
                 "AirSim ComputerVision pose",
                 {
-                    "position": {
-                        "x": pose.position.x_val,
-                        "y": pose.position.y_val,
-                        "z": pose.position.z_val,
-                    },
+                    "position": self._canonical_position(pose.position),
                     "euler_rad": {"pitch": pitch, "roll": roll, "yaw": yaw},
                     "velocity": {"x": 0.0, "y": 0.0, "z": 0.0},
                 },
@@ -155,19 +157,25 @@ class AirSimUavAdapter:
         airsim = self._airsim()
         pitch, roll, yaw = airsim.to_eularian_angles(kin.orientation)
         data = {
-            "position": {
-                "x": kin.position.x_val,
-                "y": kin.position.y_val,
-                "z": kin.position.z_val,
-            },
+            "position": self._canonical_position(kin.position),
             "euler_rad": {"pitch": pitch, "roll": roll, "yaw": yaw},
             "velocity": {
                 "x": kin.linear_velocity.x_val,
                 "y": kin.linear_velocity.y_val,
-                "z": kin.linear_velocity.z_val,
+                "z": -kin.linear_velocity.z_val,
             },
         }
         return PrimitiveResult(True, "AirSim UAV pose", data)
+
+    @staticmethod
+    def _canonical_position(position: Any) -> dict[str, float]:
+        """Convert AirSim NED position into FlyAgent's positive-up pose."""
+
+        return {
+            "x": position.x_val,
+            "y": position.y_val,
+            "z": -position.z_val,
+        }
 
     def get_frames(self, modalities: list[str]) -> PrimitiveResult:
         # Convert requested modalities into AirSim image requests.

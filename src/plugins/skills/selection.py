@@ -20,24 +20,44 @@ available_skills list. Select zero or more skill names that should be loaded
 before action planning. Choose only the exact "name" values from
 available_skills, not plugin ids or qualified names.
 
-Select the smallest useful set. Most instructions need 0-2 skills; use 3 only
-when the instruction clearly combines three different concerns. Never select all
-skills as a safe default. Returning [] is valid for simple primitive motion or
-hover instructions.
+Read the active_instruction, semantic_goal, current_phase, and each available
+skill's name and description. Select the minimal useful set whose descriptions
+directly match the active task concerns. Never select all skills as a safe
+default.
 
-Select only skills that directly help the current instruction and phase. Do not
-select safety guidance unless the instruction or scene context mentions people,
-obstacles, narrow space, collision risk, or unsafe uncertainty. Do not select
-completion-evidence guidance unless the task is explicitly about deciding whether
-to finish, confirming success, or avoiding premature completion.
+Selection process:
+1. Identify the primary concern of the task-level goal and current phase.
+2. Select at most one primary skill whose description directly covers that
+   concern.
+3. Add an auxiliary skill only when it covers a separate concern that is active
+   now, not merely generally useful.
+
+Default to 0-1 skills. Select 2 only when two independent concerns are both
+active. Select 3 only for clearly complex phases with three independent current
+concerns. If several skills seem relevant, prefer the smallest set that prevents
+missing important guidance.
+
+Use the task-level goal to keep early locate/approach phases grounded. If the
+final task concern is landing, descending, altitude change, passing through,
+progressing past, or using a requested side of a route, a skill whose description
+covers that final concern may be useful even when the current phase name says
+locate or approach.
+
+Do not add search guidance just because a landmark exists; add it only when the
+target, route cue, or candidate is missing or ambiguous. Do not add visual
+attention guidance just because an object is visible; add it when facing,
+centering, observing, or visual confirmation is the main concern. Do not add
+obstacle or safety guidance just because a route exists; add it when the current
+route is narrow, cluttered, occluded, close to people, close to obstacles, or
+otherwise risk-sensitive.
 
 If the instruction is only a primitive command such as "hover", "rotate N
-degrees", or "move forward N meters" and it does not mention a target, safety
-condition, search uncertainty, or completion decision, return [].
+degrees", or "translate N meters" and no available skill description adds
+task-relevant knowledge beyond the primitive, return []. If an available skill
+description clearly covers a primitive command's important nuance, such as
+controlled vertical motion or stopping near a surface, select that skill.
 
-If the instruction says find, search, locate, look for, or "somewhere around" a
-target whose current visibility is unknown, prefer search_under_uncertainty over
-approach or completion skills. Return exactly:
+Return exactly:
 {"selected_skills": ["skill_name"]}.
 """
 

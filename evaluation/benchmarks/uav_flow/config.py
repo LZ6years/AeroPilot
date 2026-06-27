@@ -44,6 +44,8 @@ class UavFlowEvalConfig:
     visual_diagnostics_max_frames: int = 12
     enable_action_planner_debug: bool = False
     max_cases: int | None = None
+    test_jsons_path_override: str | None = None
+    classified_instr_path_override: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -78,6 +80,12 @@ class UavFlowEvalConfig:
             visual_diagnostics_max_frames=int(data.get("visual_diagnostics_max_frames", cls.visual_diagnostics_max_frames)),
             enable_action_planner_debug=bool(data.get("enable_action_planner_debug", False)),
             max_cases=_optional_int(data.get("max_cases")),
+            test_jsons_path_override=_optional_str(
+                data.get("test_jsons_path", data.get("test_jsons_path_override"))
+            ),
+            classified_instr_path_override=_optional_str(
+                data.get("classified_instr_path", data.get("classified_instr_path_override"))
+            ),
             metadata=dict(data.get("metadata", {})),
         )
 
@@ -86,10 +94,14 @@ class UavFlowEvalConfig:
 
     @property
     def test_jsons_path(self) -> Path:
+        if self.test_jsons_path_override:
+            return Path(self.test_jsons_path_override)
         return Path(self.uav_flow_repo_path) / "test_jsons"
 
     @property
     def classified_instr_path(self) -> Path:
+        if self.classified_instr_path_override:
+            return Path(self.classified_instr_path_override)
         return Path(self.uav_flow_repo_path) / "classified_instr.json"
 
 
@@ -100,6 +112,13 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _optional_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
 
 
 def _resolution(value: Any) -> list[int]:

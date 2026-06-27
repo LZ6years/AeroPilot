@@ -187,7 +187,7 @@ F:\conda_env\flyagent\python.exe demos/real_engine_instruction_demo.py --env-pat
 - 自动 observation 是否采集成功。
 - `latest_state.current_phase_progress` 是否合理。
 - `latest_context.phase_execution_summary` 是否与 state 同源。
-- phase judge 是否判断阶段完成。
+- coupled phase decision 是否判断阶段完成。
 - memory 是否随着多轮 instruction 增长。
 
 重点输出：
@@ -203,9 +203,9 @@ runs/real_engine_basic_instruction_<timestamp>/
   memory/poses.jsonl
   memory/frames.jsonl
   contexts/latest_context.json
-  contexts/latest_phase_transition_context.json
+  contexts/latest_action_planner_model_context.json
   debug/debug_events.jsonl
-  debug/phase_transition/*.json
+  debug/action_planner/*.json
   artifacts/rgb/
   artifacts/depth/
   demo/summary.json
@@ -236,7 +236,7 @@ runs/<run_id>/eval/metrics.json
 第二层读 `src/runtime/runners/task_runtime.py`：
 
 - 这里是真正执行 phase window 的地方。
-- action 执行、stabilization、automatic observation、phase transition judge 都在 runtime 里发生。
+- action 执行、stabilization、automatic observation、coupled phase decision 都在 runtime 里发生。
 - phase 是否完成不是 demo 文件里的固定规则，而是执行动作并采集 observation 后，由 runtime 构造判断上下文，再让模型输出 phase transition。
 
 第三层按问题继续读：

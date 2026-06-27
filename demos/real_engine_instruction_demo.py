@@ -137,8 +137,8 @@ def main() -> None:
 
     # This is the full production pipeline used by the demo:
     # TaskParser(model) -> context builder -> ModelActionPlanner(model) ->
-    # ToolContractValidator -> SafetySupervisor -> ToolDispatcher/UAV ->
-    # automatic observation -> post-action phase judge.
+    # coupled phase decision -> ToolContractValidator -> SafetySupervisor ->
+    # ToolDispatcher/UAV -> automatic observation when the phase continues.
     runtime = make_runtime(args, LocalEnvClient(server), recorder, model_config, action_config, safety_config)
     summaries: list[dict[str, Any]] = []
     last_state = None
@@ -412,7 +412,7 @@ def compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "inspect_files": {
             "state": str(Path(summary["run_dir"]) / "state" / "latest_state.json"),
             "planner_context": str(Path(summary["run_dir"]) / "contexts" / "latest_context.json"),
-            "phase_judge_context": str(Path(summary["run_dir"]) / "contexts" / "latest_phase_transition_context.json"),
+            "planner_model_context": str(Path(summary["run_dir"]) / "contexts" / "latest_action_planner_model_context.json"),
             "demo_summary": str(Path(summary["run_dir"]) / "demo" / "summary.json"),
         },
         "shutdown_events": summary["shutdown_events"],
@@ -517,7 +517,7 @@ def build_session_summary(run_dir: Path, summaries: list[dict[str, Any]]) -> dic
         "latest_model_action_plan": latest_event_payload(debug_events, "model_action_planned"),
         "latest_validated_plan": latest_event_payload(debug_events, "short_horizon_planned"),
         "latest_safety_intervention": latest_event_payload(debug_events, "safety_intervened"),
-        "latest_phase_transition_context": latest_event_payload(events, "phase_transition_judge_context_built"),
+        "latest_coupled_phase_decision": latest_event_payload(events, "coupled_planner_phase_decided"),
         "model_plan_recorded": latest_event_payload(debug_events, "model_action_planned") is not None,
         "validated_plan_recorded": latest_event_payload(debug_events, "short_horizon_planned") is not None,
         "automatic_observation_recorded": latest_event_payload(debug_events, "automatic_observation_updated") is not None,
@@ -568,17 +568,24 @@ def action_sequence_from_events(events: list[dict[str, Any]]) -> list[dict[str, 
     """Extract user-planned tool steps from compact and debug event streams.
 
     Runtime stabilization writes its own brake/settling events. Those are useful
-    in debug logs but noisy in the user-facing demo summary. When debug
-    `step_completed` records are available, prefer them because they contain the
-    original model-planned args. Fall back to compact `tool_step_completed`
-    records only when the debug stream is not present.
+    in debug logs but noisy in the user-facing demo summary. Prefer detailed
+    `tool_call_completed` records from current runs, then old `step_completed`
+    records, and fall back to compact `tool_step_completed` records only when
+    no detailed debug stream is present.
     """
 
     actions = []
-    step_events = [event for event in events if event.get("event") == "step_completed"]
-    source_events = step_events or [event for event in events if event.get("event") == "tool_step_completed"]
+    detailed_events = [event for event in events if event.get("event") == "tool_call_completed"]
+    old_step_events = [event for event in events if event.get("event") == "step_completed"]
+    source_events = detailed_events or old_step_events or [event for event in events if event.get("event") == "tool_step_completed"]
     for event in source_events:
-        if event.get("event") == "step_completed":
+        if event.get("event") == "tool_call_completed":
+            payload = event.get("payload", {})
+            result = payload.get("result", {}) if isinstance(payload, dict) else {}
+            tool = payload.get("tool") if isinstance(payload, dict) else None
+            args = payload.get("args", {}) if isinstance(payload, dict) else {}
+            ok = result.get("ok") if isinstance(result, dict) else None
+        elif event.get("event") == "step_completed":
             payload = event.get("payload", {})
             step = payload.get("step", {}) if isinstance(payload, dict) else {}
             result = payload.get("result", {}) if isinstance(payload, dict) else {}
@@ -609,7 +616,7 @@ def action_windows_from_events(events: list[dict[str, Any]]) -> list[dict[str, A
 
     windows = []
     for event in events:
-        if event.get("event") not in {"phase_plan_ready", "phase_window_recorded", "phase_transition_judge_context_built"}:
+        if event.get("event") not in {"phase_plan_ready", "phase_window_recorded", "coupled_planner_phase_decided"}:
             continue
         payload = event.get("payload")
         if not isinstance(payload, dict):

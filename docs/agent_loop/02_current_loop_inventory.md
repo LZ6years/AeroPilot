@@ -18,7 +18,7 @@ src/runtime/runners/task_runtime.py
 - 通过 SafetySupervisor 做硬安全检查。
 - 调用 ToolDispatcher 执行动作。
 - 自动采集 RGB/depth/pose observation。
-- 调用 phase judge 判断当前 phase 是否完成。
+- 调用 coupled phase decision 判断当前 phase 是否完成。
 - 根据 `continue_current_phase / advance_to_next_phase / complete_task` 推进任务。
 - loop guard 只做极端防死循环兜底。
 

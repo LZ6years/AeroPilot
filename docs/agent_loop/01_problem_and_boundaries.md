@@ -97,7 +97,7 @@ uav.land
 - UE scene 启动失败。
 - ToolDispatcher 执行动作失败。
 - safety 裁剪导致动作幅度变小。
-- phase judge 判断目标未完成。
+- coupled phase decision 判断目标未完成。
 - 无人机实际飞偏、没看到目标、视觉模型识别错。
 - runtime loop guard 触发 stopped/incomplete。
 
@@ -117,7 +117,7 @@ ModelActionPlanner 模型返回内容 -> ShortHorizonPlan parser / ToolContractV
 后续才接：
 
 ```text
-Phase judge JSON repair
+Coupled phase decision JSON repair
 Visual caption schema repair
 ```
 

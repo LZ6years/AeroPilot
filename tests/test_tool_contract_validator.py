@@ -26,7 +26,6 @@ def make_context() -> dict:
                 },
                 "uav.move_body": {
                     "args_one_of": [
-                        {"direction": "forward|backward|left|right|up|down", "duration": "number"},
                         {"vx": "number", "vy": "number", "vz": "number", "duration": "number"},
                     ],
                     "limits": {
@@ -56,7 +55,7 @@ def assert_violation(exc_info: pytest.ExceptionInfo[ToolContractValidationError]
 def test_tool_contract_validator_accepts_legal_tool_plan():
     plan = make_plan(
         PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": -15.0}, "scan left"),
-        PlannedStep.tool_step("uav.move_body", {"direction": "forward", "duration": 1.5}, "small move"),
+        PlannedStep.tool_step("uav.move_body", {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 1.5}, "small move"),
     )
 
     result = ToolContractValidator().validate(plan, "scan_left", make_context())
@@ -144,8 +143,8 @@ def test_tool_contract_validator_rejects_context_tool_without_supported_schema_v
         ),
         (
             make_plan(PlannedStep.tool_step("uav.move_body", {"direction": "diagonal", "duration": 1.0}, "bad")),
-            "move_body_direction_invalid",
-            "Unsupported uav.move_body direction",
+            "move_body_direction_not_model_facing",
+            "direction shorthand is not allowed",
         ),
         (
             make_plan(PlannedStep.tool_step("uav.move_body", {"vx": 7.0, "vy": 0.0, "vz": 0.0, "duration": 1.0}, "bad")),
@@ -158,7 +157,7 @@ def test_tool_contract_validator_rejects_context_tool_without_supported_schema_v
             "vertical velocity exceeds",
         ),
         (
-            make_plan(PlannedStep.tool_step("uav.move_body", {"direction": "forward", "duration": 9.0}, "bad")),
+            make_plan(PlannedStep.tool_step("uav.move_body", {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 9.0}, "bad")),
             "move_body_duration_limit_exceeded",
             "duration exceeds",
         ),
@@ -221,7 +220,7 @@ def test_tool_contract_validator_rejects_multi_step_when_intermediate_observatio
         "scan_left",
         [
             PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": -10.0}, "scan"),
-            PlannedStep.tool_step("uav.move_body", {"direction": "forward", "duration": 1.0}, "move"),
+            PlannedStep.tool_step("uav.move_body", {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 1.0}, "move"),
         ],
         action_window=ActionWindow(
             intent="scan then move",

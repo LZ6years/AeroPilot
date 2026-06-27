@@ -86,7 +86,7 @@ def test_set_pose_calls_airsim_sim_set_vehicle_pose(monkeypatch):
     assert call["ignore_collision"] is False
     assert call["pose"].position.x_val == 1.0
     assert call["pose"].position.y_val == 2.0
-    assert call["pose"].position.z_val == -3.0
+    assert call["pose"].position.z_val == 3.0
     assert round(call["pose"].orientation[2], 6) == 1.570796
 
 

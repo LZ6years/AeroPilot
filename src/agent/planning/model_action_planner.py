@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
-from pathlib import Path
 from typing import Any
 
 from src.agent.mission_state import MissionState
@@ -16,8 +15,7 @@ from src.agent.planning.model_repair_planner import (
     RepairAttemptRecord,
     RepairContext,
 )
-from src.agent.phase import PhaseTransition
-from src.agent.planning.schemas import ShortHorizonPlan
+from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
 from src.agent.planning.tool_contract_validator import (
     ToolContractValidationError,
     ToolContractValidator,
@@ -44,16 +42,31 @@ class ModelActionPlanner:
         repair_planner: ModelRepairPlanner | None = None,
     ) -> None:
         self.model_config = model_config or load_model_config()
-        self.prompt_path = prompt_path or self.model_config.action_planner_prompt_path
-        self.system_prompt = self._load_system_prompt()
-        self.phase_transition_system_prompt = self._load_phase_transition_system_prompt()
+        if prompt_path:
+            raise ModelActionPlannerConfigError(
+                "ModelActionPlanner now uses the coupled action/phase prompt only; "
+                "action-only planner prompt overrides are no longer supported."
+            )
+        self.coupled_action_phase_system_prompt = self._load_coupled_action_phase_system_prompt()
         self.tool_contract_validator = ToolContractValidator(self.ALLOWED_TOOL_STEPS)
         self.max_repair_attempts = max(0, int(max_repair_attempts))
         self.repair_planner = repair_planner or ModelRepairPlanner(self.model_config)
         self.last_repair_attempts: list[dict[str, Any]] = []
         self.last_repair_result: dict[str, Any] = {"repair_triggered": False}
 
-    def plan_next(self, state: MissionState, context: dict | None = None) -> ShortHorizonPlan:
+    def plan_next_with_phase_decision(
+        self,
+        state: MissionState,
+        context: dict | None = None,
+    ) -> CoupledActionPhasePlan:
+        """Run the experimental one-call planner/judge prompt.
+
+        Continue decisions still pass through the same tool contract validator
+        and repair loop as normal action planning. The repair is intentionally
+        scoped to the tool-only ``ShortHorizonPlan`` part; it never changes the
+        coupled phase decision itself.
+        """
+
         self._reset_repair_state()
         if context is None:
             raise ValueError("ModelActionPlanner requires M5 context")
@@ -61,31 +74,35 @@ class ModelActionPlanner:
             raise ModelActionPlannerConfigError("Model action planner requires FLYAGENT_MODEL_API_KEY")
         if self.model_config.provider != "openai_compatible":
             raise ModelActionPlannerConfigError(f"Unsupported model provider: {self.model_config.provider}")
-        response = self._call_openai_compatible(context)
-        plan = ShortHorizonPlan.from_dict(
-            _without_phase_transition(response),
-            require_action_window=True,
-            require_agent_messages=True,
-        )
-        try:
-            self.tool_contract_validator.validate(plan, state.current_phase_name, context)
-            return plan
-        except ToolContractValidationError as exc:
-            return self._repair_contract_violation(plan, response, exc, state.current_phase_name, context)
+        response = self._call_coupled_action_phase_openai_compatible(context)
+        coupled_plan = CoupledActionPhasePlan.from_dict(response, require_agent_messages=True)
+        if coupled_plan.phase != state.current_phase_name:
+            raise ValueError(
+                f"CoupledActionPhasePlan phase mismatch: expected {state.current_phase_name}, got {coupled_plan.phase}"
+            )
+        if coupled_plan.phase_decision.decision == "continue_current_phase":
+            short_plan = coupled_plan.to_short_horizon_plan()
+            try:
+                self.tool_contract_validator.validate(short_plan, state.current_phase_name, context)
+            except ToolContractValidationError as exc:
+                repaired_plan = self._repair_contract_violation(
+                    short_plan,
+                    short_plan.to_dict(),
+                    exc,
+                    state.current_phase_name,
+                    context,
+                )
+                return CoupledActionPhasePlan(
+                    phase=coupled_plan.phase,
+                    phase_decision=coupled_plan.phase_decision,
+                    steps=list(repaired_plan.steps),
+                    action_window=repaired_plan.action_window,
+                    agent_messages=list(repaired_plan.agent_messages),
+                )
+        return coupled_plan
 
-    def _call_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
-        return self._call_openai_compatible_json(self.system_prompt, context)
-
-    def judge_phase_transition(self, phase_context: dict[str, Any]) -> PhaseTransition:
-        if not self.model_config.api_key:
-            raise ModelActionPlannerConfigError("Model phase transition judge requires FLYAGENT_MODEL_API_KEY")
-        if self.model_config.provider != "openai_compatible":
-            raise ModelActionPlannerConfigError(f"Unsupported model provider: {self.model_config.provider}")
-        response = self._call_phase_transition_openai_compatible(phase_context)
-        return PhaseTransition.from_dict(response)
-
-    def _call_phase_transition_openai_compatible(self, phase_context: dict[str, Any]) -> dict[str, Any]:
-        return self._call_openai_compatible_json(self.phase_transition_system_prompt, phase_context)
+    def _call_coupled_action_phase_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
+        return self._call_openai_compatible_json(self.coupled_action_phase_system_prompt, context)
 
     def _call_openai_compatible_json(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
         endpoint = self.model_config.chat_completions_url()
@@ -170,7 +187,7 @@ class ModelActionPlanner:
 
             try:
                 repaired_plan = ShortHorizonPlan.from_dict(
-                    _without_phase_transition(repaired_plan_data),
+                    repaired_plan_data,
                     require_action_window=True,
                     require_agent_messages=True,
                 )
@@ -259,23 +276,25 @@ class ModelActionPlanner:
         self.last_repair_attempts = []
         self.last_repair_result = {"repair_triggered": False}
 
-    def _load_system_prompt(self) -> str:
-        path = Path(self.prompt_path) if self.prompt_path else Path(__file__).resolve().parent / "prompts" / "action_planner_system.txt"
-        return path.read_text(encoding="utf-8").strip()
+    def _load_coupled_action_phase_system_prompt(self) -> str:
+        from pathlib import Path
 
-    def _load_phase_transition_system_prompt(self) -> str:
-        path = Path(__file__).resolve().parent / "prompts" / "phase_transition_judge_system.txt"
-        return path.read_text(encoding="utf-8").strip()
+        prompt_dir = Path(__file__).resolve().parent / "prompts"
+        overview = (
+            "You are FlyAgent's experimental coupled action-and-phase planner.\n\n"
+            "In one JSON response, decide whether the current semantic phase should "
+            "continue, advance, or complete the task, and only plan UAV tool actions "
+            "when the phase must continue."
+        )
+        phase_prompt = (prompt_dir / "coupled_phase_decision_system.txt").read_text(encoding="utf-8").strip()
+        action_prompt = (prompt_dir / "coupled_action_planner_system.txt").read_text(encoding="utf-8").strip()
+        return "\n\n--- Phase Decision Contract ---\n\n".join([overview, phase_prompt]) + (
+            "\n\n--- Action Planning Contract ---\n\n" + action_prompt
+        )
 
 
 def _canonical_plan_signature(plan: dict[str, Any]) -> str:
     return json.dumps(plan, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
-
-
-def _without_phase_transition(plan: dict[str, Any]) -> dict[str, Any]:
-    data = dict(plan)
-    data.pop("phase_transition", None)
-    return data
 
 
 def _violation_from_dict(data: dict[str, Any]) -> ToolContractViolation:

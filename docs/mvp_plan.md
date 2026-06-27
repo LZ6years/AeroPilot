@@ -35,7 +35,7 @@ flowchart TD
     UAV --> OBS["Runtime automatic observation<br/>RGB / depth / pose"]
     OBS --> MEM["FlightMemory + memory/*.jsonl"]
     MEM --> CB
-    OBS --> J["Post-action phase transition judge"]
+    OBS --> J["Coupled planner/phase decision"]
     J --> MS
 ```
 
@@ -104,7 +104,7 @@ flowchart TD
 
 - 每轮写入 `debug/latest_observation.json` 作为开发查看快照。
 - 每轮写入 `contexts/latest_context.json`。
-- 执行后阶段判断写入 `contexts/latest_phase_transition_context.json`。
+- 执行后阶段判断写入 `contexts/latest_action_planner_model_context.json`。
 - `state/latest_state.json` 保存当前 runtime 状态和当前 phase 累计进度。
 - `debug/phase_windows/*.json` 保存完整 phase window 调试记录。
 - planner 输入不暴露完整 `FlightMemory` 或完整 jsonl 历史。

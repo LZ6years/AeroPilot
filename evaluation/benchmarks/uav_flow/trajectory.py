@@ -27,7 +27,12 @@ def world_to_local(target: list[float], init_pos: list[float]) -> list[float]:
 
 
 def world_pose_to_model_pose(world_pose_cm: list[float], initial_pos_cm: list[float]) -> dict[str, float]:
-    """Create model-facing local pose in meters without exposing target truth."""
+    """Create canonical model-facing local pose in meters without target truth.
+
+    UAV-Flow world coordinates stay inside the benchmark adapter. Runtime sees
+    FlyAgent's canonical vertical convention: positive local Z is up, negative
+    local Z is down.
+    """
 
     local_cm = world_to_local(world_pose_cm[:3], initial_pos_cm)
     yaw_delta = _normalize_yaw(world_pose_cm[4] - initial_pos_cm[4])
@@ -38,7 +43,7 @@ def world_pose_to_model_pose(world_pose_cm: list[float], initial_pos_cm: list[fl
         "pitch_deg": float(world_pose_cm[3]),
         "yaw_deg": round(yaw_delta, 6),
         "roll_deg": float(world_pose_cm[5]),
-        "coordinate_frame": "uav_flow_initial_local_m",
+        "coordinate_frame": "uav_flow_initial_local_canonical_m",
     }
 
 
@@ -77,7 +82,7 @@ def export_trajectory(
         "point_count": len(states),
         "unit": "cm",
         "coordinate_frame": "uav_flow_initial_local",
-        "source_pose_frame": "uav_agent_local_m",
+        "source_pose_frame": "uav_agent_local_canonical_m",
         "initial_pos": list(case.initial_pos),
     }
 
@@ -91,4 +96,3 @@ def target_local_from_case(case: UavFlowCase) -> list[float] | None:
 def _normalize_yaw(value: float) -> float:
     normalized = (float(value) + 180.0) % 360.0 - 180.0
     return 180.0 if normalized == -180.0 else normalized
-

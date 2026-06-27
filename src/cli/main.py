@@ -408,7 +408,6 @@ def handle_slash_command(command: str, session: InteractiveTaskSession) -> bool:
         print_json(
             {
                 "latest_context": str(session.run_dir / "contexts" / "latest_context.json"),
-                "latest_phase_transition_context": str(session.run_dir / "contexts" / "latest_phase_transition_context.json"),
                 "latest_state": str(session.run_dir / "state" / "latest_state.json"),
                 "flight_memory": str(session.run_dir / "state" / "flight_memory.json"),
                 "semantic_plan": str(session.run_dir / "state" / "semantic_plan.json"),

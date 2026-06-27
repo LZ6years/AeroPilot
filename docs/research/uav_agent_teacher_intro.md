@@ -31,18 +31,18 @@ UAV-VLN 可以理解为无人机版本的视觉语言导航。它要求无人机
 
 本文主要讨论 UAV / Aerial Navigation 相关工作，不将传统室内 VLN 作为主要对比对象。传统 VLN 可作为背景来源，但核心对比对象聚焦无人机领域。
 
-现有 UAV-VLN 研究可以从两个角度理解：一是按照研究贡献类型划分，分析已有工作主要在数据平台、导航模型、空间推理或人机交互中的哪一环做贡献；二是按照空中任务形态划分，分析不同任务对统一智能体框架提出的需求。这里不按“是否端到端”或“是否需要训练”进行硬划分，因为多数 UAV-VLN 方法都会涉及数据训练、模型适配或策略学习。为了保持分类清晰，下表中的代表工作按其主要贡献归入单一类别，不重复列举。
+随着 UAV-VLN 任务不断扩展，现有研究已经覆盖长距离语言导航、目标搜索、细粒度语言飞行控制、top-down 地理空间推理和人机对话等多种任务形态。不同工作通常围绕各自任务构建专门的数据、模型、记忆结构或交互机制。本文不按“是否端到端”或“是否需要训练”进行划分，而是按现有方法解决 UAV-VLN 任务时依赖的主要处理方式进行概括。
 
 ### 3.1 按研究贡献类型分类
 
-| 研究方向 | 代表工作 | 核心思想 | 典型不足 |
+| 方法类型 | 代表工作 | 主要思路 | 与统一 UAV-Agent 的差距 |
 | --- | --- | --- | --- |
-| UAV 任务、数据集与平台构建 | AerialVLN、TRAVEL / OpenUAV、OpenFly、UAV-Flow、CityNav、AirNav | 构建无人机视觉语言导航任务、仿真或真实数据平台、语言指令、飞行轨迹和评测协议 | 推动了任务发展，但不同 benchmark 的输入格式、动作空间、环境接口和评估指标差异较大，系统复用困难 |
-| 任务专用导航模型与策略学习 | UAV Navigation LLM、AerialVLA Minimalist Control、VLA-AN、OpenVLN、AirVLN-R1 | 在特定 UAV 任务数据上训练、微调或强化导航模型，使其输出动作、航点、轨迹或控制信号 | 模型通常服务于特定任务设定，执行过程可解释性、安全校验、失败恢复和跨任务迁移仍然不足 |
-| 历史观察 / 空间记忆 + VLM/LLM 推理 | STMR、GeoNav、CityNavAgent、PSC-AVDN | 利用历史图像、位姿、轨迹、地图或场景图，把无人机观察加工成 VLM/LLM 更容易理解的空间上下文 | 依赖特定记忆结构、地图表示或 prompt 流程，缺少统一的上下文插件化接口 |
-| UAV 对话、求助与人机交互 | Aerial Vision-and-Dialog Navigation、AerialVLA with Online Dialogue、AirStar、AeroDuo | 在无人机任务中引入对话、助手、帮助信号、主动提问、自然交互或多机协作，使无人机能在复杂情况下获得额外信息 | 多数仍是任务或模型内部机制，尚未形成可复用的通信协议和 AgentMessage 执行闭环 |
+| 任务 / 数据 / 平台驱动方法 | AerialVLN、TRAVEL / OpenUAV、OpenFly、UAV-Flow、CityNav、AirNav | 为不同 UAV-VLN 任务构建数据集、仿真或真实平台、轨迹和评测协议 | 每个 benchmark 往往对应自己的输入格式、动作空间、环境接口和评测方式，难以直接迁移到新任务 |
+| 任务专用导航模型方法 | UAV Navigation LLM、AerialVLA Minimalist Control、VLA-AN、OpenVLN、AirVLN-R1 | 针对特定任务训练、微调或强化模型，使其输出动作、航点、轨迹或控制信号 | 模型和任务设定强绑定，换任务通常需要重新适配训练数据、动作定义和推理流程 |
+| 空间记忆与结构化推理方法 | STMR、GeoNav、CityNavAgent、PSC-AVDN | 将历史图像、位姿、轨迹、地图或场景图整理成 VLM/LLM 可推理的空间上下文 | 记忆结构和 prompt 流程多为特定任务设计，难以作为统一上下文模块复用 |
+| 对话、求助与人机交互方法 | Aerial Vision-and-Dialog Navigation、AerialVLA with Online Dialogue、AirStar、AeroDuo | 在导航中引入对话历史、助手信号、主动提问或自然交互 | 交互机制通常嵌入具体任务或模型，缺少跨任务通用的回复、提问和用户反馈回流协议 |
 
-从研究贡献看，无人机 VLN 现有工作大致覆盖四个方向：任务数据与平台构建、任务专用导航模型与策略学习、空间记忆与 VLM/LLM 推理、人机对话与求助机制。它们分别解决了数据来源、导航策略、空间上下文和交互协作的一部分问题，但尚未统一到一个可复用、可解释、可安全执行的 UAV-Agent 运行框架中。
+总体来看，现有方法已经分别推进了 UAV-VLN 的任务构建、导航模型、空间记忆和人机交互能力，但它们大多是围绕单一任务或单一 benchmark 设计的专属处理方式。随着空中任务类型增多，这种专属化设计会带来明显的迁移和适配成本：新任务往往需要重新定义输入、动作、上下文、模型调用和交互逻辑，而不是接入一个统一的任务运行框架。
 
 ### 3.2 按空中任务类别分类
 
@@ -52,24 +52,26 @@ UAV-VLN 可以理解为无人机版本的视觉语言导航。它要求无人机
 | 空中对话 / 交互导航 | 对话式导航与主动求助 | 任务中包含对话、帮助、主动提问或确认过程 | 需要回复、提问、用户反馈回流和可解释执行过程 |
 | 细粒度语言飞行控制 | 短程语言条件飞控 | 根据短语或一句话执行较短程、细粒度飞行动作，并评估轨迹 | 适合验证基础动作执行、轨迹记录和闭环稳定性 |
 | 空中目标搜索 / InstanceNav 类任务 | 目标描述驱动搜索 | 给定目标描述，让无人机在真实感更强的环境中搜索、接近并确认目标 | 需要视觉目标确认、证据图片、位置汇报和不确定时提问 |
-| 城市级语言目标导航 / 地理推理 | 地标与地图约束导航 | 任务依赖地标、道路、城市地图和跨尺度空间关系 | 需要地图、场景图、地理知识和历史轨迹上下文 |
+| Top-down 地理空间推理 | 地标与地图约束导航 | 任务依赖 top-down 观察、地标、道路、城市地图和跨尺度空间关系 | 需要地图、场景图、地理知识和历史轨迹上下文 |
 
-从任务上看，空中 VLN 不只是“跟着路线飞”。它可以分成空中语言路径导航、空中对话/交互导航、细粒度语言飞行控制、空中目标搜索，以及城市级地理推理导航。不同任务虽然评估方式和任务目标不同，但都需要无人机在语言、视觉、位姿、历史观察和安全约束之间进行持续决策。因此，统一 UAV-Agent 框架的价值在于：用同一套运行闭环承载不同任务，而将任务差异交给知识、记忆、视觉能力和通信协议来表达。
+从任务上看，空中 VLN 不只是“跟着路线飞”。它可以分成空中语言路径导航、空中对话/交互导航、细粒度语言飞行控制、空中目标搜索，以及 top-down 地理空间推理。不同任务虽然评估方式和任务目标不同，但都需要无人机在语言、视觉、位姿、历史观察和安全约束之间进行持续决策。因此，统一 UAV-Agent 框架的价值在于：用同一套运行闭环承载不同任务，而将任务差异交给知识、记忆、视觉能力和通信协议来表达。
 
-## 4. 无人机领域现有方法的共同缺口
+其中，`Fine Control` 表示 UAV-Flow / Flying-on-a-Word 这类短程语言条件飞控任务，强调动作或轨迹执行粒度；`Top-down Geo Reasoning` 表示 CityNav / GeoNav / CityNavAgent 这类基于 top-down 视角、地图、地标和场景图的空间推理任务，不重点强调真实 6DoF 上下飞行控制。
 
-现有 UAV-VLN 方法在各自设定下有效，但从统一智能体系统的角度看，仍存在四类共同缺口。
+## 4. 核心问题与本文切入点
 
-| 现有研究方向 | 主要方法缺口 | 本项目对应思路 |
+现有 UAV-VLN 方法的核心缺口不是某一个模块能力不足，而是**不同 UAV 任务之间缺少统一的智能体运行方式**。任务越来越多，但每类任务通常都有自己的数据格式、动作空间、上下文组织、模型策略和交互形式，导致方法难以迁移，新任务适配成本较高。
+
+| 现有专属化问题 | 具体表现 | 本项目对应思路 |
 | --- | --- | --- |
-| UAV 任务、数据集与平台构建 | benchmark 之间输入、动作空间、环境接口和评估协议差异较大，系统复用困难 | 设计统一 UAV-Agent Runtime，让不同任务通过 adapter、skill 和 context 接入，而不是重写完整 pipeline |
-| 任务专用导航模型与策略学习 | 模型多服务于特定任务设定，执行过程可解释性、安全校验和失败恢复不足 | 用 Model Planner + Validator + Safety + ToolDispatcher 形成可记录、可校验、可恢复的执行闭环 |
-| 历史观察 / 空间记忆 + VLM/LLM 推理 | 记忆结构、地图表示和 prompt 流程常是专用设计，难以复用或替换 | 把图像、位姿、轨迹、动作历史抽象为 Multimodal Memory 和 ContextModule |
-| UAV 对话、求助与人机交互 | 多数是任务内的 help signal、dialog history 或 assistant 机制，缺少通用通信协议 | 用 AgentMessage 定义 progress、question、warning、final，并支持用户回复回流 |
+| 任务接口专属化 | 不同任务有不同输入、动作空间、环境接口和评估协议 | 用统一 UAV-Agent Runtime 承载任务执行，通过 task adapter 接入不同 benchmark |
+| 任务知识专属化 | 搜索策略、安全规则、位置描述和完成判断常写在具体任务流程中 | 用 Skill Knowledge 注入任务经验和飞行知识 |
+| 记忆上下文专属化 | 图像、位姿、轨迹、地图和历史观察常被加工成特定任务格式 | 用 Multimodal Memory 和 ContextModule 统一上下文表达 |
+| 交互机制专属化 | 对话、求助、提问和最终回答常绑定具体任务或模型 | 用 AgentMessage 和 HumanReplyLoop 统一过程回复、澄清提问和最终回答 |
 
 由此，本项目希望解决的核心问题是：
 
-> 能不能用一套统一 UAV-Agent 架构处理不同 UAV-VLN 任务，让任务差异通过知识、记忆、视觉能力和通信协议注入，而不是每换一个 benchmark 就重新搭一套 pipeline？
+> 能不能用一套统一 UAV-Agent 架构处理多种 UAV-VLN 任务，让任务差异通过 adapter、skills、multimodal memory、vision capability 和 communication protocol 注入，而不是每新增一种任务都重新设计一套专属 pipeline？
 
 ### 4.1 为什么需要可插拔知识、记忆和视觉能力
 
@@ -127,9 +129,9 @@ final: 找到了，售货机在右前方约 8 米处，这是对应图片。
    - Dialogue and assistance
 
 2. 现有方法限制。
-   - Hard to transfer across UAV tasks
-   - Task-specific memory and prompts
-   - Weak interpretability and evidence
+   - Task-specific pipelines
+   - High adaptation cost for new tasks
+   - Fragmented memory and context design
    - Limited reusable communication protocol
 
 3. 本项目的核心启发。
@@ -141,7 +143,7 @@ final: 找到了，售货机在右前方约 8 米处，这是对应图片。
 
 对应的论文式表述为：
 
-> Existing UAV-VLN studies have advanced task benchmarks, navigation policy learning, memory-enhanced VLM/LLM reasoning, and dialogue-based assistance. Although effective in their own settings, these works are often tied to specific task definitions, memory designs, interaction protocols, or action spaces. Meanwhile, UAV-VLN tasks are becoming increasingly diverse. This motivates a unified UAV-Agent framework that decouples task adaptation from the core runtime through skills, multimodal memory, safe execution, and human-agent communication.
+> Existing UAV-VLN studies have advanced task benchmarks, navigation policy learning, memory-enhanced VLM/LLM reasoning, and dialogue-based assistance. However, as UAV-VLN tasks become increasingly diverse, existing solutions are often tied to task-specific pipelines, including specific action spaces, memory formats, model policies, and interaction protocols. This motivates a unified UAV-Agent framework that decouples task adaptation from the core runtime through task adapters, skills, multimodal memory, safe execution, and human-agent communication.
 
 ## 7. 方法总览
 
@@ -194,11 +196,11 @@ AgentMessage 机制让无人机不仅会行动，还会汇报、提问和给出�
 2. AerialVLN：验证长路径语言导航、图像观察和多轮规划。
 3. TRAVEL / OpenUAV：验证空中目标搜索、视觉确认、位置汇报和最终证据回答。
 4. Aerial Vision-and-Dialog Navigation / AerialVLA with Online Dialogue：验证 question、用户回复回流和交互式导航。
-5. CityNav / GeoNav 类任务：验证地图、地理知识、场景图和历史轨迹上下文的插件化表达。
+5. CityNav / GeoNav 类任务：验证 top-down 地理知识、场景图和历史轨迹上下文的插件化表达。
 
 ## 9. 总结表述
 
-> 现有 UAV-VLN 方法大多围绕某个数据集、平台或模型设计，系统之间迁移困难，也缺少面向真实用户的解释、提问和证据化回答。本项目希望构建一个统一 UAV-Agent 框架，把不同无人机视觉语言导航任务统一到“观察、记忆、规划、执行、反馈”的闭环中。任务差异通过 soft skills、图像记忆、视觉能力和通信协议注入，而不是重写整个系统。最终目标是让无人机不仅能执行导航动作，还能在不确定时主动提问，在执行中汇报进展，并给出带图片、位置和轨迹证据的最终结果。
+> 现有 UAV-VLN 任务类型不断增多，但很多方法仍围绕具体数据集、平台、动作空间或交互形式设计专属 pipeline，导致系统迁移困难，新任务适配成本较高。本项目希望构建一个统一 UAV-Agent 框架，把不同无人机视觉语言导航任务统一到“观察、记忆、规划、执行、反馈”的闭环中。任务差异通过 task adapter、soft skills、多模态记忆、视觉能力和通信协议注入，而不是重写整个系统。最终目标是让无人机不仅能执行导航动作，还能在不确定时主动提问，在执行中汇报进展，并给出带图片、位置和轨迹证据的最终结果。
 
 ## 10. 当前开发顺序
 

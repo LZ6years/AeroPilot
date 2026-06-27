@@ -1,4 +1,8 @@
-"""Implement a minimal UnrealCV backend for Windows UnrealZoo maps."""
+"""Implement a minimal UnrealCV backend for Windows UnrealZoo maps.
+
+This backend keeps UnrealCV camera state internally but returns FlyAgent's
+canonical pose shape to runtime: positive Z is up, negative Z is down.
+"""
 
 from __future__ import annotations
 
@@ -47,7 +51,7 @@ class UnrealCvBackend:
         # Fetch raw camera observations from UnrealCV or dry-run state.
         data: dict[str, Any] = {}
         if "pose" in modalities:
-            data["pose"] = self._get_pose()
+            data["pose"] = self._model_pose()
         frame_modalities = [m for m in modalities if m != "pose"]
         if frame_modalities:
             data["frames"] = self._get_frames(frame_modalities)
@@ -61,12 +65,12 @@ class UnrealCvBackend:
             self._connect()
             return ActionResult(True, action, "UnrealCV connected")
         if action in {"takeoff", "hover", "land"}:
-            return ActionResult(True, action, f"UnrealCV {action} treated as no-op")
+            return ActionResult(True, action, f"UnrealCV {action} treated as no-op", {"pose": self._model_pose()})
         if action == "turn_relative":
             pose = self._get_pose()
             pose[4] += float(args.get("yaw_deg", self.action_config.yaw_step_deg))
             self._set_pose(pose)
-            return ActionResult(True, action, "UnrealCV camera yaw updated", {"pose": pose})
+            return ActionResult(True, action, "UnrealCV camera yaw updated", {"pose": self._pose_to_model(pose)})
         if action == "set_pose":
             pose = [
                 float(args["x"]),
@@ -77,7 +81,7 @@ class UnrealCvBackend:
                 float(args.get("roll_deg", 0.0)),
             ]
             self._set_pose(pose)
-            return ActionResult(True, action, "UnrealCV camera pose set", {"pose": pose})
+            return ActionResult(True, action, "UnrealCV camera pose set", {"pose": self._pose_to_model(pose)})
         if action == "move_body":
             pose = self._get_pose()
             duration = float(args.get("duration", self.action_config.move_duration_sec))
@@ -87,21 +91,21 @@ class UnrealCvBackend:
             pose[1] += delta["dy"]
             pose[2] += delta["dz"]
             self._set_pose(pose)
-            return ActionResult(True, action, "UnrealCV camera location updated", {"pose": pose})
+            return ActionResult(True, action, "UnrealCV camera location updated", {"pose": self._pose_to_model(pose)})
         if action == "ascend":
             pose = self._get_pose()
             speed_mps, duration = self._vertical_args(args)
             pose[2] += speed_mps * duration
             self._set_pose(pose)
-            return ActionResult(True, action, "UnrealCV camera ascended", {"pose": pose})
+            return ActionResult(True, action, "UnrealCV camera ascended", {"pose": self._pose_to_model(pose)})
         if action == "descend":
             pose = self._get_pose()
             speed_mps, duration = self._vertical_args(args)
             pose[2] -= speed_mps * duration
             self._set_pose(pose)
-            return ActionResult(True, action, "UnrealCV camera descended", {"pose": pose})
+            return ActionResult(True, action, "UnrealCV camera descended", {"pose": self._pose_to_model(pose)})
         if action == "get_pose":
-            return ActionResult(True, action, "UnrealCV camera pose", {"pose": self._get_pose()})
+            return ActionResult(True, action, "UnrealCV camera pose", {"pose": self._model_pose()})
         if action == "get_frames":
             return ActionResult(
                 True,
@@ -158,6 +162,23 @@ class UnrealCvBackend:
         location = self._request_float_list(f"vget /camera/{cam}/location")
         rotation = self._request_float_list(f"vget /camera/{cam}/rotation")
         return [*location, *rotation]
+
+    def _model_pose(self) -> dict[str, float | str]:
+        return self._pose_to_model(self._get_pose())
+
+    @staticmethod
+    def _pose_to_model(pose: list[float]) -> dict[str, float | str]:
+        """Return the canonical model-facing pose shape for a raw camera pose."""
+
+        return {
+            "x": float(pose[0]),
+            "y": float(pose[1]),
+            "z": float(pose[2]),
+            "pitch_deg": float(pose[3]),
+            "yaw_deg": float(pose[4]),
+            "roll_deg": float(pose[5]),
+            "coordinate_frame": "unrealcv_canonical_m",
+        }
 
     def _set_pose(self, pose: list[float]) -> None:
         # Set camera location and rotation in UnrealCV.

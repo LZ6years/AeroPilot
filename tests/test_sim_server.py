@@ -228,7 +228,7 @@ def test_action_config_provides_default_move_turn_and_vertical_steps(tmp_path):
 
     assert move.data["pose"]["x"] == 8.0
     assert turn.data["pose"]["yaw_deg"] == 20.0
-    assert ascend.data["pose"]["z"] == -1.0
+    assert ascend.data["pose"]["z"] == 1.0
     assert descend.data["pose"]["z"] == 0.0
 
 
@@ -264,9 +264,9 @@ def test_vertical_actions_support_duration_speed_and_meters(tmp_path):
     )
     ascend_meters = server.execute_action(scene.scene_instance_id, "uav_1", "ascend", {"meters": 2})
 
-    assert ascend_duration.data["pose"]["z"] == -3.0
-    assert descend_speed_duration.data["pose"]["z"] == -1.0
-    assert ascend_meters.data["pose"]["z"] == -3.0
+    assert ascend_duration.data["pose"]["z"] == 3.0
+    assert descend_speed_duration.data["pose"]["z"] == 1.0
+    assert ascend_meters.data["pose"]["z"] == 3.0
 
 
 def test_windows_path_to_wsl_converts_drive_paths():

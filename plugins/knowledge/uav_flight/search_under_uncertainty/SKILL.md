@@ -22,8 +22,8 @@ Action scale must match the evidence you describe:
   person-like, silhouette, outline, patch, region, target side, or any similar
   uncertain cue, do not use 30-45 degrees. That is candidate confirmation:
   hover or use a small 5-15 degree yaw that keeps the cue in view.
-- If the target is clear or roughly centered, hover/stop searching and let phase
-  completion be judged.
+- If the target is clear or roughly centered, hover/stop searching and let the
+  current phase decision handle completion.
 
 Do not call a 30 degree yaw "small" or "local" confirmation. In this skill,
 small confirmation means about 5-15 degrees or hover.
@@ -51,14 +51,14 @@ scale from the latest visual evidence before choosing the yaw amount:
   candidate, possible target, target-like outline, or target on one image side.
   Use the visual-target skill for detailed image-side centering behavior.
 - Confirmed target handling: when the target is visually confirmed or already
-  roughly centered, stop broad search. Hover or let the current phase and phase
-  judge decide whether to align, continue, advance, or complete.
+  roughly centered, stop broad search. Hover or let the current phase decision
+  decide whether to align, continue, advance, or complete.
 
 Action-scale self-check:
 - no current target-like cue -> broad search may use 30-45 degrees;
 - uncertain candidate in view -> hover or small 5-15 degree confirmation;
-- clear or roughly centered target -> hover/stop searching and let phase
-  completion be judged.
+- clear or roughly centered target -> hover/stop searching and let the current
+  phase decision handle completion.
 
 Do not approach an uncertain target as if it were confirmed. Do not treat map
 memory hints, old observations, or artifact paths as current visual confirmation.

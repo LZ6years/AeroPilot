@@ -110,7 +110,7 @@ tests/test_model_repair_planner.py
 
 第一版稳定后再接：
 
-- phase judge JSON/schema recovery。
+- coupled phase decision JSON/schema recovery。
 - visual caption schema recovery。
 - 更细粒度 deterministic fallback。
 - selector 评估日志和不同 provider 的选择质量对比。

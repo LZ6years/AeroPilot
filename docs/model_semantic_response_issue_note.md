@@ -15,7 +15,7 @@
 -> SafetySupervisor
 -> ToolDispatcher / AirSim UE
 -> runtime automatic observation
--> post-action phase judge
+-> historical stage-decision flow (current coupled branch makes the phase decision in the planner call)
 ```
 
 最近新增的 UAV stabilization 也已经接入：每个真实飞行动作后，runtime 会等待速度低于阈值，再进行下一步动作或最终 observation。稳定等待不是模型动作，也不会写入 memory history。
@@ -110,7 +110,7 @@ rotate_right_40deg: uav.turn_relative {"yaw_deg": 10.0}
 adjust_altitude_down: uav.move_body {"direction": "down", "duration": 1.0}
 ```
 
-post-action phase judge 随后根据错误的 `completion_criteria.axis = down` 判断该阶段完成。这说明 phase judge 的行为是按输入标准执行的，问题源头更靠前：`TaskParser(model)` 或语义阶段生成。
+Historical note: this records an old stage-decision path that followed the old semantic criteria. It is not the current coupled planner flow on this branch.
 
 ## 当前判断
 

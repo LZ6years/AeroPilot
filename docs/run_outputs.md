@@ -30,7 +30,7 @@ runs/<run_id>/
     depth/
   contexts/
     latest_context.json
-    latest_phase_transition_context.json
+    latest_action_planner_model_context.json
   debug/
     debug_events.jsonl
     system.log
@@ -59,11 +59,11 @@ runs/<run_id>/
 | `memory/agent_messages.jsonl` | 回复历史 | append-only 用户可见回复历史，`state/flight_memory.json` 只保存对应 refs。 |
 | `artifacts/rgb` / `artifacts/depth` | 原始感知文件 | 真实 RGB/depth 文件唯一保存位置。 |
 | `contexts/latest_context.json` | 模型动作输入 | `ModelActionPlanner` 使用的最终 PlannerContext。 |
-| `contexts/latest_phase_transition_context.json` | 阶段判断输入 | 执行动作和自动观察后，给 phase judge 的上下文。 |
-| `debug/debug_events.jsonl` | 详细事件流 | 给开发者排查模型输出、安全拦截、稳定等待、repair、phase judge 细节。 |
+| `contexts/latest_action_planner_model_context.json` | 阶段判断输入 | 执行动作和自动观察后，给 coupled phase decision 的上下文。 |
+| `debug/debug_events.jsonl` | 详细事件流 | 给开发者排查模型输出、安全拦截、稳定等待、repair、coupled phase decision 细节。 |
 | `debug/latest_observation.json` | 最新原始 observation | 仅用于开发查看，不作为 context module 的历史来源。 |
 | `debug/phase_windows/*.json` | 阶段窗口详情 | 每个 phase window 的完整执行记录。 |
-| `debug/phase_transition/*.json` | 阶段判断详情 | 每次 post-action phase judge 的完整输入。 |
+| `debug/action_planner/*.json` | 阶段判断详情 | 每次 coupled phase decision 的完整输入。 |
 
 ## 已删除的旧输出
 
@@ -81,11 +81,11 @@ runs/<run_id>/
 
 ## Event 分层
 
-`events.jsonl` 是简版事件流，面向用户和后续 TUI。它只记录大阶段摘要，不放完整 observation、完整模型 payload 或完整 phase judge context。
+`events.jsonl` 是简版事件流，面向用户和后续 TUI。它只记录大阶段摘要，不放完整 observation、完整模型 payload 或完整 coupled phase decision context。
 
 `debug/debug_events.jsonl` 是开发流。模型原始 plan、validated plan、SafetySupervisor intervention、repair 尝试、稳定等待轮询和 shutdown 细节都写在这里。
 
-完整大对象优先写到 `debug/phase_windows/*.json` 或 `debug/phase_transition/*.json`，event 里只保留 `debug_ref` / `context_ref` 和摘要字段。
+完整大对象优先写到 `debug/phase_windows/*.json` 或 `debug/action_planner/*.json`，event 里只保留 `debug_ref` / `context_ref` 和摘要字段。
 
 ## Context 与 Memory 的关系
 

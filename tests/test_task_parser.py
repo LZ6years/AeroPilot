@@ -144,6 +144,14 @@ def test_model_parser_prompt_requires_explicit_numeric_metrics():
 
     assert "Use metrics only when the user explicitly gives a distance" in prompt
     assert "Do not invent numeric metric targets when the user did not provide them." in prompt
+    assert "negative target" in prompt
+    assert "Numeric angle role rules" in prompt
+    assert "A numeric angle is not automatically a yaw angle" in prompt
+    assert "orientation_role" in prompt
+    assert "horizontal_displacement_role" in prompt
+    assert "vertical_path_role" in prompt
+    assert "forward_distance = D*cos(A)" in prompt
+    assert "avoid defaulting to yaw_delta" in prompt
     assert "move to the trees" in prompt
     assert "Do not invent a distance metric." in prompt
 
@@ -167,6 +175,29 @@ def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespa
                     "observe": ["latest_observation"],
                     "continue_when": ["trees are unclear"],
                     "metrics": [],
+                }
+            ],
+            "uncertainties": [],
+        }
+    )
+    semantic_plan_from_dict(
+        {
+            "intent": "movement",
+            "task_goal": {
+                "target": "land four meters lower",
+                "target_attributes": {"direction": "down", "distance_m": 4.0},
+                "final_state": "uav_stable_after_landing_descent",
+            },
+            "phases": [
+                {
+                    "index": 1,
+                    "total": 1,
+                    "name": "controlled_landing_descent",
+                    "goal": "Land by descending four meters and stabilizing.",
+                    "done_when": ["the UAV has descended four meters", "the UAV is stable"],
+                    "observe": ["phase_execution_summary"],
+                    "continue_when": ["the requested descent is incomplete"],
+                    "metrics": [{"name": "up_distance", "target": -4.0, "unit": "m", "tolerance": 0.5}],
                 }
             ],
             "uncertainties": [],

@@ -12,7 +12,8 @@ from demos.model_action_planner_context_demo import (
     write_demo_outputs,
 )
 from src.agent.mission_state import MissionState
-from src.agent.planning.schemas import ShortHorizonPlan
+from src.agent.phase import CONTINUE_CURRENT_PHASE, PhaseTransition
+from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
 from src.agent.semantic.schemas import SemanticPlan, TaskParseResult
 from src.memory.flight_memory import FlightMemory
 from src.perception.context_builder import ObservationContextBuilder
@@ -55,6 +56,7 @@ def test_demo_declares_expected_output_files():
         "debug/model_payload.json",
         "debug/raw_model_response.json",
         "debug/raw_model_content.json",
+        "debug/coupled_plan.json",
         "debug/validated_plan.json",
         "debug/repair_attempts.json",
         "debug/repair_result.json",
@@ -125,6 +127,13 @@ def test_demo_writes_expected_artifact_files(tmp_path):
             "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold position"}],
         }
     )
+    coupled_plan = CoupledActionPhasePlan(
+        phase="orient_right",
+        phase_decision=PhaseTransition(CONTINUE_CURRENT_PHASE, "Need one safe observation window."),
+        steps=list(plan.steps),
+        action_window=plan.action_window,
+        agent_messages=list(plan.agent_messages),
+    )
     artifacts = DemoArtifacts(
         run_dir=tmp_path,
         parse_result=parse_result,
@@ -132,7 +141,8 @@ def test_demo_writes_expected_artifact_files(tmp_path):
         flight_memory=flight_memory,
         context=context,
         raw_model_response={"choices": [{"message": {"content": "{}"}}]},
-        raw_model_content=plan.to_dict(),
+        raw_model_content=coupled_plan.to_dict(),
+        coupled_plan=coupled_plan,
         validated_plan=plan,
         repair_attempts=[],
         repair_result={"repair_triggered": False},
@@ -161,6 +171,7 @@ def test_demo_writes_expected_artifact_files(tmp_path):
     preview = (tmp_path / "demo/demo_preview.md").read_text(encoding="utf-8")
     assert "Model Action Planner Demo" in preview
     assert "Contract Repair" in preview
-    assert "Phase Transition Boundary" in preview
-    assert "planner_side_phase_transition" in preview
-    assert "model_phase_transition_judged" in preview
+    assert "Coupled Phase Decision Boundary" in preview
+    assert "planner_side_transition" in preview
+    assert "coupled_planner_phase_decided" in preview
+    assert "model_phase_transition_judged" not in preview

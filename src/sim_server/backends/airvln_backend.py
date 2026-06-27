@@ -8,7 +8,7 @@ from src.adapters.airsim_uav import AirSimUavAdapter
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter, UavPrimitiveAdapter
 from src.env_client.schemas import ActionResult, MapPackage, Observation, SceneInstance
 from src.runtime.configs.action_config import UavActionConfig
-from src.uav import AIRSIM_NED_VERTICAL_SIGN, move_body_velocity_from_args
+from src.uav import CANONICAL_VERTICAL_SIGN, move_body_velocity_from_args
 
 
 class AirVlnBackend:
@@ -110,8 +110,9 @@ class AirVlnBackend:
         raise ValueError(f"Unsupported UAV primitive action: {action}")
 
     def _move_body_args(self, args: dict) -> tuple[float, float, float, float]:
-        # Resolve semantic direction or explicit body-frame velocity into a fixed-scale move.
-        return move_body_velocity_from_args(args, self.action_config, vertical_sign=AIRSIM_NED_VERTICAL_SIGN)
+        # Resolve model-facing movement into canonical body-frame velocity. The
+        # concrete primitive adapter owns any simulator-specific raw conversion.
+        return move_body_velocity_from_args(args, self.action_config, vertical_sign=CANONICAL_VERTICAL_SIGN)
 
     def _vertical_args(self, args: dict) -> tuple[float, float]:
         # Resolve meters, speed, and duration into a vertical speed-duration command.

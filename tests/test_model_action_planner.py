@@ -16,7 +16,7 @@ from src.agent.planning.model_action_planner import (
 from src.agent.planning.model_inputs import build_model_user_content
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK
-from src.agent.planning.schemas import ShortHorizonPlan
+from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
 from src.runtime.configs.model_config import ModelConfig
@@ -32,11 +32,6 @@ class StubModelActionPlanner(ModelActionPlanner):
         repair_planner=None,
     ) -> None:
         self.response = dict(response)
-        if not self.response.pop("_omit_phase_transition", False):
-            self.response.setdefault(
-                "phase_transition",
-                {"decision": ADVANCE_TO_NEXT_PHASE, "reason": "phase complete after this action"},
-            )
         if not self.response.pop("_omit_action_window", False):
             self.response.setdefault("action_window", make_action_window())
         if not self.response.pop("_omit_agent_messages", False):
@@ -53,15 +48,10 @@ class StubModelActionPlanner(ModelActionPlanner):
             repair_planner=repair_planner,
         )
 
-    def _call_openai_compatible(self, context: dict):
-        return self.response
-
-    def _call_phase_transition_openai_compatible(self, phase_context: dict):
-        return {
-            "decision": COMPLETE_TASK,
-            "reason": "stub post-action phase evidence is complete",
-            "agent_messages": make_agent_messages(message_type="final", content="任务完成，我已稳定悬停。"),
-        }
+    def _call_coupled_action_phase_openai_compatible(self, context: dict):
+        response = dict(self.response)
+        response.setdefault("phase_decision", {"decision": "continue_current_phase", "reason": "stub continues"})
+        return response
 
 
 class StubRepairPlanner:
@@ -138,7 +128,6 @@ def make_context() -> dict:
                 },
                 "uav.move_body": {
                     "args_one_of": [
-                        {"direction": "forward|backward|left|right|up|down", "duration": "number"},
                         {"vx": "number", "vy": "number", "vz": "number", "duration": "number"},
                     ],
                     "limits": {
@@ -152,6 +141,15 @@ def make_context() -> dict:
     }
 
 
+def make_tool_plan(
+    planner: ModelActionPlanner,
+    state: MissionState | None = None,
+    context: dict | None = None,
+) -> ShortHorizonPlan:
+    coupled_plan = planner.plan_next_with_phase_decision(state or make_state(), context or make_context())
+    return coupled_plan.to_short_horizon_plan()
+
+
 def test_model_user_content_stays_text_without_model_inputs():
     context = make_context()
     context["safety_constraints"] = {"yaw_scan_remaining_deg": 10.0}
@@ -162,6 +160,98 @@ def test_model_user_content_stays_text_without_model_inputs():
     assert text_context["current_phase"]["name"] == "orient_leftward"
     assert "safety_constraints" not in text_context
     assert "observation_policy" not in text_context
+
+
+def test_model_user_content_strips_legacy_move_direction_shorthand():
+    context = make_context()
+    context["allowed_action_constraints"]["action_schemas"]["uav.move_body"]["args_one_of"].append(
+        {"direction": "legacy", "duration": "number"}
+    )
+    context["phase_execution_summary"] = {
+        "tool_facts": {
+            "move_duration_by_direction_success": {"forward": 1.0},
+            "move_duration_success_sum_sec": 1.0,
+        }
+    }
+    context["fragments"] = [
+        {
+            "name": "action",
+            "content": {
+                "recent_actions": [
+                    {
+                        "tool": "uav.move_body",
+                        "args": {"direction": "forward", "duration": 1.0},
+                        "history_only": True,
+                    }
+                ]
+            },
+        }
+    ]
+
+    content = build_model_user_content(context)
+
+    assert isinstance(content, str)
+    text_context = json.loads(content)
+    text = json.dumps(text_context, ensure_ascii=False)
+    assert '"direction"' not in text
+    assert "move_duration_by_direction_success" not in text
+    assert text_context["allowed_action_constraints"]["action_schemas"]["uav.move_body"]["args_one_of"] == [
+        {"vx": "number", "vy": "number", "vz": "number", "duration": "number"}
+    ]
+    assert text_context["fragments"][0]["content"]["recent_actions"][0]["args"] == {
+        "duration": 1.0,
+        "legacy_named_motion": True,
+    }
+
+
+def test_model_user_content_puts_flyagent_rules_before_task_fragments():
+    context = make_context()
+    context.update(
+        {
+            "rules": {"text": "FlyAgent baseline flight rules.", "source": "memory/FLYAGENT.md"},
+            "active_instruction": "Turn toward the visual target.",
+            "semantic_goal": {"target": "visual target"},
+            "phase_progress_evidence": {"motion_progress": {"yaw_only_so_far": False}},
+            "fragments": [
+                {
+                    "name": "skills",
+                    "content": {
+                        "selected_skills": [
+                            {
+                                "name": "visual_target_task_reasoning",
+                                "skill_text": "Use visual evidence carefully.",
+                            }
+                        ]
+                    },
+                    "metadata": {"debug_only": True},
+                }
+            ],
+            "phase_execution_summary": {"window_count": 1},
+            "user_preferences": {"text": "Be concise."},
+            "context_schema": {"planner_context_fields": {"rules": "Global FlyAgent behavior guidance."}},
+            "metadata": {"run_id": "run_test"},
+        }
+    )
+
+    content = build_model_user_content(context)
+
+    assert isinstance(content, str)
+    text_context = json.loads(content)
+    assert list(text_context)[:10] == [
+        "rules",
+        "active_instruction",
+        "current_phase",
+        "semantic_goal",
+        "phase_progress_evidence",
+        "fragments",
+        "allowed_action_constraints",
+        "phase_execution_summary",
+        "user_preferences",
+        "context_schema",
+    ]
+    assert text_context["rules"]["text"] == "FlyAgent baseline flight rules."
+    assert text_context["fragments"][0]["content"]["selected_skills"][0]["name"] == "visual_target_task_reasoning"
+    assert "metadata" not in text_context["fragments"][0]
 
 
 def test_model_user_content_strips_phase_judge_audit_fields():
@@ -357,27 +447,30 @@ def test_model_user_content_adds_text_model_inputs():
     assert content[1] == {"type": "text", "text": "画面中疑似入口位于右前方。"}
 
 
-def test_action_planner_prompt_uses_image_sequence_action_trend_and_explicit_targets():
-    prompt = (
-        Path("src")
-        / "agent"
-        / "planning"
-        / "prompts"
-        / "action_planner_system.txt"
-    ).read_text(encoding="utf-8")
+def test_model_action_planner_rejects_legacy_action_prompt_override():
+    with pytest.raises(ModelActionPlannerConfigError, match="coupled action/phase prompt only"):
+        ModelActionPlanner(ModelConfig(model_name="stub", api_key="test-key"), prompt_path="legacy.txt")
 
-    assert "selected_frames" in prompt
-    assert "action_trend" in prompt
-    assert "current_phase.metrics" in prompt
-    assert "Do not tell the user an exact remaining distance or angle unless current_phase.metrics provides a numeric target" in prompt
-    assert "alternating_yaw" in prompt
+
+def test_model_action_planner_combines_coupled_prompt_fragments_in_order():
+    planner = ModelActionPlanner(ModelConfig(model_name="stub", api_key="test-key"))
+    prompt = planner.coupled_action_phase_system_prompt
+
+    overview_index = prompt.index("experimental coupled action-and-phase planner")
+    phase_index = prompt.index("--- Phase Decision Contract ---")
+    action_index = prompt.index("--- Action Planning Contract ---")
+
+    assert overview_index < phase_index < action_index
+    assert "Phase Decision Guide" in prompt
+    assert "Allowed Tools For Continue Decisions" in prompt
+    assert "coupled_action_phase_planner_system.txt" not in prompt
 
 
 def test_model_action_planner_requires_api_key():
     planner = ModelActionPlanner(ModelConfig(model_name="stub", api_key=""))
 
     with pytest.raises(ModelActionPlannerConfigError, match="API_KEY"):
-        planner.plan_next(make_state(), {"current_phase": {"name": "orient_leftward"}})
+        planner.plan_next_with_phase_decision(make_state(), {"current_phase": {"name": "orient_leftward"}})
 
 
 def test_model_action_planner_accepts_open_phase_name():
@@ -396,7 +489,7 @@ def test_model_action_planner_accepts_open_phase_name():
         }
     )
 
-    plan = planner.plan_next(state, make_context())
+    plan = make_tool_plan(planner, state, make_context())
 
     assert plan.phase == "orient_leftward"
     assert plan.steps[0].tool == "uav.turn_relative"
@@ -414,20 +507,6 @@ def test_short_horizon_plan_direct_constructor_has_no_planner_side_transition():
     assert plan.to_dict()["action_window"]["intent"]
 
 
-def test_model_action_planner_accepts_missing_phase_transition():
-    planner = StubModelActionPlanner(
-        {
-            "_omit_phase_transition": True,
-            "phase": "orient_leftward",
-            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
-        }
-    )
-
-    plan = planner.plan_next(make_state(), make_context())
-
-    assert plan.steps[0].tool == "uav.hover"
-
-
 def test_model_action_planner_rejects_missing_action_window():
     planner = StubModelActionPlanner(
         {
@@ -438,7 +517,7 @@ def test_model_action_planner_rejects_missing_action_window():
     )
 
     with pytest.raises(ValueError, match="requires action_window"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_missing_agent_messages():
@@ -451,7 +530,7 @@ def test_model_action_planner_rejects_missing_agent_messages():
     )
 
     with pytest.raises(ValueError, match="requires agent_messages"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_invalid_action_window_scope():
@@ -464,7 +543,7 @@ def test_model_action_planner_rejects_invalid_action_window_scope():
     )
 
     with pytest.raises(ValueError, match="current_phase_only"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_multi_step_window_that_needs_observation():
@@ -483,39 +562,7 @@ def test_model_action_planner_rejects_multi_step_window_that_needs_observation()
     )
 
     with pytest.raises(ValueError, match="exactly one step"):
-        planner.plan_next(make_state(), make_context())
-
-
-def test_model_action_planner_ignores_invalid_phase_transition_decision():
-    planner = StubModelActionPlanner(
-        {
-            "phase": "orient_leftward",
-            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
-            "phase_transition": {"decision": "jump_somewhere", "reason": "bad"},
-        }
-    )
-
-    plan = planner.plan_next(make_state(), make_context())
-
-    assert plan.steps[0].tool == "uav.hover"
-
-
-def test_model_action_planner_ignores_phase_transition_target_fields():
-    planner = StubModelActionPlanner(
-        {
-            "phase": "orient_leftward",
-            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
-            "phase_transition": {
-                "decision": ADVANCE_TO_NEXT_PHASE,
-                "next_phase": "skip_to_final",
-                "reason": "bad target",
-            },
-        }
-    )
-
-    plan = planner.plan_next(make_state(), make_context())
-
-    assert plan.steps[0].tool == "uav.hover"
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_unknown_tool():
@@ -527,7 +574,7 @@ def test_model_action_planner_rejects_unknown_tool():
     )
 
     with pytest.raises(ValueError, match="not allowed"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_env_observe_tool_step():
@@ -546,7 +593,7 @@ def test_model_action_planner_rejects_env_observe_tool_step():
     )
 
     with pytest.raises(ValueError, match="not allowed"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_phase_mismatch():
@@ -558,7 +605,7 @@ def test_model_action_planner_rejects_phase_mismatch():
     )
 
     with pytest.raises(ValueError, match="phase mismatch"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_yaw_above_context_limit():
@@ -577,7 +624,7 @@ def test_model_action_planner_rejects_yaw_above_context_limit():
     )
 
     with pytest.raises(ValueError, match="below limit"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_observe_step():
@@ -595,7 +642,7 @@ def test_model_action_planner_rejects_observe_step():
     )
 
     with pytest.raises(ValueError, match="runtime perception policy"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_hover_with_args():
@@ -607,7 +654,7 @@ def test_model_action_planner_rejects_hover_with_args():
     )
 
     with pytest.raises(ValueError, match="uav.hover args must be"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_move_body_distance_args():
@@ -626,11 +673,10 @@ def test_model_action_planner_rejects_move_body_distance_args():
     )
 
     with pytest.raises(ValueError, match="uav.move_body args must be exactly"):
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
-def test_model_action_planner_accepts_contract_move_body_direction_args():
-    state = make_state()
+def test_model_action_planner_rejects_model_facing_move_body_direction_args():
     planner = StubModelActionPlanner(
         {
             "phase": "orient_leftward",
@@ -639,18 +685,17 @@ def test_model_action_planner_accepts_contract_move_body_direction_args():
                     "kind": "tool",
                     "tool": "uav.move_body",
                     "args": {"direction": "backward", "duration": 1.5},
-                    "reason": "move backward",
+                    "reason": "legacy named motion",
                 }
             ],
         }
     )
 
-    plan = planner.plan_next(state, make_context())
+    with pytest.raises(ValueError, match="direction shorthand is not allowed"):
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
-    assert plan.steps[0].args == {"direction": "backward", "duration": 1.5}
 
-
-def test_model_action_planner_accepts_forward_5m_duration_from_nominal_scale():
+def test_model_action_planner_accepts_numeric_move_for_5m_nominal_scale():
     state = make_state()
     context = make_context()
     context["allowed_action_constraints"]["action_schemas"]["uav.move_body"]["limits"]["duration_max"] = 8.0
@@ -665,16 +710,16 @@ def test_model_action_planner_accepts_forward_5m_duration_from_nominal_scale():
                 {
                     "kind": "tool",
                     "tool": "uav.move_body",
-                    "args": {"direction": "forward", "duration": 2.5},
-                    "reason": "move forward about 5 meters using nominal 2 m/s scale",
+                    "args": {"vx": 2.0, "vy": 0.0, "vz": 0.0, "duration": 2.5},
+                    "reason": "translate about 5 meters using nominal 2 m/s scale",
                 }
             ],
         }
     )
 
-    plan = planner.plan_next(state, context)
+    plan = make_tool_plan(planner, state, context)
 
-    assert plan.steps[0].args == {"direction": "forward", "duration": 2.5}
+    assert plan.steps[0].args == {"vx": 2.0, "vy": 0.0, "vz": 0.0, "duration": 2.5}
 
 
 def test_model_action_planner_accepts_contract_move_body_velocity_args_without_normalization():
@@ -693,7 +738,7 @@ def test_model_action_planner_accepts_contract_move_body_velocity_args_without_n
         }
     )
 
-    plan = planner.plan_next(state, make_context())
+    plan = make_tool_plan(planner, state, make_context())
 
     assert plan.steps[0].args == {"vx": 1.0, "vy": -0.5, "vz": 0.25, "duration": 1.2}
 
@@ -713,8 +758,8 @@ def test_model_action_planner_rejects_legacy_move_body_alias_args():
         }
     )
 
-    with pytest.raises(ValueError, match="Unsupported uav.move_body direction"):
-        planner.plan_next(make_state(), make_context())
+    with pytest.raises(ValueError, match="direction shorthand is not allowed"):
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_legacy_move_body_duration_alias():
@@ -732,8 +777,8 @@ def test_model_action_planner_rejects_legacy_move_body_duration_alias():
         }
     )
 
-    with pytest.raises(ValueError, match="uav.move_body args must be exactly"):
-        planner.plan_next(make_state(), make_context())
+    with pytest.raises(ValueError, match="direction shorthand is not allowed"):
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_rejects_unknown_move_body_direction():
@@ -751,8 +796,8 @@ def test_model_action_planner_rejects_unknown_move_body_direction():
         }
     )
 
-    with pytest.raises(ValueError, match="Unsupported uav.move_body direction"):
-        planner.plan_next(make_state(), make_context())
+    with pytest.raises(ValueError, match="direction shorthand is not allowed"):
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_repairs_contract_violation_on_first_attempt():
@@ -761,10 +806,6 @@ def test_model_action_planner_repairs_contract_violation_on_first_attempt():
             {
                 "phase": "orient_leftward",
                 "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "repaired hold"}],
-                "phase_transition": {
-                    "decision": ADVANCE_TO_NEXT_PHASE,
-                    "reason": "repair uses safe hover",
-                },
             }
         ]
     )
@@ -777,7 +818,7 @@ def test_model_action_planner_repairs_contract_violation_on_first_attempt():
         repair_planner=repair_planner,
     )
 
-    plan = planner.plan_next(make_state(), make_context())
+    plan = make_tool_plan(planner, make_state(), make_context())
 
     assert plan.steps[0].tool == "uav.hover"
     assert repair_planner.contexts[0].attempt == 1
@@ -791,26 +832,14 @@ def test_model_action_planner_repairs_contract_violation_on_third_attempt():
             {
                 "phase": "orient_leftward",
                 "steps": [{"kind": "tool", "tool": "uav.move_body", "args": {"x_m": 1.0}, "reason": "bad"}],
-                "phase_transition": {
-                    "decision": ADVANCE_TO_NEXT_PHASE,
-                    "reason": "still bad",
-                },
             },
             {
                 "phase": "orient_leftward",
                 "steps": [{"kind": "observe", "modalities": ["rgb"], "reason": "bad"}],
-                "phase_transition": {
-                    "decision": ADVANCE_TO_NEXT_PHASE,
-                    "reason": "still bad",
-                },
             },
             {
                 "phase": "orient_leftward",
                 "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "finally safe"}],
-                "phase_transition": {
-                    "decision": ADVANCE_TO_NEXT_PHASE,
-                    "reason": "third repair succeeds",
-                },
             },
         ]
     )
@@ -823,7 +852,7 @@ def test_model_action_planner_repairs_contract_violation_on_third_attempt():
         repair_planner=repair_planner,
     )
 
-    plan = planner.plan_next(make_state(), make_context())
+    plan = make_tool_plan(planner, make_state(), make_context())
 
     assert plan.steps[0].tool == "uav.hover"
     assert len(planner.last_repair_attempts) == 3
@@ -836,26 +865,14 @@ def test_model_action_planner_repair_failure_exposes_structured_error():
             {
                 "phase": "orient_leftward",
                 "steps": [{"kind": "tool", "tool": "uav.move_body", "args": {"x_m": 1.0}, "reason": "bad"}],
-                "phase_transition": {
-                    "decision": ADVANCE_TO_NEXT_PHASE,
-                    "reason": "still bad",
-                },
             },
             {
                 "phase": "orient_leftward",
                 "steps": [{"kind": "tool", "tool": "uav.move_body", "args": {"x_m": 2.0}, "reason": "bad"}],
-                "phase_transition": {
-                    "decision": ADVANCE_TO_NEXT_PHASE,
-                    "reason": "still bad",
-                },
             },
             {
                 "phase": "orient_leftward",
                 "steps": [{"kind": "tool", "tool": "uav.move_body", "args": {"x_m": 3.0}, "reason": "bad"}],
-                "phase_transition": {
-                    "decision": ADVANCE_TO_NEXT_PHASE,
-                    "reason": "still bad",
-                },
             },
         ]
     )
@@ -869,7 +886,7 @@ def test_model_action_planner_repair_failure_exposes_structured_error():
     )
 
     with pytest.raises(ModelRepairPlannerError, match="exhausted") as exc_info:
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
     data = exc_info.value.to_dict()
     assert data["reason"] == "max_repair_attempts_exhausted"
@@ -883,12 +900,8 @@ def test_model_action_planner_repair_repeated_same_invalid_plan_fails_early():
         "action_window": make_action_window(),
         "agent_messages": make_agent_messages(),
         "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
-        "phase_transition": {
-            "decision": ADVANCE_TO_NEXT_PHASE,
-            "reason": "bad",
-        },
     }
-    repair_planner = StubRepairPlanner([bad_plan])
+    repair_planner = StubRepairPlanner([bad_plan, bad_plan])
     planner = StubModelActionPlanner(
         bad_plan,
         max_repair_attempts=3,
@@ -896,30 +909,7 @@ def test_model_action_planner_repair_repeated_same_invalid_plan_fails_early():
     )
 
     with pytest.raises(ModelRepairPlannerError, match="repeated"):
-        planner.plan_next(make_state(), make_context())
-
-
-def test_model_action_planner_repair_output_missing_phase_transition_succeeds():
-    repair_planner = StubRepairPlanner(
-        [
-            {
-                "phase": "orient_leftward",
-                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "missing transition"}],
-            }
-        ]
-    )
-    planner = StubModelActionPlanner(
-        {
-            "phase": "orient_leftward",
-            "steps": [{"kind": "tool", "tool": "env.observe", "args": {}, "reason": "bad"}],
-        },
-        max_repair_attempts=1,
-        repair_planner=repair_planner,
-    )
-
-    plan = planner.plan_next(make_state(), make_context())
-
-    assert plan.steps[0].tool == "uav.hover"
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
 
 def test_model_action_planner_repair_output_missing_action_window_fails():
@@ -942,7 +932,7 @@ def test_model_action_planner_repair_output_missing_action_window_fails():
     )
 
     with pytest.raises(ModelRepairPlannerError) as exc_info:
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
     assert exc_info.value.violations[-1]["code"] == "repair_plan_parse_error"
     assert "requires action_window" in exc_info.value.violations[-1]["message"]
@@ -968,13 +958,13 @@ def test_model_action_planner_repair_output_missing_agent_messages_fails():
     )
 
     with pytest.raises(ModelRepairPlannerError) as exc_info:
-        planner.plan_next(make_state(), make_context())
+        planner.plan_next_with_phase_decision(make_state(), make_context())
 
     assert exc_info.value.violations[-1]["code"] == "repair_plan_parse_error"
     assert "requires agent_messages" in exc_info.value.violations[-1]["message"]
 
 
-def test_model_action_planner_judges_phase_transition_from_post_action_context():
+def test_model_action_planner_has_no_independent_phase_judge_method():
     planner = StubModelActionPlanner(
         {
             "phase": "orient_leftward",
@@ -982,8 +972,192 @@ def test_model_action_planner_judges_phase_transition_from_post_action_context()
         }
     )
 
-    transition = planner.judge_phase_transition({"executed_steps": [], "measurements": {}})
+    assert not hasattr(planner, "judge_phase_transition")
 
-    assert transition.decision == COMPLETE_TASK
-    assert "post-action" in transition.reason
-    assert transition.agent_messages[0].type == "final"
+
+def test_coupled_action_phase_plan_accepts_continue_with_tool_steps():
+    plan = CoupledActionPhasePlan.from_dict(
+        {
+            "phase": "orient_leftward",
+            "phase_decision": {"decision": "continue_current_phase", "reason": "target not aligned yet"},
+            "action_window": make_action_window(),
+            "agent_messages": make_agent_messages(),
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+        },
+        require_agent_messages=True,
+    )
+
+    short_plan = plan.to_short_horizon_plan()
+
+    assert plan.phase_decision.decision == "continue_current_phase"
+    assert short_plan.steps[0].tool == "uav.hover"
+    assert "phase_decision" in plan.to_dict()
+    assert "phase_transition" not in plan.to_dict()
+
+
+def test_coupled_action_phase_plan_accepts_advance_with_empty_steps():
+    plan = CoupledActionPhasePlan.from_dict(
+        {
+            "phase": "orient_leftward",
+            "phase_decision": {"decision": ADVANCE_TO_NEXT_PHASE, "reason": "phase already complete"},
+            "agent_messages": make_agent_messages(),
+            "steps": [],
+        }
+    )
+
+    assert plan.phase_decision.decision == ADVANCE_TO_NEXT_PHASE
+    assert plan.steps == []
+
+
+def test_coupled_action_phase_plan_rejects_transition_with_steps():
+    with pytest.raises(ValueError, match="empty steps"):
+        CoupledActionPhasePlan.from_dict(
+            {
+                "phase": "orient_leftward",
+                "phase_decision": {"decision": COMPLETE_TASK, "reason": "done"},
+                "agent_messages": make_agent_messages(),
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "bad"}],
+            }
+        )
+
+
+def test_coupled_action_phase_plan_rejects_continue_without_steps():
+    with pytest.raises(ValueError, match="1-3 tool steps"):
+        CoupledActionPhasePlan.from_dict(
+            {
+                "phase": "orient_leftward",
+                "phase_decision": {"decision": "continue_current_phase", "reason": "not done"},
+                "action_window": make_action_window(),
+                "agent_messages": make_agent_messages(),
+                "steps": [],
+            }
+        )
+
+
+def test_coupled_action_phase_plan_rejects_invalid_decision():
+    with pytest.raises(ValueError, match="Unsupported phase_decision decision"):
+        CoupledActionPhasePlan.from_dict(
+            {
+                "phase": "orient_leftward",
+                "phase_decision": {"decision": "invalid_transition_request", "reason": "old design"},
+                "agent_messages": make_agent_messages(),
+                "steps": [],
+            }
+        )
+
+
+def test_model_action_planner_coupled_continue_uses_tool_contract_validator():
+    planner = StubModelActionPlanner(
+        {
+            "phase": "unused",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "unused"}],
+        }
+    )
+    planner._call_coupled_action_phase_openai_compatible = lambda context: {
+        "phase": "orient_leftward",
+        "phase_decision": {"decision": "continue_current_phase", "reason": "need one more action"},
+        "action_window": make_action_window(),
+        "agent_messages": make_agent_messages(),
+        "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+    }
+
+    plan = planner.plan_next_with_phase_decision(make_state(), make_context())
+
+    assert plan.phase_decision.decision == "continue_current_phase"
+    assert plan.steps[0].tool == "uav.hover"
+
+
+def test_model_action_planner_coupled_continue_repairs_tool_contract_violation():
+    repair_planner = StubRepairPlanner(
+        [
+            {
+                "phase": "orient_leftward",
+                "action_window": make_action_window(
+                    intent="repair to one safe observation window",
+                    requires_intermediate_observation=True,
+                    expected_effect="collect one new observation after holding",
+                ),
+                "agent_messages": make_agent_messages(content="我会改用一个安全的短动作继续确认。"),
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "single repaired step"}],
+            }
+        ]
+    )
+    planner = StubModelActionPlanner(
+        {
+            "phase": "unused",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "unused"}],
+        },
+        max_repair_attempts=1,
+        repair_planner=repair_planner,
+    )
+    planner._call_coupled_action_phase_openai_compatible = lambda context: {
+        "phase": "orient_leftward",
+        "phase_decision": {"decision": "continue_current_phase", "reason": "need fresh evidence"},
+        "action_window": make_action_window(
+            requires_intermediate_observation=True,
+            expected_effect="bad multi-step plan asks for a mid-window observation",
+        ),
+        "agent_messages": make_agent_messages(),
+        "steps": [
+            {"kind": "tool", "tool": "uav.turn_relative", "args": {"yaw_deg": -5}, "reason": "first"},
+            {"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "second"},
+        ],
+    }
+
+    plan = planner.plan_next_with_phase_decision(make_state(), make_context())
+
+    assert plan.phase_decision.decision == "continue_current_phase"
+    assert plan.phase_decision.reason == "need fresh evidence"
+    assert len(plan.steps) == 1
+    assert plan.steps[0].tool == "uav.hover"
+    assert plan.action_window.requires_intermediate_observation is True
+    assert planner.last_repair_result["status"] == "repaired"
+    assert repair_planner.contexts[0].violation["code"] == "action_window_intermediate_observation_requires_single_step"
+
+
+def test_model_action_planner_coupled_transition_with_steps_is_not_tool_repaired():
+    repair_planner = StubRepairPlanner(
+        [
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "should not be used"}],
+            }
+        ]
+    )
+    planner = StubModelActionPlanner(
+        {
+            "phase": "unused",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "unused"}],
+        },
+        max_repair_attempts=1,
+        repair_planner=repair_planner,
+    )
+    planner._call_coupled_action_phase_openai_compatible = lambda context: {
+        "phase": "orient_leftward",
+        "phase_decision": {"decision": ADVANCE_TO_NEXT_PHASE, "reason": "done"},
+        "agent_messages": make_agent_messages(),
+        "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "bad transition action"}],
+    }
+
+    with pytest.raises(ValueError, match="empty steps"):
+        planner.plan_next_with_phase_decision(make_state(), make_context())
+
+    assert repair_planner.contexts == []
+
+
+def test_model_action_planner_coupled_rejects_phase_mismatch_without_tool_steps():
+    planner = StubModelActionPlanner(
+        {
+            "phase": "unused",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "unused"}],
+        }
+    )
+    planner._call_coupled_action_phase_openai_compatible = lambda context: {
+        "phase": "wrong_phase",
+        "phase_decision": {"decision": ADVANCE_TO_NEXT_PHASE, "reason": "bad phase"},
+        "agent_messages": make_agent_messages(),
+        "steps": [],
+    }
+
+    with pytest.raises(ValueError, match="phase mismatch"):
+        planner.plan_next_with_phase_decision(make_state(), make_context())

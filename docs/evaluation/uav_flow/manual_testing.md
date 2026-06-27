@@ -176,25 +176,25 @@ runs/uav_flow_<case_id>_<timestamp>_<suffix>/
 
 ```text
 contexts/latest_context.json
-contexts/latest_phase_transition_context.json
+contexts/latest_action_planner_model_context.json
 memory/actions.jsonl
 memory/agent_messages.jsonl
 artifacts/rgb/
 debug/action_planner/
-debug/phase_transition/
 ```
 
 ## 7. 如何判断一次 case
 
 不要只看 SR judge。建议按这个顺序看：
 
-1. `review.html` 中的 RGB before/after/final。
-2. action sequence：是否一直 `turn_relative`，是否有合理 `move_body`。
-3. `latest_context.json`：planner 是否拿到了图片、skills、action trend、compact phase progress。
-4. `latest_phase_transition_context.json`：phase judge 是否拿到了 post-action 图片和 `phase_completion_evaluation`。
-5. `trajectory_2d.png`：实际轨迹和 reference 是否方向一致。
-6. `ndtw.json`：看 nDTW 数值和 metric mode。
-7. `sr_judge.json`：作为参考，不作为唯一结论。
+1. `review.html` 的 Decision Timeline：先看每个 window 的 coupled phase decision、reason，以及是否真的执行 UAV tool。
+2. Tool Timeline：只看真实执行的 `turn_relative / move_body / hover`，不要用它判断无工具切阶段窗口。
+3. Coupled Planner Debug：先看 Decision Summary、phase progress evidence、image input roles、action trend，再展开完整 Model-Facing Context。
+4. `latest_context.json`：检查 planner 是否拿到了图片、skills、action trend、compact phase progress。
+5. `latest_action_planner_model_context.json`：检查 coupled planner 是否拿到了最新图片、phase progress evidence 和 `phase_completion_evaluation`。
+6. `trajectory_2d.png`：实际轨迹和 reference 是否方向一致。
+7. `ndtw.json`：看 nDTW 数值和 metric mode。
+8. `sr_judge.json`：作为参考，不作为唯一结论。
 
 特别注意：
 
@@ -250,7 +250,7 @@ Get-ChildItem "$eval/cases" -Directory | ForEach-Object {
 
 ```text
 runs/<run_id>/contexts/latest_context.json
-runs/<run_id>/contexts/latest_phase_transition_context.json
+runs/<run_id>/contexts/latest_action_planner_model_context.json
 ```
 
 确认 image fragment 中：
@@ -292,7 +292,7 @@ Get-Process | Where-Object {
 
 1. 代码改动后先跑 dry smoke。
 2. 真实 UE 跑 `Turn / Approach` 每类 1 个 case。
-3. 打开 `review.html` 看 action planner debug、RGB before/after、phase judge context。
+3. 打开 `review.html` 看 action planner debug、RGB before/after、coupled phase decision context。
 4. 如果行为合理，再跑每类 3 个 case。
-5. 记录明显误判 SR、低 nDTW 但语义正确、视觉识别失败、phase judge 过早完成等样本。
+5. 记录明显误判 SR、低 nDTW 但语义正确、视觉识别失败、coupled phase decision 过早完成等样本。
 6. 每次分析时优先看 HTML，再回到 `latest_context.json` 和 JSONL 查细节。

@@ -30,6 +30,12 @@
     "max_selected": 3
   },
   {
+    "instruction": "Locate and approach the sunshade from the front side.",
+    "expected_any": ["search_under_uncertainty", "approach_and_standoff"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
     "instruction": "Locate the sign before moving closer to the building.",
     "expected_any": ["search_under_uncertainty", "visual_target_task_reasoning"],
     "forbidden": [],
@@ -55,9 +61,33 @@
   },
   {
     "instruction": "Fly through the narrow alley while avoiding walls and poles.",
-    "expected_any": ["obstacle_and_safety_awareness"],
+    "expected_any": ["route_traversal_and_passage", "obstacle_and_safety_awareness"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Navigate through the sun umbrella from the left side.",
+    "expected_any": ["route_traversal_and_passage", "obstacle_and_safety_awareness"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Progress past the sun umbrella from the right side.",
+    "expected_any": ["route_traversal_and_passage"],
     "forbidden": [],
     "max_selected": 2
+  },
+  {
+    "instruction": "Go through the trees from the left side.",
+    "expected_any": ["route_traversal_and_passage", "obstacle_and_safety_awareness"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Pass between the two buildings without hitting the walls.",
+    "expected_any": ["route_traversal_and_passage", "obstacle_and_safety_awareness"],
+    "forbidden": [],
+    "max_selected": 3
   },
   {
     "instruction": "Move closer to the tree but avoid its branches.",
@@ -130,5 +160,35 @@
     "expected_any": ["visual_target_task_reasoning", "task_completion_evidence"],
     "forbidden": [],
     "max_selected": 3
+  },
+  {
+    "instruction": "Descend 9 meters at a 15 degree angle and stop at the target altitude.",
+    "expected_any": ["vertical_landing_and_altitude_control"],
+    "forbidden": ["search_under_uncertainty"],
+    "max_selected": 2
+  },
+  {
+    "instruction": "Land 4 meters lower and hold steady.",
+    "expected_any": ["vertical_landing_and_altitude_control"],
+    "forbidden": [],
+    "max_selected": 2
+  },
+  {
+    "instruction": "Land near the tree on the left side.",
+    "expected_any": ["vertical_landing_and_altitude_control", "approach_and_standoff"],
+    "forbidden": [],
+    "max_selected": 3
+  },
+  {
+    "instruction": "Land on the front side of the landmark.",
+    "expected_any": ["vertical_landing_and_altitude_control"],
+    "forbidden": ["search_under_uncertainty"],
+    "max_selected": 2
+  },
+  {
+    "instruction": "Land on the right side of the target structure.",
+    "expected_any": ["vertical_landing_and_altitude_control"],
+    "forbidden": [],
+    "max_selected": 2
   }
 ]

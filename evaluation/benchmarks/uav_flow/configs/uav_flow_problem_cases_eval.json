@@ -1,0 +1,39 @@
+{
+  "uav_flow_repo_path": "C:\\Users\\HP\\Desktop\\UAV-Flow-main\\UAV-Flow-main\\UAV-Flow-Eval",
+  "env_id": "UnrealTrack-DowntownWest-ContinuousColor-v0",
+  "output_dir": "evaluation/benchmarks/uav_flow/outputs",
+  "run_root": "runs",
+  "instruction_field": "instruction_unified",
+  "classes": ["Shift", "Pass", "Land", "Ascend/Descend"],
+  "limit_per_class": 99,
+  "enable_sr_judge": true,
+  "real_unrealcv": true,
+  "reuse_real_unrealcv_env": true,
+  "time_dilation": 10,
+  "resolution": [256, 256],
+  "seed": 0,
+  "env_path": ".env",
+  "parser_mode": "model",
+  "shutdown_policy": "hover",
+  "runtime_loop_guard_windows": 100,
+  "enable_visual_diagnostics": true,
+  "visual_diagnostics_max_frames": 12,
+  "enable_action_planner_debug": true,
+  "test_jsons_path": "C:\\Users\\HP\\Desktop\\UAV-Flow-main\\UAV-Flow-main\\UAV-Flow-Eval\\test_jsons",
+  "classified_instr_path": "evaluation/benchmarks/uav_flow/configs/uav_flow_problem_cases_20260625.json",
+  "action_config_overrides": {
+    "linear_velocity_mps": 1.0,
+    "move_duration_sec": 1.0,
+    "yaw_step_deg": 10.0
+  },
+  "safety_overrides": {
+    "max_yaw_step_deg": 90.0,
+    "max_linear_velocity_mps": 3.0,
+    "max_move_duration_sec": 3.0,
+    "max_yaw_scan_accum_deg": 540.0
+  },
+  "metadata": {
+    "purpose": "Fixed regression batch for previously observed UAV-Flow problem cases after prompt, skill, and context fixes.",
+    "shift_angled_move_expected": "record_only_until_task_parser_is_reworked"
+  }
+}

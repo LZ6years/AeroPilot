@@ -153,7 +153,7 @@ flyagent start
 
 - 不需要用户手动传 `SceneInstance`。
 - 模型输出合法 `uav.move_body`。
-- run 中有 `state/semantic_plan.json`、`state/latest_state.json`、`state/flight_memory.json`、`contexts/latest_context.json`、`contexts/latest_phase_transition_context.json`。
+- run 中有 `state/semantic_plan.json`、`state/latest_state.json`、`state/flight_memory.json`、`contexts/latest_context.json`、`contexts/latest_action_planner_model_context.json`。
 - run 中有 RGB/depth artifact。
 - CLI 打印 pose delta 和 artifact count。
 - `/quit` 能安全 hover 或 land，并停止 scene。

@@ -1,4 +1,9 @@
-"""Define FlyAgent's UAV primitive interface and dry-run implementation."""
+"""Define FlyAgent's UAV primitive interface and dry-run implementation.
+
+Primitive adapters expose FlyAgent's canonical pose and velocity convention:
+positive Z means upward motion, negative Z means downward motion. Simulator
+backends that use another convention must convert at their own boundary.
+"""
 
 from __future__ import annotations
 
@@ -97,11 +102,11 @@ class NullUavPrimitiveAdapter:
         return PrimitiveResult(True, "null UAV connected")
 
     def takeoff(self) -> PrimitiveResult:
-        # Simulate takeoff by moving to a small negative NED altitude.
+        # Simulate takeoff by moving to a small positive canonical altitude.
         if not self.connected:
             return PrimitiveResult(False, "UAV is not connected")
         self.flying = True
-        self.position["z"] = -2.0
+        self.position["z"] = 2.0
         return PrimitiveResult(True, "null UAV takeoff", {"pose": self._pose()})
 
     def hover(self) -> PrimitiveResult:
@@ -164,12 +169,12 @@ class NullUavPrimitiveAdapter:
         )
 
     def ascend(self, speed_mps: float, duration: float) -> PrimitiveResult:
-        # Convert ascend into negative-Z NED velocity over time.
-        return self.move_body(0.0, 0.0, -abs(speed_mps), duration)
+        # Convert ascend into positive-Z canonical velocity over time.
+        return self.move_body(0.0, 0.0, abs(speed_mps), duration)
 
     def descend(self, speed_mps: float, duration: float) -> PrimitiveResult:
-        # Convert descend into positive-Z NED velocity over time.
-        return self.move_body(0.0, 0.0, abs(speed_mps), duration)
+        # Convert descend into negative-Z canonical velocity over time.
+        return self.move_body(0.0, 0.0, -abs(speed_mps), duration)
 
     def get_pose(self) -> PrimitiveResult:
         # Return the current dry-run pose.

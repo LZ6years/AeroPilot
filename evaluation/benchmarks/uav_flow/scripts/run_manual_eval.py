@@ -67,8 +67,8 @@ Open:
 
     evaluation/benchmarks/uav_flow/outputs/<eval_id>/review.html
 
-Then inspect per-case review pages, RGB frames, action planner debug cards,
-latest planner context, latest phase transition context, nDTW, SR judge, and
+Then inspect per-case review pages, RGB frames, coupled planner debug cards,
+latest planner context, runtime phase transition events, nDTW, SR judge, and
 trajectory plots.
 """
 

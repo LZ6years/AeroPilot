@@ -84,12 +84,12 @@ def evaluate_run(run_dir: Path, suite: dict[str, Any], task_id: str | None = Non
         run_dir / "mission_state.json",
     ) or {}
     latest_context = load_json(run_dir / "contexts" / "latest_context.json") or {}
-    phase_transition_context = load_json(run_dir / "contexts" / "latest_phase_transition_context.json") or {}
+    latest_action_context = load_json(run_dir / "contexts" / "latest_action_planner_model_context.json") or {}
     demo_summary = load_json(run_dir / "demo" / "summary.json") or {}
     run_config = load_json(run_dir / "config" / "model_config.json") or {}
     task = select_task_for_run(demo_summary, all_events, suite, task_id, run_config=run_config)
     action_sequence = extract_action_sequence(all_events, demo_summary)
-    phase_contexts = extract_phase_contexts(events, phase_transition_context, run_dir)
+    phase_contexts = extract_phase_contexts(events, latest_action_context, run_dir)
     observations = extract_observations(all_events, latest_state, run_dir)
     artifact_inventory = build_artifact_inventory(observations, run_dir)
     expected = dict(task.get("expected", {})) if task else {}
@@ -97,7 +97,7 @@ def evaluate_run(run_dir: Path, suite: dict[str, Any], task_id: str | None = Non
     metrics = {
         "run_dir": str(run_dir),
         "task": task_summary(task),
-        "basic": evaluate_basic(latest_state, latest_context, phase_transition_context, demo_summary),
+        "basic": evaluate_basic(latest_state, latest_context, phase_contexts, demo_summary),
         "actions": evaluate_actions(action_sequence),
         "action_windows": evaluate_action_windows(phase_contexts, all_events),
         "agent_messages": evaluate_agent_messages(all_events, demo_summary),
@@ -113,7 +113,7 @@ def evaluate_run(run_dir: Path, suite: dict[str, Any], task_id: str | None = Non
             "events": (run_dir / "events.jsonl").exists(),
             "debug_events": (run_dir / "debug" / "debug_events.jsonl").exists(),
             "latest_context": (run_dir / "contexts" / "latest_context.json").exists(),
-            "latest_phase_transition_context": (run_dir / "contexts" / "latest_phase_transition_context.json").exists(),
+            "latest_action_planner_model_context": (run_dir / "contexts" / "latest_action_planner_model_context.json").exists(),
         },
     }
     metrics["overall"] = overall_status(metrics)
@@ -218,13 +218,10 @@ def single_task_by_instruction(suite: dict[str, Any], instruction: str) -> dict[
 
 
 def extract_action_sequence(events: list[dict[str, Any]], demo_summary: dict[str, Any]) -> list[dict[str, Any]]:
-    # Prefer detailed debug step_completed records when present. New runs also
-    # write compact tool_step_completed events for users, and counting both
-    # would double-count the same physical action.
-    actions = _actions_from_event_name(events, "step_completed")
-    if actions:
-        return actions
-    actions = _actions_from_event_name(events, "tool_step_completed")
+    # Prefer detailed debug tool-call records when present. Compact
+    # tool_step_completed events are still written for live UI progress, and
+    # counting both would double-count the same physical action.
+    actions = _actions_from_event_name(events, _preferred_action_event_name(events))
     if actions:
         return actions
     return list(demo_summary.get("action_sequence", [])) if isinstance(demo_summary.get("action_sequence", []), list) else []
@@ -242,26 +239,65 @@ def _actions_from_event_name(events: list[dict[str, Any]], event_name: str) -> l
             {
                 "phase": payload.get("phase"),
                 "tool": step.get("tool") or payload.get("tool"),
-                "args": step.get("args", {}),
-                "ok": result.get("ok") if isinstance(result, dict) else payload.get("ok"),
+                "args": step.get("args", payload.get("args", {})),
+                "ok": result.get("ok") if isinstance(result, dict) and "ok" in result else payload.get("ok"),
             }
         )
     return actions
 
 
+def _preferred_action_event_name(events: list[dict[str, Any]]) -> str:
+    for name in ("tool_call_completed", "step_completed", "tool_step_completed"):
+        if any(event.get("event") == name for event in events):
+            return name
+    return "tool_step_completed"
+
+
 def extract_phase_contexts(events: list[dict[str, Any]], latest_context: dict[str, Any], run_dir: Path) -> list[dict[str, Any]]:
     contexts = []
     for event in events:
-        if event.get("event") != "phase_transition_judge_context_built":
+        if event.get("event") != "phase_window_recorded":
             continue
         payload = event.get("payload")
         if isinstance(payload, dict):
-            ref = payload.get("context_ref")
+            ref = payload.get("debug_ref")
             context = load_json(run_dir / str(ref)) if ref else None
-            contexts.append(context or payload)
+            contexts.append(normalize_phase_window_context(context or {}, payload))
     if not contexts and latest_context:
         contexts.append(latest_context)
     return contexts
+
+
+def normalize_phase_window_context(context: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Convert coupled runtime phase-window records into evaluator phase contexts."""
+
+    merged = dict(context)
+    for key, value in payload.items():
+        merged.setdefault(key, value)
+    phase = str(merged.get("phase") or payload.get("phase") or "")
+    summary = merged.get("phase_execution_summary")
+    if not isinstance(summary, dict):
+        measurements = merged.get("measurements")
+        if not isinstance(measurements, dict):
+            measurements = payload.get("measurements", {})
+        if not isinstance(measurements, dict):
+            measurements = {}
+        summary = {
+            "phase": phase,
+            "window_count": payload.get("phase_window_count") or ((payload.get("window_index") or 0) + 1),
+            "max_phase_window_count": payload.get("max_phase_window_count"),
+            "phase_local_measurements": measurements,
+            "last_window_measurements": measurements,
+            "cumulative_measurements": measurements,
+            "cumulative_tool_facts": {},
+        }
+    elif not summary.get("phase") and phase:
+        summary = {**summary, "phase": phase}
+    facts = payload.get("phase_execution_summary", {}).get("cumulative_tool_facts") if isinstance(payload.get("phase_execution_summary"), dict) else None
+    if isinstance(facts, dict) and "cumulative_tool_facts" not in summary:
+        summary = {**summary, "cumulative_tool_facts": facts}
+    merged["phase_execution_summary"] = summary
+    return merged
 
 
 def extract_observations(events: list[dict[str, Any]], latest_state: dict[str, Any], run_dir: Path) -> list[dict[str, Any]]:
@@ -288,7 +324,7 @@ def extract_observations(events: list[dict[str, Any]], latest_state: dict[str, A
 def evaluate_basic(
     latest_state: dict[str, Any],
     latest_context: dict[str, Any],
-    phase_transition_context: dict[str, Any],
+    phase_contexts: list[dict[str, Any]],
     demo_summary: dict[str, Any],
 ) -> dict[str, Any]:
     instructions = demo_summary.get("instructions", [])
@@ -300,7 +336,7 @@ def evaluate_basic(
         "connected": latest_state.get("connected"),
         "airborne": latest_state.get("airborne"),
         "has_latest_context": bool(latest_context),
-        "has_phase_transition_context": bool(phase_transition_context),
+        "has_phase_context": bool(phase_contexts),
         "instruction_count": len(instructions) if isinstance(instructions, list) else 0,
     }
 
@@ -510,8 +546,8 @@ def evaluate_continuous(
     suite: dict[str, Any],
 ) -> dict[str, Any]:
     instructions = demo_summary.get("instructions", []) if isinstance(demo_summary.get("instructions", []), list) else []
-    context_updates = sum(1 for event in events if event.get("event") == "phase_transition_judge_context_built")
-    action_event_name = "step_completed" if any(event.get("event") == "step_completed" for event in events) else "tool_step_completed"
+    context_updates = sum(1 for event in events if event.get("event") == "phase_window_recorded")
+    action_event_name = _preferred_action_event_name(events)
     action_count = sum(1 for event in events if event.get("event") == action_event_name)
     checks = {
         "instruction_count": {"actual": len(instructions), "minimum": int(expected.get("min_instruction_count", 0) or 0)},
@@ -620,7 +656,7 @@ def continuous_instruction_results(events: list[dict[str, Any]]) -> list[dict[st
     """Split a continuous run by task_parsed events for per-instruction reporting."""
 
     results: list[dict[str, Any]] = []
-    action_event_name = "step_completed" if any(event.get("event") == "step_completed" for event in events) else "tool_step_completed"
+    action_event_name = _preferred_action_event_name(events)
     for segment in split_events_by_instruction(events):
         current = {
             "instruction": segment.get("instruction", ""),
@@ -641,7 +677,7 @@ def continuous_instruction_results(events: list[dict[str, Any]]) -> list[dict[st
                 result = payload.get("result", {}) if isinstance(payload.get("result", {}), dict) else {}
                 if result.get("ok") is True or payload.get("ok") is True:
                     current["action_ok"] += 1
-            elif name == "phase_transition_judge_context_built":
+            elif name == "phase_window_recorded":
                 current["context_updates"] += 1
                 phase = phase_name_from_context(payload)
                 if phase:
@@ -797,7 +833,7 @@ def build_markdown_report(metrics: dict[str, Any]) -> str:
         f"- connected: `{metrics['basic'].get('connected')}`",
         f"- airborne: `{metrics['basic'].get('airborne')}`",
         f"- has latest context: `{metrics['basic'].get('has_latest_context')}`",
-        f"- has phase transition context: `{metrics['basic'].get('has_phase_transition_context')}`",
+        f"- has phase context: `{metrics['basic'].get('has_phase_context')}`",
         "",
         "## Actions",
         "",

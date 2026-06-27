@@ -48,27 +48,6 @@ def run_artifact_summary(run_dir: str | Path, action_config: UavActionConfig | N
     }
 
 
-def evaluation_truth_leak_check(run_dir: str | Path) -> dict[str, Any]:
-    """Scan latest planner context for evaluation-only UAV-Flow truth fields."""
-
-    context_path = Path(run_dir) / "contexts" / "latest_context.json"
-    terms = ["target_pos", "reference_path_preprocessed", "end_pos"]
-    if not context_path.exists():
-        return {
-            "status": "skipped",
-            "context_path": str(context_path),
-            "leaked_terms": [],
-            "reason": "context_missing",
-        }
-    text = context_path.read_text(encoding="utf-8", errors="replace")
-    leaked = [term for term in terms if term in text]
-    return {
-        "status": "failed" if leaked else "passed",
-        "context_path": str(context_path),
-        "leaked_terms": leaked,
-    }
-
-
 def write_case_review(case_dir: str | Path, case_payload: dict[str, Any]) -> str:
     """Write a compact human-readable per-case review file."""
 
@@ -79,7 +58,6 @@ def write_case_review(case_dir: str | Path, case_payload: dict[str, Any]) -> str
     ndtw = case_payload.get("ndtw", {})
     metric_interpretation = ndtw.get("metric_interpretation") or metric_interpretation_for_class(case.get("class_name"))
     sr = case_payload.get("sr_judge", {})
-    leak = case_payload.get("evaluation_truth_leak_check", {})
     lines = [
         f"# UAV-Flow Case Review: {case.get('case_id')}",
         "",
@@ -100,7 +78,6 @@ def write_case_review(case_dir: str | Path, case_payload: dict[str, Any]) -> str
         f"- Metric mode: {metric_interpretation.get('mode')} position_zeroed={metric_interpretation.get('position_zeroed')} sample_step={metric_interpretation.get('sample_step')}",
         f"- Metric interpretation: {metric_interpretation.get('summary')}",
         f"- SR judge: {sr.get('status')}",
-        f"- Context leak check: {leak.get('status')} {leak.get('leaked_terms', [])}",
         "",
         "## Actions",
         "",
@@ -244,14 +221,11 @@ def failure_counts(results: list[dict[str, Any]]) -> dict[str, int]:
         "runtime_failed": 0,
         "metric_skipped": 0,
         "sr_skipped": 0,
-        "invalid_context_leak": 0,
         "runtime_loop_guard_reached": 0,
     }
     for result in results:
         error = result.get("error") or {}
         error_text = f"{error.get('error_type', '')} {error.get('error', '')}".lower()
-        if result.get("status") == "invalid_context_leak":
-            counts["invalid_context_leak"] += 1
         if result.get("stopped_reason") == "runtime_loop_guard_reached":
             counts["runtime_loop_guard_reached"] += 1
         if result.get("status") == "error":

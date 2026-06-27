@@ -267,20 +267,16 @@ class ToolContractValidator:
 
     def _validate_move_body_args(self, args: dict[str, Any], index: int, constraints: dict[str, Any]) -> None:
         keys = set(args)
-        if keys == {"direction", "duration"}:
-            direction = str(args.get("direction", "")).lower().strip()
-            if direction not in {"forward", "backward", "left", "right", "up", "down"}:
-                self._fail(
-                    "move_body_direction_invalid",
-                    f"Unsupported uav.move_body direction: {args.get('direction')}",
-                    step_index=index,
-                    tool="uav.move_body",
-                    field="direction",
-                    expected="forward|backward|left|right|up|down",
-                    actual=args.get("direction"),
-                )
-            self._validate_duration(args, index, constraints)
-            return
+        if "direction" in keys:
+            self._fail(
+                "move_body_direction_not_model_facing",
+                "uav.move_body direction shorthand is not allowed in model action plans; use vx/vy/vz/duration",
+                step_index=index,
+                tool="uav.move_body",
+                field="direction",
+                expected={"vx": "number", "vy": "number", "vz": "number", "duration": "number"},
+                actual=args,
+            )
         if keys == {"vx", "vy", "vz", "duration"}:
             limits = (
                 constraints.get("action_schemas", {})
@@ -316,12 +312,11 @@ class ToolContractValidator:
             return
         self._fail(
             "move_body_args_schema_error",
-            "uav.move_body args must be exactly {'direction', 'duration'} or {'vx', 'vy', 'vz', 'duration'}",
+            "uav.move_body args must be exactly {'vx', 'vy', 'vz', 'duration'}",
             step_index=index,
             tool="uav.move_body",
             field="args",
             expected=[
-                {"direction": "forward|backward|left|right|up|down", "duration": "number"},
                 {"vx": "number", "vy": "number", "vz": "number", "duration": "number"},
             ],
             actual=args,

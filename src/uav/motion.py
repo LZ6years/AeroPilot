@@ -3,6 +3,11 @@
 The current projection assumes yaw=0 means world +x is UAV forward and yaw=90
 means world +y is UAV forward. The real-engine calibration demo verifies this
 assumption before tightening completion tolerances.
+
+The pose inputs to this module must already be in FlyAgent's canonical frame:
+positive Z/up displacement means upward motion, and negative Z/up displacement
+means downward motion. Simulator adapters own any raw AirSim/UnrealCV
+conversion before runtime calls these helpers.
 """
 
 from __future__ import annotations
@@ -44,7 +49,7 @@ def pose_measurements(before: dict[str, Any], after: dict[str, Any]) -> dict[str
         "pose_delta": {"dx": round(dx, 3), "dy": round(dy, 3), "dz": round(dz, 3)},
         "forward_displacement_m": round(forward, 3),
         "right_displacement_m": round(right, 3),
-        "up_displacement_m": round(-dz, 3),
+        "up_displacement_m": round(dz, 3),
         "planar_displacement_m": round((dx * dx + dy * dy) ** 0.5, 3),
         "vertical_delta_m": round(dz, 3),
         "yaw_delta_deg": round(normalize_yaw_delta_deg(yaw_delta), 3) if yaw_delta is not None else None,
