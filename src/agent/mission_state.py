@@ -30,7 +30,7 @@ class MissionState:
     hover_required: bool = False
     yaw_scan_accum_deg: float = 0.0
     current_phase_window_count_value: int = 0
-    max_phase_window_count: int = 5
+    max_phase_window_count: int = 100
     current_phase_origin_pose: dict[str, Any] = field(default_factory=dict)
     completed: bool = False
     stopped: bool = False

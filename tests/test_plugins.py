@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
 
 from src.agent.semantic.task_parser import TaskParser
@@ -18,20 +19,21 @@ from src.runtime.configs.model_config import ModelConfig
 
 EXPECTED_UAV_FLIGHT_SKILLS = {
     "visual_target_task_reasoning",
-    "search_under_uncertainty",
     "approach_and_standoff",
-    "obstacle_and_safety_awareness",
-    "task_completion_evidence",
     "vertical_landing_and_altitude_control",
     "route_traversal_and_passage",
+    "orbit_and_surround",
 }
 
 REMOVED_UAV_FLIGHT_SKILLS = {
     "visual_target_alignment",
     "search_and_confirm_target",
+    "search_under_uncertainty",
     "standoff_distance",
     "approach_landmark",
     "motion_progress_assessment",
+    "obstacle_and_safety_awareness",
+    "task_completion_evidence",
 }
 
 
@@ -66,6 +68,7 @@ def test_plugin_discovery_finds_only_current_uav_flight_skills():
     assert names == EXPECTED_UAV_FLIGHT_SKILLS
     assert not REMOVED_UAV_FLIGHT_SKILLS & names
     assert {skill.plugin_id for skill in result.contributions.skills} == {"knowledge.uav_flight"}
+    assert all(skill.summary.strip() for skill in result.contributions.skills)
     assert result.warnings == []
 
 
@@ -76,61 +79,91 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
 
     assert [skill.name for skill in accepted] == ["visual_target_task_reasoning"]
     assert rejected == ["missing_skill"]
+    index = accepted[0].index_listing()
+    assert index["name"] == "visual_target_task_reasoning"
+    assert "summary" in index
+    assert "source_path" not in index
+    assert "skill_text" not in index
+    assert index["references"] == [
+        {
+            "path": "references/search_under_uncertainty.md",
+            "description": "Optional reference for search under uncertainty.",
+        }
+    ]
     summary = SkillContentLoader().load_summary(accepted[0])
     assert summary["name"] == "visual_target_task_reasoning"
+    assert summary["summary"]
+    assert summary["available_references"] == ["references/search_under_uncertainty.md"]
     assert "Visual Target Task Reasoning" in summary["skill_text"]
-    assert "Before choosing a visual-target action, check" in summary["skill_text"]
+    assert "Classify the latest target state before choosing an action" in summary["skill_text"]
+    assert "target is reasonably identifiable, even if it is a little" in summary["skill_text"]
+    assert "roughly aligned" in summary["skill_text"]
+    assert "treat it as a stable target" in summary["skill_text"]
+    assert "small left/right" in summary["skill_text"]
+    assert "offset alone is not enough" in summary["skill_text"]
     assert "left target -> left/negative yaw" in summary["skill_text"]
     assert "Self-check before yaw" in summary["skill_text"]
     assert "cumulative yaw" in summary["skill_text"]
     assert "choice to stop" in summary["skill_text"]
     assert "Do not chase perfect centering" in summary["skill_text"]
-    assert "good enough to advance" in summary["skill_text"]
+    assert "visual alignment as sufficient evidence" in summary["skill_text"]
     assert "recent motion history" in summary["skill_text"]
+    assert "current phase decision" not in summary["skill_text"]
+    assert "good enough to advance" not in summary["skill_text"]
     assert "motion_history_summary" not in summary["skill_text"]
     assert "phase_action_summary" not in summary["skill_text"]
     assert summary["references"] == []
-    assert summary["available_references"] == []
     assert summary["assets"]["scripts"] == []
 
 
 def test_skill_loader_lists_references_without_executing_scripts():
     catalog = _uav_flight_registry().skill_catalog
 
-    accepted, _ = catalog.validate_selection(["search_under_uncertainty", "obstacle_and_safety_awareness"])
+    accepted, _ = catalog.validate_selection(["visual_target_task_reasoning"])
     summaries = {skill.name: SkillContentLoader().load_summary(skill) for skill in accepted}
 
-    search_refs = summaries["search_under_uncertainty"]["available_references"]
-    safety_refs = summaries["obstacle_and_safety_awareness"]["available_references"]
-    assert search_refs == ["references\\search_patterns.md"] or search_refs == ["references/search_patterns.md"]
-    assert safety_refs == ["references\\safety_checks.md"] or safety_refs == ["references/safety_checks.md"]
-    assert "No-candidate broad search" in summaries["search_under_uncertainty"]["skill_text"]
-    assert "target-like evidence" in summaries["search_under_uncertainty"]["skill_text"]
-    assert "30-45 degrees" in summaries["search_under_uncertainty"]["skill_text"]
-    assert "Candidate confirmation" in summaries["search_under_uncertainty"]["skill_text"]
-    assert "small 5-15 degree yaw" in summaries["search_under_uncertainty"]["skill_text"]
-    assert "Do not call a 30 degree yaw \"small\"" in summaries["search_under_uncertainty"]["skill_text"]
-    assert "small left/negative" not in summaries["search_under_uncertainty"]["skill_text"]
-    assert summaries["search_under_uncertainty"]["assets"]["scripts"] == []
-    assert summaries["obstacle_and_safety_awareness"]["assets"]["scripts"] == []
+    visual_refs = summaries["visual_target_task_reasoning"]["available_references"]
+    assert visual_refs == ["references/search_under_uncertainty.md"]
+    assert "target absent" in summaries["visual_target_task_reasoning"]["skill_text"]
+    assert "weak candidate" in summaries["visual_target_task_reasoning"]["skill_text"]
+    assert "30-45 degrees" not in summaries["visual_target_task_reasoning"]["skill_text"]
+    assert summaries["visual_target_task_reasoning"]["assets"]["scripts"] == []
+    planner_guidance = SkillContentLoader().load_planner_guidance(accepted[0])
+    assert planner_guidance["name"] == "visual_target_task_reasoning"
+    assert "summary" not in planner_guidance
+    assert "skill_text" in planner_guidance
+    assert "Visual Target Task Reasoning" in planner_guidance["skill_text"]
+    assert "skill_text_truncated" not in planner_guidance
+    assert planner_guidance["skill_text"] == accepted[0].body.strip()
+    assert "references" not in planner_guidance
+    assert "requested_references" not in planner_guidance
+    assert "source_path" not in planner_guidance
+    assert "skill_dir" not in planner_guidance
+    assert "available_references" not in planner_guidance
+    planner_guidance_with_ref = SkillContentLoader().load_planner_guidance(
+        accepted[0],
+        requested_references=["references/search_under_uncertainty.md"],
+    )
+    assert planner_guidance_with_ref["requested_references"][0]["path"] == "references/search_under_uncertainty.md"
+    assert "30-45 degrees" in planner_guidance_with_ref["requested_references"][0]["text"]
 
 
 def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmation():
-    skill_text = Path("plugins/knowledge/uav_flight/search_under_uncertainty/SKILL.md").read_text(encoding="utf-8")
+    skill_text = Path("plugins/knowledge/uav_flight/visual_target_task_reasoning/SKILL.md").read_text(encoding="utf-8")
     reference_text = Path(
-        "plugins/knowledge/uav_flight/search_under_uncertainty/references/search_patterns.md"
+        "plugins/knowledge/uav_flight/visual_target_task_reasoning/references/search_under_uncertainty.md"
     ).read_text(encoding="utf-8")
     normalized_skill_text = " ".join(skill_text.split())
     normalized_reference_text = " ".join(reference_text.split())
 
-    assert "No-candidate broad search" in normalized_skill_text
-    assert "no target-like evidence is visible" in normalized_skill_text
-    assert "30-45 degrees" in normalized_skill_text
-    assert "small 5-15 degree yaw" in normalized_skill_text
-    assert 'Do not use a 30-45 degree broad-search turn as "further confirmation"' in normalized_skill_text
-    assert "If your message or reason says possible, suspected, candidate" in normalized_skill_text
-    assert 'Do not call a 30 degree yaw "small" or "local" confirmation' in normalized_skill_text
-    assert "Use the visual-target skill for detailed image-side centering behavior" in normalized_skill_text
+    assert "target absent" in normalized_skill_text
+    assert "weak candidate" in normalized_skill_text
+    assert "visible target" in normalized_skill_text
+    assert "stable target" in normalized_skill_text
+    assert "30-45 degrees" not in normalized_skill_text
+    assert "current phase decision" not in normalized_skill_text
+    assert "artifact paths" not in normalized_skill_text
+    assert "hidden benchmark" not in normalized_skill_text
     assert "30-45 degrees is broad search, not a small/local confirmation turn" in normalized_reference_text
     assert "switch from broad sweep to hover or a small 5-15 degree yaw" in normalized_reference_text
     assert "continue a 30-45 degree broad sweep as if it were confirmation" in normalized_reference_text
@@ -153,17 +186,22 @@ def test_vertical_landing_skill_contains_controlled_stopping_guidance_without_in
     assert "altitude or surface-related progress" in normalized
     assert "near a surface" in normalized
     assert "vertical error" in normalized
-    assert "vertical flight-path angle relative to the horizontal plane" in normalized
-    assert "abs(vertical_speed) / horizontal_speed = tan(angle)" in normalized
-    assert "vz = -horizontal_speed * tan(angle)" in normalized
+    assert "path's deviation from the vertical ascent/descent direction" in normalized
+    assert "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))" in normalized
+    assert "sqrt(vx^2 + vy^2) = abs(vz) * tan(angle)" in normalized
+    assert "smaller angle is closer to straight vertical movement" in normalized
+    assert "Starting with pure vertical motion does not satisfy a non-zero path-deviation angle" in normalized
+    assert "relative to the horizontal plane" not in normalized
+    assert "abs(vertical_speed) / horizontal_speed = tan(angle)" not in normalized
     assert "does not mean the UAV should turn in the horizontal plane" in normalized
     assert "yaw, heading, vehicle pitch, or camera angle" in normalized
-    assert "shallow ascent or descent angles" in normalized
+    assert "small ascent or descent angles" in normalized
     assert "tiny repeated vertical steps" in normalized
     assert "effective bounded step" in normalized
     assert "inside the reasonable tolerance band" in normalized
     assert "decimal-level correction" in normalized
     assert "Do not keep descending only because the word \"land\" appears" in normalized
+    assert "hidden benchmark" not in normalized
     forbidden_terms = [
         "UAV-Flow",
         "UnrealCV",
@@ -209,6 +247,48 @@ def test_route_traversal_skill_contains_passage_guidance_without_overlapping_int
         assert term not in skill_text
 
 
+def test_skill_frontmatter_summaries_are_selection_scoped_without_planner_details():
+    catalog = _uav_flight_registry().skill_catalog
+    forbidden = [
+        "atan(",
+        "vx",
+        "vy",
+        "vz",
+        "yaw",
+        "hover",
+        "phase_decision",
+        "phase_progress_evidence",
+        "current_phase",
+        "UAV-Flow",
+        "UnrealCV",
+    ]
+
+    for skill in catalog.skills:
+        summary = skill.summary
+        assert summary
+        assert summary.startswith("Select")
+        for term in forbidden:
+            assert term not in summary
+
+
+def test_orbit_and_surround_skill_contains_orbit_guidance_without_runtime_internals():
+    skill_text = Path(
+        "plugins/knowledge/uav_flight/orbit_and_surround/SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(skill_text.split())
+
+    assert "requested radius" in normalized
+    assert "tangential movement" in normalized
+    assert "Clockwise" in normalized
+    assert "Do not rely on yaw alone" in normalized
+    assert "orbit-progress evidence" in normalized
+    assert "semantic phase" not in normalized
+    assert "phase_progress_evidence" not in normalized
+    assert "hidden benchmark" not in normalized
+    assert "raw file names" not in normalized
+    assert "reference paths" not in normalized
+
+
 def test_flyagent_contains_visual_direction_basics_without_case_specific_terms():
     rules = Path("memory/FLYAGENT.md").read_text(encoding="utf-8")
 
@@ -250,6 +330,8 @@ def test_skill_catalog_accepts_unique_qualified_skill_names():
 def test_skill_selection_fixture_references_only_current_skill_names():
     fixture_path = Path("tests/fixtures/uav_knowledge_skill_selection_cases.json")
     cases = json.loads(fixture_path.read_text(encoding="utf-8"))
+    catalog = _uav_flight_registry().skill_catalog
+    by_name = {skill.name: skill for skill in catalog.skills}
 
     assert len(cases) >= 20
     for case in cases:
@@ -257,7 +339,62 @@ def test_skill_selection_fixture_references_only_current_skill_names():
         assert set(case.get("expected_any", [])) <= EXPECTED_UAV_FLIGHT_SKILLS
         assert set(case.get("forbidden", [])) <= EXPECTED_UAV_FLIGHT_SKILLS
         assert not set(case.get("expected_any", [])) & set(case.get("forbidden", []))
+        expected_refs = case.get("expected_references", {})
+        forbidden_refs = case.get("forbidden_references", {})
+        assert set(expected_refs) <= EXPECTED_UAV_FLIGHT_SKILLS
+        assert set(forbidden_refs) <= EXPECTED_UAV_FLIGHT_SKILLS
+        for skill_name, paths in {**expected_refs, **forbidden_refs}.items():
+            available_paths = {item["path"] for item in by_name[skill_name].index_listing().get("references", [])}
+            assert set(paths) <= available_paths
         assert int(case.get("max_selected", 0)) >= 0
+
+
+def test_manual_selector_probe_builds_task_relevant_semantic_context():
+    probe_path = Path("tests/manual/plugin_system_real_probe.py")
+    spec = importlib.util.spec_from_file_location("plugin_system_real_probe", probe_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    land = module._semantic_plan_for_instruction("Land on the right side of the sunshade")
+    assert land.intent == "vertical_landing"
+    assert land.task_goal.target == "sunshade"
+    assert land.task_goal.target_attributes["relation"] == "right_side"
+    assert land.phases[0].name == "controlled_landing_near_requested_region"
+    assert "altitude or surface progress is insufficient" in land.phases[0].continue_when
+    assert land.phases[0].metrics[0]["name"] == "up_distance"
+    assert land.phases[0].metrics[0]["target"] < 0
+
+    route = module._semantic_plan_for_instruction("Please navigate through the sun umbrella from the left side")
+    assert route.intent == "route_traversal"
+    assert route.task_goal.target == "sun umbrella"
+    assert route.task_goal.target_attributes["relation"] == "left_side"
+    assert route.phases[0].name == "traverse_requested_route"
+
+    descend = module._semantic_plan_for_instruction("Descend 9.0 meters at 30 degrees")
+    assert descend.intent == "altitude_control"
+    assert descend.phases[0].metrics[0]["target"] == -9.0
+
+    fallback = module._semantic_plan_for_instruction("Hold this area conservatively")
+    assert fallback.intent == "general_visual_navigation"
+    assert fallback.task_goal.target != "person"
+
+    expected_refs = module._expected_reference_map(
+        {"visual_target_task_reasoning": ["references\\search_under_uncertainty.md"]}
+    )
+    assert expected_refs == {
+        "visual_target_task_reasoning": ["references/search_under_uncertainty.md"]
+    }
+    assert module._missing_expected_references(
+        expected_refs,
+        {"visual_target_task_reasoning": ["references/search_under_uncertainty.md"]},
+    ) == {}
+    assert module._missing_expected_references(expected_refs, {}) == expected_refs
+    assert module._forbidden_reference_hits(
+        expected_refs,
+        {"visual_target_task_reasoning": ["references/search_under_uncertainty.md"]},
+    ) == expected_refs
+    assert module._forbidden_reference_hits(expected_refs, {}) == {}
 
 
 def test_skills_module_handles_no_model_selection():
@@ -301,6 +438,56 @@ def test_model_skill_selector_retries_invalid_json_once():
     assert result.rejected_skill_names == []
 
 
+def test_model_skill_selector_accepts_requested_references_for_selected_skills():
+    class ReferenceSelector(ModelSkillSelector):
+        def __init__(self):
+            super().__init__(
+                ModelConfig(model_name="test-model", api_key="secret", base_url="https://example.test/v1")
+            )
+
+        def _request_content(self, selection_context):
+            return json.dumps(
+                {
+                    "selected_skills": ["visual_target_task_reasoning"],
+                    "requested_references": {
+                        "visual_target_task_reasoning": ["references/not_selected.md"],
+                    },
+                }
+            )
+
+    registry = _uav_flight_registry()
+
+    result = ReferenceSelector().select(
+        {"available_skills": registry.skill_catalog.index_listings()},
+        registry.skill_catalog,
+    )
+
+    assert result.status == "selected"
+    assert result.accepted_skill_names == ["visual_target_task_reasoning"]
+    assert result.accepted_references == {}
+    assert result.rejected_references == {"visual_target_task_reasoning": ["references/not_selected.md"]}
+    assert "skill_reference_rejected:visual_target_task_reasoning:references/not_selected.md" in result.warnings
+
+
+def test_skill_catalog_rejects_unknown_reference_paths():
+    catalog = _uav_flight_registry().skill_catalog
+    accepted, _ = catalog.validate_selection(["visual_target_task_reasoning"])
+
+    valid, rejected = catalog.validate_reference_selection(
+        accepted,
+        {
+            "visual_target_task_reasoning": [
+                "references/search_under_uncertainty.md",
+                "references/missing.md",
+                "../outside.md",
+            ]
+        },
+    )
+
+    assert valid == {"visual_target_task_reasoning": ["references/search_under_uncertainty.md"]}
+    assert rejected == {"visual_target_task_reasoning": ["references/missing.md", "../outside.md"]}
+
+
 def test_model_skill_selector_falls_back_to_empty_selection_after_invalid_json_retry():
     class InvalidSelector(ModelSkillSelector):
         def __init__(self):
@@ -328,14 +515,14 @@ def test_model_skill_selector_recovers_skill_names_from_invalid_json_text():
             )
 
         def _request_content(self, selection_context):
-            return "selected_skills should include visual_target_task_reasoning and search_under_uncertainty"
+            return "selected_skills should include visual_target_task_reasoning"
 
     registry = _uav_flight_registry()
 
     result = InvalidSelector().select({"available_skills": registry.skill_catalog.listings()}, registry.skill_catalog)
 
     assert result.status == "selected"
-    assert set(result.accepted_skill_names) == {"visual_target_task_reasoning", "search_under_uncertainty"}
+    assert result.accepted_skill_names == ["visual_target_task_reasoning"]
     assert any(warning.startswith("skill_selection_invalid_json_recovered:") for warning in result.warnings)
 
 
@@ -359,12 +546,116 @@ def test_skills_module_loads_model_selected_skill():
     assert fragment["metadata"]["selection"]["accepted_skill_names"] == ["visual_target_task_reasoning"]
     assert fragment["metadata"]["selection"]["rejected_skill_names"] == ["missing_skill"]
     assert fragment["content"]["selected_skills"][0]["name"] == "visual_target_task_reasoning"
+    assert "summary" not in fragment["content"]["selected_skills"][0]
     assert "skill_text" in fragment["content"]["selected_skills"][0]
+    assert "Visual Target Task Reasoning" in fragment["content"]["selected_skills"][0]["skill_text"]
+    assert "skill_text_truncated" not in fragment["content"]["selected_skills"][0]
     assert "plugin_id" not in fragment["content"]["selected_skills"][0]
     assert "source_path" not in fragment["content"]["selected_skills"][0]
     assert "available_references" not in fragment["content"]["selected_skills"][0]
     assert fragment["facts"] == []
     assert fragment["warnings"].count("skill_selection_rejected:missing_skill") >= 1
+
+
+def test_skills_module_loads_only_requested_references_for_selected_skill():
+    class FixedSelector:
+        def select(self, selection_context, catalog):
+            assert "semantic_plan" not in selection_context
+            assert "metadata" not in selection_context
+            assert "phase_progress_brief" in selection_context
+            available_skill = next(
+                item for item in selection_context["available_skills"] if item["name"] == "visual_target_task_reasoning"
+            )
+            assert "source_path" not in available_skill
+            assert "skill_text" not in available_skill
+            assert available_skill["references"][0]["path"] == "references/search_under_uncertainty.md"
+            return SkillSelectionResult(
+                requested_skill_names=["visual_target_task_reasoning"],
+                accepted_skill_names=["visual_target_task_reasoning"],
+                requested_references={"visual_target_task_reasoning": ["references/search_under_uncertainty.md"]},
+                accepted_references={"visual_target_task_reasoning": ["references/search_under_uncertainty.md"]},
+                status="selected",
+            )
+
+    instruction = "Search for the person near the street."
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", active_instruction=instruction)
+    module = DefaultSkillsContextModule(plugin_registry=_uav_flight_registry(), skill_selector=FixedSelector())
+
+    fragment = module.build(
+        MemorySourceBundle(memory),
+        StageContextInput(
+            active_instruction=instruction,
+            semantic_plan={},
+            current_phase={
+                "name": "search_person",
+                "goal": "find the person candidate",
+                "done_when": ["person candidate is visible"],
+                "continue_when": ["person is not visible or ambiguous"],
+                "metrics": [],
+            },
+            semantic_goal={"target": "person"},
+            phase_execution_summary={
+                "window_count": 1,
+                "measurements": {"yaw_delta_deg": 30.0},
+                "tool_facts": {"tools_executed": {"uav.turn_relative": 1}},
+            },
+        ),
+    ).to_dict()
+
+    selected = fragment["content"]["selected_skills"][0]
+    assert selected["name"] == "visual_target_task_reasoning"
+    assert "summary" not in selected
+    assert "skill_text" in selected
+    assert "Visual Target Task Reasoning" in selected["skill_text"]
+    assert "No-candidate broad search" not in selected["skill_text"]
+    assert selected["requested_references"][0]["path"] == "references/search_under_uncertainty.md"
+    assert "30-45 degrees" in selected["requested_references"][0]["text"]
+    assert fragment["metadata"]["available_skill_references"]["visual_target_task_reasoning"] == [
+        "references/search_under_uncertainty.md"
+    ]
+
+
+def test_skills_module_selection_context_keeps_phase_only_policy_in_prompt_not_context_shape():
+    class InspectingSelector:
+        def select(self, selection_context, catalog):
+            assert set(selection_context) == {
+                "active_instruction",
+                "current_phase",
+                "semantic_goal",
+                "phase_progress_brief",
+                "available_skills",
+                "instruction",
+            }
+            assert "selection_scope" not in selection_context
+            assert "final_goal_is_context_only" not in selection_context
+            assert selection_context["current_phase"]["name"] == "locate_and_approach_landmark"
+            assert "landing" in selection_context["semantic_goal"]["final_state"]
+            assert selection_context["instruction"].startswith("Select zero or more skill names")
+            return SkillSelectionResult(status="none_selected")
+
+    instruction = "Land on the right side of the landmark."
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", active_instruction=instruction)
+    module = DefaultSkillsContextModule(plugin_registry=_uav_flight_registry(), skill_selector=InspectingSelector())
+
+    fragment = module.build(
+        MemorySourceBundle(memory),
+        StageContextInput(
+            active_instruction=instruction,
+            semantic_plan={},
+            current_phase={
+                "name": "locate_and_approach_landmark",
+                "goal": "Identify the landmark and approach the requested side while maintaining visual contact",
+                "done_when": ["landmark is visible and the requested side relation is plausible"],
+                "continue_when": ["landmark is not identified or the requested side is not yet plausible"],
+                "metrics": [],
+            },
+            semantic_goal={"target": "landmark", "final_state": "landing_on_requested_side"},
+            phase_execution_summary={"window_count": 0, "measurements": {}, "tool_facts": {}},
+        ),
+    ).to_dict()
+
+    assert fragment["content"]["selected_skills"] == []
+    assert fragment["metadata"]["selection"]["status"] == "none_selected"
 
 
 def test_skills_module_reuses_selection_within_phase_and_refreshes_on_phase_change():

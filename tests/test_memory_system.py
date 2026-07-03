@@ -151,7 +151,9 @@ def test_context_composer_outputs_uniform_fragments(tmp_path):
         assert {"facts", "inferences", "goals", "risks", "budget", "metadata"} <= set(fragment)
         assert "priority" in fragment["budget"]
     assert context["metadata"]["budget"]["max_tokens_estimate"] == 2000
-    assert context["metadata"]["budget"]["final_tokens_estimate"] <= 2000
+    assert context["metadata"]["budget"]["final_tokens_estimate"] >= 0
+    assert context["metadata"]["budget"]["budget_applied"] is False
+    assert context["metadata"]["budget"]["trimmed_fragments"] == []
     assert "context_schema" in context
     assert "planner_context_fields" in context["context_schema"]
     assert "fragment_fields" in context["context_schema"]
@@ -223,7 +225,7 @@ def test_context_composer_allows_explicit_rules_to_override_file_values(tmp_path
     assert context["user_preferences"] == {"text": "runtime preferences"}
 
 
-def test_context_composer_trims_low_priority_list_content_when_over_budget(tmp_path):
+def test_context_composer_preserves_fragment_content_when_over_budget(tmp_path):
     class LargeLowPriorityModule(ContextModule):
         name = "map"
 
@@ -252,14 +254,58 @@ def test_context_composer_trims_low_priority_list_content_when_over_budget(tmp_p
     )
     map_fragment = _fragment(context, "map")
 
-    assert map_fragment["content"]["items"] == [{"index": 5}]
-    assert map_fragment["facts"] == [{"index": 5}]
-    assert map_fragment["inferences"] == [{"index": 5}]
-    assert map_fragment["risks"] == [{"index": 5}]
-    assert map_fragment["artifact_refs"] == ["artifact_5"]
-    assert map_fragment["warnings"] == ["warning_5"]
-    assert context["metadata"]["budget"]["budget_applied"] is True
-    assert context["metadata"]["budget"]["trimmed_fragments"][0]["name"] == "map"
+    assert map_fragment["content"]["items"] == [{"index": index} for index in range(6)]
+    assert map_fragment["facts"] == [{"index": index} for index in range(6)]
+    assert map_fragment["inferences"] == [{"index": index} for index in range(6)]
+    assert map_fragment["risks"] == [{"index": index} for index in range(6)]
+    assert map_fragment["artifact_refs"] == [f"artifact_{index}" for index in range(6)]
+    assert map_fragment["warnings"] == [f"warning_{index}" for index in range(6)]
+    assert context["metadata"]["budget"]["original_tokens_estimate"] == 1000
+    assert context["metadata"]["budget"]["final_tokens_estimate"] == 1000
+    assert context["metadata"]["budget"]["budget_applied"] is False
+    assert context["metadata"]["budget"]["trimmed_fragments"] == []
+
+
+def test_context_composer_preserves_all_selected_skills_when_over_budget(tmp_path):
+    class LargeSkillsModule(ContextModule):
+        name = "skills"
+
+        def build(self, sources, stage_context):
+            return ContextFragment(
+                name="skills",
+                enabled=True,
+                source="LargeSkillsModule",
+                content={
+                    "selected_skills": [
+                        {"name": "vertical_landing_and_altitude_control", "skill_text": "landing guidance"},
+                        {"name": "approach_and_standoff", "skill_text": "approach guidance"},
+                    ]
+                },
+                budget=BudgetSpec(priority=95, tokens_estimate=2400, max_items=8),
+            )
+
+        def describe_output(self):
+            return {
+                "summary": "Synthetic skills test module.",
+                "content_fields": {"selected_skills": "Synthetic selected skills."},
+            }
+
+    registry = ContextModuleRegistry({"skills": LargeSkillsModule()})
+
+    context = ContextComposer(registry, max_tokens_estimate=500).compose(
+        MemorySourceBundle(make_memory(tmp_path), MapMemoryStore()),
+        make_stage_context(),
+    )
+    skills_fragment = _fragment(context, "skills")
+
+    assert [item["name"] for item in skills_fragment["content"]["selected_skills"]] == [
+        "vertical_landing_and_altitude_control",
+        "approach_and_standoff",
+    ]
+    assert context["metadata"]["budget"]["original_tokens_estimate"] == 2400
+    assert context["metadata"]["budget"]["final_tokens_estimate"] == 2400
+    assert context["metadata"]["budget"]["budget_applied"] is False
+    assert context["metadata"]["budget"]["trimmed_fragments"] == []
 
 
 def test_action_module_reads_jsonl_refs_and_outputs_compact_recent_actions(tmp_path):

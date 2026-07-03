@@ -102,23 +102,102 @@ def sanitize_context_for_model_text(context: dict[str, Any]) -> dict[str, Any]:
     sanitized = copy.deepcopy(context)
     _remove_debug_only_top_level_fields(sanitized)
     _remove_model_facing_direction_shorthand(sanitized)
+    _normalize_model_facing_phase_completion(sanitized)
+    _compact_model_facing_phase_execution_summary(sanitized)
     fragments = sanitized.get("fragments", [])
-    if not isinstance(fragments, list):
-        return _order_model_text_context(sanitized)
-    for fragment in fragments:
-        if not isinstance(fragment, dict):
-            continue
-        fragment.pop("metadata", None)
-        model_inputs = fragment.get("model_inputs", [])
-        if not isinstance(model_inputs, list):
-            continue
-        for item in model_inputs:
-            if not isinstance(item, dict):
+    if isinstance(fragments, list):
+        compact_fragments = []
+        for fragment in fragments:
+            if not isinstance(fragment, dict):
                 continue
-            item.pop("metadata", None)
-            if "data" in item:
-                item["data"] = _omitted_data_marker(item.get("data"))
+            if fragment.get("name") == "skills":
+                _clean_selected_skills(fragment)
+            compact_fragment = _compact_model_facing_fragment(fragment)
+            if compact_fragment is not None:
+                compact_fragments.append(compact_fragment)
+        sanitized["fragments"] = compact_fragments
+    else:
+        sanitized.pop("fragments", None)
+    _remove_empty_and_debug_top_level_fields(sanitized)
     return _order_model_text_context(sanitized)
+
+
+def _clean_selected_skills(fragment: dict[str, Any]) -> None:
+    content = fragment.get("content")
+    if not isinstance(content, dict):
+        return
+    selected = content.get("selected_skills")
+    if not isinstance(selected, list):
+        return
+    allowed = {"name", "description", "skill_text", "requested_references", "capability"}
+    for index, item in enumerate(list(selected)):
+        if not isinstance(item, dict):
+            continue
+        selected[index] = {key: value for key, value in item.items() if key in allowed and value not in (None, "", [], {})}
+
+
+def _compact_model_facing_fragment(fragment: dict[str, Any]) -> dict[str, Any] | None:
+    compact: dict[str, Any] = {}
+    name = fragment.get("name")
+    if isinstance(name, str) and name.strip():
+        compact["name"] = name
+
+    content = fragment.get("content")
+    if isinstance(content, dict):
+        cleaned_content = _drop_empty_values(content)
+        if cleaned_content:
+            compact["content"] = cleaned_content
+
+    model_inputs = fragment.get("model_inputs")
+    if isinstance(model_inputs, list):
+        cleaned_inputs = [_compact_model_input(item) for item in model_inputs if isinstance(item, dict)]
+        cleaned_inputs = [item for item in cleaned_inputs if item]
+        if cleaned_inputs:
+            compact["model_inputs"] = cleaned_inputs
+
+    for key in ("risks", "warnings"):
+        value = fragment.get(key)
+        if isinstance(value, list) and value:
+            compact[key] = value
+
+    return compact or None
+
+
+def _compact_model_input(item: dict[str, Any]) -> dict[str, Any]:
+    compact = dict(item)
+    compact.pop("metadata", None)
+    compact.pop("path", None)
+    compact.pop("artifact_ref", None)
+    compact.pop("source_path", None)
+    if "data" in compact:
+        compact["data"] = _omitted_data_marker(compact.get("data"))
+    return _drop_empty_values(compact)
+
+
+def _drop_empty_values(data: dict[str, Any]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in data.items():
+        if value in (None, "", [], {}):
+            continue
+        if isinstance(value, dict):
+            cleaned = _drop_empty_values(value)
+            if cleaned:
+                result[key] = cleaned
+            continue
+        if isinstance(value, list):
+            cleaned_list = []
+            for item in value:
+                if isinstance(item, dict):
+                    cleaned_item = _drop_empty_values(item)
+                    if cleaned_item:
+                        cleaned_list.append(cleaned_item)
+                elif item not in (None, "", [], {}):
+                    cleaned_list.append(item)
+            if cleaned_list:
+                result[key] = cleaned_list
+            continue
+        result[key] = value
+    return result
 
 
 def _order_model_text_context(context: dict[str, Any]) -> dict[str, Any]:
@@ -134,8 +213,8 @@ def _order_model_text_context(context: dict[str, Any]) -> dict[str, Any]:
         "allowed_action_constraints",
         "phase_execution_summary",
         "user_preferences",
-        "context_schema",
-        "metadata",
+        "phase_completion_evaluation",
+        "latest_observation_summary",
     )
     ordered: dict[str, Any] = {}
     for key in preferred_order:
@@ -159,13 +238,9 @@ def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
     context.pop("safety_constraints", None)
     context.pop("observation_policy", None)
     _remove_phase_judge_debug_fields(context)
-    schema = context.get("context_schema")
-    if not isinstance(schema, dict):
-        return
-    fields = schema.get("planner_context_fields")
-    if isinstance(fields, dict):
-        fields.pop("safety_constraints", None)
-        fields.pop("observation_policy", None)
+    context.pop("context_schema", None)
+    context.pop("metadata", None)
+    context.pop("disabled_fragments", None)
 
 
 def _remove_phase_judge_debug_fields(context: dict[str, Any]) -> None:
@@ -248,6 +323,61 @@ def _sanitize_phase_execution_summary(summary: dict[str, Any]) -> None:
         return
     tool_facts.pop("move_duration_by_direction_success", None)
     tool_facts.pop("move_duration_by_direction_attempted", None)
+
+
+def _normalize_model_facing_phase_completion(context: dict[str, Any]) -> None:
+    evaluation = context.get("phase_completion_evaluation")
+    if not isinstance(evaluation, dict):
+        return
+    measurable_count = int(evaluation.get("measurable_count") or 0)
+    metrics_count = int(evaluation.get("metrics_count") or 0)
+    if metrics_count == 0 or measurable_count == 0:
+        context["phase_completion_evaluation"] = {
+            "deterministic_status": "not_measurable",
+            "requires_model_judgment": True,
+            "reason": "No deterministic phase metrics are available; judge completion from current_phase done_when/continue_when, images, and phase_progress_evidence.",
+        }
+
+
+def _compact_model_facing_phase_execution_summary(context: dict[str, Any]) -> None:
+    summary = context.get("phase_execution_summary")
+    if not isinstance(summary, dict):
+        return
+    tool_facts = summary.get("tool_facts") if isinstance(summary.get("tool_facts"), dict) else {}
+    compact: dict[str, Any] = {}
+    for key in ("phase", "window_count", "max_window_count"):
+        if summary.get(key) is not None:
+            compact[key] = summary[key]
+    if isinstance(tool_facts, dict) and tool_facts.get("tools_executed"):
+        compact["tools_executed"] = dict(tool_facts["tools_executed"])
+    context["phase_execution_summary"] = compact
+
+
+def _remove_empty_and_debug_top_level_fields(context: dict[str, Any]) -> None:
+    for key in ("phase_metrics",):
+        value = context.get(key)
+        if value in (None, "", [], {}):
+            context.pop(key, None)
+    observation = context.get("latest_observation_summary")
+    if isinstance(observation, dict):
+        context["latest_observation_summary"] = _compact_latest_observation_summary(observation)
+    for key in list(context):
+        if context.get(key) in (None, "", [], {}):
+            context.pop(key, None)
+
+
+def _compact_latest_observation_summary(observation: dict[str, Any]) -> dict[str, Any]:
+    compact = {
+        "source": observation.get("source"),
+        "timestamp": observation.get("timestamp"),
+        "modalities": observation.get("modalities"),
+        "pose": observation.get("pose"),
+    }
+    frames = observation.get("frames")
+    if isinstance(frames, dict):
+        compact["has_rgb"] = "rgb" in frames
+        compact["has_depth"] = "depth" in frames
+    return _drop_empty_values(compact)
 
 
 def _sanitize_action_fragment(fragment: dict[str, Any]) -> None:

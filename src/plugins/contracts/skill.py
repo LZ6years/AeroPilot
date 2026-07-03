@@ -31,6 +31,7 @@ class Skill:
     plugin_id: str
     name: str
     description: str
+    summary: str
     skill_dir: Path
     skill_path: Path
     reference_paths: tuple[Path, ...] = ()
@@ -47,9 +48,47 @@ class Skill:
             "plugin_id": self.plugin_id,
             "name": self.name,
             "description": self.description,
+            "summary": self.summary,
             "source_path": str(self.skill_path),
             "callable": self.capability is not None,
         }
         if self.capability is not None:
             data["capability"] = self.capability.listing()
         return data
+
+    def index_listing(self) -> dict[str, Any]:
+        """Return the Hermes-style lightweight listing used for skill selection."""
+
+        data: dict[str, Any] = {
+            "name": self.name,
+            "description": self.description,
+            "summary": self.summary,
+            "references": self.reference_manifest(),
+            "callable": self.capability is not None,
+        }
+        return {key: value for key, value in data.items() if value not in (None, "", [], {})}
+
+    def reference_manifest(self) -> list[dict[str, str]]:
+        """List reference files without loading their text."""
+
+        return [
+            {
+                "path": _relative_to_skill(self, path),
+                "description": _reference_description(path),
+            }
+            for path in self.reference_paths
+        ]
+
+
+def _relative_to_skill(skill: Skill, path: Path) -> str:
+    try:
+        return str(path.relative_to(skill.skill_dir)).replace("\\", "/")
+    except ValueError:
+        return str(path)
+
+
+def _reference_description(path: Path) -> str:
+    stem = path.stem.replace("_", " ").replace("-", " ").strip()
+    if not stem:
+        return "Optional skill reference."
+    return f"Optional reference for {stem}."

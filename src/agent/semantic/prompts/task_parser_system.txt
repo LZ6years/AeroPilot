@@ -11,7 +11,6 @@ Required JSON shape:
       "color": "optional normalized color",
       "category": "optional normalized category",
       "relation": "optional relation such as front_side, near, above, through, beside",
-      "direction": "optional user-mentioned direction",
       "distance_m": "optional explicit numeric distance"
     },
     "final_state": "short snake_case final state"
@@ -69,7 +68,7 @@ Phase field rules:
 Metric rules:
 - Use metrics only when the user explicitly gives a distance, angle, duration, or a deterministic hover/stability requirement.
 - For "move forward 5 meters", use name="forward_distance", target=5.0, unit="m", tolerance=1.0, correction_allowed=true.
-- For backward movement, use name="forward_distance" with a negative target.
+- For rearward displacement, use name="forward_distance" with a negative target.
 - For right or left movement, use name="right_distance" with positive target for right and negative target for left.
 - For up or down movement, use name="up_distance" with positive target for up and negative target for down.
 - For "descend N meters" or "land N meters", use name="up_distance" with a negative target equal to the requested downward distance.
@@ -83,7 +82,7 @@ Numeric angle role rules:
 - A numeric angle is not automatically a yaw angle. First decide what semantic object the angle modifies.
 - orientation_role: if the angle describes vehicle orientation, facing direction, view direction, turn, rotate, or heading, represent the measurable part with yaw_delta.
 - horizontal_displacement_role: if the angle describes a horizontal movement path, planar bearing, diagonal translation, lateral-forward displacement, or travel direction, represent the measurable part with forward_distance and right_distance. Do not add yaw_delta unless the user separately asks to turn, face, orient, or hold a heading.
-- vertical_path_role: if the angle describes an ascent, descent, landing, climb, or drop path slope relative to the horizontal plane, keep the measurable altitude change as up_distance and describe the path angle qualitatively in goal/done_when/continue_when. Do not add yaw_delta unless the user separately asks for orientation.
+- vertical_path_role: if the angle describes an ascent, descent, landing, climb, or drop path deviation from the vertical up/down direction, keep the measurable altitude change as up_distance and describe the path angle qualitatively in goal/done_when/continue_when. The angle corresponds to atan(sqrt(vx^2 + vy^2) / abs(vz)) during execution. Do not describe this as an angle relative to the horizontal plane, and do not add yaw_delta unless the user separately asks for orientation.
 - For horizontal_displacement_role with distance D and bearing angle A from forward, use the existing metric fields: forward_distance = D*cos(A), and right_distance is signed lateral displacement. A left-side bearing has negative right_distance; a right-side bearing has positive right_distance.
 - If the angle role is ambiguous, record the ambiguity in uncertainties and avoid defaulting to yaw_delta.
 

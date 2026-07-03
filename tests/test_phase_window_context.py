@@ -77,8 +77,38 @@ def test_phase_window_context_marks_yaw_only_progress():
 
     result = PhaseWindowContextBuilder().build(state, {"fragments": []}, {"pose": {}})
     progress = result.phase_progress_evidence["motion_progress"]
-    support = result.phase_progress_evidence["done_when_support"]
 
     assert progress["yaw_only_so_far"] is True
     assert progress["has_translation"] is False
-    assert any(item["requires_translation"] and item["supported_by_motion"] is False for item in support)
+    assert "done_when_support" not in result.phase_progress_evidence
+    assert "visual_progress" not in result.phase_progress_evidence
+    assert "model_guidance" not in result.phase_progress_evidence
+
+
+def test_phase_window_context_model_context_uses_neutral_no_metric_completion():
+    plan = SemanticPlan(
+        intent="test_no_metric_phase",
+        task_goal=TaskGoal(target="target", final_state="done"),
+        phases=[
+            SemanticPhase(
+                index=1,
+                total=1,
+                name="visual_phase",
+                goal="judge a visual phase",
+                done_when=["visual evidence is sufficient"],
+                observe=["latest_observation"],
+                continue_when=["visual evidence is insufficient"],
+                metrics=[],
+            )
+        ],
+    )
+    state = MissionState("run-context", "judge visual target", plan)
+
+    result = PhaseWindowContextBuilder().build(state, {"fragments": []}, {"pose": {}})
+
+    assert result.planner_payload["phase_completion_evaluation"]["all_within_tolerance"] is False
+    assert result.model_context["phase_completion_evaluation"] == {
+        "deterministic_status": "not_measurable",
+        "requires_model_judgment": True,
+        "reason": "No deterministic phase metrics are available; judge completion from current_phase done_when/continue_when, images, and phase_progress_evidence.",
+    }

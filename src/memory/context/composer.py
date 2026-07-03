@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +37,7 @@ class ContextComposer:
         fragments = self.registry.build_fragments(sources, stage_context)
         fragments.sort(key=lambda item: item.budget.priority, reverse=True)
         original_tokens = _tokens_estimate(fragments)
-        fragments, budget_metadata = _apply_budget(fragments, self.max_tokens_estimate)
+        budget_metadata = _budget_metadata(fragments)
         memory = sources.flight_memory
         context = PlannerContext(
             active_instruction=stage_context.active_instruction,
@@ -125,7 +124,7 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
             "uncertainties": "Known parser uncertainties.",
         },
         "skills": {
-            "selected_skills": "Selected reusable guidance for this planning step.",
+            "selected_skills": "Selected skill summaries, bounded SKILL.md guidance text, and any explicitly requested reference text.",
             "callable_capabilities": "Enabled callable skill tools, present only when non-empty.",
         },
         "image": {
@@ -148,93 +147,13 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
     }
 
 
-def _apply_budget(fragments: list[ContextFragment], max_tokens: int) -> tuple[list[ContextFragment], dict[str, Any]]:
-    if max_tokens <= 0:
-        return fragments, {
-            "final_tokens_estimate": _tokens_estimate(fragments),
-            "trimmed_fragments": [],
-            "budget_applied": False,
-        }
-    current_tokens = _tokens_estimate(fragments)
-    trimmed: list[dict[str, Any]] = []
-    if current_tokens <= max_tokens:
-        return fragments, {
-            "final_tokens_estimate": current_tokens,
-            "trimmed_fragments": trimmed,
-            "budget_applied": False,
-        }
-
-    updated = list(fragments)
-    for index in reversed(range(len(updated))):
-        if current_tokens <= max_tokens:
-            break
-        fragment = updated[index]
-        trimmed_fragment = _trim_fragment_lists(fragment)
-        if trimmed_fragment is fragment:
-            continue
-        before = fragment.budget.tokens_estimate
-        after = trimmed_fragment.budget.tokens_estimate
-        current_tokens -= max(0, before - after)
-        updated[index] = trimmed_fragment
-        trimmed.append({"name": fragment.name, "tokens_before": before, "tokens_after": after})
-
-    return updated, {
-        "final_tokens_estimate": current_tokens,
-        "trimmed_fragments": trimmed,
-        "budget_applied": bool(trimmed),
+def _budget_metadata(fragments: list[ContextFragment]) -> dict[str, Any]:
+    tokens = _tokens_estimate(fragments)
+    return {
+        "final_tokens_estimate": tokens,
+        "trimmed_fragments": [],
+        "budget_applied": False,
     }
-
-
-def _trim_fragment_lists(fragment: ContextFragment) -> ContextFragment:
-    content, changed = _trim_dict_lists(fragment.content)
-    facts = _trim_list(fragment.facts)
-    inferences = _trim_list(fragment.inferences)
-    goals = _trim_list(fragment.goals)
-    risks = _trim_list(fragment.risks)
-    artifact_refs = _trim_list(fragment.artifact_refs)
-    warnings = _trim_list(fragment.warnings)
-    changed = changed or any(
-        [
-            len(facts) != len(fragment.facts),
-            len(inferences) != len(fragment.inferences),
-            len(goals) != len(fragment.goals),
-            len(risks) != len(fragment.risks),
-            len(artifact_refs) != len(fragment.artifact_refs),
-            len(warnings) != len(fragment.warnings),
-        ]
-    )
-    if not changed:
-        return fragment
-    return replace(
-        fragment,
-        content=content,
-        facts=facts,
-        inferences=inferences,
-        goals=goals,
-        risks=risks,
-        artifact_refs=artifact_refs,
-        warnings=warnings,
-        budget=replace(fragment.budget, tokens_estimate=max(0, fragment.budget.tokens_estimate // 2)),
-    )
-
-
-def _trim_dict_lists(data: dict[str, Any]) -> tuple[dict[str, Any], bool]:
-    changed = False
-    result: dict[str, Any] = {}
-    for key, value in data.items():
-        if isinstance(value, list):
-            trimmed = _trim_list(value)
-            result[key] = trimmed
-            changed = changed or len(trimmed) != len(value)
-        else:
-            result[key] = value
-    return result, changed
-
-
-def _trim_list(items: list[Any]) -> list[Any]:
-    if len(items) <= 1:
-        return list(items)
-    return [items[-1]]
 
 
 def _tokens_estimate(fragments: list[ContextFragment]) -> int:

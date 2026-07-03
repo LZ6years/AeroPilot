@@ -1,14 +1,16 @@
 ---
 name: approach_and_standoff
-description: Use when the UAV should approach, move near, follow, or keep a requested distance from a target or landmark.
+description: Use when the UAV should approach, travel to, move near, retreat from, follow, or keep a requested distance or side position relative to a target or landmark.
+summary: Select for target-relative approach, retreat, following, requested side/front/back positioning, or standoff tasks where distance or relative position is the active concern.
 ---
 
 # Approach And Standoff
 
 Use this guidance when the instruction asks the UAV to get closer to a person,
-object, vehicle, entrance, building, or landmark, or to maintain a requested
-distance from it. Approach tasks are target-relative; they usually require target
-confirmation before meaningful movement.
+object, vehicle, entrance, building, or landmark, travel to a requested side of
+it, back away from it, or maintain a requested distance from it. Approach tasks
+are target-relative; they usually require target confirmation before meaningful
+movement.
 
 First establish or refresh the target relation. If the target is visible, reason
 qualitatively about direction, visual scale, depth evidence when available, free
@@ -23,8 +25,8 @@ avoid overshooting into the target and avoid finishing just because the UAV
 turned.
 
 Do not move blindly toward a target that is not visually confirmed or otherwise
-well supported by current context. Do not treat hidden benchmark positions as
-evidence. Do not confuse "face the target" with "reach the requested distance."
+well supported by current evidence. Do not confuse "face the target" with
+"reach the requested distance."
 
 Approach and standoff decisions should consider target visibility and qualitative
 bearing, whether there is clear free space between the UAV and target, whether

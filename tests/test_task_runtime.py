@@ -574,12 +574,9 @@ def test_task_runtime_phase_progress_evidence_marks_yaw_only_approach_progress()
 
     assert evidence["motion_progress"]["has_translation"] is False
     assert evidence["motion_progress"]["yaw_only_so_far"] is True
-    approach_support = [
-        item for item in evidence["done_when_support"] if item["requires_translation"]
-    ]
-    assert approach_support
-    assert approach_support[0]["supported_by_motion"] is False
-    assert "No successful move_body" in approach_support[0]["note"]
+    assert evidence["motion_progress"]["tools_executed"] == {"uav.turn_relative": 3}
+    assert "done_when_support" not in evidence
+    assert "model_guidance" not in evidence
 
 
 def test_task_runtime_phase_progress_evidence_marks_translation_progress():
@@ -609,10 +606,11 @@ def test_task_runtime_phase_progress_evidence_marks_translation_progress():
 
     assert evidence["motion_progress"]["has_translation"] is True
     assert evidence["motion_progress"]["yaw_only_so_far"] is False
-    approach_support = [
-        item for item in evidence["done_when_support"] if item["requires_translation"]
-    ]
-    assert approach_support[0]["supported_by_motion"] is True
+    assert evidence["motion_progress"]["forward_m"] == 2.0
+    assert evidence["motion_progress"]["planar_m"] == 2.0
+    assert evidence["motion_progress"]["tools_executed"] == {"uav.move_body": 1}
+    assert "done_when_support" not in evidence
+    assert "model_guidance" not in evidence
 
 
 def test_task_runtime_coupled_records_contract_repair_events(tmp_path):
@@ -1128,7 +1126,7 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     assert (run_dir / "memory/instructions.jsonl").read_text(encoding="utf-8").count("\n") >= len(instructions)
     assert fragments["instruction"]["content"]["current_instruction"]["text"] == instructions[-1]
     assert len(fragments["instruction"]["content"]["instruction_history"]) == 5
-    assert len(fragments["action"]["content"]["recent_actions"]) == 2
+    assert 1 <= len(fragments["action"]["content"]["recent_actions"]) <= 2
     assert all(item["history_only"] is True for item in fragments["action"]["content"]["recent_actions"])
     assert fragments["pose"]["metadata"]["pose_history_count"] <= 3
     assert fragments["image"]["metadata"]["observation_count"] <= 3

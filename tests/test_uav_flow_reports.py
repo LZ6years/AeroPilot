@@ -207,6 +207,20 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
                             ],
                         },
                         {
+                            "name": "skills",
+                            "content": {
+                                "selected_skills": [
+                                    {
+                                        "name": "visual_target_task_reasoning",
+                                        "description": "Use visual evidence for target alignment.",
+                                        "summary": "Selector-only summary should not appear in model-facing context.",
+                                        "skill_text": "# Visual Target Task Reasoning\n\nBefore choosing a visual-target action, check whether the target is left, right, or centered.",
+                                        "skill_text_truncated": False,
+                                    }
+                                ]
+                            },
+                        },
+                        {
                             "name": "action",
                             "content": {
                                 "action_trend": {
@@ -388,6 +402,12 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
     assert "alternating yaw" in case_html
     assert "yaw-only so far" in case_html
     assert "Phase progress evidence" in case_html
+    assert "Selected skill guidance" in case_html
+    assert "visual_target_task_reasoning" in case_html
+    assert "skill_text_chars" in case_html
+    assert "skill_text_truncated" in case_html
+    assert "Before choosing a visual-target action" in case_html
+    assert "Selector-only summary should not appear in model-facing context" not in case_html
     assert "yaw_only_so_far" in case_html
     assert "has_translation" in case_html
     assert "yaw_scan_remaining_deg" not in case_html

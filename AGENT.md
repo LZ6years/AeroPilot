@@ -44,6 +44,35 @@ Human/debug/review data may be larger and more detailed:
 Do not move debug-only fields into model-facing context just because they are
 useful for diagnosis. Convert them into compact, task-relevant summaries first.
 
+## Prompt And Skill Writing Rules
+
+Reusable skills are flight-domain knowledge, not runtime documentation. Do not
+reference project-private fields such as `current_phase`, `phase_decision`,
+`phase_progress_evidence`, `model_inputs`, debug metadata, report fields, or
+benchmark artifacts from `plugins/knowledge/*/SKILL.md`. Phrase skill guidance
+as general UAV behavior, visual reasoning, movement, route, safety, or
+completion knowledge.
+
+When two knowledge files describe one continuous reasoning chain, prefer one
+primary skill plus optional references over multiple overlapping skills. For
+example, visual target search, candidate confirmation, and target alignment
+belong to one visual-target skill; detailed search patterns can live in that
+skill's references and load only when selected.
+
+Planner and parser prompts may reference the model contract they own, but they
+should not reintroduce obsolete fields or teach reusable skills about internal
+schemas. Keep old debug, evaluation, and report concepts out of model-facing
+prompt examples unless that prompt explicitly owns the field.
+
+Do not restore model-facing `direction` shorthand for movement. UAV movement
+plans use numeric velocity arguments, and semantic direction should be expressed
+through `relation` plus measurable metrics such as `forward_distance`,
+`right_distance`, and `up_distance`.
+
+Do not add prompt or skill warnings about data that should never be provided to
+the model, such as hidden benchmark truth. Enforce that boundary in context and
+evaluation plumbing instead of asking the model to ignore unavailable fields.
+
 ## Change Discipline
 
 Before changing behavior, identify which layer owns the behavior. Do not put a

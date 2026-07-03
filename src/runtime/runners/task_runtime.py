@@ -75,7 +75,7 @@ class TaskRuntime:
             enable_model_skill_selection=getattr(self.planner, "planner_mode", "") == "model",
         )
         self.phase_window_context_builder = PhaseWindowContextBuilder()
-        self.tool_telemetry = ToolTelemetryMiddleware(self._debug_event)
+        self.tool_telemetry = ToolTelemetryMiddleware(self.tools, self._debug_event)
         self.memory_writer = MemoryEventWriter(self.recorder.run_dir)
         self.memory_reader = MemoryRecordReader(self.recorder.run_dir)
         self._preflight_scene_ids: set[str] = set()
@@ -355,7 +355,6 @@ class TaskRuntime:
             "step_count": len(coupled_plan.steps),
             "planner_debug_ref": planner_debug_ref,
         }
-        self._debug_event("coupled_planner_phase_decided", decision_payload)
         self._event("coupled_planner_phase_decided", decision_payload)
         self._agent_messages(coupled_plan.agent_messages, source="coupled_planner", phase=coupled_plan.phase)
         if transition.decision != CONTINUE_CURRENT_PHASE:
@@ -417,7 +416,7 @@ class TaskRuntime:
             payload = {"phase": plan.phase, "step_index": index, "step": step.to_dict()}
             if step.kind != "tool" or not step.tool:
                 raise ValueError("runtime action plan requires tool steps; observation is automatic")
-            result = self.tool_telemetry.run_tool_step(
+            result = self.tool_telemetry.call_step(
                 scene_instance_id=scene.scene_instance_id,
                 agent_id=agent_id,
                 phase=plan.phase,
@@ -426,18 +425,12 @@ class TaskRuntime:
                 tool=step.tool,
                 args=step.args,
                 pose_before=self._pose_from_observation(state.latest_observation),
-                call_fn=lambda step=step: self.tools.call(
-                    scene.scene_instance_id,
-                    agent_id,
-                    step.tool,
-                    step.args,
-                    runtime_context={
-                        "latest_observation": dict(state.latest_observation),
-                        "observation_before": dict(observation_before),
-                        "phase": plan.phase,
-                        "run_dir": str(self.recorder.run_dir),
-                    },
-                ),
+                runtime_context={
+                    "latest_observation": dict(state.latest_observation),
+                    "observation_before": dict(observation_before),
+                    "phase": plan.phase,
+                    "run_dir": str(self.recorder.run_dir),
+                },
             )
             data = result.to_dict()
             self._record_action(state, step.tool, step.args, data)
@@ -490,7 +483,6 @@ class TaskRuntime:
             "safety_intervention_count": len(safety_decision.interventions),
             "debug_ref": window_ref,
         }
-        self._debug_event("phase_window_recorded", window_summary)
         self._event("phase_window_recorded", window_summary)
         state.update_current_phase_progress(
             observation_after,

@@ -17,10 +17,11 @@ plugins/
       approach_and_standoff/
         SKILL.md
         reference.md
-      obstacle_and_safety_awareness/
+      orbit_and_surround/
         SKILL.md
-        references/
-      task_completion_evidence/
+      route_traversal_and_passage/
+        SKILL.md
+      vertical_landing_and_altitude_control/
         SKILL.md
 
     communication/

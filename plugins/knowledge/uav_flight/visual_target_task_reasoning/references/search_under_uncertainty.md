@@ -19,8 +19,9 @@ Useful search patterns should be selected by scene context:
   reliable, switch from broad sweep to hover or a small 5-15 degree yaw before
   judging so the candidate stays in view. Do not describe a candidate and then
   continue a 30-45 degree broad sweep as if it were confirmation.
-- Confirmed or centered target: hover, stop searching, or let the current phase
-  decision handle completion instead of continuing a search sweep.
+- Confirmed or centered target: hover, stop searching, or use the confirmed
+  target evidence for the current objective instead of continuing a search
+  sweep.
 
 Avoid repetitive left-right oscillation unless the last observation clearly
 showed that a small corrective turn is needed.

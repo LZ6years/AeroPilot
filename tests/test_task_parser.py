@@ -145,6 +145,9 @@ def test_model_parser_prompt_requires_explicit_numeric_metrics():
     assert "Use metrics only when the user explicitly gives a distance" in prompt
     assert "Do not invent numeric metric targets when the user did not provide them." in prompt
     assert "negative target" in prompt
+    assert '"direction":' not in prompt
+    assert "rearward displacement" in prompt
+    assert "backward movement" not in prompt
     assert "Numeric angle role rules" in prompt
     assert "A numeric angle is not automatically a yaw angle" in prompt
     assert "orientation_role" in prompt
@@ -185,7 +188,7 @@ def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespa
             "intent": "movement",
             "task_goal": {
                 "target": "land four meters lower",
-                "target_attributes": {"direction": "down", "distance_m": 4.0},
+                "target_attributes": {"distance_m": 4.0},
                 "final_state": "uav_stable_after_landing_descent",
             },
             "phases": [

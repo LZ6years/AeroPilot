@@ -96,7 +96,7 @@ def _run_real_skill_selection(run_dir: Path, cases_path: Path) -> dict[str, Any]
     results = []
     for case in cases:
         instruction = case["instruction"]
-        plan = _semantic_plan_for_instruction(instruction)
+        plan = _semantic_plan_for_case(case)
         memory = FlightMemory(
             "plugin_probe",
             "probe_map",
@@ -108,17 +108,33 @@ def _run_real_skill_selection(run_dir: Path, cases_path: Path) -> dict[str, Any]
         selected = [item["name"] for item in fragment["content"]["selected_skills"]]
         expected_any = list(case.get("expected_any", []))
         forbidden = list(case.get("forbidden", []))
+        expected_references = _expected_reference_map(case.get("expected_references", {}))
+        forbidden_references = _expected_reference_map(case.get("forbidden_references", {}))
         max_selected = int(case.get("max_selected", 99))
         skills_metadata = fragment.get("metadata", {})
+        accepted_references = skills_metadata.get("selection", {}).get("accepted_references", {})
+        missing_references = _missing_expected_references(expected_references, accepted_references)
+        forbidden_reference_hits = _forbidden_reference_hits(forbidden_references, accepted_references)
         result = {
             "instruction": instruction,
             "expected_any": expected_any,
             "forbidden": forbidden,
+            "expected_references": expected_references,
+            "forbidden_references": forbidden_references,
             "max_selected": max_selected,
             "available_skill_count": len(skills_metadata.get("available_skill_names", [])),
             "selection": skills_metadata.get("selection", {}),
             "selected_skill_names": selected,
+            "semantic_context": {
+                "intent": plan.intent,
+                "target": plan.task_goal.target,
+                "final_state": plan.task_goal.final_state,
+                "current_phase": plan.phases[0].to_dict(),
+            },
             "expected_hit": not expected_any or bool(set(selected) & set(expected_any)),
+            "expected_reference_hit": not missing_references,
+            "missing_expected_references": missing_references,
+            "forbidden_reference_hits": forbidden_reference_hits,
             "forbidden_hits": sorted(set(selected) & set(forbidden)),
             "over_selected": len(selected) > max_selected,
             "warnings": fragment["warnings"],
@@ -276,55 +292,261 @@ def _memory_and_state_with_observation(
 
 def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
     lower = instruction.lower()
-    if "turn" in lower:
-        intent = "turn_to_visual_target"
-        final_state = "UAV faces the person."
+    if _has_any(lower, ["do not finish", "decide whether", "confirm whether", "complete", "sufficient"]):
+        intent = "completion_evidence_check"
+        target = _target_from_instruction(lower)
+        final_state = "The UAV has enough evidence to decide whether the current objective is complete."
         phase = SemanticPhase(
             index=1,
             total=1,
-            name="rotate_to_face_person",
-            goal="Locate the person visually and rotate until the person is centered enough to face.",
-            done_when=["person is identifiable", "view is roughly aligned with the person"],
+            name="assess_current_objective_evidence",
+            goal="Judge whether current visual evidence and recent progress are sufficient for the requested objective.",
+            done_when=["current evidence supports completion or clearly shows more evidence is needed"],
             observe=["latest_observation", "phase_execution_summary"],
-            continue_when=["person identity is unclear", "view is not plausibly aligned"],
+            continue_when=["evidence is stale, ambiguous, or missing for the requested objective"],
             metrics=[],
         )
-    elif "move" in lower:
-        intent = "move_to_standoff_distance"
-        final_state = "UAV reaches a 3.5 meter standoff distance from the person."
+        attributes = {"evidence_role": "completion_check"}
+    elif _has_any(lower, ["land", "landing"]):
+        intent = "vertical_landing"
+        target = _target_from_instruction(lower)
+        final_state = "UAV reaches a controlled landing or low-altitude hold near the requested region."
         phase = SemanticPhase(
             index=1,
             total=1,
-            name="locate_and_move_to_person_standoff",
-            goal="Locate the person and move to the requested distance.",
-            done_when=["person is identifiable", "standoff distance is plausibly near 3.5 meters"],
+            name="controlled_landing_near_requested_region",
+            goal="Confirm the requested landing region or relation, then make controlled altitude progress toward landing.",
+            done_when=[
+                "landing region or requested relation is plausible",
+                "altitude or surface-related progress supports landing or low-altitude hold",
+            ],
             observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
-            continue_when=["person identity is unclear", "standoff distance is not yet plausible"],
+            continue_when=[
+                "landing region is unclear",
+                "altitude or surface progress is insufficient",
+                "continuing descent would be unsafe",
+            ],
+            metrics=_vertical_metric_from_instruction(lower, default_drop_m=4.0),
+        )
+        attributes = {"relation": _relation_from_instruction(lower)}
+    elif _has_any(lower, ["descend", "ascend", "altitude"]):
+        intent = "altitude_control"
+        target = "requested altitude"
+        final_state = "UAV reaches the requested altitude change and stabilizes."
+        phase = SemanticPhase(
+            index=1,
+            total=1,
+            name="controlled_altitude_change",
+            goal="Make bounded vertical progress toward the requested altitude change.",
+            done_when=["requested altitude change is within tolerance", "UAV is stable after vertical movement"],
+            observe=["latest_observation", "phase_execution_summary"],
+            continue_when=["altitude progress is insufficient", "vertical motion is overshooting or unsafe"],
+            metrics=_vertical_metric_from_instruction(lower),
+        )
+        attributes = {"path_angle_role": "vertical_path" if "degree" in lower else "unspecified"}
+    elif _has_any(lower, ["through", "past", "between", "pass ", " passage", "route"]):
+        intent = "route_traversal"
+        target = _target_from_instruction(lower)
+        final_state = "UAV makes route progress through or past the requested cue while preserving the requested side relation."
+        phase = SemanticPhase(
+            index=1,
+            total=1,
+            name="traverse_requested_route",
+            goal="Identify the route cue or side relation and make bounded route progress.",
+            done_when=["route cue is identified", "recent motion supports through, past, between, or side-route progress"],
+            observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
+            continue_when=["route cue is unclear", "only yaw or visual centering has occurred without route progress"],
             metrics=[],
         )
+        attributes = {"relation": _relation_from_instruction(lower)}
+    elif _has_any(lower, ["search", "find", "locate", "look for", "missing", "hidden"]):
+        intent = "search_or_locate_target"
+        target = _target_from_instruction(lower)
+        final_state = "UAV has found a plausible target or route cue before acting on it."
+        phase = SemanticPhase(
+            index=1,
+            total=1,
+            name="search_for_requested_cue",
+            goal="Search for and confirm the requested target or route cue.",
+            done_when=["target or route cue is visible or strongly identifiable"],
+            observe=["latest_observation", "phase_execution_summary"],
+            continue_when=["target or route cue is absent, ambiguous, or confused with similar candidates"],
+            metrics=[],
+        )
+        attributes = {}
+    elif _has_any(lower, ["turn", "face", "look", "center", "view", "visible", "inspect"]):
+        intent = "turn_to_visual_target"
+        target = _target_from_instruction(lower)
+        final_state = "UAV has the requested visual target or region in view."
+        phase = SemanticPhase(
+            index=1,
+            total=1,
+            name="orient_to_visual_target",
+            goal="Use current visual evidence to face, view, or confirm the requested target or region.",
+            done_when=["target or region is visible", "view is roughly aligned with the visual objective"],
+            observe=["latest_observation", "phase_execution_summary"],
+            continue_when=["visual target is unclear", "view is not plausibly aligned"],
+            metrics=[],
+        )
+        attributes = {}
+    elif _has_any(lower, ["move", "approach", "follow", "near", "distance", "closer"]):
+        intent = "approach_or_standoff"
+        target = _target_from_instruction(lower)
+        final_state = "UAV reaches the requested relative position or distance while staying stable."
+        phase = SemanticPhase(
+            index=1,
+            total=1,
+            name="approach_or_hold_relative_position",
+            goal="Confirm the target relation and move or hold toward the requested distance or relative position.",
+            done_when=["target relation is identifiable", "requested distance or relative position is plausible"],
+            observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
+            continue_when=["target relation is unclear", "requested relative position is not yet plausible"],
+            metrics=[],
+        )
+        attributes = {"relation": _relation_from_instruction(lower)}
     else:
-        intent = "approach_visual_target"
-        final_state = "UAV approaches the person while keeping safe distance."
+        intent = "general_visual_navigation"
+        target = _target_from_instruction(lower)
+        final_state = "UAV makes conservative progress on the requested visual navigation task."
         phase = SemanticPhase(
             index=1,
             total=1,
-            name="approach_person_safely",
-            goal="Confirm the person visually and approach conservatively.",
-            done_when=["person is identifiable", "approach remains safe"],
+            name="general_visual_navigation_step",
+            goal="Understand the current visual navigation objective and choose conservative task-relevant progress.",
+            done_when=["current evidence supports the requested objective"],
             observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
-            continue_when=["person identity is unclear", "safe approach relation is unclear"],
+            continue_when=["objective evidence is unclear or movement progress is insufficient"],
             metrics=[],
         )
+        attributes = {}
     return SemanticPlan(
         intent=intent,
         task_goal=TaskGoal(
-            target="person",
-            target_attributes={"category": "human"},
+            target=target,
+            target_attributes={key: value for key, value in attributes.items() if value},
             final_state=final_state,
         ),
         phases=[phase],
         uncertainties=[],
     )
+
+
+def _semantic_plan_for_case(case: dict[str, Any]) -> SemanticPlan:
+    instruction = str(case["instruction"])
+    hint = case.get("semantic_hint")
+    if isinstance(hint, dict):
+        return _semantic_plan_from_hint(instruction, hint)
+    return _semantic_plan_for_instruction(instruction)
+
+
+def _semantic_plan_from_hint(instruction: str, hint: dict[str, Any]) -> SemanticPlan:
+    target = str(hint.get("target", "")).strip() or _target_from_instruction(instruction.lower())
+    final_state = str(hint.get("final_state", "")).strip() or f"UAV satisfies: {instruction}"
+    phase = SemanticPhase(
+        index=1,
+        total=1,
+        name=str(hint.get("phase_name", "")).strip() or "hinted_task_step",
+        goal=str(hint.get("phase_goal", "")).strip() or final_state,
+        done_when=[str(item).strip() for item in hint.get("done_when", []) if str(item).strip()],
+        observe=[str(item).strip() for item in hint.get("observe", []) if str(item).strip()]
+        or ["latest_observation", "phase_execution_summary"],
+        continue_when=[str(item).strip() for item in hint.get("continue_when", []) if str(item).strip()],
+        metrics=[dict(item) for item in hint.get("metrics", []) if isinstance(item, dict)],
+    )
+    return SemanticPlan(
+        intent=str(hint.get("intent", "")).strip() or "hinted_task",
+        task_goal=TaskGoal(
+            target=target,
+            target_attributes=dict(hint.get("target_attributes", {})),
+            final_state=final_state,
+        ),
+        phases=[phase],
+        uncertainties=[str(item).strip() for item in hint.get("uncertainties", []) if str(item).strip()],
+    )
+
+
+def _has_any(text: str, needles: list[str]) -> bool:
+    return any(needle in text for needle in needles)
+
+
+def _relation_from_instruction(text: str) -> str:
+    relations = []
+    for word, relation in [
+        ("left side", "left_side"),
+        ("right side", "right_side"),
+        ("front side", "front_side"),
+        ("back side", "back_side"),
+        ("behind", "behind"),
+        ("between", "between"),
+        ("near", "near"),
+    ]:
+        if word in text:
+            relations.append(relation)
+    return ",".join(relations)
+
+
+def _target_from_instruction(text: str) -> str:
+    targets = [
+        "sun umbrella",
+        "sunshade",
+        "target structure",
+        "landmark",
+        "person",
+        "pedestrians",
+        "vehicle",
+        "car",
+        "truck",
+        "cyclist",
+        "tree",
+        "trees",
+        "building",
+        "buildings",
+        "doorway",
+        "entrance",
+        "storefront",
+        "monument",
+        "sign",
+        "alley",
+    ]
+    for target in targets:
+        if target in text:
+            return target
+    if "surface" in text or "ground" in text:
+        return "landing surface"
+    return "requested target or region"
+
+
+def _vertical_metric_from_instruction(text: str, default_drop_m: float | None = None) -> list[dict[str, Any]]:
+    amount = _first_number(text)
+    if amount is None:
+        amount = default_drop_m
+    if amount is None:
+        return []
+    sign = 1.0 if "ascend" in text else -1.0
+    return [
+        {
+            "name": "up_distance",
+            "target": sign * float(amount),
+            "unit": "m",
+            "tolerance": max(0.5, min(1.0, float(amount) * 0.1)),
+            "correction_allowed": True,
+        }
+    ]
+
+
+def _first_number(text: str) -> float | None:
+    current = []
+    for char in text:
+        if char.isdigit() or char == ".":
+            current.append(char)
+        elif current:
+            break
+    if not current:
+        return None
+    try:
+        return float("".join(current))
+    except ValueError:
+        return None
 
 
 def _stage_context(instruction: str, plan: SemanticPlan) -> StageContextInput:
@@ -360,6 +582,10 @@ def _selection_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(results)
     invalid = sum(1 for item in results if item["selection"].get("rejected_skill_names"))
     expected_hits = sum(1 for item in results if item["expected_hit"])
+    reference_hits = sum(1 for item in results if item["expected_reference_hit"])
+    reference_expectation_cases = sum(1 for item in results if item["expected_references"])
+    missing_reference_cases = sum(1 for item in results if item["missing_expected_references"])
+    forbidden_reference_cases = sum(1 for item in results if item["forbidden_reference_hits"])
     forbidden_cases = sum(1 for item in results if item["forbidden_hits"])
     over_selected = sum(1 for item in results if item["over_selected"])
     all_selected = sum(1 for item in results if len(item["selected_skill_names"]) >= item["available_skill_count"] > 0)
@@ -368,6 +594,10 @@ def _selection_metrics(results: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "total_cases": total,
         "expected_hit_rate": expected_hits / total if total else 0.0,
+        "expected_reference_hit_rate": reference_hits / total if total else 0.0,
+        "reference_expectation_cases": reference_expectation_cases,
+        "missing_expected_reference_cases": missing_reference_cases,
+        "forbidden_reference_cases": forbidden_reference_cases,
         "invalid_selection_cases": invalid,
         "forbidden_hit_cases": forbidden_cases,
         "over_selected_cases": over_selected,
@@ -391,8 +621,8 @@ def _selection_markdown(payload: dict[str, Any]) -> str:
         "",
         "## Cases",
         "",
-        "| instruction | selected | expected_hit | forbidden_hits | over_selected |",
-        "| --- | --- | --- | --- | --- |",
+        "| instruction | selected | expected_hit | reference_hit | forbidden_hits | forbidden_reference_hits | over_selected |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
     ]
     for item in payload["results"]:
         lines.append(
@@ -402,7 +632,9 @@ def _selection_markdown(payload: dict[str, Any]) -> str:
                     str(item["instruction"]).replace("|", "\\|"),
                     ", ".join(item["selected_skill_names"]) or "(none)",
                     str(item["expected_hit"]),
+                    str(item["expected_reference_hit"]),
                     ", ".join(item["forbidden_hits"]) or "-",
+                    json.dumps(item["forbidden_reference_hits"], ensure_ascii=False) if item["forbidden_reference_hits"] else "-",
                     str(item["over_selected"]),
                 ]
             )
@@ -410,6 +642,59 @@ def _selection_markdown(payload: dict[str, Any]) -> str:
         )
     lines.append("")
     return "\n".join(lines)
+
+
+def _expected_reference_map(raw: Any) -> dict[str, list[str]]:
+    if not isinstance(raw, dict):
+        return {}
+    expected: dict[str, list[str]] = {}
+    for skill_name, paths in raw.items():
+        if not isinstance(paths, list):
+            continue
+        cleaned = [str(path).strip().replace("\\", "/") for path in paths if str(path).strip()]
+        if cleaned:
+            expected[str(skill_name).strip()] = cleaned
+    return expected
+
+
+def _missing_expected_references(
+    expected: dict[str, list[str]],
+    accepted: Any,
+) -> dict[str, list[str]]:
+    if not expected:
+        return {}
+    accepted_map = accepted if isinstance(accepted, dict) else {}
+    missing: dict[str, list[str]] = {}
+    for skill_name, paths in expected.items():
+        accepted_paths = {
+            str(path).strip().replace("\\", "/")
+            for path in accepted_map.get(skill_name, [])
+            if str(path).strip()
+        }
+        absent = [path for path in paths if path not in accepted_paths]
+        if absent:
+            missing[skill_name] = absent
+    return missing
+
+
+def _forbidden_reference_hits(
+    forbidden: dict[str, list[str]],
+    accepted: Any,
+) -> dict[str, list[str]]:
+    if not forbidden:
+        return {}
+    accepted_map = accepted if isinstance(accepted, dict) else {}
+    hits: dict[str, list[str]] = {}
+    for skill_name, paths in forbidden.items():
+        accepted_paths = {
+            str(path).strip().replace("\\", "/")
+            for path in accepted_map.get(skill_name, [])
+            if str(path).strip()
+        }
+        matched = [path for path in paths if path in accepted_paths]
+        if matched:
+            hits[skill_name] = matched
+    return hits
 
 
 def _compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
@@ -421,6 +706,8 @@ def _compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
                 "instruction": item["instruction"],
                 "status": item["selection"].get("status"),
                 "selected": item["selected_skill_names"],
+                "missing_expected_references": item["missing_expected_references"],
+                "forbidden_reference_hits": item["forbidden_reference_hits"],
                 "warnings": item["warnings"],
             }
             for item in summary["selector"]["results"][:5]

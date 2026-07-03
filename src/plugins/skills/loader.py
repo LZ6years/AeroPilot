@@ -25,6 +25,27 @@ class SkillResourceLoader:
             for path in skill.reference_paths
         ]
 
+    def load_reference_paths(self, skill: Skill, requested_paths: list[str]) -> list[dict[str, Any]]:
+        """Load only the selected skill-local references."""
+
+        if not self.load_reference_files:
+            return []
+        by_relative_path = {
+            _relative_to_skill(skill, path).replace("\\", "/"): path
+            for path in skill.reference_paths
+        }
+        loaded: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for raw_path in requested_paths:
+            relative_path = str(raw_path).strip().replace("\\", "/")
+            if not relative_path or relative_path in seen:
+                continue
+            seen.add(relative_path)
+            path = by_relative_path.get(relative_path)
+            if path is not None:
+                loaded.append(_load_reference(skill, path, self.max_reference_chars))
+        return loaded
+
     def available_references(self, skill: Skill) -> list[str]:
         return [_relative_to_skill(skill, path) for path in skill.reference_paths]
 
@@ -61,17 +82,53 @@ class SkillContentLoader:
             "plugin_id": skill.plugin_id,
             "name": skill.name,
             "description": skill.description,
+            "summary": skill.summary,
             "source_path": str(skill.skill_path),
             "skill_dir": str(skill.skill_dir),
             "skill_text": skill.body[: self.max_skill_chars].strip(),
             "skill_text_truncated": len(skill.body) > self.max_skill_chars,
-            "references": resource_loader.load_references(skill),
+            "references": [],
             "available_references": resource_loader.available_references(skill),
             "capability": skill.capability.listing() if skill.capability else None,
             "assets": {
                 "scripts": resource_loader.script_assets(skill),
             },
         }
+
+    def load_planner_guidance(
+        self,
+        skill: Skill,
+        *,
+        requested_references: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Load model-facing guidance for a selected skill.
+
+        Selection remains index-only, but once a skill is accepted the planner
+        receives the bounded SKILL.md body. References stay opt-in so large
+        supporting material only appears when explicitly requested.
+        """
+
+        resource_loader = self.resource_loader
+        data: dict[str, Any] = {
+            "name": skill.name,
+            "description": skill.description,
+            "skill_text": skill.body.strip(),
+        }
+        references = resource_loader.load_reference_paths(skill, requested_references or [])
+        if references:
+            data["requested_references"] = [
+                {
+                    "path": item.get("path", ""),
+                    "text": item.get("text", ""),
+                    "truncated": bool(item.get("truncated", False)),
+                }
+                for item in references
+                if isinstance(item, dict) and item.get("text")
+            ]
+        capability = skill.capability.listing() if skill.capability else None
+        if capability:
+            data["capability"] = capability
+        return {key: value for key, value in data.items() if value not in (None, "", [], {})}
 
 
 def _load_reference(skill: Skill, path, max_chars: int) -> dict[str, Any]:
@@ -96,6 +153,6 @@ def _load_reference(skill: Skill, path, max_chars: int) -> dict[str, Any]:
 
 def _relative_to_skill(skill: Skill, path) -> str:
     try:
-        return str(path.relative_to(skill.skill_dir))
+        return str(path.relative_to(skill.skill_dir)).replace("\\", "/")
     except ValueError:
         return str(path)

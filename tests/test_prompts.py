@@ -13,6 +13,7 @@ def test_task_parser_prompt_contains_lightweight_semantic_plan_contract():
     assert '"intent"' in prompt
     assert '"task_goal"' in prompt
     assert '"target_attributes"' in prompt
+    assert '"direction":' not in prompt
     assert '"done_when"' in prompt
     assert '"observe"' in prompt
     assert '"continue_when"' in prompt
@@ -25,11 +26,16 @@ def test_task_parser_prompt_contains_lightweight_semantic_plan_contract():
     assert "distance_m" in prompt
     assert "Do not invent numeric metric targets" in prompt
     assert "Do not invent a distance metric." in prompt
+    assert "rearward displacement" in prompt
+    assert "backward movement" not in prompt
     assert "Numeric angle role rules" in prompt
     assert "A numeric angle is not automatically a yaw angle" in prompt
     assert "orientation_role" in prompt
     assert "horizontal_displacement_role" in prompt
     assert "vertical_path_role" in prompt
+    assert "deviation from the vertical up/down direction" in prompt
+    assert "atan(sqrt(vx^2 + vy^2) / abs(vz))" in prompt
+    assert "Do not describe this as an angle relative to the horizontal plane" in prompt
     assert "forward_distance = D*cos(A)" in prompt
     assert "right_distance is signed lateral displacement" in prompt
     assert "avoid defaulting to yaw_delta" in prompt
@@ -47,6 +53,20 @@ def test_legacy_action_and_phase_judge_prompts_removed():
 
     assert not (prompt_dir / "action_planner_system.txt").exists()
     assert not (prompt_dir / "phase_transition_judge_system.txt").exists()
+
+
+def test_agent_boundaries_document_prompt_and_skill_writing_rules():
+    guide = Path("AGENT.md").read_text(encoding="utf-8")
+
+    assert "Prompt And Skill Writing Rules" in guide
+    assert "Reusable skills are flight-domain knowledge" in guide
+    assert "`current_phase`" in guide
+    assert "`phase_decision`" in guide
+    assert "`phase_progress_evidence`" in guide
+    assert "`model_inputs`" in guide
+    assert "Do not restore model-facing `direction` shorthand" in guide
+    assert "`relation` plus measurable metrics" in guide
+    assert "hidden benchmark truth" in guide
 
 
 def test_flyagent_rules_contain_general_visual_action_alignment_without_internal_terms():
@@ -117,6 +137,9 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "vertical flight-path angle" not in phase_prompt
     assert "yaw, heading, vehicle pitch" not in phase_prompt
     assert "do not advance from yaw alone" in phase_prompt
+    assert "visible and roughly aligned; or target remains visible after repeated tiny yaw/alternating yaw corrections" in phase_prompt
+    assert "slightly left/right of center" in phase_prompt
+    assert "evidence to stop micro-adjusting and advance" in phase_prompt
     assert "one short translation or left/right image placement" in phase_prompt
     assert "repeated small yaw corrections should not block advance" not in phase_prompt
 
@@ -138,10 +161,14 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
 def test_skill_selection_prompt_keeps_compound_locate_and_approach_phases_covered():
     prompt = " ".join(SKILL_SELECTION_SYSTEM_PROMPT.split())
 
-    assert "available skill's name and description" in prompt
-    assert "active_instruction, semantic_goal, current_phase" in prompt
+    assert "name, description, summary, and reference manifest" in prompt
+    assert "active_instruction, semantic_goal, current_phase, phase_progress_brief" in prompt
     assert "minimal useful set" in prompt
-    assert "task-level goal and current phase" in prompt
+    assert "current semantic phase" in prompt
+    assert "Select skills for the current semantic phase only" in prompt
+    assert "current_phase.goal, current_phase.done_when, current_phase.continue_when, and current_phase.metrics" in prompt
+    assert "active_instruction and semantic_goal only to understand the target, user intent, and final relation" in prompt
+    assert "do not preload skills for future phases" in prompt
     assert "primary concern" in prompt
     assert "at most one primary skill" in prompt
     assert "auxiliary skill only when it covers a separate concern" in prompt
@@ -151,21 +178,33 @@ def test_skill_selection_prompt_keeps_compound_locate_and_approach_phases_covere
     assert "Do not add search guidance just because a landmark exists" in prompt
     assert "Do not add visual attention guidance just because an object is visible" in prompt
     assert "Do not add obstacle or safety guidance just because a route exists" in prompt
-    assert "Use the task-level goal to keep early locate/approach phases grounded" in prompt
-    assert "final task concern is landing, descending, altitude change, passing through" in prompt
+    assert "Treat side/front/back relations as modifiers of the primary task" in prompt
+    assert "current phase itself makes the side relation part of route traversal" in prompt
+    assert "current phase's main concern" in prompt
+    assert "unless traversal is the active current concern" in prompt
     assert "description clearly covers" in prompt
-    assert "controlled vertical motion" in prompt
-    assert "stopping near a surface" in prompt
+    assert "Request reference files only when the selected skill summary is not enough" in prompt
+    assert "Do not request references as insurance" in prompt
+    assert "Selecting a skill does not mean its references are needed" in prompt
+    assert "absent target evidence, weak candidate evidence, hidden target evidence" in prompt
+    assert "explicit search/find/locate/identify-candidate task" in prompt
+    assert "target visibility has not yet been confirmed" in prompt
+    assert "Do not request a search reference for ordinary face, center, keep-in-view" in prompt
+    assert "decide-if-current-observation-is-sufficient" in prompt
+    assert "requested_references" in prompt
+    assert "important current-phase nuance beyond the primitive itself" in prompt
+    assert "controlled vertical motion" not in prompt
+    assert "stopping near a surface" not in prompt
     assert "translate N meters" in prompt
     assert "move forward N meters" not in prompt
+    assert "selection_scope" not in prompt
+    assert "final_goal_is_context_only" not in prompt
     hardcoded_skill_names = [
-        "search_under_uncertainty",
         "approach_and_standoff",
         "visual_target_task_reasoning",
-        "task_completion_evidence",
-        "obstacle_and_safety_awareness",
         "vertical_landing_and_altitude_control",
         "route_traversal_and_passage",
+        "orbit_and_surround",
     ]
     for name in hardcoded_skill_names:
         assert name not in prompt

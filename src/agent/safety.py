@@ -19,7 +19,23 @@ class SafetyDecision:
     interventions: list[dict] = field(default_factory=list)
 
 
+SAFETY_OPERATING_PRINCIPLES = (
+    "Prefer conservative action sizes when obstacles, people, occlusions, narrow spaces, or uncertain free space are active.",
+    "Use safety to shape or clip motion, not to replace the primary navigation objective.",
+    "Do not assume a path is clear only because no obstacle metadata exists.",
+)
+
+
 class SafetySupervisor:
+    """Review planned primitive steps against UAV safety limits.
+
+    Obstacle and proximity awareness belongs to this safety boundary rather than
+    planner skill selection. The current implementation enforces hard primitive
+    limits only; perception-driven obstacle rules can build on
+    SAFETY_OPERATING_PRINCIPLES later without exposing safety prose as a flight
+    strategy skill.
+    """
+
     ALLOWED_TOOLS = {
         "uav.hover",
         "uav.turn_relative",

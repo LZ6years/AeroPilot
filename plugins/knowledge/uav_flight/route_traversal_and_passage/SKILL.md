@@ -1,6 +1,7 @@
 ---
 name: route_traversal_and_passage
-description: Use when the UAV should pass through, go through, navigate through, cross between objects, or travel via a requested side of a passage, gap, obstacle, landmark, or route cue.
+description: Use when the UAV should pass through, go through, navigate through, progress past, cross between objects, or follow an explicit passage, gap, corridor, opening, or route cue.
+summary: Select for through, past, between, passage, gap, corridor, opening, or explicit route-cue traversal tasks where route progress is the active concern.
 ---
 
 # Route Traversal And Passage
@@ -8,6 +9,11 @@ description: Use when the UAV should pass through, go through, navigate through,
 Use this guidance when the instruction asks the UAV to pass through a region,
 go through or between objects, cross a passage, or use a requested side of a
 landmark or obstacle as part of a route.
+
+Do not use this guidance merely because the instruction says to travel to,
+move to, or approach a landmark from a side. When the landmark is the
+destination and the active concern is relative position, distance, or side
+placement around that target, use approach and standoff reasoning instead.
 
 Passage tasks are about route progress, not perfect visual centering. First
 identify the relevant passage, gap, side, or route cue well enough to choose a

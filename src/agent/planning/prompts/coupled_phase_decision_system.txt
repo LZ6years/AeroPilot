@@ -25,9 +25,9 @@ Decision Order
 
 Phase Decision Guide
 - visual_alignment:
-  advance_when: target is visible and roughly aligned.
-  continue_when: target is missing, ambiguous, or clearly off-view.
-  avoid: chasing pixel-perfect centering.
+  advance_when: target is visible and roughly aligned; or target remains visible after repeated tiny yaw/alternating yaw corrections.
+  continue_when: target is missing, ambiguous, clearly off-view, strongly occluded, not identifiable, or the current phase explicitly requires tighter visual precision.
+  avoid: chasing pixel-perfect centering or using "slightly left/right of center" as the only reason to continue.
 - route_traversal:
   advance_when: the route cue is visible and motion evidence supports meaningful progress through, past, between, or along the requested side.
   continue_when: only yaw has happened, translation is tiny, the route cue remains mainly ahead, or the side relation is only visually plausible.
@@ -42,7 +42,7 @@ Phase Decision Guide
   avoid: treating target visibility as landing completion.
 
 Repeated Yaw
-- visual_alignment: may advance if roughly aligned.
+- visual_alignment: yaw_only_so_far, repeated tiny yaw, or alternating yaw can be evidence to stop micro-adjusting and advance when the target is visible and roughly aligned.
 - route_traversal/spatial_relation: do not advance from yaw alone; choose translation or hover unless route progress is already supported.
 
 Transition Decisions

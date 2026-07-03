@@ -1,6 +1,7 @@
 ---
 name: vertical_landing_and_altitude_control
-description: Use when the UAV should ascend, descend, change altitude, follow an angled vertical path, land, or stop near a safe low-altitude/ground surface.
+description: Use when the UAV should ascend, descend, change altitude, follow a vertical-axis angled path, land, or stop near a safe low-altitude/ground surface.
+summary: Select for altitude changes, vertical-path motion, landing, or stopping near a low-altitude region, ground, or surface.
 ---
 
 # Vertical Landing And Altitude Control
@@ -22,19 +23,21 @@ instead of many tiny corrections. As the UAV gets close to the target height,
 ground, surface, or tolerance band, shorten each vertical step and prefer hover
 to reassess.
 
-For angled ascent or descent, interpret the angle as the vertical flight-path
-angle relative to the horizontal plane unless the user explicitly says it is a
+For angled ascent or descent, interpret the angle as the path's deviation from
+the vertical ascent/descent direction unless the user explicitly says it is a
 yaw, heading, vehicle pitch, or camera angle. Use that angle to choose the ratio
-between horizontal speed and vertical speed:
+between the sideways/forward components and the vertical component:
 
 ```text
-abs(vertical_speed) / horizontal_speed = tan(angle)
+angle = atan(sqrt(vx^2 + vy^2) / abs(vz))
 ```
 
-For descent, vertical speed is negative:
+For descent, `vz` is negative. For ascent, `vz` is positive. A smaller angle is
+closer to straight vertical movement; a larger angle allows more sideways or
+forward motion while changing altitude.
 
 ```text
-vz = -horizontal_speed * tan(angle)
+sqrt(vx^2 + vy^2) = abs(vz) * tan(angle)
 ```
 
 The angle does not mean the UAV should turn in the horizontal plane or point its
@@ -43,12 +46,18 @@ consistent with the requested path, but do not continue vertical motion when
 doing so would move farther away from the requested height or add near-surface
 risk.
 
-For shallow ascent or descent angles, the vertical component is naturally
-smaller than the horizontal component. Do not respond by using extremely short
-durations or tiny repeated vertical steps when the remaining altitude change is
-still large and the scene appears safe. Use an effective bounded step that keeps
-the requested ratio, then shorten steps only near the target height, ground,
-surface, or tolerance band.
+When an instruction explicitly asks for an angled ascent or descent, include a
+non-zero sideways or forward component from the start unless safety, near-surface
+conditions, or a final tolerance correction make a pure vertical step safer.
+Starting with pure vertical motion does not satisfy a non-zero path-deviation
+angle.
+
+For small ascent or descent angles, most of the movement is still vertical, with
+only a modest sideways or forward component. Do not respond by using extremely
+short durations or tiny repeated vertical steps when the remaining altitude
+change is still large and the scene appears safe. Use an effective bounded step
+that keeps the requested ratio, then shorten steps only near the target height,
+ground, surface, or tolerance band.
 
 For landing, first make sure the requested landing region or relation is
 plausible. If the landing is near a visual target or on a requested side,
@@ -67,8 +76,8 @@ begin a controlled descent.
 
 Do not keep descending only because the word "land" appears in the instruction.
 Do not declare a landmark landing complete from target visibility alone; landing
-also needs altitude or surface-related evidence. Do not use hidden benchmark
-targets or old images as proof of safe ground contact.
+also needs altitude or surface-related evidence. Do not use stale images as
+proof of safe ground contact.
 
 When evidence is uncertain, prefer hover or a smaller vertical adjustment before
 continuing. When the UAV is already low, near a surface, or inside a reasonable

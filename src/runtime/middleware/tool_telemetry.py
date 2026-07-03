@@ -9,19 +9,24 @@ actions; TaskRuntime owns those behaviors.
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any, TypeVar
+from typing import Any
 
-
-T = TypeVar("T")
+from src.env_client.schemas import ActionResult
+from src.tools.dispatcher import ToolDispatcher
 
 
 class ToolTelemetryMiddleware:
-    """Wrap a tool call with runtime debug events."""
+    """Wrap ToolDispatcher calls with runtime debug events."""
 
-    def __init__(self, debug_event: Callable[[str, dict[str, Any]], None]) -> None:
+    def __init__(
+        self,
+        dispatcher: ToolDispatcher,
+        debug_event: Callable[[str, dict[str, Any]], None],
+    ) -> None:
+        self.dispatcher = dispatcher
         self.debug_event = debug_event
 
-    def run_tool_step(
+    def call_step(
         self,
         *,
         scene_instance_id: str,
@@ -32,9 +37,9 @@ class ToolTelemetryMiddleware:
         tool: str,
         args: dict[str, Any],
         pose_before: dict[str, Any] | None,
-        call_fn: Callable[[], T],
-    ) -> T:
-        """Run ``call_fn`` and emit telemetry without changing its behavior."""
+        runtime_context: dict[str, Any] | None = None,
+    ) -> ActionResult:
+        """Dispatch one tool step and emit telemetry without changing behavior."""
 
         base_payload = {
             "scene_instance_id": scene_instance_id,
@@ -49,7 +54,13 @@ class ToolTelemetryMiddleware:
             base_payload["pose_before"] = dict(pose_before)
         self.debug_event("tool_call_started", base_payload)
         try:
-            result = call_fn()
+            result = self.dispatcher.call(
+                scene_instance_id,
+                agent_id,
+                tool,
+                args,
+                runtime_context=runtime_context,
+            )
         except Exception as exc:
             self.debug_event(
                 "tool_call_failed",

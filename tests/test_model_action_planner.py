@@ -219,7 +219,8 @@ def test_model_user_content_puts_flyagent_rules_before_task_fragments():
                         "selected_skills": [
                             {
                                 "name": "visual_target_task_reasoning",
-                                "skill_text": "Use visual evidence carefully.",
+                                "summary": "Use visual evidence carefully.",
+                                "skill_text": "Full selected skill body.",
                             }
                         ]
                     },
@@ -237,7 +238,7 @@ def test_model_user_content_puts_flyagent_rules_before_task_fragments():
 
     assert isinstance(content, str)
     text_context = json.loads(content)
-    assert list(text_context)[:10] == [
+    assert list(text_context)[:9] == [
         "rules",
         "active_instruction",
         "current_phase",
@@ -247,11 +248,14 @@ def test_model_user_content_puts_flyagent_rules_before_task_fragments():
         "allowed_action_constraints",
         "phase_execution_summary",
         "user_preferences",
-        "context_schema",
     ]
     assert text_context["rules"]["text"] == "FlyAgent baseline flight rules."
     assert text_context["fragments"][0]["content"]["selected_skills"][0]["name"] == "visual_target_task_reasoning"
+    assert "summary" not in text_context["fragments"][0]["content"]["selected_skills"][0]
+    assert text_context["fragments"][0]["content"]["selected_skills"][0]["skill_text"] == "Full selected skill body."
     assert "metadata" not in text_context["fragments"][0]
+    assert "context_schema" not in text_context
+    assert "metadata" not in text_context
 
 
 def test_model_user_content_strips_phase_judge_audit_fields():
@@ -342,6 +346,90 @@ def test_model_user_content_strips_phase_judge_audit_fields():
         "has_rgb": True,
         "has_depth": True,
     }
+
+
+def test_model_user_content_slims_fragments_and_observation_debug_fields():
+    context = make_context()
+    context.update(
+        {
+            "context_schema": {"debug": True},
+            "metadata": {"run_id": "run_test"},
+            "disabled_fragments": [],
+            "phase_metrics": [],
+            "phase_completion_evaluation": {
+                "metrics_count": 0,
+                "measurable_count": 0,
+                "all_within_tolerance": False,
+                "evaluations": [{"status": "requires_model_judgment"}],
+            },
+            "phase_execution_summary": {
+                "phase": "landmark_phase",
+                "window_count": 7,
+                "measurements": {"forward_m": 10.0, "right_m": 2.0},
+                "tool_facts": {"tools_executed": {"uav.move_body": 3}},
+            },
+            "latest_observation_summary": {
+                "source": "automatic_phase_window",
+                "timestamp": "t1",
+                "modalities": ["rgb", "pose"],
+                "pose": {"x": 1.0},
+                "frames": {
+                    "rgb": {
+                        "path": "runs/example/frame.png",
+                        "artifact_ref": "runs/example/frame.png",
+                        "case_id": "case-debug",
+                        "source": "uav_flow_benchmark",
+                    }
+                },
+            },
+            "fragments": [
+                {
+                    "name": "image",
+                    "enabled": True,
+                    "source": "DefaultImageContextModule",
+                    "content": {"selected_frames": [{"role": "current_observation"}]},
+                    "model_inputs": [],
+                    "facts": [],
+                    "inferences": [],
+                    "goals": [],
+                    "risks": [],
+                    "artifact_refs": ["runs/example/frame.png"],
+                    "budget": {"tokens_estimate": 300},
+                    "confidence": "medium",
+                    "warnings": [],
+                    "metadata": {"debug_only": True},
+                }
+            ],
+        }
+    )
+
+    content = build_model_user_content(context)
+
+    assert isinstance(content, str)
+    text_context = json.loads(content)
+    text = json.dumps(text_context, ensure_ascii=False)
+    assert "context_schema" not in text_context
+    assert "metadata" not in text_context
+    assert "disabled_fragments" not in text_context
+    assert "phase_metrics" not in text_context
+    assert "all_within_tolerance" not in text_context["phase_completion_evaluation"]
+    assert text_context["phase_completion_evaluation"]["deterministic_status"] == "not_measurable"
+    assert text_context["phase_execution_summary"] == {
+        "phase": "landmark_phase",
+        "window_count": 7,
+        "tools_executed": {"uav.move_body": 3},
+    }
+    assert text_context["latest_observation_summary"] == {
+        "source": "automatic_phase_window",
+        "timestamp": "t1",
+        "modalities": ["rgb", "pose"],
+        "pose": {"x": 1.0},
+        "has_rgb": True,
+        "has_depth": False,
+    }
+    assert text_context["fragments"] == [{"name": "image", "content": {"selected_frames": [{"role": "current_observation"}]}}]
+    for forbidden in ["artifact_refs", "budget", "confidence", "source_path", "runs/example", "case-debug"]:
+        assert forbidden not in text
 
 
 def test_model_user_content_attaches_encoded_image_from_any_fragment():

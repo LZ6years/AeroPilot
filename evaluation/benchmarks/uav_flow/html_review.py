@@ -828,6 +828,7 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
         fragments = {item.get("name"): item for item in model_context.get("fragments", []) if isinstance(item, dict)}
         image = fragments.get("image", {})
         action = fragments.get("action", {})
+        skills = fragments.get("skills", {})
         progress = model_context.get("phase_progress_evidence", {})
         raw_plan = record.get("raw_plan", {}) if isinstance(record.get("raw_plan"), dict) else {}
         safe_plan = record.get("safe_plan", {}) if isinstance(record.get("safe_plan"), dict) else {}
@@ -854,6 +855,7 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
         {_exec}
         {_progress}
         {_image_roles}
+        {_skill_guidance}
         {_action_trend}
         {_tool_diff}
       </dl>
@@ -890,6 +892,7 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
                 _exec=_kv("Phase execution summary", json.dumps(_compact_phase_execution(context.get("phase_execution_summary", {})), ensure_ascii=False)),
                 _progress=_kv("Phase progress evidence", json.dumps(_compact_progress_evidence(progress), ensure_ascii=False)),
                 _image_roles=_kv("Image model inputs", json.dumps(_fragment_model_input_roles(model_context), ensure_ascii=False)),
+                _skill_guidance=_kv("Selected skill guidance", json.dumps(_selected_skill_guidance_summary(skills), ensure_ascii=False)),
                 _action_trend=_kv("Action trend", json.dumps((action.get("content", {}) if isinstance(action.get("content"), dict) else {}).get("action_trend", {}), ensure_ascii=False)),
                 _tool_diff=_kv("Raw -> safe tools", f"{_plan_tools(raw_plan)} -> {_plan_tools(safe_plan)}"),
                 artifact=_link(base, _path_from_result(record.get("_path"), None), "open full debug json"),
@@ -1024,6 +1027,34 @@ def _fragment_model_input_roles(record: dict[str, Any]) -> list[dict[str, Any]]:
                     }
                 )
     return roles
+
+
+def _selected_skill_guidance_summary(fragment: dict[str, Any]) -> list[dict[str, Any]]:
+    content = fragment.get("content", {}) if isinstance(fragment.get("content"), dict) else {}
+    selected = content.get("selected_skills", [])
+    if not isinstance(selected, list):
+        return []
+    result = []
+    for item in selected:
+        if not isinstance(item, dict):
+            continue
+        references = item.get("requested_references", [])
+        result.append(
+            {
+                "name": item.get("name"),
+                "description": item.get("description"),
+                "skill_text_chars": len(str(item.get("skill_text", ""))),
+                "skill_text_truncated": item.get("skill_text_truncated"),
+                "requested_references": [
+                    ref.get("path")
+                    for ref in references
+                    if isinstance(ref, dict) and ref.get("path")
+                ]
+                if isinstance(references, list)
+                else [],
+            }
+        )
+    return result
 
 
 def _planner_output_note(coupled_decision: dict[str, Any]) -> str:

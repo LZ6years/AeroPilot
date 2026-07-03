@@ -72,12 +72,7 @@ class PhaseWindowContextBuilder:
         return [dict(item) for item in state.semantic_plan.phases[state.current_phase_index].metrics]
 
     def phase_progress_evidence(self, state: MissionState) -> dict[str, Any]:
-        """Summarize physical phase progress separately from visual comparison.
-
-        This is model-facing evidence, not a transition validator. It helps the
-        coupled planner avoid treating image scale or centering changes as proof
-        of physical approach when the runtime has only recorded yaw corrections.
-        """
+        """Summarize model-facing motion facts for the current phase."""
 
         summary = state.current_phase_execution_summary
         measurements = summary.get("measurements", {}) if isinstance(summary.get("measurements"), dict) else {}
@@ -104,13 +99,6 @@ class PhaseWindowContextBuilder:
             or move_count > 0
         )
         yaw_only = not has_translation and (turn_count > 0 or abs(yaw_delta_deg) > 0.0 or abs(turn_yaw) > 0.0)
-        phase = (
-            state.semantic_plan.phases[state.current_phase_index]
-            if state.current_phase_index < len(state.semantic_plan.phases)
-            else None
-        )
-        done_when = list(phase.done_when) if phase is not None else []
-        support = [self._done_when_motion_support(condition, has_translation) for condition in done_when]
         return {
             "motion_progress": {
                 "forward_m": forward_m,
@@ -124,15 +112,6 @@ class PhaseWindowContextBuilder:
                 "has_translation": has_translation,
                 "yaw_only_so_far": yaw_only,
             },
-            "done_when_support": support,
-            "visual_progress": {
-                "image_comparison_is_auxiliary": True,
-                "note": "Image scale, centering, or occlusion changes can support visual evidence but do not prove physical translation by themselves.",
-            },
-            "model_guidance": (
-                "Use image comparison as visual evidence, but do not claim physical approach progress when "
-                "motion_progress shows yaw-only behavior."
-            ),
         }
 
     @staticmethod
@@ -153,51 +132,3 @@ class PhaseWindowContextBuilder:
             return round(float(value), 3)
         except (TypeError, ValueError):
             return default
-
-    @staticmethod
-    def _done_when_requires_translation(condition: str) -> bool:
-        text = str(condition).lower()
-        translation_terms = (
-            "move",
-            "moved",
-            "moving",
-            "approach",
-            "approached",
-            "closer",
-            "near",
-            "arrive",
-            "arrival",
-            "reach",
-            "position",
-            "distance",
-            "follow",
-            "standoff",
-            "proximity",
-            "travel",
-            "移动",
-            "前进",
-            "靠近",
-            "接近",
-            "到达",
-            "抵达",
-            "距离",
-            "保持距离",
-            "跟随",
-            "位置",
-        )
-        return any(term in text for term in translation_terms)
-
-    def _done_when_motion_support(self, condition: str, has_translation: bool) -> dict[str, Any]:
-        requires_translation = self._done_when_requires_translation(condition)
-        support: dict[str, Any] = {
-            "condition": str(condition),
-            "requires_translation": requires_translation,
-            "supported_by_motion": has_translation if requires_translation else None,
-        }
-        if requires_translation and not has_translation:
-            support["note"] = "No successful move_body or translation progress has been recorded in this phase."
-        elif requires_translation:
-            support["note"] = "Runtime motion summary contains translation evidence for this condition."
-        else:
-            support["note"] = "This condition is not primarily a physical-translation condition."
-        return support

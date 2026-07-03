@@ -15,10 +15,9 @@ plugins/{category}/{plugin_name}/{skill_folder}/capability.json   # optional
 
 ```text
 plugins/knowledge/uav_flight/visual_target_task_reasoning/SKILL.md
-plugins/knowledge/uav_flight/search_under_uncertainty/SKILL.md
 plugins/knowledge/uav_flight/approach_and_standoff/SKILL.md
-plugins/knowledge/uav_flight/obstacle_and_safety_awareness/SKILL.md
-plugins/knowledge/uav_flight/task_completion_evidence/SKILL.md
+plugins/knowledge/uav_flight/route_traversal_and_passage/SKILL.md
+plugins/knowledge/uav_flight/orbit_and_surround/SKILL.md
 ```
 
 ## SKILL.md

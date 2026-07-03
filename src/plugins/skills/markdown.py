@@ -19,10 +19,12 @@ def parse_skill_markdown(path: str | Path, plugin_id: str) -> Skill:
     frontmatter, body = _split_frontmatter(text, skill_path)
     name = _required_field(frontmatter, "name", skill_path)
     description = _required_field(frontmatter, "description", skill_path)
+    summary = frontmatter.get("summary", "").strip() or description
     return Skill(
         plugin_id=plugin_id,
         name=name,
         description=description,
+        summary=summary,
         skill_dir=skill_dir,
         skill_path=skill_path,
         reference_paths=_reference_paths(skill_dir),

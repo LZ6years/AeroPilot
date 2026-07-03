@@ -15,6 +15,11 @@ class SkillCatalog:
     def listings(self) -> list[dict[str, Any]]:
         return [skill.listing() for skill in self.skills]
 
+    def index_listings(self) -> list[dict[str, Any]]:
+        """Return lightweight selection-time listings without source paths or bodies."""
+
+        return [skill.index_listing() for skill in self.skills]
+
     def by_name(self) -> dict[str, Skill]:
         return {skill.name: skill for skill in self.skills}
 
@@ -39,6 +44,36 @@ class SkillCatalog:
             seen_skills.add(skill.name)
             accepted.append(skill)
         return accepted, rejected
+
+    def validate_reference_selection(
+        self,
+        accepted_skills: list[Skill],
+        requested_references: dict[str, list[str]],
+    ) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+        """Validate requested reference paths against the already selected skills."""
+
+        accepted_by_name = {skill.name: skill for skill in accepted_skills}
+        valid: dict[str, list[str]] = {}
+        rejected: dict[str, list[str]] = {}
+        for raw_skill_name, raw_paths in requested_references.items():
+            skill_name = str(raw_skill_name).strip()
+            if not skill_name:
+                continue
+            paths = raw_paths if isinstance(raw_paths, list) else []
+            skill = accepted_by_name.get(skill_name)
+            if skill is None:
+                rejected[skill_name] = [str(path).strip() for path in paths if str(path).strip()]
+                continue
+            allowed = {item["path"] for item in skill.reference_manifest()}
+            seen: set[str] = set()
+            for raw_path in paths:
+                path = str(raw_path).strip().replace("\\", "/")
+                if not path or path in seen:
+                    continue
+                seen.add(path)
+                target = valid if path in allowed else rejected
+                target.setdefault(skill.name, []).append(path)
+        return valid, rejected
 
 
 @dataclass(frozen=True)
