@@ -24,6 +24,25 @@ logic.
   should become generic runtime/context/prompt improvements before affecting
   normal behavior.
 
+## Benchmark Generalization Boundary
+
+Benchmarks are diagnostic probes, not product specifications. A benchmark case
+may reveal a weakness in the general UAV agent, but it must not directly decide
+parser, planner, runtime, context, safety, skill, or prompt behavior.
+
+Do not put benchmark case names, benchmark classes, reference paths, SR judge
+results, nDTW scores, hidden truth, leaderboard heuristics, or test-set
+experience into model-facing prompts, reusable skills, context contracts, or
+runtime behavior. Evaluation-only facts must stay in `evaluation/*`, reports,
+and human-facing debug artifacts.
+
+Before changing normal behavior based on a benchmark result, restate the issue
+as a general UAV capability gap. Examples include target-relative spatial
+relations, around-target progress evidence, uncertainty-aware visual movement,
+history summarization, or safe completion judgment. If a proposed change only
+helps one benchmark and cannot be justified as a general user-facing UAV
+capability, do not make it in the shared runtime, prompts, or knowledge base.
+
 ## Model-Facing vs Human-Facing Data
 
 Model-facing context should be small, current, and decision useful:

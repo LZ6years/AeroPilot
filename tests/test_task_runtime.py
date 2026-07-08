@@ -571,10 +571,14 @@ def test_task_runtime_phase_progress_evidence_marks_yaw_only_approach_progress()
         },
     }
     evidence = PhaseWindowContextBuilder().phase_progress_evidence(state)
+    progress = evidence["motion_progress"]
 
-    assert evidence["motion_progress"]["has_translation"] is False
-    assert evidence["motion_progress"]["yaw_only_so_far"] is True
-    assert evidence["motion_progress"]["tools_executed"] == {"uav.turn_relative": 3}
+    assert progress["measurement_scope"] == "phase_start_relative_uav_motion"
+    assert "not distance-to-target" in progress["interpretation_note"]
+    assert "not distance-to-landmark" in progress["interpretation_note"]
+    assert progress["has_translation"] is False
+    assert progress["yaw_only_so_far"] is True
+    assert progress["tools_executed"] == {"uav.turn_relative": 3}
     assert "done_when_support" not in evidence
     assert "model_guidance" not in evidence
 
@@ -603,12 +607,15 @@ def test_task_runtime_phase_progress_evidence_marks_translation_progress():
         },
     }
     evidence = PhaseWindowContextBuilder().phase_progress_evidence(state)
+    progress = evidence["motion_progress"]
 
-    assert evidence["motion_progress"]["has_translation"] is True
-    assert evidence["motion_progress"]["yaw_only_so_far"] is False
-    assert evidence["motion_progress"]["forward_m"] == 2.0
-    assert evidence["motion_progress"]["planar_m"] == 2.0
-    assert evidence["motion_progress"]["tools_executed"] == {"uav.move_body": 1}
+    assert progress["measurement_scope"] == "phase_start_relative_uav_motion"
+    assert "UAV motion progress from the current phase start" in progress["interpretation_note"]
+    assert progress["has_translation"] is True
+    assert progress["yaw_only_so_far"] is False
+    assert progress["forward_m"] == 2.0
+    assert progress["planar_m"] == 2.0
+    assert progress["tools_executed"] == {"uav.move_body": 1}
     assert "done_when_support" not in evidence
     assert "model_guidance" not in evidence
 

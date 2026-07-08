@@ -36,6 +36,10 @@ Phase Decision Guide
   advance_when: the relation is supported by both observation and motion/position evidence.
   continue_when: the relation is only inferred from camera bearing or yaw.
   avoid: using yaw alone as proof of being on a side.
+- circulation_or_orbit:
+  advance_when: usable target or reference evidence remains available and motion evidence shows meaningful lateral or tangential progress.
+  continue_when: target/reference evidence is missing, the task relation is still unsafe or ambiguous, or only yaw/search motion has happened.
+  avoid: treating yaw as circulation progress, or repeating radius/standoff corrections when translation progress and usable evidence are already present.
 - vertical_landing:
   advance_when: requested altitude or landing-region evidence is satisfied.
   continue_when: altitude or region evidence is incomplete.
@@ -43,7 +47,7 @@ Phase Decision Guide
 
 Repeated Yaw
 - visual_alignment: yaw_only_so_far, repeated tiny yaw, or alternating yaw can be evidence to stop micro-adjusting and advance when the target is visible and roughly aligned.
-- route_traversal/spatial_relation: do not advance from yaw alone; choose translation or hover unless route progress is already supported.
+- route_traversal/spatial_relation/circulation_or_orbit: do not advance from yaw alone; choose translation or hover unless route or circulation progress is already supported.
 
 Transition Decisions
 - If the current phase already satisfies done_when well enough, output advance_to_next_phase or complete_task and leave steps empty.

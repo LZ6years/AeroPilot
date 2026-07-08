@@ -137,6 +137,7 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert context["metadata"]["run_id"] == state.run_id
     assert context["metadata"]["current_phase_index"] == state.current_phase_index
     fragments = {fragment["name"]: fragment for fragment in context["fragments"]}
+    assert "custom_map" not in fragments
     instruction = fragments["instruction"]["content"]
     assert instruction["current_instruction"]["text"] == state.user_instruction
     assert "current_phase" not in instruction

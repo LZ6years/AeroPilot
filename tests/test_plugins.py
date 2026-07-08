@@ -277,13 +277,32 @@ def test_orbit_and_surround_skill_contains_orbit_guidance_without_runtime_intern
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill_text.split())
 
-    assert "requested radius" in normalized
-    assert "tangential movement" in normalized
-    assert "Clockwise" in normalized
-    assert "Do not rely on yaw alone" in normalized
-    assert "orbit-progress evidence" in normalized
+    assert "Core rule: keep a plausible target or reference relation" in normalized
+    assert "Use this guidance when" not in normalized
+    assert "visible target such as" not in normalized
+    assert "orbit radius is distance to the target" in normalized
+    assert "not UAV local pose origin or phase displacement" in normalized
+    assert "brief support work, not the main orbit behavior" in normalized
+    assert "lateral or tangential shift" in normalized
+    assert "yaw alone is not orbit progress" in normalized
+    assert "shift segment -> yaw re-align -> next shift segment" in normalized
+    assert "orbit direction controls shift direction, not yaw sign" in normalized
+    assert "target left -> left/negative yaw" in normalized
+    assert "target right -> right/positive yaw" in normalized
+    assert "but not re-centering" in normalized
+    assert "near the image edge, partly lost, or unclear" in normalized
+    assert "yaw re-align or hover to recover before shifting again" in normalized
+    assert "consistent shift direction" in normalized
+    assert "safety, target recovery, or a clearly wrong orbit direction" in normalized
+    assert "Radius repair" in normalized
+    assert "continue orbit movement instead of repeating standoff correction" in normalized
+    assert "Estimate radius" not in normalized
+    assert "Stop: stop orbit motions" in normalized
     assert "semantic phase" not in normalized
+    assert "phase_decision" not in normalized
     assert "phase_progress_evidence" not in normalized
+    assert "current_phase" not in normalized
+    assert "UAV-Flow" not in normalized
     assert "hidden benchmark" not in normalized
     assert "raw file names" not in normalized
     assert "reference paths" not in normalized

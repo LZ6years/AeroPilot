@@ -143,6 +143,12 @@ def test_model_parser_prompt_requires_explicit_numeric_metrics():
     prompt = parser.system_prompt
 
     assert "Use metrics only when the user explicitly gives a distance" in prompt
+    assert "An explicit number is required for a metric, but it is not sufficient by itself." in prompt
+    assert "target-relative numbers such as orbit radius" in prompt
+    assert "Do not convert them into planar_distance" in prompt
+    assert "do not generate planar_distance=2*pi*N" in prompt
+    assert "do not make exact radius confirmation a hard blocker" in prompt
+    assert "Do not describe fixed tool sequences or exact paths" in prompt
     assert "Do not invent numeric metric targets when the user did not provide them." in prompt
     assert "negative target" in prompt
     assert '"direction":' not in prompt

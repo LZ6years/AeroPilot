@@ -91,10 +91,12 @@ def _discover_context_modules(plugin_dir: Path, plugin_id: str) -> list[ContextM
     if not modules_dir.exists():
         return modules
     category, _, plugin_name = plugin_id.partition(".")
+    seen_slots: set[str] = set()
     for path in sorted(modules_dir.glob("*.py")):
         if path.name == "__init__.py":
             continue
         slot = path.stem
+        seen_slots.add(slot)
         module_path = f"plugins.{category}.{plugin_name}.context_modules.{slot}"
         modules.append(
             ContextModuleContribution(
@@ -103,6 +105,22 @@ def _discover_context_modules(plugin_dir: Path, plugin_id: str) -> list[ContextM
                 module_path=module_path,
                 class_name="PluginContextModule",
                 source_path=path,
+            )
+        )
+    for path in sorted(item for item in modules_dir.iterdir() if item.is_dir()):
+        if not (path / "__init__.py").exists():
+            continue
+        slot = path.name
+        if slot in seen_slots:
+            continue
+        module_path = f"plugins.{category}.{plugin_name}.context_modules.{slot}"
+        modules.append(
+            ContextModuleContribution(
+                plugin_id=plugin_id,
+                slot=slot,
+                module_path=module_path,
+                class_name="PluginContextModule",
+                source_path=path / "__init__.py",
             )
         )
     return modules

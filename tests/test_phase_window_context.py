@@ -78,6 +78,8 @@ def test_phase_window_context_marks_yaw_only_progress():
     result = PhaseWindowContextBuilder().build(state, {"fragments": []}, {"pose": {}})
     progress = result.phase_progress_evidence["motion_progress"]
 
+    assert progress["measurement_scope"] == "phase_start_relative_uav_motion"
+    assert "not distance-to-target" in progress["interpretation_note"]
     assert progress["yaw_only_so_far"] is True
     assert progress["has_translation"] is False
     assert "done_when_support" not in result.phase_progress_evidence

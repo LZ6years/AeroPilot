@@ -87,7 +87,6 @@ def _merge_text_config(file_config: dict[str, Any], override: dict[str, Any] | N
 
 
 def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]:
-    enabled_modules = set(module_descriptions)
     return {
         "planner_context_fields": {
             "active_instruction": "Current user instruction.",
@@ -108,12 +107,21 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
             "risks": "Warnings or missing evidence.",
             "metadata": "Debug/audit metadata; do not treat as task evidence.",
         },
-        "module_content_fields": {
-            name: fields
-            for name, fields in _compact_module_content_fields().items()
-            if name in enabled_modules
-        },
+        "module_content_fields": _module_content_fields(module_descriptions),
     }
+
+
+def _module_content_fields(module_descriptions: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    legacy_fields = _compact_module_content_fields()
+    fields: dict[str, dict[str, Any]] = {}
+    for name, description in module_descriptions.items():
+        content_fields = description.get("content_fields") if isinstance(description, dict) else None
+        if isinstance(content_fields, dict) and content_fields:
+            fields[name] = dict(content_fields)
+            continue
+        if name in legacy_fields:
+            fields[name] = dict(legacy_fields[name])
+    return fields
 
 
 def _compact_module_content_fields() -> dict[str, dict[str, str]]:

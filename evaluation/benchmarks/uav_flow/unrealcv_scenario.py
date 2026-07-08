@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import sys
 import uuid
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +39,7 @@ class UavFlowBenchmarkEnvClient:
         seed: int = 0,
         action_config: UavActionConfig | None = None,
         save_artifacts: bool = True,
+        enable_research_frame_capture: bool = False,
     ) -> None:
         self.case = case
         self.run_dir = Path(run_dir)
@@ -49,6 +51,7 @@ class UavFlowBenchmarkEnvClient:
         self.seed = int(seed)
         self.action_config = action_config or UavActionConfig()
         self.save_artifacts = save_artifacts
+        self.enable_research_frame_capture = bool(enable_research_frame_capture)
         self.env: Any | None = None
         self.scene: SceneInstance | None = None
         self.world_pose_cm = list(case.initial_pos)
@@ -132,7 +135,9 @@ class UavFlowBenchmarkEnvClient:
         if "rgb" in modalities:
             frames["rgb"] = self._rgb_frame()
         if "depth" in modalities:
-            frames["depth"] = {"mock": True, "reason": "uav_flow_v1_rgb_pose_only"}
+            frames["depth"] = self._depth_frame()
+        if "mask" in modalities:
+            frames["mask"] = self._mask_frame()
         data: dict[str, Any] = {}
         if "pose" in modalities:
             data["pose"] = self._model_pose()
@@ -312,6 +317,191 @@ class UavFlowBenchmarkEnvClient:
             "case_id": self.case.case_id,
         }
 
+    def _depth_frame(self) -> dict[str, Any]:
+        if not self.enable_research_frame_capture:
+            return {"mock": True, "reason": "uav_flow_v1_rgb_pose_only"}
+        if not self.real_unrealcv or self.env is None:
+            return {
+                "mock": True,
+                "reason": "research_frame_capture_requires_real_unrealcv",
+                "research_frame_capture": "unavailable",
+            }
+        self._sync_camera_to_player()
+        path = self._next_research_frame_path("depth", "npy")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        response = self._request_unrealcv_frame("vget /camera/0/depth npy")
+        self._write_depth_response(path, response)
+        return {
+            "path": str(path),
+            "mock": False,
+            "source": "uav_flow_unrealcv_research_capture",
+            "case_id": self.case.case_id,
+            "fov_degrees": 90,
+            "depth_unit": "meter",
+            "raw_depth_unit": "centimeter",
+            "command": "vget /camera/0/depth npy",
+        }
+
+    def _mask_frame(self) -> dict[str, Any]:
+        if not self.enable_research_frame_capture:
+            return {
+                "mock": True,
+                "reason": "research_frame_capture_disabled",
+                "research_frame_capture": "disabled",
+            }
+        if not self.real_unrealcv or self.env is None:
+            return {
+                "mock": True,
+                "reason": "research_frame_capture_requires_real_unrealcv",
+                "research_frame_capture": "unavailable",
+            }
+        self._sync_camera_to_player()
+        path = self._next_research_frame_path("mask", "png")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        response = self._request_unrealcv_frame("vget /camera/0/object_mask png")
+        self._write_bytes_response(path, response)
+        return {
+            "path": str(path),
+            "mock": False,
+            "source": "uav_flow_unrealcv_research_capture",
+            "case_id": self.case.case_id,
+            "fov_degrees": 90,
+            "command": "vget /camera/0/object_mask png",
+        }
+
+    def _next_research_frame_path(self, folder: str, suffix: str) -> Path:
+        while True:
+            self._frame_index += 1
+            path = self.run_dir / "artifacts" / folder / f"frame_{self._frame_index:06d}.{suffix}"
+            if not path.exists():
+                return path
+
+    def _request_unrealcv_frame(self, command: str) -> Any:
+        if self.env is None:
+            raise RuntimeError("UAV-Flow real UnrealCV environment is not started")
+        unrealcv = self.env.unwrapped.unrealcv
+        client = getattr(unrealcv, "client", None)
+        request = getattr(client, "request", None)
+        if callable(request):
+            return request(command)
+        request = getattr(unrealcv, "request", None)
+        if callable(request):
+            return request(command)
+        raise RuntimeError("UAV-Flow UnrealCV object does not expose a request API for research frame capture")
+
+    def _write_depth_response(self, path: Path, response: Any) -> None:
+        try:
+            import numpy as np
+        except ModuleNotFoundError as exc:
+            raise RuntimeError("Depth research capture requires numpy") from exc
+
+        if isinstance(response, (bytes, bytearray, memoryview)):
+            array = np.load(BytesIO(bytes(response)))
+            self._write_depth_array_meters(path, array)
+            return
+        if isinstance(response, str):
+            source_path = Path(response)
+            if source_path.exists():
+                array = np.load(source_path)
+                self._write_depth_array_meters(path, array)
+                return
+        array = np.asarray(response, dtype=np.float32)
+        self._write_depth_array_meters(path, array)
+
+    def _write_depth_array_meters(self, path: Path, array: Any) -> None:
+        import numpy as np
+
+        depth_m = np.asarray(array, dtype=np.float32) * 0.01
+        buffer = BytesIO()
+        np.save(buffer, depth_m)
+        path.write_bytes(buffer.getvalue())
+
+    def _write_bytes_response(self, path: Path, response: Any) -> None:
+        if isinstance(response, (bytes, bytearray, memoryview)):
+            path.write_bytes(bytes(response))
+            return
+        if isinstance(response, str):
+            source_path = Path(response)
+            if source_path.exists():
+                path.write_bytes(source_path.read_bytes())
+                return
+            raise RuntimeError(f"UnrealCV image command returned text instead of image bytes: {response[:120]}")
+        raise RuntimeError(f"Unsupported UnrealCV image response type for {path.suffix}: {type(response).__name__}")
+
+    def collect_research_mask_label_map(
+        self,
+        visible_colors: set[tuple[int, int, int]] | None = None,
+    ) -> dict[str, Any]:
+        """Collect conservative object-mask labels for standalone custom_map runs.
+
+        UnrealCV masks expose colors, not semantic classes. This method queries
+        the simulator's object inventory and only assigns a semantic label when
+        the object name supports a conservative category. Unclassified colors
+        stay unknown in custom_map instead of being guessed.
+        """
+
+        if not self.enable_research_frame_capture or not self.real_unrealcv or self.env is None:
+            return {"colors": {}, "unmapped_objects": [], "source": "research_frame_capture_unavailable"}
+        color_dict = self._research_object_color_dict()
+        visible = set(visible_colors or set())
+        colors: dict[str, dict[str, Any]] = {}
+        unmapped_objects: list[dict[str, Any]] = []
+        for object_name in sorted(color_dict):
+            color = color_dict[object_name]
+            if visible and color not in visible:
+                continue
+            semantic = _semantic_label_for_object_name(object_name)
+            if semantic is None:
+                unmapped_objects.append(
+                    {
+                        "object_name": object_name,
+                        "color": list(color),
+                        "reason": "object_name_not_classified",
+                    }
+                )
+                continue
+            colors[_color_key(color)] = {
+                "id": semantic["id"],
+                "label": semantic["label"],
+                "category": semantic["category"],
+                "object_name": object_name,
+                "source": "uav_flow_unrealcv_object_inventory",
+                "confidence": "name_heuristic",
+            }
+        return {
+            "colors": colors,
+            "unmapped_objects": unmapped_objects,
+            "visible_color_count": len(visible),
+            "object_count": len(color_dict),
+            "source": "uav_flow_unrealcv_object_inventory",
+        }
+
+    def _research_object_color_dict(self) -> dict[str, tuple[int, int, int]]:
+        if self.env is None:
+            return {}
+        unrealcv = self.env.unwrapped.unrealcv
+        get_objects = getattr(unrealcv, "get_objects", None)
+        objects = get_objects() if callable(get_objects) else []
+        if not isinstance(objects, list):
+            return {}
+        build_color_dict = getattr(unrealcv, "build_color_dict", None)
+        raw_colors = build_color_dict(objects) if callable(build_color_dict) else {}
+        if not isinstance(raw_colors, dict):
+            raw_colors = {}
+        colors: dict[str, tuple[int, int, int]] = {}
+        for object_name in objects:
+            color = _normalize_color(raw_colors.get(object_name))
+            if color is None:
+                get_obj_color = getattr(unrealcv, "get_obj_color", None)
+                if callable(get_obj_color):
+                    try:
+                        color = _normalize_color(get_obj_color(object_name))
+                    except Exception:
+                        color = None
+            if color is not None:
+                colors[str(object_name)] = color
+        return colors
+
     def _write_dry_rgb(self, path: Path) -> None:
         image = Image.new("RGB", (224, 224), (242, 242, 238))
         draw = ImageDraw.Draw(image)
@@ -331,3 +521,44 @@ class UavFlowBenchmarkEnvClient:
 
 def _normalize_yaw_world(value: float) -> float:
     return float(value) % 360.0
+
+
+def _semantic_label_for_object_name(object_name: str) -> dict[str, Any] | None:
+    name = object_name.lower()
+    categories = [
+        (10, "person", "dynamic_actor", ("character", "human", "person", "bp_character")),
+        (11, "vehicle", "dynamic_actor", ("car", "vehicle", "bus", "truck", "bp_basecar")),
+        (12, "sunshade", "landmark", ("sunshade", "umbrella", "parasol")),
+        (20, "route_surface", "navigation_surface", ("road", "street", "asphalt", "lane", "sidewalk", "crosswalk")),
+        (30, "building_structure", "structure", ("building", "house", "wall", "roof", "window", "door")),
+        (40, "vegetation", "natural", ("tree", "plant", "grass", "bush")),
+        (50, "street_fixture", "fixture", ("pole", "sign", "traffic", "lamp", "light")),
+    ]
+    for semantic_id, label, category, keywords in categories:
+        if any(keyword in name for keyword in keywords):
+            return {"id": semantic_id, "label": label, "category": category}
+    return None
+
+
+def _normalize_color(value: Any) -> tuple[int, int, int] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        values = []
+        for token in value.replace(",", " ").replace("(", " ").replace(")", " ").split():
+            try:
+                values.append(int(float(token)))
+            except ValueError:
+                continue
+    else:
+        try:
+            values = [int(float(item)) for item in value]
+        except (TypeError, ValueError):
+            return None
+    if len(values) < 3:
+        return None
+    return tuple(max(0, min(255, value)) for value in values[:3])
+
+
+def _color_key(color: tuple[int, int, int]) -> str:
+    return f"{color[0]},{color[1]},{color[2]}"

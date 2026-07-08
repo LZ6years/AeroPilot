@@ -28,6 +28,7 @@ data/rec_videos/
 .external_refs/
 outputs/
 manual_outputs/
+tmp/
 
 # Local visual/demo artifacts
 docs/hyperframes/

@@ -25,6 +25,12 @@ def test_task_parser_prompt_contains_lightweight_semantic_plan_contract():
     assert "uav.<tool_name>" in prompt
     assert "distance_m" in prompt
     assert "Do not invent numeric metric targets" in prompt
+    assert "An explicit number is required for a metric, but it is not sufficient by itself." in prompt
+    assert "target-relative numbers such as orbit radius" in prompt
+    assert "Do not convert them into planar_distance" in prompt
+    assert "do not generate planar_distance=2*pi*N" in prompt
+    assert "do not make exact radius confirmation a hard blocker" in prompt
+    assert "Do not describe fixed tool sequences or exact paths" in prompt
     assert "Do not invent a distance metric." in prompt
     assert "rearward displacement" in prompt
     assert "backward movement" not in prompt
@@ -67,6 +73,53 @@ def test_agent_boundaries_document_prompt_and_skill_writing_rules():
     assert "Do not restore model-facing `direction` shorthand" in guide
     assert "`relation` plus measurable metrics" in guide
     assert "hidden benchmark truth" in guide
+
+
+def test_agent_boundaries_require_benchmark_generalization():
+    guide = Path("AGENT.md").read_text(encoding="utf-8")
+    compact_guide = " ".join(guide.split())
+
+    assert "Benchmark Generalization Boundary" in guide
+    assert "Benchmarks are diagnostic probes, not product specifications" in guide
+    assert "must not directly decide parser, planner, runtime, context, safety, skill, or prompt behavior" in compact_guide
+    assert "benchmark case names" in guide
+    assert "benchmark classes" in guide
+    assert "reference paths" in guide
+    assert "SR judge" in guide
+    assert "nDTW scores" in guide
+    assert "hidden truth" in guide
+    assert "Evaluation-only facts must stay in `evaluation/*`" in guide
+    assert "restate the issue as a general UAV capability gap" in compact_guide
+    assert "target-relative spatial relations" in compact_guide
+    assert "around-target progress evidence" in compact_guide
+    assert "If a proposed change only helps one benchmark" in compact_guide
+
+
+def test_model_facing_prompts_and_reusable_skills_do_not_leak_benchmark_repairs():
+    model_facing_paths = [
+        *Path("src/agent/planning/prompts").glob("*.txt"),
+        *Path("src/agent/semantic/prompts").glob("*.txt"),
+        *Path("plugins/knowledge").rglob("SKILL.md"),
+    ]
+    forbidden_terms = [
+        "UAV-Flow",
+        "nDTW",
+        "SR judge",
+        "case id",
+        "benchmark class",
+        "reference path",
+        "reference_path",
+        "reference_path_preprocessed",
+        "target_pos",
+        "classified_instr",
+        "leaderboard",
+        "2025-03-30",
+    ]
+
+    for path in model_facing_paths:
+        text = path.read_text(encoding="utf-8")
+        for term in forbidden_terms:
+            assert term not in text, f"{path} leaks benchmark-specific term {term!r}"
 
 
 def test_flyagent_rules_contain_general_visual_action_alignment_without_internal_terms():
@@ -129,6 +182,7 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "visual_alignment" in phase_prompt
     assert "route_traversal" in phase_prompt
     assert "spatial_relation" in phase_prompt
+    assert "circulation_or_orbit" in phase_prompt
     assert "phase_progress_evidence" in phase_prompt
     assert "Metric Authority" in phase_prompt
     assert "all_within_tolerance is true" in phase_prompt
@@ -137,6 +191,8 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "vertical flight-path angle" not in phase_prompt
     assert "yaw, heading, vehicle pitch" not in phase_prompt
     assert "do not advance from yaw alone" in phase_prompt
+    assert "meaningful lateral or tangential progress" in phase_prompt
+    assert "repeating radius/standoff corrections" in phase_prompt
     assert "visible and roughly aligned; or target remains visible after repeated tiny yaw/alternating yaw corrections" in phase_prompt
     assert "slightly left/right of center" in phase_prompt
     assert "evidence to stop micro-adjusting and advance" in phase_prompt
@@ -156,6 +212,28 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "Phase Decision Guide" not in action_prompt
     assert "route progress evidence" not in action_prompt
     assert "phase_transition_judge_system" not in phase_prompt + action_prompt
+
+
+def test_orbit_skill_stays_compact_and_action_oriented():
+    skill = (Path("plugins") / "knowledge" / "uav_flight" / "orbit_and_surround" / "SKILL.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "yaw alone is not orbit progress" in skill
+    assert "lateral or tangential shift" in skill
+    assert "shift segment -> yaw re-align -> next shift segment" in skill
+    assert "brief support work" in skill
+    assert "continue orbit movement instead of" in skill
+    assert "Estimate radius" not in skill
+    forbidden_internal_terms = [
+        "phase_progress_evidence",
+        "model_inputs",
+        "current_phase",
+        "phase_decision",
+        "debug metadata",
+    ]
+    for term in forbidden_internal_terms:
+        assert term not in skill
 
 
 def test_skill_selection_prompt_keeps_compound_locate_and_approach_phases_covered():

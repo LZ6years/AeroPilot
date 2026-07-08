@@ -101,6 +101,11 @@ class PhaseWindowContextBuilder:
         yaw_only = not has_translation and (turn_count > 0 or abs(yaw_delta_deg) > 0.0 or abs(turn_yaw) > 0.0)
         return {
             "motion_progress": {
+                "measurement_scope": "phase_start_relative_uav_motion",
+                "interpretation_note": (
+                    "forward_m/right_m/up_m/planar_m are UAV motion progress from the current "
+                    "phase start; they are not distance-to-target values and not distance-to-landmark values."
+                ),
                 "forward_m": forward_m,
                 "right_m": right_m,
                 "up_m": up_m,

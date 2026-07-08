@@ -84,7 +84,10 @@ class DefaultImageContextModule(ContextModule):
         return {
             "summary": "Selected RGB frame roles, attached image count, and visual evidence availability.",
             "content_fields": {
-                "selected_frames": "Key RGB frames selected for multimodal input, including input_id, role, usage, and source identifiers.",
+                "selected_frames": (
+                    "Key RGB frames selected for multimodal input, including roles such as "
+                    "current_observation and phase_start_reference, plus input_id, usage, and source identifiers."
+                ),
                 "visual_evidence": "Boolean availability summary such as has_rgb, has_depth, has_mock_frames, latest_observation_source, and interpretation_status.",
             },
             "model_inputs": (
