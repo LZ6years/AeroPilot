@@ -19,14 +19,20 @@ def build_model_user_content(context: dict[str, Any]) -> str | list[dict[str, An
 
     sanitized_context = sanitize_context_for_model_text(context)
     text = json.dumps(sanitized_context, ensure_ascii=False)
-    parts = _model_input_parts(context)
-    if not parts:
+    media_parts, supplemental_text_parts = _model_input_parts(context)
+    if not media_parts and not supplemental_text_parts:
         return text
-    return [{"type": "text", "text": text}, *parts]
+    if not media_parts:
+        return [{"type": "text", "text": text}, *supplemental_text_parts]
+    trailing_text = text
+    if supplemental_text_parts:
+        trailing_text += "\n\n" + "\n".join(part["text"] for part in supplemental_text_parts)
+    return [*media_parts, {"type": "text", "text": trailing_text}]
 
 
-def _model_input_parts(context: dict[str, Any]) -> list[dict[str, Any]]:
-    parts: list[dict[str, Any]] = []
+def _model_input_parts(context: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    media_parts: list[dict[str, Any]] = []
+    supplemental_text_parts: list[dict[str, Any]] = []
     for item in _iter_model_inputs(context):
         input_type = item.get("type")
         if input_type == "image":
@@ -34,14 +40,15 @@ def _model_input_parts(context: dict[str, Any]) -> list[dict[str, Any]]:
             if part is not None:
                 label = _input_label_part(item)
                 if label is not None:
-                    parts.append(label)
+                    media_parts.append(label)
+                media_parts.append(part)
         elif input_type == "text":
             part = _text_part(item)
+            if part is not None:
+                supplemental_text_parts.append(part)
         else:
             part = None
-        if part is not None:
-            parts.append(part)
-    return parts
+    return media_parts, supplemental_text_parts
 
 
 def _iter_model_inputs(context: dict[str, Any]):
@@ -77,16 +84,13 @@ def _input_label_part(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _input_label_text(item: dict[str, Any]) -> str:
-    if not any(isinstance(item.get(key), str) and item.get(key, "").strip() for key in ("input_id", "usage")):
-        return ""
-    fields = []
-    for key in ("input_id", "role", "usage"):
-        value = item.get(key)
-        if isinstance(value, str) and value.strip():
-            fields.append(f"{key}={value.strip()}")
-    if not fields:
-        return ""
-    return "Model input label: " + "; ".join(fields).rstrip(".") + "."
+    usage = item.get("usage")
+    if isinstance(usage, str) and usage.strip():
+        return usage.strip()
+    role = item.get("role")
+    if isinstance(role, str) and role.strip():
+        return f"Image role: {role.strip()}."
+    return ""
 
 
 def _text_part(item: dict[str, Any]) -> dict[str, Any] | None:
@@ -144,16 +148,11 @@ def _compact_model_facing_fragment(fragment: dict[str, Any]) -> dict[str, Any] |
 
     content = fragment.get("content")
     if isinstance(content, dict):
+        if name == "image":
+            _compact_image_selected_frames(content)
         cleaned_content = _drop_empty_values(content)
         if cleaned_content:
             compact["content"] = cleaned_content
-
-    model_inputs = fragment.get("model_inputs")
-    if isinstance(model_inputs, list):
-        cleaned_inputs = [_compact_model_input(item) for item in model_inputs if isinstance(item, dict)]
-        cleaned_inputs = [item for item in cleaned_inputs if item]
-        if cleaned_inputs:
-            compact["model_inputs"] = cleaned_inputs
 
     for key in ("risks", "warnings"):
         value = fragment.get(key)
@@ -163,15 +162,22 @@ def _compact_model_facing_fragment(fragment: dict[str, Any]) -> dict[str, Any] |
     return compact or None
 
 
-def _compact_model_input(item: dict[str, Any]) -> dict[str, Any]:
-    compact = dict(item)
-    compact.pop("metadata", None)
-    compact.pop("path", None)
-    compact.pop("artifact_ref", None)
-    compact.pop("source_path", None)
-    if "data" in compact:
-        compact["data"] = _omitted_data_marker(compact.get("data"))
-    return _drop_empty_values(compact)
+def _compact_image_selected_frames(content: dict[str, Any]) -> None:
+    selected = content.get("selected_frames")
+    if not isinstance(selected, list):
+        return
+    compact_frames: list[dict[str, str]] = []
+    for item in selected:
+        if not isinstance(item, dict):
+            continue
+        compact = {
+            key: value.strip()
+            for key in ("role", "usage")
+            if isinstance((value := item.get(key)), str) and value.strip()
+        }
+        if compact:
+            compact_frames.append(compact)
+    content["selected_frames"] = compact_frames
 
 
 def _drop_empty_values(data: dict[str, Any]) -> dict[str, Any]:
@@ -415,9 +421,3 @@ def _compact_observation(observation: dict[str, Any]) -> dict[str, Any]:
         "has_rgb": "rgb" in frames or "rgb" in (observation.get("modalities") or []),
         "has_depth": "depth" in frames or "depth" in (observation.get("modalities") or []),
     }
-
-
-def _omitted_data_marker(value: Any) -> str:
-    if isinstance(value, str):
-        return f"<omitted encoded model input data: {len(value)} chars>"
-    return "<omitted encoded model input data>"

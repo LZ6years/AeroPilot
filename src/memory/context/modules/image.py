@@ -13,8 +13,12 @@ from src.memory.context.modules.base import ContextModule
 from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
 
 
-CURRENT_IMAGE_USAGE = "LATEST image; use for current visibility and action decisions."
-PHASE_START_IMAGE_USAGE = "HISTORICAL phase-start image; comparison only; never use as current visibility."
+CURRENT_IMAGE_USAGE = "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
+PHASE_START_IMAGE_USAGE = "PAST | PHASE START. Comparison only."
+TEMPORAL_EVIDENCE_RULE = (
+    "Current-state claims must use NOW only. PAST is only for comparing change. "
+    "An object visible only in PAST is not currently visible."
+)
 
 _CURRENT_IMAGE_BANNER = "NOW | CURRENT OBSERVATION"
 _PHASE_START_IMAGE_BANNER = "PAST | PHASE START"
@@ -73,7 +77,9 @@ class DefaultImageContextModule(ContextModule):
         visual_evidence["interpretation_status"] = (
             "image_attached_not_interpreted" if model_inputs else "metadata_only_not_interpreted"
         )
-        visual_evidence["attached_image_count"] = len(model_inputs)
+        visual_evidence["attached_image_count"] = sum(
+            1 for item in model_inputs if item.get("type") == "image"
+        )
         return ContextFragment(
             name=self.name,
             enabled=True,
@@ -102,8 +108,9 @@ class DefaultImageContextModule(ContextModule):
                 "visual_evidence": "Boolean availability summary such as has_rgb, has_depth, has_mock_frames, latest_observation_source, and interpretation_status.",
             },
             "model_inputs": (
-                "Up to two encoded real RGB images for planner multimodal input: "
-                "current_observation and a distinct phase_start_reference. "
+                "Up to two encoded real RGB images for planner multimodal input, ordered as "
+                "a distinct phase_start_reference followed by current_observation. "
+                "When both are attached, a concise trailing temporal evidence rule is included. "
                 "Mock, missing, unreadable, or duplicate images are not attached."
             ),
             "risk_fields": {
@@ -132,9 +139,9 @@ def selected_rgb_frames_from_observations(
 ) -> list[dict[str, Any]]:
     """Select key RGB frames from observation history without interpreting image content.
 
-    Prefer the latest RGB frame as the current decision image, with a distinct
-    current-phase anchor as reference. Duplicate frames are removed by
-    frame id/path so short runs naturally attach fewer images.
+    Prefer a distinct current-phase anchor followed by the latest RGB frame so
+    provider-ready multimodal input is chronological and current evidence is
+    last. If both roles resolve to one frame, keep it only as current evidence.
     """
 
     rgb_frames = _recent_rgb_frames(reader, observations, len(observations))
@@ -145,18 +152,13 @@ def selected_rgb_frames_from_observations(
     legacy_task_initial = _rgb_frame_from_anchor(reader, anchors.get("task_initial"))
     phase_start_frame = phase_start or legacy_task_initial or rgb_frames[0]
     latest_frame = rgb_frames[-1]
-    candidates = [
-        (
-            "current_observation",
-            CURRENT_IMAGE_USAGE,
-            latest_frame,
-        ),
-        (
-            "phase_start_reference",
-            PHASE_START_IMAGE_USAGE,
-            phase_start_frame,
-        ),
-    ]
+    if _frame_identity(phase_start_frame) == _frame_identity(latest_frame):
+        candidates = [("current_observation", CURRENT_IMAGE_USAGE, latest_frame)]
+    else:
+        candidates = [
+            ("phase_start_reference", PHASE_START_IMAGE_USAGE, phase_start_frame),
+            ("current_observation", CURRENT_IMAGE_USAGE, latest_frame),
+        ]
     selected: list[dict[str, Any]] = []
     seen: set[str] = set()
     for role, reason, frame in candidates:
@@ -243,10 +245,28 @@ def frame_debug_metadata(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def rgb_model_inputs_from_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    inputs: list[dict[str, Any]] = []
+    encoded_by_role: dict[str, dict[str, Any]] = {}
     for frame in frames[:2]:
-        inputs.extend(latest_rgb_model_inputs_from_frame(frame))
-    return inputs
+        for item in latest_rgb_model_inputs_from_frame(frame):
+            role = item.get("role")
+            if isinstance(role, str) and role:
+                encoded_by_role[role] = item
+
+    current = encoded_by_role.get("current_observation")
+    if current is None:
+        return []
+    phase_start = encoded_by_role.get("phase_start_reference")
+    if phase_start is None:
+        return [current]
+    return [
+        phase_start,
+        current,
+        {
+            "type": "text",
+            "role": "temporal_evidence_rule",
+            "text": TEMPORAL_EVIDENCE_RULE,
+        },
+    ]
 
 
 def _image_input_id(index: int, role: str) -> str:

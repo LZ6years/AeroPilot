@@ -461,11 +461,12 @@ def test_model_user_content_attaches_encoded_image_from_any_fragment():
 
     assert isinstance(content, list)
     assert content[0]["type"] == "text"
-    text_context = json.loads(content[0]["text"])
-    assert text_context["current_phase"]["name"] == "orient_leftward"
-    assert image_data not in content[0]["text"]
-    assert text_context["fragments"][0]["model_inputs"][0]["data"].startswith("<omitted encoded model input data")
+    assert content[0] == {"type": "text", "text": "Image role: latest_observation."}
     assert content[1] == {"type": "image_url", "image_url": {"url": image_data}}
+    text_context = json.loads(content[2]["text"])
+    assert text_context["current_phase"]["name"] == "orient_leftward"
+    assert image_data not in content[2]["text"]
+    assert "model_inputs" not in text_context["fragments"][0]
 
 
 def test_model_user_content_inserts_label_before_semantic_image_input():
@@ -479,7 +480,7 @@ def test_model_user_content_inserts_label_before_semantic_image_input():
                     "type": "image",
                     "input_id": "image_1_current_observation",
                     "role": "current_observation",
-                    "usage": "LATEST image; use for current visibility and action decisions.",
+                    "usage": "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions.",
                     "mime_type": "image/png",
                     "encoding": "data_url",
                     "data": image_data,
@@ -492,21 +493,13 @@ def test_model_user_content_inserts_label_before_semantic_image_input():
 
     assert isinstance(content, list)
     assert len(content) == 3
-    text_context = json.loads(content[0]["text"])
-    model_input = text_context["fragments"][0]["model_inputs"][0]
-    assert model_input["input_id"] == "image_1_current_observation"
-    assert model_input["role"] == "current_observation"
-    assert model_input["usage"] == "LATEST image; use for current visibility and action decisions."
-    assert model_input["data"].startswith("<omitted encoded model input data")
-    assert content[1] == {
+    assert content[0] == {
         "type": "text",
-        "text": (
-            "Model input label: input_id=image_1_current_observation; "
-            "role=current_observation; "
-            "usage=LATEST image; use for current visibility and action decisions."
-        ),
+        "text": "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions.",
     }
-    assert content[2] == {"type": "image_url", "image_url": {"url": image_data}}
+    assert content[1] == {"type": "image_url", "image_url": {"url": image_data}}
+    text_context = json.loads(content[2]["text"])
+    assert "model_inputs" not in text_context["fragments"][0]
 
 
 def test_model_user_content_ignores_unencoded_image_path():

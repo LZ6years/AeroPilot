@@ -495,7 +495,8 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert "context_schema" in latest_context
     assert "image" in latest_context["context_schema"]["module_content_fields"]
     fragments = {fragment["name"]: fragment for fragment in latest_context["fragments"]}
-    assert fragments["image"]["content"]["selected_frames"][0]["role"] == "current_observation"
+    selected_roles = [item["role"] for item in fragments["image"]["content"]["selected_frames"]]
+    assert selected_roles == ["phase_start_reference", "current_observation"]
     assert "lifecycle_tools_excluded" not in latest_context["allowed_action_constraints"]
     assert "recent_actions" not in flight_memory
     assert "recent_observations" not in flight_memory

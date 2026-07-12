@@ -206,7 +206,7 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
     assert image["content"]["selected_frames"][0]["role"] == "current_observation"
     assert image["content"]["selected_frames"][0]["input_id"] == "image_1_current_observation"
-    assert image["content"]["selected_frames"][0]["usage"] == "LATEST image; use for current visibility and action decisions."
+    assert image["content"]["selected_frames"][0]["usage"] == "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
     assert image["content"]["selected_frames"][0]["observation_id"] == "obs_0001"
     assert image["content"]["selected_frames"][0]["frame_id"] == "frame_0001"
     assert image["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)
@@ -214,7 +214,7 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     assert image["model_inputs"][0]["type"] == "image"
     assert image["model_inputs"][0]["input_id"] == "image_1_current_observation"
     assert image["model_inputs"][0]["role"] == "current_observation"
-    assert image["model_inputs"][0]["usage"] == "LATEST image; use for current visibility and action decisions."
+    assert image["model_inputs"][0]["usage"] == "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
     assert image["model_inputs"][0]["encoding"] == "data_url"
     assert set(image["model_inputs"][0]) == {"type", "input_id", "role", "usage", "mime_type", "encoding", "data"}
     assert "visual_processing" not in image["content"]
@@ -247,28 +247,46 @@ def test_context_builder_default_image_attaches_key_rgb_frames(tmp_path):
     roles = [item["role"] for item in image["content"]["selected_frames"]]
     source_paths = [item["path"] for item in image["metadata"]["selected_frame_metadata"]]
     assert roles == [
-        "current_observation",
         "phase_start_reference",
+        "current_observation",
     ]
-    assert source_paths == [paths[5], paths[0]]
+    assert source_paths == [paths[0], paths[5]]
     assert [item["input_id"] for item in image["content"]["selected_frames"]] == [
-        "image_1_current_observation",
-        "image_2_phase_start_reference",
+        "image_1_phase_start_reference",
+        "image_2_current_observation",
     ]
-    assert len(image["model_inputs"]) == 2
-    assert all(item["encoding"] == "data_url" for item in image["model_inputs"])
+    assert [item["type"] for item in image["model_inputs"]] == ["image", "image", "text"]
+    assert all(item["encoding"] == "data_url" for item in image["model_inputs"][:2])
     assert all("metadata" not in item and "source" not in item for item in image["model_inputs"])
-    assert [item["usage"] for item in image["model_inputs"]] == [
-        "LATEST image; use for current visibility and action decisions.",
-        "HISTORICAL phase-start image; comparison only; never use as current visibility.",
+    assert [item["usage"] for item in image["model_inputs"][:2]] == [
+        "PAST | PHASE START. Comparison only.",
+        "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions.",
     ]
+    assert image["model_inputs"][2] == {
+        "type": "text",
+        "role": "temporal_evidence_rule",
+        "text": (
+            "Current-state claims must use NOW only. PAST is only for comparing change. "
+            "An object visible only in PAST is not currently visible."
+        ),
+    }
     model_content = build_model_user_content(context)
     assert isinstance(model_content, list)
-    assert [part["type"] for part in model_content] == ["text", "text", "image_url", "text", "image_url"]
-    assert "role=current_observation" in model_content[1]["text"]
-    assert "LATEST image" in model_content[1]["text"]
-    assert "role=phase_start_reference" in model_content[3]["text"]
-    assert "HISTORICAL phase-start image" in model_content[3]["text"]
+    assert [part["type"] for part in model_content] == ["text", "image_url", "text", "image_url", "text"]
+    assert model_content[0]["text"] == "PAST | PHASE START. Comparison only."
+    assert model_content[2]["text"] == "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
+    context_text, temporal_rule = model_content[4]["text"].split("\n\n", 1)
+    text_context = json.loads(context_text)
+    text_image = {fragment["name"]: fragment for fragment in text_context["fragments"]}["image"]
+    assert "model_inputs" not in text_image
+    assert text_image["content"]["selected_frames"] == [
+        {"role": "phase_start_reference", "usage": "PAST | PHASE START. Comparison only."},
+        {
+            "role": "current_observation",
+            "usage": "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions.",
+        },
+    ]
+    assert temporal_rule.endswith("An object visible only in PAST is not currently visible.")
 
 
 def test_context_builder_default_image_deduplicates_key_rgb_frames(tmp_path):
@@ -323,8 +341,8 @@ def test_context_builder_default_image_prefers_current_phase_anchor(tmp_path):
     image = {fragment["name"]: fragment for fragment in context["fragments"]}["image"]
     roles = [item["role"] for item in image["content"]["selected_frames"]]
     source_paths = [item["path"] for item in image["metadata"]["selected_frame_metadata"]]
-    assert roles == ["current_observation", "phase_start_reference"]
-    assert source_paths == [paths[3], paths[2]]
+    assert roles == ["phase_start_reference", "current_observation"]
+    assert source_paths == [paths[2], paths[3]]
 
 
 def test_context_builder_annotates_model_images_without_changing_source_pixels(tmp_path):
@@ -350,8 +368,8 @@ def test_context_builder_annotates_model_images_without_changing_source_pixels(t
 
     context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, observations=observations))
     image = {fragment["name"]: fragment for fragment in context["fragments"]}["image"]
-    current = decode_data_url_image(image["model_inputs"][0]["data"])
-    reference = decode_data_url_image(image["model_inputs"][1]["data"])
+    reference = decode_data_url_image(image["model_inputs"][0]["data"])
+    current = decode_data_url_image(image["model_inputs"][1]["data"])
 
     assert image["model_inputs"][0]["mime_type"] == "image/png"
     assert image["model_inputs"][1]["mime_type"] == "image/png"
@@ -370,6 +388,24 @@ def test_context_builder_annotates_model_images_without_changing_source_pixels(t
     assert list(reference.crop((0, reference_banner_height, 320, reference.height)).getdata()) == [(90, 40, 10)] * (320 * 240)
     assert current_path.read_bytes() == current_bytes
     assert reference_path.read_bytes() == reference_bytes
+
+
+def test_context_builder_does_not_attach_historical_image_when_current_is_unreadable(tmp_path):
+    state = make_state()
+    reference_path = tmp_path / "reference.png"
+    current_path = tmp_path / "current.png"
+    write_test_png(reference_path)
+    current_path.write_bytes(b"not-an-image")
+    observations = [
+        {"modalities": ["rgb"], "frames": {"rgb": {"path": str(reference_path), "mock": False}}},
+        {"modalities": ["rgb"], "frames": {"rgb": {"path": str(current_path), "mock": False}}},
+    ]
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, observations=observations))
+    image = {fragment["name"]: fragment for fragment in context["fragments"]}["image"]
+
+    assert image["model_inputs"] == []
+    assert image["content"]["visual_evidence"]["attached_image_count"] == 0
 
 
 def test_model_user_content_omits_fragment_debug_metadata(tmp_path):
