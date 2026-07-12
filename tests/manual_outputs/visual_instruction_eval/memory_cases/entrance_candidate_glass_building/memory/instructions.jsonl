@@ -1,1 +1,0 @@
-{"id": "inst_0001", "timestamp": "2026-05-24T10:12:02.623565+00:00", "instruction": "请根据当前画面判断玻璃幕墙建筑底层是否存在入口候选区域，只描述可见视觉事实。", "semantic_plan": {"phase": {"name": "search_visual_entrance", "meaning": "寻找建筑入口、门廊、入口标识或建筑底层开口"}}}

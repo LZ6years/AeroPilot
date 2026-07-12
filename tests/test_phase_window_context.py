@@ -62,6 +62,45 @@ def test_phase_window_context_adds_runtime_evidence_and_model_context():
     assert result.latest_observation_summary["pose"]["position"]["x"] == 1.0
     assert "velocity" not in result.latest_observation_summary["pose"]
     assert "velocity" not in result.model_context["latest_observation_summary"]["pose"]
+    assert "runtime_control" not in result.planner_payload
+    assert "runtime_control" not in result.model_context
+
+
+def test_phase_window_context_adds_compact_runtime_control_when_available():
+    state = make_state()
+
+    result = PhaseWindowContextBuilder().build(
+        state,
+        {"active_instruction": "turn toward target", "fragments": []},
+        {"pose": {}},
+        runtime_control_context={
+            "available": ["semantic_plan_update"],
+            "contracts": {
+                "semantic_plan_update": "Request after multiple cycles when semantic-contract confidence is low.",
+                "ask_user": "hidden because ask_user is not available",
+            },
+            "status": {"semantic_plan_update": "pending", "ask_user": "hidden"},
+            "recommendations": {
+                "semantic_plan_update": "review_now: reassess the current semantic contract",
+                "ask_user": "hidden because ask_user is not available",
+            },
+            "debug": {"job_id": "hidden"},
+        },
+    )
+
+    assert result.planner_payload["runtime_control"] == {
+        "available": ["semantic_plan_update"],
+        "contracts": {
+            "semantic_plan_update": "Request after multiple cycles when semantic-contract confidence is low.",
+        },
+        "status": {"semantic_plan_update": "pending"},
+        "recommendations": {
+            "semantic_plan_update": "review_now: reassess the current semantic contract",
+        },
+    }
+    assert result.model_context["runtime_control"] == result.planner_payload["runtime_control"]
+    assert list(result.planner_payload).index("runtime_control") < list(result.planner_payload).index("phase_metrics")
+    assert list(result.model_context).index("runtime_control") < list(result.model_context).index("phase_progress_evidence")
 
 
 def test_phase_window_context_marks_yaw_only_progress():

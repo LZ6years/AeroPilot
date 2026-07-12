@@ -6,6 +6,7 @@ import base64
 import json
 
 import pytest
+from PIL import Image
 
 from src.agent.messages import AgentMessage
 from src.agent.semantic.task_parser import TaskParser
@@ -18,6 +19,10 @@ from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySource
 from src.memory.stores import MapMemoryStore, MemoryEventWriter, MemoryRecordReader
 from src.plugins import PluginRegistry
 from src.runtime.configs.model_config import ModelConfig
+
+
+def write_test_png(path, color=(12, 34, 56), size=(320, 240)) -> None:
+    Image.new("RGB", size, color).save(path, format="PNG")
 
 
 def make_parse_result():
@@ -383,7 +388,7 @@ def test_pose_and_image_modules_read_jsonl_refs(tmp_path):
 
 def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
     rgb_path = tmp_path / "frame.png"
-    rgb_path.write_bytes(b"fake-png")
+    write_test_png(rgb_path)
     writer = MemoryEventWriter(tmp_path)
     reader = MemoryRecordReader(tmp_path)
     memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
@@ -407,9 +412,10 @@ def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
     assert model_input["type"] == "image"
     assert model_input["input_id"] == "image_1_current_observation"
     assert model_input["role"] == "current_observation"
-    assert model_input["usage"] == "Use as the current visual evidence for this decision."
+    assert model_input["usage"] == "LATEST image; use for current visibility and action decisions."
     assert model_input["encoding"] == "data_url"
-    assert model_input["data"] == "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
+    assert model_input["data"].startswith("data:image/png;base64,")
+    assert model_input["data"] != "data:image/png;base64," + base64.b64encode(rgb_path.read_bytes()).decode("ascii")
     assert set(model_input) == {"type", "input_id", "role", "usage", "mime_type", "encoding", "data"}
     assert image["content"]["selected_frames"][0]["input_id"] == model_input["input_id"]
     assert image["content"]["selected_frames"][0]["role"] == "current_observation"

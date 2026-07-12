@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from dataclasses import dataclass
 import inspect
 from pathlib import Path
 from typing import Any
 
 from PIL import Image
+
+from plugins.research.stmr_map.profiling import StageContext, StageProfiler
 
 
 DEFAULT_GROUNDING_DINO_MODEL = "IDEA-Research/grounding-dino-base"
@@ -33,11 +36,13 @@ class GroundingDinoBackend:
         *,
         box_threshold: float = 0.25,
         text_threshold: float = 0.25,
+        profiler: StageProfiler | None = None,
     ) -> None:
         self.model_name = model_name
         self.requested_device = device
         self.box_threshold = box_threshold
         self.text_threshold = text_threshold
+        self.profiler = profiler
         self._processor: Any | None = None
         self._model: Any | None = None
         self._device: str | None = None
@@ -48,61 +53,80 @@ class GroundingDinoBackend:
             self._device = self._resolve_device()
         return self._device
 
-    def detect(self, rgb_path: str | Path, prompts: list[str]) -> list[DetectionResult]:
+    def warmup(self, *, profiler: StageProfiler | None = None) -> None:
+        """Load the processor and model once for reuse across cases."""
+
+        self._load(profiler=profiler)
+
+    def detect(
+        self,
+        rgb_path: str | Path,
+        prompts: list[str],
+        *,
+        profiler: StageProfiler | None = None,
+    ) -> list[DetectionResult]:
         """Detect all prompt phrases in one RGB image."""
 
         if not prompts:
             return []
+        profiler = profiler or self.profiler
         torch = self._torch()
-        processor, model = self._load()
-        image = Image.open(rgb_path).convert("RGB")
-        text = ". ".join(prompts) + "."
-        inputs = processor(images=image, text=text, return_tensors="pt")
-        inputs = {key: value.to(self.device) if hasattr(value, "to") else value for key, value in inputs.items()}
-        with torch.no_grad():
-            outputs = model(**inputs)
-        target_sizes = torch.tensor([image.size[::-1]], device=self.device)
-        post_process = getattr(processor, "post_process_grounded_object_detection", None)
-        if post_process is None:
-            post_process = getattr(processor, "post_process_grounded_object_detection_with_logits", None)
-        if post_process is None:
-            raise RuntimeError("GroundingDINO processor does not expose grounded object post-processing")
-        kwargs = {
-            "text_threshold": self.text_threshold,
-            "target_sizes": target_sizes,
-        }
-        if "box_threshold" in inspect.signature(post_process).parameters:
-            kwargs["box_threshold"] = self.box_threshold
-        else:
-            kwargs["threshold"] = self.box_threshold
-        results = post_process(outputs, inputs.get("input_ids"), **kwargs)[0]
-        boxes = results.get("boxes", [])
-        scores = results.get("scores", [])
-        labels = results.get("labels", results.get("text_labels", []))
-        detections = []
-        for box, score, label in zip(boxes, scores, labels):
-            raw_box = box.detach().cpu().tolist() if hasattr(box, "detach") else list(box)
-            detections.append(
-                DetectionResult(
-                    box_xyxy=tuple(float(value) for value in raw_box[:4]),  # type: ignore[arg-type]
-                    phrase=str(label),
-                    score=float(score.detach().cpu().item() if hasattr(score, "detach") else score),
-                    label=str(label),
+        processor, model = self._load(profiler=profiler)
+        with _profile(profiler, "grounding_preprocess", prompt_count=len(prompts)) as stage:
+            image = Image.open(rgb_path).convert("RGB")
+            text = ". ".join(prompts) + "."
+            inputs = processor(images=image, text=text, return_tensors="pt")
+            inputs = {key: value.to(self.device) if hasattr(value, "to") else value for key, value in inputs.items()}
+            stage.update(image_width=image.width, image_height=image.height)
+        with _profile(profiler, "grounding_inference", prompt_count=len(prompts)):
+            with torch.no_grad():
+                outputs = model(**inputs)
+        with _profile(profiler, "grounding_postprocess", prompt_count=len(prompts)) as stage:
+            target_sizes = torch.tensor([image.size[::-1]], device=self.device)
+            post_process = getattr(processor, "post_process_grounded_object_detection", None)
+            if post_process is None:
+                post_process = getattr(processor, "post_process_grounded_object_detection_with_logits", None)
+            if post_process is None:
+                raise RuntimeError("GroundingDINO processor does not expose grounded object post-processing")
+            kwargs = {
+                "text_threshold": self.text_threshold,
+                "target_sizes": target_sizes,
+            }
+            if "box_threshold" in inspect.signature(post_process).parameters:
+                kwargs["box_threshold"] = self.box_threshold
+            else:
+                kwargs["threshold"] = self.box_threshold
+            results = post_process(outputs, inputs.get("input_ids"), **kwargs)[0]
+            boxes = results.get("boxes", [])
+            scores = results.get("scores", [])
+            labels = results.get("text_labels") if "text_labels" in results else results.get("labels", [])
+            detections = []
+            for box, score, label in zip(boxes, scores, labels):
+                raw_box = box.detach().cpu().tolist() if hasattr(box, "detach") else list(box)
+                detections.append(
+                    DetectionResult(
+                        box_xyxy=tuple(float(value) for value in raw_box[:4]),  # type: ignore[arg-type]
+                        phrase=str(label),
+                        score=float(score.detach().cpu().item() if hasattr(score, "detach") else score),
+                        label=str(label),
+                    )
                 )
-            )
+            stage.update(detection_count=len(detections))
         return detections
 
-    def _load(self) -> tuple[Any, Any]:
+    def _load(self, *, profiler: StageProfiler | None = None) -> tuple[Any, Any]:
         if self._processor is not None and self._model is not None:
             return self._processor, self._model
-        try:
-            from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
-        except ModuleNotFoundError as exc:
-            raise RuntimeError("GroundingDINO backend requires transformers") from exc
-        self._processor = AutoProcessor.from_pretrained(self.model_name)
-        self._model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_name)
-        self._model.eval()
-        self._model.to(self.device)
+        profiler = profiler or self.profiler
+        with _profile(profiler, "grounding_model_load", cold_start=True, model_name=self.model_name):
+            try:
+                from transformers import AutoModelForZeroShotObjectDetection, AutoProcessor
+            except ModuleNotFoundError as exc:
+                raise RuntimeError("GroundingDINO backend requires transformers") from exc
+            self._processor = AutoProcessor.from_pretrained(self.model_name)
+            self._model = AutoModelForZeroShotObjectDetection.from_pretrained(self.model_name)
+            self._model.eval()
+            self._model.to(self.device)
         return self._processor, self._model
 
     def _resolve_device(self) -> str:
@@ -118,3 +142,15 @@ class GroundingDinoBackend:
         except ModuleNotFoundError as exc:
             raise RuntimeError("GroundingDINO backend requires torch") from exc
         return torch
+
+
+def _profile(
+    profiler: StageProfiler | None,
+    stage: str,
+    *,
+    cold_start: bool = False,
+    **metadata: Any,
+) -> Any:
+    if profiler is None:
+        return nullcontext(StageContext(metadata))
+    return profiler.stage(stage, cold_start=cold_start, metadata=metadata)

@@ -208,6 +208,7 @@ def _order_model_text_context(context: dict[str, Any]) -> dict[str, Any]:
         "active_instruction",
         "current_phase",
         "semantic_goal",
+        "runtime_control",
         "phase_progress_evidence",
         "fragments",
         "allowed_action_constraints",

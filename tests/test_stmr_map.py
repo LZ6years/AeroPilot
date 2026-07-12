@@ -7,27 +7,32 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
+import pytest
 
 from plugins.research.custom_map.context_modules.custom_map.records import read_custom_map_records
-from plugins.research.custom_map.context_modules.custom_map.schemas import PosePoint
+from plugins.research.custom_map.context_modules.custom_map.schemas import CustomMapRecords, FrameRecord, PosePoint
 from plugins.research.custom_map.context_modules.custom_map.projection_geometry import (
     DEPTH_MODE_OPTICAL_Z,
     DEPTH_MODE_RAY_DISTANCE,
 )
 from plugins.research.custom_map.perception.semantic_palette import SEMANTIC_CLASSES
 from plugins.research.stmr_map.core import (
+    IncrementalStmrMapState,
     _local_to_centered_cell,
     _voxel_center,
     _world_to_local,
     build_stmr_map,
 )
+import plugins.research.stmr_map.core as stmr_core
+from plugins.research.stmr_map.debug_payload import build_points_preview, projection_debug_summary, stratified_sample_points
+from plugins.research.stmr_map.html_report import render_stmr_html
 from plugins.research.stmr_map.perception.dynamic_targets import (
     DynamicTargetFilterConfig,
     apply_dynamic_target_policy,
     build_dynamic_candidate,
     should_write_candidate,
 )
-from plugins.research.stmr_map.perception.grounding_dino_backend import DetectionResult
+from plugins.research.stmr_map.perception.grounding_dino_backend import DetectionResult, GroundingDinoBackend
 from plugins.research.stmr_map.perception.landmark_extractor import extract_landmarks
 from plugins.research.stmr_map.perception.model_landmark_extractor import (
     SYSTEM_PROMPT,
@@ -36,6 +41,7 @@ from plugins.research.stmr_map.perception.model_landmark_extractor import (
 )
 from plugins.research.stmr_map.perception.open_vocab_writer import write_open_vocab_mask
 from plugins.research.stmr_map.perception.sam_backend import SamMaskResult
+from plugins.research.stmr_map.perception.session import StmrPerceptionSession
 from plugins.research.stmr_map.perception.tfidf_filter import TfidfMatch, filter_detections_by_tfidf, tfidf_similarity
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryRecordReader
@@ -69,6 +75,121 @@ def test_tfidf_filter_keeps_matching_phrases_and_rejects_unrelated():
     assert matches[0].keep is True
     assert matches[0].landmark == "traffic light"
     assert matches[1].keep is False
+
+
+def test_perception_session_reuses_injected_backends_across_frames(tmp_path):
+    rgb = tmp_path / "rgb.png"
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(rgb)
+
+    class FakeGrounding:
+        def __init__(self):
+            self.warmups = 0
+            self.calls = 0
+
+        def warmup(self, *, profiler=None):
+            self.warmups += 1
+
+        def detect(self, rgb_path, prompts, *, profiler=None):
+            self.calls += 1
+            return [DetectionResult((1, 1, 7, 7), prompts[0], 0.9, prompts[0])]
+
+    class FakeSam:
+        def __init__(self):
+            self.warmups = 0
+            self.calls = 0
+
+        def warmup(self, *, profiler=None):
+            self.warmups += 1
+
+        def segment(self, rgb_path, detections, *, profiler=None):
+            self.calls += 1
+            return [SamMaskResult(detections[0], np.ones((8, 8), dtype=bool), 0.9)]
+
+    grounding = FakeGrounding()
+    sam = FakeSam()
+    session = StmrPerceptionSession(grounding_backend=grounding, sam_backend=sam)
+    landmarks = extract_landmarks("", manual_landmarks=["building"], include_defaults=False)
+
+    session.warmup()
+    first = session.infer_frame(rgb, landmarks, observation_id="obs_1")
+    second = session.infer_frame(rgb, landmarks, observation_id="obs_2")
+
+    assert grounding.warmups == sam.warmups == 1
+    assert grounding.calls == sam.calls == 2
+    assert first.detections[0].phrase == "building"
+    assert second.masks[0].mask.shape == (8, 8)
+
+
+def test_grounding_backend_prefers_text_labels_from_new_transformers_result(tmp_path):
+    rgb = tmp_path / "rgb.png"
+    Image.new("RGB", (8, 8), (10, 20, 30)).save(rgb)
+
+    class FakeValue:
+        def __init__(self, value):
+            self.value = value
+
+        def to(self, device):
+            return self
+
+        def detach(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def tolist(self):
+            return list(self.value)
+
+        def item(self):
+            return self.value
+
+    class FakeNoGrad:
+        def __enter__(self):
+            return None
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    class FakeTorch:
+        def no_grad(self):
+            return FakeNoGrad()
+
+        def tensor(self, value, device=None):
+            return FakeValue(value)
+
+    class FakeProcessor:
+        def __call__(self, **kwargs):
+            return {"input_ids": FakeValue([1])}
+
+        def post_process_grounded_object_detection(
+            self,
+            outputs,
+            input_ids,
+            *,
+            text_threshold,
+            target_sizes,
+            threshold,
+        ):
+            return [{
+                "boxes": [FakeValue([1, 2, 3, 4])],
+                "scores": [FakeValue(0.9)],
+                "labels": ["legacy-label"],
+                "text_labels": ["building"],
+            }]
+
+    class FakeModel:
+        def __call__(self, **kwargs):
+            return object()
+
+    backend = GroundingDinoBackend(device="cpu")
+    backend._processor = FakeProcessor()
+    backend._model = FakeModel()
+    backend._device = "cpu"
+    backend._torch = lambda: FakeTorch()
+
+    detections = backend.detect(rgb, ["building"])
+
+    assert detections[0].phrase == "building"
 
 
 def test_model_landmark_response_parses_and_sanitizes_short_phrases():
@@ -369,6 +490,221 @@ def test_stmr_path_is_stamped_as_minus_one(tmp_path):
     assert stmr_map.semantic_matrix[10][10] == -1
 
 
+def test_incremental_stmr_matches_batch_and_keeps_all_history(tmp_path):
+    full_records = _incremental_records(tmp_path)
+    first_records = _records_with_observations(full_records, {"obs_0001"})
+    state = IncrementalStmrMapState(grid_size=20, meters_per_cell=5.0, stride=1)
+
+    first = state.update(first_records)
+    duplicate = state.update(first_records)
+    second = state.update(full_records, ["obs_0002"])
+    incremental = state.snapshot(debug_point_limit=None)
+    batch = build_stmr_map(full_records, grid_size=20, meters_per_cell=5.0, stride=1)
+
+    assert first.processed_observation_ids == ("obs_0001",)
+    assert duplicate.processed_observation_ids == ()
+    assert duplicate.duplicate_observation_ids == ("obs_0001",)
+    assert duplicate.new_projected_point_count == 0
+    assert second.processed_observation_ids == ("obs_0002",)
+    assert incremental.semantic_matrix == batch.semantic_matrix
+    assert incremental.center_pose == batch.center_pose
+    assert incremental.projection_debug["voxel_count"] == batch.projection_debug["voxel_count"]
+    assert incremental.projection_debug["semantic_cell_counts"] == batch.projection_debug["semantic_cell_counts"]
+    assert incremental.projection_debug["source_observation_ids"] == ["obs_0001", "obs_0002"]
+    assert incremental.projection_debug["processed_observation_count"] == 2
+
+
+def test_incremental_stmr_retries_incomplete_observation(tmp_path):
+    full_records = _incremental_records(tmp_path)
+    incomplete = CustomMapRecords(
+        run_dir=full_records.run_dir,
+        actions=full_records.actions,
+        poses=full_records.poses,
+        frames=[
+            frame
+            for frame in full_records.frames
+            if not (frame.observation_id == "obs_0002" and frame.modality == "stmr_open_vocab_mask")
+        ],
+        poses_by_observation_id=full_records.poses_by_observation_id,
+        warnings=[],
+    )
+    state = IncrementalStmrMapState(stride=1)
+
+    pending = state.update(incomplete, ["obs_0002"])
+    recovered = state.update(full_records, ["obs_0002"])
+
+    assert pending.processed_observation_ids == ()
+    assert pending.pending_observation_ids == ("obs_0002",)
+    assert recovered.processed_observation_ids == ("obs_0002",)
+    assert state.processed_observation_ids == ("obs_0002",)
+
+
+def test_incremental_stmr_recenters_historical_world_points(tmp_path):
+    full_records = _incremental_records(tmp_path)
+    first_records = _records_with_observations(full_records, {"obs_0001"})
+    state = IncrementalStmrMapState(stride=1)
+    state.update(first_records)
+    first_snapshot = state.snapshot(debug_point_limit=None)
+    first_points = {
+        (item["world_x"], item["world_y"], item["world_z"]): (
+            item["local_forward_m"],
+            item["local_right_m"],
+        )
+        for item in first_snapshot.projection_debug["sampled_points"]
+        if item["source_observation_id"] == "obs_0001"
+    }
+
+    state.update(full_records, ["obs_0002"])
+    second_snapshot = state.snapshot(debug_point_limit=None)
+    second_points = {
+        (item["world_x"], item["world_y"], item["world_z"]): (
+            item["local_forward_m"],
+            item["local_right_m"],
+        )
+        for item in second_snapshot.projection_debug["sampled_points"]
+        if item["source_observation_id"] == "obs_0001"
+    }
+
+    assert second_points.keys() == first_points.keys()
+    assert any(second_points[key] != first_points[key] for key in first_points)
+    assert second_snapshot.center_pose == {"x": 20.0, "y": 5.0, "z": 0.0, "yaw_deg": 90.0}
+
+
+def test_incremental_stmr_light_snapshot_preserves_total_counts(tmp_path):
+    records = _incremental_records(tmp_path)
+    state = IncrementalStmrMapState(stride=1)
+    state.update(records)
+
+    snapshot = state.snapshot(debug_point_limit=3)
+    preview = build_points_preview(
+        stmr_projection_debug=snapshot.projection_debug,
+        custom_map=None,
+        stmr_point_budget=3,
+        voxel_budget=3,
+    )
+
+    assert len(snapshot.projection_debug["sampled_points"]) == 3
+    assert snapshot.projection_debug["debug_points_truncated"] is True
+    assert preview["counts"]["stmr_points_total"] == state.point_count
+
+
+def test_incremental_stmr_projection_failure_does_not_mutate_state(tmp_path, monkeypatch):
+    records = _incremental_records(tmp_path)
+    first_records = _records_with_observations(records, {"obs_0001"})
+    state = IncrementalStmrMapState(stride=1)
+    state.update(first_records)
+    point_count = state.point_count
+    voxel_count = state.voxel_count
+
+    def fail_projection(*args, **kwargs):
+        raise RuntimeError("synthetic projection failure")
+
+    monkeypatch.setattr(stmr_core, "_project_frame_to_voxels", fail_projection)
+    with pytest.raises(RuntimeError, match="synthetic projection failure"):
+        state.update(records, ["obs_0002"])
+
+    assert state.point_count == point_count
+    assert state.voxel_count == voxel_count
+    assert state.processed_observation_ids == ("obs_0001",)
+
+
+def test_stmr_debug_stratified_sampling_respects_budget_and_keeps_small_classes():
+    points = [
+        {"semantic_id": 20, "source_observation_id": "obs_a", "local_forward_m": float(index)}
+        for index in range(1000)
+    ]
+    points.extend(
+        {"semantic_id": 10, "source_observation_id": "obs_b", "local_forward_m": float(index)}
+        for index in range(8)
+    )
+
+    sampled = stratified_sample_points(points, 50)
+
+    assert len(sampled) <= 50
+    assert any(item["semantic_id"] == 10 for item in sampled)
+    assert any(item["semantic_id"] == 20 for item in sampled)
+
+
+def test_stmr_projection_debug_summary_removes_heavy_point_arrays():
+    debug = {
+        "point_count": 3,
+        "sampled_points": [{"semantic_id": 10}, {"semantic_id": 20}],
+        "voxel_world_centers": [{"semantic_id": 10}],
+        "frame_point_ranges": [{"count": 2}],
+    }
+
+    summary = projection_debug_summary(debug)
+
+    assert "sampled_points" not in summary
+    assert "voxel_world_centers" not in summary
+    assert summary["sampled_points_total"] == 2
+    assert summary["voxel_world_centers_total"] == 1
+    assert summary["frame_point_ranges"] == [{"count": 2}]
+
+
+def test_stmr_points_preview_caps_custom_points_stmr_points_and_voxels():
+    stmr_debug = {
+        "sampled_points": [{"semantic_id": 10, "source_observation_id": f"obs_{index % 3}"} for index in range(100)],
+        "voxel_world_centers": [{"semantic_id": 30, "observation_ids": [f"obs_{index % 4}"]} for index in range(80)],
+    }
+    custom_map = {
+        "projection_debug": {
+            "sampled_points": [{"semantic_id": 40, "source_observation_id": f"obs_{index % 2}"} for index in range(90)]
+        }
+    }
+
+    preview = build_points_preview(
+        stmr_projection_debug=stmr_debug,
+        custom_map=custom_map,
+        stmr_point_budget=12,
+        custom_point_budget=10,
+        voxel_budget=7,
+    )
+
+    assert len(preview["stmr_points"]) <= 12
+    assert len(preview["custom_points"]) <= 10
+    assert len(preview["stmr_voxels"]) <= 7
+    assert preview["counts"]["stmr_points_total"] == 100
+    assert preview["counts"]["custom_points_total"] == 90
+    assert preview["sampling_strategy"] == "stratified_by_semantic_id_and_observation_id_v1"
+
+
+def test_stmr_html_uses_lightweight_3d_preview_without_old_compare(tmp_path):
+    route = SEMANTIC_CLASSES["route_surface"]
+    building = SEMANTIC_CLASSES["building_structure"]
+    mask_colors = np.zeros((8, 8, 3), dtype=np.uint8)
+    mask_colors[0:4, :, :] = building.color
+    mask_colors[4:8, :, :] = route.color
+    _write_stmr_observation(tmp_path, mask_colors, {route.color_key: route, building.color_key: building})
+    stmr_map = build_stmr_map(_records(tmp_path), grid_size=20, meters_per_cell=5.0, stride=1)
+    preview = build_points_preview(
+        stmr_projection_debug=stmr_map.projection_debug,
+        custom_map=None,
+        stmr_point_budget=5,
+        custom_point_budget=0,
+        voxel_budget=3,
+    )
+
+    html_path = render_stmr_html(
+        stmr_map,
+        tmp_path / "latest_stmr_map.png",
+        tmp_path / "contexts" / "stmr_map",
+        points_preview=preview,
+    )
+    html = html_path.read_text(encoding="utf-8")
+
+    assert "STMR Lightweight 3D Preview" in html
+    assert "Semantic Class Gallery" in html
+    assert "Pipeline Timing" in html
+    assert "pointCloud" in html
+    assert "points_preview" in html
+    assert '"stmr_point_budget": 5' in html
+    assert '"custom_point_budget": 0' in html
+    assert "3D Alignment Compare" not in html
+    assert "compare3d" not in html
+    assert "custom_map projected points" not in html
+
+
 def _records(run_dir: Path):
     memory = FlightMemory("run", "map", "scene", "uav", memory_reader=MemoryRecordReader(run_dir))
     return read_custom_map_records(memory)
@@ -463,3 +799,77 @@ def _write_stmr_observation(tmp_path: Path, mask_colors: np.ndarray, color_class
         },
     ]
     (memory_dir / "frames.jsonl").write_text("\n".join(json.dumps(item) for item in frames) + "\n", encoding="utf-8")
+
+
+def _incremental_records(tmp_path: Path) -> CustomMapRecords:
+    """Create two complete observations with distinct poses and world evidence."""
+
+    route = SEMANTIC_CLASSES["route_surface"]
+    label_map = {
+        route.color_key: {
+            "id": route.semantic_id,
+            "label": route.label,
+            "category": route.category,
+            "source": "test",
+        }
+    }
+    poses = [
+        PosePoint(0.0, 0.0, 0.0, 0.0, observation_id="obs_0001"),
+        PosePoint(20.0, 5.0, 0.0, 90.0, observation_id="obs_0002"),
+    ]
+    frames: list[FrameRecord] = []
+    for index, observation_id in enumerate(("obs_0001", "obs_0002"), start=1):
+        rgb_path = tmp_path / f"rgb_{index:04d}.png"
+        depth_path = tmp_path / f"depth_{index:04d}.npy"
+        mask_path = tmp_path / f"mask_{index:04d}.png"
+        Image.new("RGB", (8, 8), (20, 30, 40)).save(rgb_path)
+        np.save(depth_path, np.full((8, 8), 8.0 + index, dtype=np.float32))
+        mask = np.zeros((8, 8, 3), dtype=np.uint8)
+        mask[:, :, :] = route.color
+        Image.fromarray(mask, mode="RGB").save(mask_path)
+        frames.extend(
+            [
+                FrameRecord(f"rgb_{index:04d}", observation_id, "rgb", rgb_path),
+                FrameRecord(
+                    f"depth_{index:04d}",
+                    observation_id,
+                    "depth",
+                    depth_path,
+                    {"fov_degrees": 90},
+                ),
+                FrameRecord(
+                    f"mask_{index:04d}",
+                    observation_id,
+                    "stmr_open_vocab_mask",
+                    mask_path,
+                    {"label_map": label_map, "fov_degrees": 90},
+                ),
+            ]
+        )
+    return CustomMapRecords(
+        run_dir=tmp_path,
+        actions=[],
+        poses=poses,
+        frames=frames,
+        poses_by_observation_id={pose.observation_id: pose for pose in poses if pose.observation_id},
+        warnings=[],
+    )
+
+
+def _records_with_observations(
+    records: CustomMapRecords,
+    observation_ids: set[str],
+) -> CustomMapRecords:
+    poses = [pose for pose in records.poses if pose.observation_id in observation_ids]
+    return CustomMapRecords(
+        run_dir=records.run_dir,
+        actions=records.actions,
+        poses=poses,
+        frames=[frame for frame in records.frames if frame.observation_id in observation_ids],
+        poses_by_observation_id={
+            observation_id: pose
+            for observation_id, pose in records.poses_by_observation_id.items()
+            if observation_id in observation_ids
+        },
+        warnings=records.warnings,
+    )

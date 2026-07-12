@@ -1,1 +1,0 @@
-{"id": "inst_0001", "timestamp": "2026-05-24T10:12:02.719198+00:00", "instruction": "请判断画面前景铺装区域是否开阔，并指出附近会影响视觉理解的车辆或树木位置。", "semantic_plan": {"phase": {"name": "check_visible_free_space", "meaning": "确认画面中是否存在开阔铺装区域作为视觉上下文"}}}

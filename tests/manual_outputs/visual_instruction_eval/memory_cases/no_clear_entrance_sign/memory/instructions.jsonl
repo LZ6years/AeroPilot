@@ -1,1 +1,0 @@
-{"id": "inst_0001", "timestamp": "2026-05-24T10:12:02.722212+00:00", "instruction": "请确认当前画面是否能看到明确入口标识；如果没有，只说明哪些建筑底层或车辆可作为视觉参照。", "semantic_plan": {"phase": {"name": "verify_entrance_visibility", "meaning": "确认入口标识是否已经清晰可见"}}}

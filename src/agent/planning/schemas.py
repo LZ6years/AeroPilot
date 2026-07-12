@@ -101,6 +101,36 @@ class ActionWindow:
 
 
 @dataclass(frozen=True)
+class RuntimeControlAction:
+    """Planner request for runtime orchestration, separate from UAV tool steps."""
+
+    name: str
+    reason: str = ""
+    payload: dict[str, Any] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "RuntimeControlAction":
+        name = str(data.get("name", "")).strip()
+        payload = data.get("payload", {})
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise ValueError("RuntimeControlAction payload must be a dict")
+        return cls(
+            name=name,
+            reason=str(data.get("reason", "")).strip(),
+            payload=dict(payload),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "reason": self.reason,
+            "payload": dict(self.payload),
+        }
+
+
+@dataclass(frozen=True)
 class ShortHorizonPlan:
     phase: str
     steps: list[PlannedStep]
@@ -150,11 +180,11 @@ class ShortHorizonPlan:
 class CoupledActionPhasePlan:
     """Experimental one-call contract that decides phase progress and action.
 
-    This schema deliberately keeps the phase decision outside ``steps``. A
-    coupled planner may either request a phase decision with no UAV tool
-    actions, or continue the current phase with a normal tool-only
-    ``ShortHorizonPlan``. It keeps transitions out of executable tool steps
-    and does not introduce control pseudo-tools.
+    This schema deliberately keeps the phase decision and runtime control
+    requests outside ``steps``. A coupled planner may either request a phase
+    decision with no UAV tool actions, or continue the current phase with a
+    normal tool-only ``ShortHorizonPlan``. Runtime control requests live in
+    ``control_actions`` so they never become executable UAV pseudo-tools.
     """
 
     phase: str
@@ -162,6 +192,7 @@ class CoupledActionPhasePlan:
     steps: list[PlannedStep] = field(default_factory=list)
     action_window: ActionWindow = field(default_factory=ActionWindow.default)
     agent_messages: list[AgentMessage] = field(default_factory=list)
+    control_actions: list[RuntimeControlAction] = field(default_factory=list)
 
     @classmethod
     def from_dict(
@@ -186,6 +217,11 @@ class CoupledActionPhasePlan:
             messages_data = []
         if not isinstance(messages_data, list):
             raise ValueError("CoupledActionPhasePlan agent_messages must be a list")
+        control_actions_data = data.get("control_actions", [])
+        if control_actions_data is None:
+            control_actions_data = []
+        if not isinstance(control_actions_data, list):
+            raise ValueError("CoupledActionPhasePlan control_actions must be a list")
 
         action_window_data = data.get("action_window")
         action_window = (
@@ -211,6 +247,7 @@ class CoupledActionPhasePlan:
             steps=steps,
             action_window=action_window,
             agent_messages=[AgentMessage.from_dict(dict(item)) for item in messages_data],
+            control_actions=[RuntimeControlAction.from_dict(dict(item)) for item in control_actions_data],
         )
 
     def to_short_horizon_plan(self) -> ShortHorizonPlan:
@@ -226,6 +263,7 @@ class CoupledActionPhasePlan:
             "phase": self.phase,
             "phase_decision": self.phase_decision.to_dict(),
             "agent_messages": [message.to_dict() for message in self.agent_messages],
+            "control_actions": [action.to_dict() for action in self.control_actions],
             "action_window": self.action_window.to_dict(),
             "steps": [step.to_dict() for step in self.steps],
         }

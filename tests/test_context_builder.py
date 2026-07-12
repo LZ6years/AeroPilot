@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
 import json
 
 import pytest
+from PIL import Image
 
 from src.agent.planning.model_inputs import build_model_user_content
 from src.agent.mission_state import MissionState
@@ -13,6 +15,7 @@ from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
 from plugins.research.multimodal_image.context_modules import MultimodalImageContextModule
 from src.memory.context.registry import ContextModuleRegistry
+from src.memory.context.modules.image import _image_banner
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
@@ -27,6 +30,15 @@ def write_tiny_png(path) -> None:
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
         )
     )
+
+
+def write_test_png(path, color=(12, 34, 56), size=(320, 240)) -> None:
+    Image.new("RGB", size, color).save(path, format="PNG")
+
+
+def decode_data_url_image(data_url: str) -> Image.Image:
+    encoded = data_url.split(",", 1)[1]
+    return Image.open(BytesIO(base64.b64decode(encoded))).convert("RGB")
 
 
 def make_state() -> MissionState:
@@ -194,7 +206,7 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
     assert image["content"]["selected_frames"][0]["role"] == "current_observation"
     assert image["content"]["selected_frames"][0]["input_id"] == "image_1_current_observation"
-    assert image["content"]["selected_frames"][0]["usage"] == "Use as the current visual evidence for this decision."
+    assert image["content"]["selected_frames"][0]["usage"] == "LATEST image; use for current visibility and action decisions."
     assert image["content"]["selected_frames"][0]["observation_id"] == "obs_0001"
     assert image["content"]["selected_frames"][0]["frame_id"] == "frame_0001"
     assert image["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)
@@ -202,7 +214,7 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     assert image["model_inputs"][0]["type"] == "image"
     assert image["model_inputs"][0]["input_id"] == "image_1_current_observation"
     assert image["model_inputs"][0]["role"] == "current_observation"
-    assert image["model_inputs"][0]["usage"] == "Use as the current visual evidence for this decision."
+    assert image["model_inputs"][0]["usage"] == "LATEST image; use for current visibility and action decisions."
     assert image["model_inputs"][0]["encoding"] == "data_url"
     assert set(image["model_inputs"][0]) == {"type", "input_id", "role", "usage", "mime_type", "encoding", "data"}
     assert "visual_processing" not in image["content"]
@@ -215,7 +227,7 @@ def test_context_builder_default_image_attaches_key_rgb_frames(tmp_path):
     paths = []
     for index in range(6):
         rgb_path = tmp_path / f"frame_{index}.png"
-        rgb_path.write_bytes(b"fake-png")
+        write_test_png(rgb_path, color=(index, index + 1, index + 2))
         paths.append(str(rgb_path))
         observations.append(
             {
@@ -246,12 +258,23 @@ def test_context_builder_default_image_attaches_key_rgb_frames(tmp_path):
     assert len(image["model_inputs"]) == 2
     assert all(item["encoding"] == "data_url" for item in image["model_inputs"])
     assert all("metadata" not in item and "source" not in item for item in image["model_inputs"])
+    assert [item["usage"] for item in image["model_inputs"]] == [
+        "LATEST image; use for current visibility and action decisions.",
+        "HISTORICAL phase-start image; comparison only; never use as current visibility.",
+    ]
+    model_content = build_model_user_content(context)
+    assert isinstance(model_content, list)
+    assert [part["type"] for part in model_content] == ["text", "text", "image_url", "text", "image_url"]
+    assert "role=current_observation" in model_content[1]["text"]
+    assert "LATEST image" in model_content[1]["text"]
+    assert "role=phase_start_reference" in model_content[3]["text"]
+    assert "HISTORICAL phase-start image" in model_content[3]["text"]
 
 
 def test_context_builder_default_image_deduplicates_key_rgb_frames(tmp_path):
     state = make_state()
     rgb_path = tmp_path / "same.png"
-    rgb_path.write_bytes(b"fake-png")
+    write_test_png(rgb_path)
     observations = [
         {
             "scene_instance_id": "scene_1",
@@ -279,7 +302,7 @@ def test_context_builder_default_image_prefers_current_phase_anchor(tmp_path):
     paths = []
     for index in range(4):
         rgb_path = tmp_path / f"anchored_{index}.png"
-        rgb_path.write_bytes(b"fake-png")
+        write_test_png(rgb_path, color=(index, index + 1, index + 2))
         paths.append(str(rgb_path))
         observations.append(
             {
@@ -302,6 +325,51 @@ def test_context_builder_default_image_prefers_current_phase_anchor(tmp_path):
     source_paths = [item["path"] for item in image["metadata"]["selected_frame_metadata"]]
     assert roles == ["current_observation", "phase_start_reference"]
     assert source_paths == [paths[3], paths[2]]
+
+
+def test_context_builder_annotates_model_images_without_changing_source_pixels(tmp_path):
+    state = make_state()
+    current_path = tmp_path / "current.png"
+    reference_path = tmp_path / "reference.png"
+    write_test_png(current_path, color=(10, 40, 90))
+    write_test_png(reference_path, color=(90, 40, 10))
+    current_bytes = current_path.read_bytes()
+    reference_bytes = reference_path.read_bytes()
+    observations = [
+        {
+            "modalities": ["rgb"],
+            "frames": {"rgb": {"path": str(reference_path), "mock": False}},
+            "source": "phase_start",
+        },
+        {
+            "modalities": ["rgb"],
+            "frames": {"rgb": {"path": str(current_path), "mock": False}},
+            "source": "phase_window",
+        },
+    ]
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, observations=observations))
+    image = {fragment["name"]: fragment for fragment in context["fragments"]}["image"]
+    current = decode_data_url_image(image["model_inputs"][0]["data"])
+    reference = decode_data_url_image(image["model_inputs"][1]["data"])
+
+    assert image["model_inputs"][0]["mime_type"] == "image/png"
+    assert image["model_inputs"][1]["mime_type"] == "image/png"
+    assert current.width == reference.width == 320
+    assert current.height > 240
+    assert reference.height > 240
+    current_banner_height = current.height - 240
+    reference_banner_height = reference.height - 240
+    assert current.getpixel((0, 0)) == (28, 122, 72)
+    assert reference.getpixel((0, 0)) == (190, 117, 20)
+    assert _image_banner("current_observation")[0] == "NOW | CURRENT OBSERVATION"
+    assert _image_banner("phase_start_reference")[0] == "PAST | PHASE START"
+    assert any(pixel == (255, 255, 255) for pixel in current.crop((0, 0, current.width, current_banner_height)).getdata())
+    assert any(pixel == (255, 255, 255) for pixel in reference.crop((0, 0, reference.width, reference_banner_height)).getdata())
+    assert list(current.crop((0, current_banner_height, 320, current.height)).getdata()) == [(10, 40, 90)] * (320 * 240)
+    assert list(reference.crop((0, reference_banner_height, 320, reference.height)).getdata()) == [(90, 40, 10)] * (320 * 240)
+    assert current_path.read_bytes() == current_bytes
+    assert reference_path.read_bytes() == reference_bytes
 
 
 def test_model_user_content_omits_fragment_debug_metadata(tmp_path):

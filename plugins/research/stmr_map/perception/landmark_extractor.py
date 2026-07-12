@@ -32,6 +32,7 @@ _LANDMARK_PATTERNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("rooftop", ("rooftop", "roof top", "roof")),
     ("tower", ("tower",)),
     ("bridge", ("bridge", "overpass")),
+    ("sunshade", ("sunshade", "umbrella", "parasol")),
     ("river", ("river", "water", "lake", "pool")),
     ("tree", ("tree", "vegetation", "plant", "grass", "bush")),
     ("person", ("person", "people", "pedestrian", "human", "man", "woman")),

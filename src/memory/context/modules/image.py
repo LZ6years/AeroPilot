@@ -3,12 +3,23 @@
 from __future__ import annotations
 
 import base64
-import mimetypes
+from io import BytesIO
 from pathlib import Path
 from typing import Any
 
+from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
+
 from src.memory.context.modules.base import ContextModule
 from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
+
+
+CURRENT_IMAGE_USAGE = "LATEST image; use for current visibility and action decisions."
+PHASE_START_IMAGE_USAGE = "HISTORICAL phase-start image; comparison only; never use as current visibility."
+
+_CURRENT_IMAGE_BANNER = "NOW | CURRENT OBSERVATION"
+_PHASE_START_IMAGE_BANNER = "PAST | PHASE START"
+_CURRENT_IMAGE_BANNER_COLOR = (28, 122, 72)
+_PHASE_START_IMAGE_BANNER_COLOR = (190, 117, 20)
 
 
 class DefaultImageContextModule(ContextModule):
@@ -137,12 +148,12 @@ def selected_rgb_frames_from_observations(
     candidates = [
         (
             "current_observation",
-            "Use as the current visual evidence for this decision.",
+            CURRENT_IMAGE_USAGE,
             latest_frame,
         ),
         (
             "phase_start_reference",
-            "Use only as the current semantic phase start reference, not as the current scene.",
+            PHASE_START_IMAGE_USAGE,
             phase_start_frame,
         ),
     ]
@@ -305,20 +316,19 @@ def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> lis
     path = _frame_path(latest_rgb)
     if path is None:
         return []
-    data_url = _image_data_url(path)
-    if data_url is None:
-        return []
-    mime_type = data_url.split(";", 1)[0].removeprefix("data:")
     role = str(latest_rgb.get("selection_role") or "latest")
     input_id = str(latest_rgb.get("input_id") or _image_input_id(1, role))
     usage = str(latest_rgb.get("usage") or latest_rgb.get("selection_reason") or "")
+    data_url = _annotated_image_data_url(path, role)
+    if data_url is None:
+        return []
     return [
         {
             "type": "image",
             "input_id": input_id,
             "role": role,
             "usage": usage,
-            "mime_type": mime_type,
+            "mime_type": "image/png",
             "encoding": "data_url",
             "data": data_url,
         }
@@ -338,13 +348,53 @@ def _frame_path(frame: dict[str, Any]) -> Path | None:
     return None
 
 
-def _image_data_url(path: Path) -> str | None:
+def _annotated_image_data_url(path: Path, role: str) -> str | None:
+    """Return a model-only PNG with an external temporal-role banner."""
+
     try:
-        data = path.read_bytes()
-    except OSError:
+        with Image.open(path) as source:
+            scene = source.convert("RGB")
+            banner_text, banner_color = _image_banner(role)
+            banner_height = _banner_height(scene.width, scene.height)
+            annotated = Image.new("RGB", (scene.width, scene.height + banner_height), banner_color)
+            annotated.paste(scene, (0, banner_height))
+            _draw_banner_text(annotated, banner_text, banner_height)
+            output = BytesIO()
+            annotated.save(output, format="PNG")
+    except (OSError, UnidentifiedImageError, ValueError):
         return None
-    mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
-    if not mime_type.startswith("image/"):
-        return None
-    encoded = base64.b64encode(data).decode("ascii")
-    return f"data:{mime_type};base64,{encoded}"
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _image_banner(role: str) -> tuple[str, tuple[int, int, int]]:
+    if role == "phase_start_reference":
+        return _PHASE_START_IMAGE_BANNER, _PHASE_START_IMAGE_BANNER_COLOR
+    return _CURRENT_IMAGE_BANNER, _CURRENT_IMAGE_BANNER_COLOR
+
+
+def _banner_height(width: int, height: int) -> int:
+    return max(28, min(56, round(min(width, height) * 0.14)))
+
+
+def _draw_banner_text(image: Image.Image, text: str, banner_height: int) -> None:
+    draw = ImageDraw.Draw(image)
+    max_font_size = max(10, min(24, banner_height - 12))
+    font = _fitted_banner_font(draw, text, image.width - 20, max_font_size)
+    text_box = draw.textbbox((0, 0), text, font=font)
+    text_height = text_box[3] - text_box[1]
+    left = 10
+    top = max(0, (banner_height - text_height) // 2 - text_box[1])
+    draw.text((left, top), text, fill=(255, 255, 255), font=font)
+
+
+def _fitted_banner_font(draw: ImageDraw.ImageDraw, text: str, max_width: int, max_size: int) -> ImageFont.ImageFont:
+    for font_size in range(max_size, 9, -1):
+        try:
+            font = ImageFont.load_default(size=font_size)
+        except TypeError:  # Pillow < 10 compatibility for downstream users.
+            return ImageFont.load_default()
+        text_box = draw.textbbox((0, 0), text, font=font)
+        if text_box[2] - text_box[0] <= max_width:
+            return font
+    return ImageFont.load_default()

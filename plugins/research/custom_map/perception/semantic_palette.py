@@ -147,6 +147,7 @@ _KEYWORD_GROUPS: tuple[tuple[str, tuple[str, ...]], ...] = (
             "window",
             "windowpane",
             "door",
+            "entrance",
             "skyscraper",
             "bridge",
             "tower",

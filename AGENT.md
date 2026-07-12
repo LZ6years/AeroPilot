@@ -12,6 +12,13 @@ logic.
 - `src/agent/planning/prompts/*.txt` defines general planner and judge
   contracts. Prompts may describe how to use available evidence, but should not
   duplicate module internals or become a case-specific controller.
+- `memory/FLYAGENT.md` is the shared Agent identity and general flight-knowledge
+  baseline for both model planning and model semantic task parsing. Load it as
+  its own model message instead of copying its guidance into parser prompts.
+- `src/agent/semantic/prompts/task_parser_system.txt` owns the semantic-plan
+  output schema, field meanings, and parsing contract. It must not duplicate
+  general UAV identity, spatial reasoning, or flight knowledge from
+  `memory/FLYAGENT.md`.
 - `plugins/knowledge/*/SKILL.md` contains reusable domain knowledge. Skills must
   not depend on local context field names, debug schemas, benchmark cases, or
   project-private runtime details.

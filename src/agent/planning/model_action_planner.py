@@ -98,6 +98,7 @@ class ModelActionPlanner:
                     steps=list(repaired_plan.steps),
                     action_window=repaired_plan.action_window,
                     agent_messages=list(repaired_plan.agent_messages),
+                    control_actions=list(coupled_plan.control_actions),
                 )
         return coupled_plan
 

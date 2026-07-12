@@ -20,6 +20,7 @@ from src.adapters.uav_primitives import NullUavPrimitiveAdapter
 from src.env_client.local_client import LocalEnvClient
 from src.env_client.schemas import MapPackage
 from src.runtime.configs.action_config import UavActionConfig
+from src.runtime.configs.runtime_control_config import RuntimeControlActionConfig, RuntimeControlConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.context import PhaseWindowContextBuilder
@@ -306,6 +307,122 @@ class CoupledPlannerWithRepairEvent(CoupledPlannerStub):
         return result
 
 
+class RuntimeControlRequestPlanner(CoupledPlannerStub):
+    def __init__(self) -> None:
+        super().__init__([CONTINUE_CURRENT_PHASE, COMPLETE_TASK])
+
+    def plan_next_with_phase_decision(self, state, context=None):
+        self.contexts.append(context)
+        if len(self.contexts) == 1:
+            return CoupledActionPhasePlan.from_dict(
+                {
+                    "phase": state.current_phase_name,
+                    "phase_decision": {
+                        "decision": CONTINUE_CURRENT_PHASE,
+                        "reason": "continue while requesting runtime control validation",
+                    },
+                    "action_window": {
+                        "intent": "continue current phase with one hover",
+                        "scope": "current_phase_only",
+                        "requires_intermediate_observation": False,
+                        "expected_effect": "keep normal flight behavior unchanged",
+                    },
+                    "agent_messages": [],
+                    "control_actions": [
+                        {
+                            "name": "semantic_plan_update",
+                            "reason": "phase contract may be too strict",
+                            "payload": {"reason": "phase contract may be too strict"},
+                        }
+                    ],
+                    "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+                },
+                require_agent_messages=True,
+            )
+        return CoupledActionPhasePlan.from_dict(
+            {
+                "phase": state.current_phase_name,
+                "phase_decision": {"decision": COMPLETE_TASK, "reason": "done"},
+                "agent_messages": [],
+                "steps": [],
+            },
+            require_agent_messages=True,
+        )
+
+
+class AlwaysHoverPlanner:
+    planner_mode = "test"
+
+    def __init__(self) -> None:
+        self.contexts = []
+
+    def plan_next_with_phase_decision(self, state, context=None):
+        self.contexts.append(context)
+        plan = ShortHorizonPlan(
+            state.current_phase_name,
+            [PlannedStep.tool_step("uav.hover", {}, "keep checking current phase")],
+        )
+        return coupled_continue_from_short_plan(plan, "not enough evidence")
+
+
+class FakeSemanticPlanUpdater:
+    def __init__(self, patch: dict) -> None:
+        self.patch = dict(patch)
+        self.contexts = []
+
+    def update(self, context):
+        self.contexts.append(context)
+        return dict(self.patch)
+
+
+class CompleteAfterSemanticUpdatePlanner:
+    planner_mode = "model"
+
+    def __init__(self) -> None:
+        self.contexts = []
+        self.calls = 0
+
+    def plan_next_with_phase_decision(self, state, context=None):
+        self.calls += 1
+        self.contexts.append(context)
+        done_when = context.get("current_phase", {}).get("done_when", []) if isinstance(context, dict) else []
+        if any("updated completion" in item for item in done_when):
+            return CoupledActionPhasePlan.from_dict(
+                {
+                    "phase": state.current_phase_name,
+                    "phase_decision": {"decision": COMPLETE_TASK, "reason": "semantic contract update is visible"},
+                    "agent_messages": [],
+                    "steps": [],
+                },
+                require_agent_messages=True,
+            )
+        control_actions = []
+        if self.calls == 1:
+            control_actions = [
+                {
+                    "name": "semantic_plan_update",
+                    "reason": "current phase contract is too strict",
+                    "payload": {"reason": "current phase contract is too strict"},
+                }
+            ]
+        return CoupledActionPhasePlan.from_dict(
+            {
+                "phase": state.current_phase_name,
+                "phase_decision": {"decision": CONTINUE_CURRENT_PHASE, "reason": "wait for semantic update"},
+                "action_window": {
+                    "intent": "continue while semantic update runs",
+                    "scope": "current_phase_only",
+                    "requires_intermediate_observation": False,
+                    "expected_effect": "keep flight behavior safe while updater works",
+                },
+                "agent_messages": [],
+                "control_actions": control_actions,
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+            },
+            require_agent_messages=True,
+        )
+
+
 def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     run_dir = tmp_path / "task_run"
     recorder = AsyncRunLogger(run_dir)
@@ -385,6 +502,176 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert flight_memory["observation_anchors"]["task_initial"]["ref"].startswith("memory/observations.jsonl#")
     assert flight_memory["recent_action_refs"]
     assert flight_memory["recent_observation_refs"]
+    assert "runtime_control" not in latest_context
+
+
+def test_task_runtime_validates_runtime_control_request_without_executing_it(tmp_path):
+    run_dir = tmp_path / "runtime_control_request_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = RuntimeControlRequestPlanner()
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+        runtime_control_config=RuntimeControlConfig(
+            enabled=True,
+            actions={
+                "semantic_plan_update": RuntimeControlActionConfig(enabled=True, exposed=True),
+            },
+        ),
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+    request = next(record for record in events if record["event"] == "runtime_control_action_requested")
+    completion = next(record for record in events if record["event"] == "runtime_control_action_completed")
+
+    assert state.completed
+    assert planner.contexts[0]["runtime_control"]["available"] == ["semantic_plan_update"]
+    assert planner.contexts[0]["runtime_control"]["contracts"] == {
+        "semantic_plan_update": (
+            "After multiple action-observation cycles, request when confidence is low that the current goal, "
+            "done_when, continue_when, or metrics still fit observed progress and user intent. Name the doubtful "
+            "fields and evidence; keep normal UAV steps if continuing."
+        )
+    }
+    assert "tool_step_completed" in event_names
+    assert request["payload"] == {
+        "name": "semantic_plan_update",
+        "reason": "phase contract may be too strict",
+        "status": "accepted",
+    }
+    assert any(
+        record["event"] == "runtime_control_action_started"
+        and record["payload"]["name"] == "semantic_plan_update"
+        and record["payload"]["status"] == "pending"
+        for record in events
+    )
+    assert "ask_user" not in planner.contexts[0]["runtime_control"]["available"]
+
+
+def test_task_runtime_loads_runtime_control_config_from_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("FLYAGENT_RUNTIME_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("FLYAGENT_RUNTIME_CONTROL_SEMANTIC_PLAN_UPDATE_ENABLED", "true")
+    monkeypatch.setenv("FLYAGENT_RUNTIME_CONTROL_SEMANTIC_PLAN_UPDATE_EXPOSED", "true")
+    run_dir = tmp_path / "runtime_control_env_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = CoupledPlannerStub([CONTINUE_CURRENT_PHASE, COMPLETE_TASK])
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    assert state.completed
+    assert planner.contexts[0]["runtime_control"]["available"] == ["semantic_plan_update"]
+    assert planner.contexts[0]["runtime_control"]["contracts"] == {
+        "semantic_plan_update": (
+            "After multiple action-observation cycles, request when confidence is low that the current goal, "
+            "done_when, continue_when, or metrics still fit observed progress and user intent. Name the doubtful "
+            "fields and evidence; keep normal UAV steps if continuing."
+        )
+    }
+
+
+def test_task_runtime_recommends_semantic_contract_review_after_multiple_action_windows(tmp_path):
+    run_dir = tmp_path / "runtime_control_recommendation_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = AlwaysHoverPlanner()
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+        runtime_loop_guard_windows=8,
+        runtime_control_config=RuntimeControlConfig(
+            enabled=True,
+            actions={"semantic_plan_update": RuntimeControlActionConfig(enabled=True, exposed=True)},
+        ),
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("blocked visual phase", "final_phase"))
+    recorder.close()
+
+    assert state.stopped
+    recommendation_contexts = [
+        context
+        for context in planner.contexts
+        if context.get("runtime_control", {}).get("recommendations", {}).get("semantic_plan_update")
+    ]
+    assert recommendation_contexts
+    assert recommendation_contexts[0]["runtime_control"]["recommendations"] == {
+        "semantic_plan_update": (
+            "review_now: multiple action-observation cycles completed; request only if confidence in "
+            "goal/done_when/continue_when/metrics is now low"
+        )
+    }
+
+
+def test_task_runtime_applies_semantic_plan_update_on_later_boundary(tmp_path):
+    run_dir = tmp_path / "semantic_plan_update_apply_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = CompleteAfterSemanticUpdatePlanner()
+    updater = FakeSemanticPlanUpdater(
+        {
+            "phase": {
+                "done_when": ["updated completion evidence is available"],
+                "continue_when": ["updated completion evidence is not available"],
+            }
+        }
+    )
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+        runtime_loop_guard_windows=20,
+        runtime_control_config=RuntimeControlConfig(
+            enabled=True,
+            actions={"semantic_plan_update": RuntimeControlActionConfig(enabled=True, exposed=True)},
+        ),
+        semantic_plan_updater=updater,
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+
+    assert state.completed
+    assert state.semantic_plan_version == 1
+    assert state.semantic_plan.phases[0].done_when == ["updated completion evidence is available"]
+    assert updater.contexts
+    assert updater.contexts[0]["phase_execution_summary"]["phase_key"] == "1:final_phase"
+    assert any(
+        context.get("runtime_control", {}).get("status", {}).get("semantic_plan_update") == "pending"
+        for context in planner.contexts
+    )
+    assert "tool_step_completed" in event_names
+    assert "semantic_plan_update_applied" in event_names
+    assert any(
+        record["event"] == "runtime_control_action_completed"
+        and record["payload"].get("name") == "semantic_plan_update"
+        and record["payload"].get("status") == "applied"
+        for record in events
+    )
 
 
 def test_task_runtime_can_land_on_shutdown(tmp_path):

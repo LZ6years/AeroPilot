@@ -24,8 +24,9 @@ def test_task_parser_prompt_contains_lightweight_semantic_plan_contract():
     assert "env.observe" in prompt
     assert "uav.<tool_name>" in prompt
     assert "distance_m" in prompt
-    assert "Do not invent numeric metric targets" in prompt
-    assert "An explicit number is required for a metric, but it is not sufficient by itself." in prompt
+    assert "Numeric provenance is strict" in prompt
+    assert "every numeric target or quantity" in prompt
+    assert "An explicit number alone is not sufficient" in prompt
     assert "target-relative numbers such as orbit radius" in prompt
     assert "Do not convert them into planar_distance" in prompt
     assert "do not generate planar_distance=2*pi*N" in prompt
@@ -46,6 +47,9 @@ def test_task_parser_prompt_contains_lightweight_semantic_plan_contract():
     assert "right_distance is signed lateral displacement" in prompt
     assert "avoid defaulting to yaw_delta" in prompt
     assert "Seeing or facing a target is useful evidence" in prompt
+    assert "target-side passage relation" not in prompt
+    assert "UAV route lies on the target's right" not in prompt
+    assert "opposite image side" not in prompt
     assert "completion_criteria" not in prompt
     assert "visual_alignment" not in prompt
     assert "visual_smoke" not in prompt
@@ -73,6 +77,9 @@ def test_agent_boundaries_document_prompt_and_skill_writing_rules():
     assert "Do not restore model-facing `direction` shorthand" in guide
     assert "`relation` plus measurable metrics" in guide
     assert "hidden benchmark truth" in guide
+    assert "`memory/FLYAGENT.md` is the shared Agent identity" in guide
+    assert "both model planning and model semantic task parsing" in guide
+    assert "must not duplicate" in guide
 
 
 def test_agent_boundaries_require_benchmark_generalization():
@@ -136,9 +143,28 @@ def test_flyagent_rules_contain_general_visual_action_alignment_without_internal
     assert "不能同时说向右转是为了让它居中" in rules
     assert "基础飞行常识始终适用" in rules
     assert "空间关系与路线关系" in rules
-    assert "转向只能改变观察方向" in rules
-    assert "通过或穿越类任务的重点" in rules
+    assert "画面中的左右位置可以仅因转向而改变" in rules
+    assert "不能单独证明无人机已经到达目标的某一物理侧" in rules
+    assert "从目标右侧经过”表示无人机航线位于目标右侧" in rules
+    assert "不表示目标应在画面右侧" in rules
+    assert "目标通常位于画面左侧" in rules
+    assert "语义计划不得把“目标在画面左侧或右侧”解释成“无人机在目标右侧或左侧”" in rules
+    assert "搜索阶段只确认目标和可行路线" in rules
+    assert "侧向经过阶段必须依赖平移或路线进展" in rules
+    assert "只转向只能用于搜索或观察" in rules
+    assert "不能作为到达目标某侧或完成经过的证据" in rules
     assert "向前、后、左、右、上、下" not in rules
+
+    parser_prompt = (Path("src") / "agent" / "semantic" / "prompts" / "task_parser_system.txt").read_text(encoding="utf-8")
+    duplicated_route_rules = [
+        "画面中的左右位置可以仅因转向而改变",
+        "语义计划不得把“目标在画面左侧或右侧”解释成“无人机在目标右侧或左侧”",
+        "搜索阶段只确认目标和可行路线",
+        "侧向经过阶段必须依赖平移或路线进展",
+        "只转向只能用于搜索或观察",
+    ]
+    for rule in duplicated_route_rules:
+        assert rule not in parser_prompt
 
     forbidden_terms = [
         "UAV-Flow",
@@ -171,6 +197,28 @@ def test_model_repair_prompt_requires_contract_valid_tool_only_plan():
     assert "phase_transition" not in prompt
 
 
+def test_semantic_plan_update_prompt_is_limited_to_current_phase_patch():
+    prompt = (Path("src") / "agent" / "semantic" / "prompts" / "semantic_plan_update_system.txt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "limited semantic patch" in prompt
+    assert '"phase"' in prompt
+    assert '"append_recovery_phase"' in prompt
+    assert '"goal"' in prompt
+    assert '"done_when"' in prompt
+    assert '"continue_when"' in prompt
+    assert '"metrics"' in prompt
+    assert "Do not rewrite task_goal, instruction, full phases" in prompt
+    assert "Do not output UAV tool names" in prompt
+    assert "uav.turn_relative" in prompt
+    assert "uav.move_body" in prompt
+    assert "evaluation sample" in prompt
+    assert "Treat planner_request as a hypothesis, not authority" in prompt
+    assert "planner_request.payload.focus" in prompt
+    assert "reference path" not in prompt
+
+
 def test_coupled_prompt_fragments_have_clear_boundaries():
     prompt_dir = Path("src") / "agent" / "planning" / "prompts"
     phase_prompt = (prompt_dir / "coupled_phase_decision_system.txt").read_text(encoding="utf-8")
@@ -178,6 +226,16 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
 
     assert not (prompt_dir / "coupled_action_phase_planner_system.txt").exists()
     assert "phase_decision" in phase_prompt
+    assert "control_actions" in phase_prompt
+    assert "Runtime Control Boundary" in phase_prompt
+    assert "Runtime control meanings and request timing are provided by the runtime_control context" in phase_prompt
+    assert "Runtime control requests belong in control_actions only and never in steps" in phase_prompt
+    assert "Ask for semantic_plan_update" not in phase_prompt
+    assert "Ask for ask_user" not in phase_prompt
+    assert "phase_completion_evaluation is not_measurable" not in phase_prompt
+    assert "phase_execution_summary.window_count is already high" not in phase_prompt
+    assert "repeated same-kind actions have produced meaningful phase_progress_evidence" not in phase_prompt
+    assert "endless small corrective actions" not in phase_prompt
     assert "Phase Decision Guide" in phase_prompt
     assert "visual_alignment" in phase_prompt
     assert "route_traversal" in phase_prompt
@@ -200,6 +258,13 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "repeated small yaw corrections should not block advance" not in phase_prompt
 
     assert "phase_decision" in action_prompt
+    assert "control_actions" in action_prompt
+    assert "Runtime Control Actions" in action_prompt
+    assert "Never put ask_user or semantic_plan_update in steps" in action_prompt
+    assert "runtime_control.available" in action_prompt
+    assert "semantic_plan_update may be requested in control_actions alongside the normal 1-3 safe UAV tool steps" in action_prompt
+    assert "semantic_plan_update payload must include reason" in action_prompt
+    assert "goal, done_when, continue_when, or metrics" in action_prompt
     assert "continue_current_phase | advance_to_next_phase | complete_task" in action_prompt
     assert "steps must be []" in action_prompt
     assert "Never set it true with multiple steps" in action_prompt
@@ -212,6 +277,10 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "Phase Decision Guide" not in action_prompt
     assert "route progress evidence" not in action_prompt
     assert "phase_transition_judge_system" not in phase_prompt + action_prompt
+    assert '"blocking"' not in phase_prompt + action_prompt
+    assert '"async"' not in phase_prompt + action_prompt
+    assert '"use_when"' not in phase_prompt + action_prompt
+    assert '"avoid_when"' not in phase_prompt + action_prompt
 
 
 def test_orbit_skill_stays_compact_and_action_oriented():

@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import numpy as np
 from PIL import Image
@@ -31,9 +31,7 @@ from plugins.research.custom_map.context_modules.custom_map.projection_geometry 
     finish_range_accumulator,
     local_to_centered_cell,
     new_range_accumulator,
-    project_depth_pixel,
     summarize_frame_projection_drift,
-    update_range_accumulator,
     world_to_centered_cell,
     world_to_local,
 )
@@ -73,6 +71,364 @@ class _VoxelEvidence:
     observation_ids: set[str] = field(default_factory=set)
 
 
+@dataclass(frozen=True)
+class IncrementalStmrUpdate:
+    """Serializable statistics for one idempotent incremental update."""
+
+    processed_observation_ids: tuple[str, ...]
+    duplicate_observation_ids: tuple[str, ...]
+    pending_observation_ids: tuple[str, ...]
+    new_projected_point_count: int
+    new_voxel_count: int
+    total_projected_point_count: int
+    total_voxel_count: int
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "processed_observation_ids": list(self.processed_observation_ids),
+            "duplicate_observation_ids": list(self.duplicate_observation_ids),
+            "pending_observation_ids": list(self.pending_observation_ids),
+            "new_projected_point_count": self.new_projected_point_count,
+            "new_voxel_count": self.new_voxel_count,
+            "total_projected_point_count": self.total_projected_point_count,
+            "total_voxel_count": self.total_voxel_count,
+        }
+
+
+class IncrementalStmrMapState:
+    """Accumulate world-space STMR evidence without reprojecting old frames.
+
+    The state is intentionally process-local. Raw RGB/depth/mask/pose files and
+    JSONL memory remain the durable source of truth, so a new state can recover
+    by importing the full record set once after a process restart.
+    """
+
+    def __init__(
+        self,
+        *,
+        grid_size: int = STMR_GRID_SIZE,
+        meters_per_cell: float = STMR_METERS_PER_CELL,
+        voxel_size_m: float = DEFAULT_VOXEL_SIZE_M,
+        stride: int = DEFAULT_STRIDE,
+        max_depth_m: float = DEFAULT_MAX_DEPTH_M,
+    ) -> None:
+        self.grid_size = int(grid_size)
+        self.meters_per_cell = float(meters_per_cell)
+        self.voxel_size_m = float(voxel_size_m)
+        self.stride = int(stride)
+        self.max_depth_m = float(max_depth_m)
+        self._voxels: dict[tuple[int, int, int], _VoxelEvidence] = defaultdict(_VoxelEvidence)
+        self._processed_observation_ids: set[str] = set()
+        self._source_frames: dict[str, dict[str, Any]] = {}
+        self._legend = _base_legend()
+        self._warnings: set[str] = set()
+        self._point_count = 0
+        self._sampled_points: list[dict[str, Any]] = []
+        self._depth_mode_ranges = {
+            DEPTH_MODE_OPTICAL_Z: new_range_accumulator(),
+            DEPTH_MODE_RAY_DISTANCE: new_range_accumulator(),
+        }
+        self._depth_mode_comparison_samples: list[dict[str, Any]] = []
+        self._frame_point_ranges: list[dict[str, Any]] = []
+        self._trajectory_path: list[PosePoint] = []
+        self._center_pose: PosePoint | None = None
+
+    @property
+    def processed_observation_ids(self) -> tuple[str, ...]:
+        """Observation IDs already committed to the accumulated evidence."""
+
+        return tuple(sorted(self._processed_observation_ids))
+
+    @property
+    def voxel_count(self) -> int:
+        return len(self._voxels)
+
+    @property
+    def point_count(self) -> int:
+        return self._point_count
+
+    def update(
+        self,
+        records: CustomMapRecords,
+        observation_ids: Iterable[str] | None = None,
+        *,
+        profiler: Any | None = None,
+    ) -> IncrementalStmrUpdate:
+        """Project and commit only complete observations not seen before.
+
+        ``observation_ids`` is mainly useful for online callers and profiling.
+        Omitting it imports every complete, unprocessed observation in record
+        order. Incomplete observations stay pending and may be retried later.
+        """
+
+        trajectory = build_trajectory(records)
+        self._trajectory_path = list(trajectory.path)
+        self._center_pose = trajectory.path[-1] if trajectory.path else None
+        self._warnings.update(records.warnings)
+
+        requested = None if observation_ids is None else {str(item) for item in observation_ids}
+        complete_pairs = _depth_mask_pose_sets(records)
+        complete_ids = {
+            str(mask_frame.observation_id)
+            for _depth_frame, mask_frame, _pose in complete_pairs
+            if mask_frame.observation_id
+        }
+        duplicate_ids = sorted(
+            observation_id
+            for observation_id in (requested or complete_ids)
+            if observation_id in self._processed_observation_ids
+        )
+        pending_ids = sorted((requested or set()) - complete_ids - self._processed_observation_ids)
+        processed_ids: list[str] = []
+        new_point_count = 0
+        new_voxel_count = 0
+
+        for depth_frame, mask_frame, pose in complete_pairs:
+            observation_id = str(mask_frame.observation_id or "")
+            if not observation_id or observation_id in self._processed_observation_ids:
+                continue
+            if requested is not None and observation_id not in requested:
+                continue
+
+            lookup = build_semantic_lookup(records, mask_frame)
+            frame_voxels: dict[tuple[int, int, int], _VoxelEvidence] = defaultdict(_VoxelEvidence)
+            center_pose = self._center_pose or pose
+            if profiler is None:
+                frame_result = _project_frame_to_voxels(
+                    depth_frame,
+                    mask_frame,
+                    pose,
+                    center_pose,
+                    lookup,
+                    frame_voxels,
+                    voxel_size_m=self.voxel_size_m,
+                    stride=self.stride,
+                    max_depth_m=self.max_depth_m,
+                )
+            else:
+                with profiler.stage(
+                    "stmr_incremental_projection",
+                    metadata={"observation_id": observation_id},
+                ) as stage:
+                    frame_result = _project_frame_to_voxels(
+                        depth_frame,
+                        mask_frame,
+                        pose,
+                        center_pose,
+                        lookup,
+                        frame_voxels,
+                        voxel_size_m=self.voxel_size_m,
+                        stride=self.stride,
+                        max_depth_m=self.max_depth_m,
+                    )
+                    stage.update(
+                        projected_point_count=frame_result["projected_points"],
+                        frame_voxel_count=len(frame_voxels),
+                        frame_status=frame_result["frame_status"],
+                    )
+
+            if frame_result["frame_status"] != "ok":
+                self._warnings.add(f"stmr_observation_unreadable:{observation_id}")
+                pending_ids.append(observation_id)
+                continue
+
+            if profiler is None:
+                added_voxels = self._commit_frame(
+                    records,
+                    mask_frame,
+                    lookup,
+                    frame_voxels,
+                    frame_result,
+                )
+            else:
+                with profiler.stage(
+                    "stmr_incremental_merge",
+                    metadata={"observation_id": observation_id},
+                ) as stage:
+                    added_voxels = self._commit_frame(
+                        records,
+                        mask_frame,
+                        lookup,
+                        frame_voxels,
+                        frame_result,
+                    )
+                    stage.update(
+                        new_voxel_count=added_voxels,
+                        total_voxel_count=len(self._voxels),
+                        total_projected_point_count=self._point_count,
+                    )
+
+            processed_ids.append(observation_id)
+            new_point_count += int(frame_result["projected_points"])
+            new_voxel_count += added_voxels
+
+        return IncrementalStmrUpdate(
+            processed_observation_ids=tuple(processed_ids),
+            duplicate_observation_ids=tuple(duplicate_ids),
+            pending_observation_ids=tuple(sorted(set(pending_ids))),
+            new_projected_point_count=new_point_count,
+            new_voxel_count=new_voxel_count,
+            total_projected_point_count=self._point_count,
+            total_voxel_count=len(self._voxels),
+        )
+
+    def snapshot(
+        self,
+        *,
+        subgoal_semantic_ids: set[int] | None = None,
+        debug_point_limit: int | None = None,
+    ) -> StmrMap:
+        """Build the current UAV-centered matrix without reading old frames."""
+
+        center_pose = self._center_pose
+        legend = dict(self._legend)
+        warnings = sorted(self._warnings)
+        if center_pose is None:
+            return StmrMap(
+                semantic_matrix=_empty_matrix(self.grid_size),
+                semantic_legend=legend,
+                path_cells=[],
+                current_cell=None,
+                center_pose={},
+                map_config=_map_config(
+                    self.grid_size,
+                    self.meters_per_cell,
+                    self.voxel_size_m,
+                    "pose_missing",
+                ),
+                coordinate_frame=_coordinate_frame(
+                    None,
+                    self.grid_size,
+                    self.meters_per_cell,
+                    self.voxel_size_m,
+                ),
+                projection_debug=_empty_debug("pose_missing"),
+                warnings=[*warnings, "stmr_pose_missing"],
+            )
+
+        voxel_labels = _voxel_labels(self._voxels)
+        voxel_world_centers = _voxel_world_centers(
+            voxel_labels,
+            center_pose,
+            grid_size=self.grid_size,
+            meters_per_cell=self.meters_per_cell,
+            voxel_size_m=self.voxel_size_m,
+        )
+        matrix, matrix_debug = _project_voxels_to_matrix(
+            voxel_labels,
+            center_pose,
+            subgoal_semantic_ids=subgoal_semantic_ids or set(),
+            grid_size=self.grid_size,
+            meters_per_cell=self.meters_per_cell,
+            voxel_size_m=self.voxel_size_m,
+        )
+        path_cells = _pose_cells(
+            self._trajectory_path,
+            center_pose,
+            self.grid_size,
+            self.meters_per_cell,
+        )
+        _stamp_path(matrix, path_cells)
+        selected_points = _limit_debug_points(self._sampled_points, debug_point_limit)
+        sampled_points = [_recenter_projection_point(item, center_pose) for item in selected_points]
+        comparison_samples = [
+            _recenter_comparison_sample(item, center_pose)
+            for item in self._depth_mode_comparison_samples
+        ]
+        return StmrMap(
+            semantic_matrix=matrix,
+            semantic_legend=legend,
+            path_cells=path_cells,
+            current_cell={"row": self.grid_size // 2, "col": self.grid_size // 2},
+            center_pose=center_pose.to_model_dict(),
+            map_config=_map_config(
+                self.grid_size,
+                self.meters_per_cell,
+                self.voxel_size_m,
+                "stmr_voxel_top_height",
+            ),
+            coordinate_frame=_coordinate_frame(
+                center_pose,
+                self.grid_size,
+                self.meters_per_cell,
+                self.voxel_size_m,
+            ),
+            projection_debug={
+                "projection_status": "stmr_voxel_top_height",
+                "build_mode": "incremental",
+                "point_count": self._point_count,
+                "sampled_points": sampled_points,
+                "sampled_points_total": len(self._sampled_points),
+                "debug_points_truncated": len(sampled_points) < len(self._sampled_points),
+                "voxel_count": len(voxel_labels),
+                "source_observation_count": len(self._processed_observation_ids),
+                "source_observation_ids": sorted(self._processed_observation_ids),
+                "processed_observation_count": len(self._processed_observation_ids),
+                "voxel_stats": _voxel_stats(voxel_labels),
+                "voxel_world_centers": voxel_world_centers,
+                "top_height_projection": matrix_debug["top_height_projection"],
+                "subgoal_priority_hits": matrix_debug["subgoal_priority_hits"],
+                "alignment_warnings": matrix_debug["alignment_warnings"],
+                "semantic_cell_counts": {
+                    str(key): value for key, value in sorted(_matrix_counts(matrix).items())
+                },
+                "depth_interpretation_used": DEPTH_MODE_OPTICAL_Z,
+                "depth_interpretation_comparison": {
+                    "primary_mode": DEPTH_MODE_OPTICAL_Z,
+                    "comparison_mode": DEPTH_MODE_RAY_DISTANCE,
+                    "ranges": {
+                        mode: finish_range_accumulator(range_data)
+                        for mode, range_data in self._depth_mode_ranges.items()
+                    },
+                    "sample_limit": DEPTH_COMPARISON_SAMPLE_LIMIT,
+                    "samples": comparison_samples,
+                },
+                "frame_point_ranges": list(self._frame_point_ranges),
+                "multi_frame_projection_drift": summarize_frame_projection_drift(
+                    self._frame_point_ranges,
+                    depth_mode=DEPTH_MODE_OPTICAL_Z,
+                ),
+                "stride": self.stride,
+                "max_depth_m": self.max_depth_m,
+                "voxel_size_m": self.voxel_size_m,
+            },
+            source_frames=dict(self._source_frames),
+            warnings=warnings,
+        )
+
+    def _commit_frame(
+        self,
+        records: CustomMapRecords,
+        mask_frame: FrameRecord,
+        lookup: SemanticLookup,
+        frame_voxels: dict[tuple[int, int, int], _VoxelEvidence],
+        frame_result: dict[str, Any],
+    ) -> int:
+        """Atomically merge one successfully projected observation."""
+
+        added_voxels = 0
+        for key, evidence in frame_voxels.items():
+            if key not in self._voxels:
+                added_voxels += 1
+            _merge_voxel_evidence(self._voxels[key], evidence)
+        self._point_count += int(frame_result["projected_points"])
+        self._sampled_points.extend(frame_result["sampled_points"])
+        for mode, range_data in frame_result["depth_mode_ranges"].items():
+            _merge_range_accumulator(self._depth_mode_ranges[mode], range_data)
+        remaining_slots = DEPTH_COMPARISON_SAMPLE_LIMIT - len(self._depth_mode_comparison_samples)
+        if remaining_slots > 0:
+            self._depth_mode_comparison_samples.extend(
+                frame_result["depth_mode_comparison_samples"][:remaining_slots]
+            )
+        self._frame_point_ranges.append(frame_result["frame_point_ranges"])
+        observation_id = str(mask_frame.observation_id or "")
+        self._processed_observation_ids.add(observation_id)
+        self._source_frames[observation_id] = _source_frame_bundle(records, observation_id)
+        self._legend.update(lookup.legend)
+        self._warnings.update(lookup.deduped_warnings())
+        return added_voxels
+
+
 def build_stmr_map(
     records: CustomMapRecords,
     *,
@@ -83,127 +439,19 @@ def build_stmr_map(
     stride: int = DEFAULT_STRIDE,
     max_depth_m: float = DEFAULT_MAX_DEPTH_M,
 ) -> StmrMap:
-    """Build a paper-style STMR matrix from open-vocabulary mask frames."""
+    """Build a full map through the incremental engine for API compatibility."""
 
-    trajectory = build_trajectory(records)
-    center_pose = trajectory.path[-1] if trajectory.path else None
-    legend = _base_legend()
-    warnings = list(records.warnings)
-    if center_pose is None:
-        return StmrMap(
-            semantic_matrix=_empty_matrix(grid_size),
-            semantic_legend=legend,
-            path_cells=[],
-            current_cell=None,
-            center_pose={},
-            map_config=_map_config(grid_size, meters_per_cell, voxel_size_m, "pose_missing"),
-            coordinate_frame=_coordinate_frame(None, grid_size, meters_per_cell, voxel_size_m),
-            projection_debug=_empty_debug("pose_missing"),
-            warnings=[*warnings, "stmr_pose_missing"],
-        )
-
-    voxels: dict[tuple[int, int, int], _VoxelEvidence] = defaultdict(_VoxelEvidence)
-    source_frames: dict[str, dict[str, Any]] = {}
-    point_count = 0
-    source_observation_ids: set[str] = set()
-    sampled_points: list[dict[str, Any]] = []
-    depth_mode_ranges = {
-        DEPTH_MODE_OPTICAL_Z: new_range_accumulator(),
-        DEPTH_MODE_RAY_DISTANCE: new_range_accumulator(),
-    }
-    depth_mode_comparison_samples: list[dict[str, Any]] = []
-    frame_point_ranges: list[dict[str, Any]] = []
-    for depth_frame, mask_frame, pose in _depth_mask_pose_sets(records):
-        lookup = build_semantic_lookup(records, mask_frame)
-        frame_result = _project_frame_to_voxels(
-            depth_frame,
-            mask_frame,
-            pose,
-            center_pose,
-            lookup,
-            voxels,
-            voxel_size_m=voxel_size_m,
-            stride=stride,
-            max_depth_m=max_depth_m,
-        )
-        point_count += int(frame_result["projected_points"])
-        sampled_points.extend(frame_result["sampled_points"])
-        for mode, range_data in frame_result["depth_mode_ranges"].items():
-            _merge_range_accumulator(depth_mode_ranges[mode], range_data)
-        remaining_comparison_slots = DEPTH_COMPARISON_SAMPLE_LIMIT - len(depth_mode_comparison_samples)
-        if remaining_comparison_slots > 0:
-            depth_mode_comparison_samples.extend(frame_result["depth_mode_comparison_samples"][:remaining_comparison_slots])
-        frame_point_ranges.append(frame_result["frame_point_ranges"])
-        if mask_frame.observation_id:
-            source_observation_ids.add(mask_frame.observation_id)
-            source_frames[mask_frame.observation_id] = _source_frame_bundle(records, mask_frame.observation_id)
-        legend.update(lookup.legend)
-        warnings.extend(lookup.deduped_warnings())
-
-    voxel_labels = _voxel_labels(voxels)
-    voxel_world_centers = _voxel_world_centers(
-        voxel_labels,
-        center_pose,
+    state = IncrementalStmrMapState(
         grid_size=grid_size,
         meters_per_cell=meters_per_cell,
         voxel_size_m=voxel_size_m,
+        stride=stride,
+        max_depth_m=max_depth_m,
     )
-    matrix, matrix_debug = _project_voxels_to_matrix(
-        voxel_labels,
-        center_pose,
-        subgoal_semantic_ids=subgoal_semantic_ids or set(),
-        grid_size=grid_size,
-        meters_per_cell=meters_per_cell,
-        voxel_size_m=voxel_size_m,
-    )
-    path_cells = _pose_cells(trajectory.path, center_pose, grid_size, meters_per_cell)
-    _stamp_path(matrix, path_cells)
-    return StmrMap(
-        semantic_matrix=matrix,
-        semantic_legend=legend,
-        path_cells=path_cells,
-        current_cell={"row": grid_size // 2, "col": grid_size // 2},
-        center_pose=center_pose.to_model_dict(),
-        map_config=_map_config(grid_size, meters_per_cell, voxel_size_m, "stmr_voxel_top_height"),
-        coordinate_frame=_coordinate_frame(center_pose, grid_size, meters_per_cell, voxel_size_m),
-        projection_debug={
-            "projection_status": "stmr_voxel_top_height",
-            "point_count": point_count,
-            "sampled_points": sampled_points,
-            "voxel_count": len(voxel_labels),
-            "source_observation_count": len(source_observation_ids),
-            "source_observation_ids": sorted(source_observation_ids),
-            "voxel_stats": _voxel_stats(voxel_labels),
-            "voxel_world_centers": voxel_world_centers,
-            "top_height_projection": matrix_debug["top_height_projection"],
-            "subgoal_priority_hits": matrix_debug["subgoal_priority_hits"],
-            "alignment_warnings": matrix_debug["alignment_warnings"],
-            "semantic_cell_counts": {
-                str(key): value for key, value in sorted(_matrix_counts(matrix).items())
-            },
-            "depth_interpretation_used": DEPTH_MODE_OPTICAL_Z,
-            "depth_interpretation_comparison": {
-                "primary_mode": DEPTH_MODE_OPTICAL_Z,
-                "comparison_mode": DEPTH_MODE_RAY_DISTANCE,
-                "ranges": {
-                    mode: finish_range_accumulator(range_data)
-                    for mode, range_data in depth_mode_ranges.items()
-                },
-                "sample_limit": DEPTH_COMPARISON_SAMPLE_LIMIT,
-                "samples": depth_mode_comparison_samples,
-            },
-            "frame_point_ranges": frame_point_ranges,
-            "multi_frame_projection_drift": summarize_frame_projection_drift(
-                frame_point_ranges,
-                depth_mode=DEPTH_MODE_OPTICAL_Z,
-            ),
-            "stride": stride,
-            "max_depth_m": max_depth_m,
-            "voxel_size_m": voxel_size_m,
-        },
-        source_frames=source_frames,
-        warnings=sorted(set(warnings)),
-    )
+    state.update(records)
+    result = state.snapshot(subgoal_semantic_ids=subgoal_semantic_ids, debug_point_limit=None)
+    result.projection_debug["build_mode"] = "batch_compatibility"
+    return result
 
 
 def _depth_mask_pose_sets(records: CustomMapRecords) -> list[tuple[FrameRecord, FrameRecord, PosePoint]]:
@@ -241,103 +489,272 @@ def _project_frame_to_voxels(
     depth = _read_depth(depth_frame.path)
     mask = _read_mask(mask_frame.path, depth.shape if depth is not None else None)
     if depth is None or mask is None:
-        return _empty_frame_projection_debug(mask_frame.observation_id, pose)
+        return _empty_frame_projection_debug(mask_frame.observation_id, pose, status="unreadable")
     height, width = depth.shape
     fx, fy, cx, cy = camera_intrinsics(width, height, _fov_degrees(depth_frame, mask_frame))
-    projected = 0
-    sampled_points: list[dict[str, Any]] = []
-    optical_range = new_range_accumulator()
-    ray_range = new_range_accumulator()
-    depth_mode_comparison_samples: list[dict[str, Any]] = []
-    for v in range(0, height, max(1, int(stride))):
-        for u in range(0, width, max(1, int(stride))):
-            distance = float(depth[v, u])
-            if not math.isfinite(distance) or distance <= 0.0 or distance > max_depth_m:
-                continue
-            color = tuple(int(channel) for channel in mask.getpixel((u, v)))
-            semantic_id = lookup.semantic_id_for_color(color)
-            if semantic_id == 0:
-                continue
-            optical_point = project_depth_pixel(
-                pixel_u=u,
-                pixel_v=v,
-                raw_depth_m=distance,
-                fx=fx,
-                fy=fy,
-                cx=cx,
-                cy=cy,
-                pose=pose,
-                center_pose=center_pose,
-                depth_mode=DEPTH_MODE_OPTICAL_Z,
-            )
-            ray_point = project_depth_pixel(
-                pixel_u=u,
-                pixel_v=v,
-                raw_depth_m=distance,
-                fx=fx,
-                fy=fy,
-                cx=cx,
-                cy=cy,
-                pose=pose,
-                center_pose=center_pose,
-                depth_mode=DEPTH_MODE_RAY_DISTANCE,
-            )
-            update_range_accumulator(optical_range, optical_point)
-            update_range_accumulator(ray_range, ray_point)
-            if len(depth_mode_comparison_samples) < DEPTH_COMPARISON_SAMPLE_LIMIT:
-                depth_mode_comparison_samples.append(
-                    {
-                        "pixel_u": u,
-                        "pixel_v": v,
-                        "semantic_id": semantic_id,
-                        "source_observation_id": mask_frame.observation_id,
-                        DEPTH_MODE_OPTICAL_Z: _compact_projection_point(optical_point),
-                        DEPTH_MODE_RAY_DISTANCE: _compact_projection_point(ray_point),
-                    }
+    step = max(1, int(stride))
+    v_axis = np.arange(0, height, step, dtype=np.int64)
+    u_axis = np.arange(0, width, step, dtype=np.int64)
+    pixel_u, pixel_v = np.meshgrid(u_axis, v_axis)
+    distances = np.asarray(depth[np.ix_(v_axis, u_axis)], dtype=np.float64).reshape(-1)
+    mask_array = np.asarray(mask.convert("RGB"), dtype=np.uint8)
+    colors = mask_array[v_axis[:, None], u_axis[None, :], :3].reshape(-1, 3)
+    packed_colors = (
+        colors[:, 0].astype(np.int64) << 16
+        | colors[:, 1].astype(np.int64) << 8
+        | colors[:, 2].astype(np.int64)
+    )
+    unique_colors, inverse_colors = np.unique(packed_colors, return_inverse=True)
+    unique_semantics = np.asarray(
+        [
+            lookup.semantic_id_for_color(
+                (
+                    int((color >> 16) & 255),
+                    int((color >> 8) & 255),
+                    int(color & 255),
                 )
-            world_x = float(optical_point["world_x"])
-            world_y = float(optical_point["world_y"])
-            world_z = float(optical_point["world_z"])
-            key = (
-                math.floor(world_x / voxel_size_m),
-                math.floor(world_y / voxel_size_m),
-                math.floor(world_z / voxel_size_m),
             )
-            voxel = voxels[key]
-            voxel.counts[semantic_id] += 1
-            voxel.point_count += 1
-            voxel.max_z = max(voxel.max_z, world_z)
-            if mask_frame.observation_id:
-                voxel.observation_ids.add(mask_frame.observation_id)
-            projected += 1
-            debug_point = _sampled_projection_point(optical_point)
-            debug_point.update(
-                {
-                    "semantic_id": semantic_id,
-                    "color": list(color),
-                    "source_observation_id": mask_frame.observation_id,
-                }
-            )
-            sampled_points.append(debug_point)
+            for color in unique_colors
+        ],
+        dtype=np.int64,
+    )
+    semantic_ids = unique_semantics[inverse_colors]
+    valid = np.isfinite(distances) & (distances > 0.0) & (distances <= max_depth_m) & (semantic_ids != 0)
+    if not np.any(valid):
+        return _empty_frame_projection_debug(mask_frame.observation_id, pose, status="ok")
+
+    pixel_u = pixel_u.reshape(-1)[valid]
+    pixel_v = pixel_v.reshape(-1)[valid]
+    distances = distances[valid]
+    colors = colors[valid]
+    semantic_ids = semantic_ids[valid]
+    camera_x = np.round((pixel_u - cx) * distances / fx, 4)
+    camera_y = np.round((pixel_v - cy) * distances / fy, 4)
+    camera_z = np.round(distances, 4)
+    forward = camera_z
+    right = camera_x
+    up = -camera_y
+    yaw_rad = math.radians(pose.yaw_deg or 0.0)
+    world_x = np.round(pose.x + forward * math.cos(yaw_rad) - right * math.sin(yaw_rad), 4)
+    world_y = np.round(pose.y + forward * math.sin(yaw_rad) + right * math.cos(yaw_rad), 4)
+    world_z = np.round((pose.z or 0.0) + up, 4)
+    local_forward, local_right, local_up = _vectorized_world_to_local(
+        world_x,
+        world_y,
+        world_z,
+        center_pose,
+    )
+    distance_m = np.round(np.sqrt(forward * forward + right * right + up * up), 4)
+    optical_arrays = {
+        "world_x": world_x,
+        "world_y": world_y,
+        "world_z": world_z,
+        "local_forward_m": local_forward,
+        "local_right_m": local_right,
+        "local_up_m": local_up,
+        "camera_x": camera_x,
+        "camera_y": camera_y,
+        "camera_z": camera_z,
+        "raw_depth_m": distances,
+    }
+
+    ray_x = (pixel_u - cx) / fx
+    ray_y = (pixel_v - cy) / fy
+    ray_norm = np.sqrt(ray_x * ray_x + ray_y * ray_y + 1.0)
+    ray_camera_x = np.round(distances * ray_x / ray_norm, 4)
+    ray_camera_y = np.round(distances * ray_y / ray_norm, 4)
+    ray_camera_z = np.round(distances / ray_norm, 4)
+    ray_forward = ray_camera_z
+    ray_right = ray_camera_x
+    ray_up = -ray_camera_y
+    ray_world_x = np.round(
+        pose.x + ray_forward * math.cos(yaw_rad) - ray_right * math.sin(yaw_rad),
+        4,
+    )
+    ray_world_y = np.round(
+        pose.y + ray_forward * math.sin(yaw_rad) + ray_right * math.cos(yaw_rad),
+        4,
+    )
+    ray_world_z = np.round((pose.z or 0.0) + ray_up, 4)
+    ray_local_forward, ray_local_right, ray_local_up = _vectorized_world_to_local(
+        ray_world_x,
+        ray_world_y,
+        ray_world_z,
+        center_pose,
+    )
+    ray_arrays = {
+        "world_x": ray_world_x,
+        "world_y": ray_world_y,
+        "world_z": ray_world_z,
+        "local_forward_m": ray_local_forward,
+        "local_right_m": ray_local_right,
+        "local_up_m": ray_local_up,
+        "camera_x": ray_camera_x,
+        "camera_y": ray_camera_y,
+        "camera_z": ray_camera_z,
+        "raw_depth_m": distances,
+    }
+
+    voxel_keys = np.floor(
+        np.column_stack((world_x, world_y, world_z)) / float(voxel_size_m)
+    ).astype(np.int64)
+    unique_voxel_keys, voxel_inverse = np.unique(voxel_keys, axis=0, return_inverse=True)
+    voxel_point_counts = np.bincount(voxel_inverse, minlength=len(unique_voxel_keys))
+    voxel_max_z = np.full(len(unique_voxel_keys), -math.inf, dtype=np.float64)
+    np.maximum.at(voxel_max_z, voxel_inverse, world_z)
+    for index, raw_key in enumerate(unique_voxel_keys):
+        key = tuple(int(value) for value in raw_key)
+        voxel = voxels[key]
+        voxel.point_count += int(voxel_point_counts[index])
+        voxel.max_z = max(voxel.max_z, float(voxel_max_z[index]))
+        if mask_frame.observation_id:
+            voxel.observation_ids.add(mask_frame.observation_id)
+    semantic_groups, semantic_counts = np.unique(
+        np.column_stack((voxel_inverse, semantic_ids)),
+        axis=0,
+        return_counts=True,
+    )
+    for (voxel_index, semantic_id), count in zip(semantic_groups, semantic_counts):
+        key = tuple(int(value) for value in unique_voxel_keys[int(voxel_index)])
+        voxels[key].counts[int(semantic_id)] += int(count)
+
+    sampled_points = [
+        {
+            "depth_mode": DEPTH_MODE_OPTICAL_Z,
+            "pixel_u": int(u),
+            "pixel_v": int(v),
+            "raw_depth_m": round(float(raw_depth), 3),
+            "camera_x": round(float(cam_x), 3),
+            "camera_y": round(float(cam_y), 3),
+            "camera_z": round(float(cam_z), 3),
+            "camera_forward_m": round(float(cam_z), 3),
+            "camera_right_m": round(float(cam_x), 3),
+            "camera_up_m": round(float(-cam_y), 3),
+            "world_x": round(float(wx), 3),
+            "world_y": round(float(wy), 3),
+            "world_z": round(float(wz), 3),
+            "local_forward_m": round(float(lf), 3),
+            "local_right_m": round(float(lr), 3),
+            "local_up_m": round(float(lu), 3),
+            "distance_m": round(float(metric_distance), 3),
+            "semantic_id": int(semantic_id),
+            "color": [int(channel) for channel in color],
+            "source_observation_id": mask_frame.observation_id,
+        }
+        for u, v, raw_depth, cam_x, cam_y, cam_z, wx, wy, wz, lf, lr, lu, metric_distance, semantic_id, color in zip(
+            pixel_u,
+            pixel_v,
+            distances,
+            camera_x,
+            camera_y,
+            camera_z,
+            world_x,
+            world_y,
+            world_z,
+            local_forward,
+            local_right,
+            local_up,
+            distance_m,
+            semantic_ids,
+            colors,
+        )
+    ]
+    comparison_count = min(DEPTH_COMPARISON_SAMPLE_LIMIT, len(sampled_points))
+    depth_mode_comparison_samples = [
+        {
+            "pixel_u": int(pixel_u[index]),
+            "pixel_v": int(pixel_v[index]),
+            "semantic_id": int(semantic_ids[index]),
+            "source_observation_id": mask_frame.observation_id,
+            DEPTH_MODE_OPTICAL_Z: _compact_vectorized_point(
+                optical_arrays,
+                distance_m,
+                index,
+            ),
+            DEPTH_MODE_RAY_DISTANCE: _compact_vectorized_point(
+                ray_arrays,
+                np.round(np.sqrt(ray_forward * ray_forward + ray_right * ray_right + ray_up * ray_up), 4),
+                index,
+            ),
+        }
+        for index in range(comparison_count)
+    ]
+    optical_range = _vectorized_range_summary(optical_arrays)
+    ray_range = _vectorized_range_summary(ray_arrays)
+    projected = len(sampled_points)
     return {
+        "frame_status": "ok",
         "projected_points": projected,
         "sampled_points": sampled_points,
         "depth_mode_ranges": {
-            DEPTH_MODE_OPTICAL_Z: finish_range_accumulator(optical_range),
-            DEPTH_MODE_RAY_DISTANCE: finish_range_accumulator(ray_range),
+            DEPTH_MODE_OPTICAL_Z: optical_range,
+            DEPTH_MODE_RAY_DISTANCE: ray_range,
         },
         "depth_mode_comparison_samples": depth_mode_comparison_samples,
         "frame_point_ranges": {
             "observation_id": mask_frame.observation_id,
             "pose": pose.to_model_dict(),
-            DEPTH_MODE_OPTICAL_Z: finish_range_accumulator(optical_range),
-            DEPTH_MODE_RAY_DISTANCE: finish_range_accumulator(ray_range),
+            DEPTH_MODE_OPTICAL_Z: optical_range,
+            DEPTH_MODE_RAY_DISTANCE: ray_range,
         },
     }
 
 
-def _empty_frame_projection_debug(observation_id: str | None, pose: PosePoint) -> dict[str, Any]:
+def _vectorized_world_to_local(
+    world_x: np.ndarray,
+    world_y: np.ndarray,
+    world_z: np.ndarray,
+    center_pose: PosePoint,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    dx = world_x - center_pose.x
+    dy = world_y - center_pose.y
+    yaw_rad = math.radians(center_pose.yaw_deg or 0.0)
+    local_forward = np.round(math.cos(yaw_rad) * dx + math.sin(yaw_rad) * dy, 4)
+    local_right = np.round(-math.sin(yaw_rad) * dx + math.cos(yaw_rad) * dy, 4)
+    local_up = np.round(world_z - (center_pose.z or 0.0), 4)
+    return local_forward, local_right, local_up
+
+
+def _vectorized_range_summary(arrays: dict[str, np.ndarray]) -> dict[str, Any]:
+    count = len(arrays.get("world_x", []))
+    if count <= 0:
+        return {"count": 0}
     return {
+        "count": count,
+        **{
+            key: [round(float(np.min(values)), 3), round(float(np.max(values)), 3)]
+            for key, values in arrays.items()
+        },
+    }
+
+
+def _compact_vectorized_point(
+    arrays: dict[str, np.ndarray],
+    distance_m: np.ndarray,
+    index: int,
+) -> dict[str, float]:
+    return {
+        "camera_x": round(float(arrays["camera_x"][index]), 3),
+        "camera_y": round(float(arrays["camera_y"][index]), 3),
+        "camera_z": round(float(arrays["camera_z"][index]), 3),
+        "world_x": round(float(arrays["world_x"][index]), 3),
+        "world_y": round(float(arrays["world_y"][index]), 3),
+        "world_z": round(float(arrays["world_z"][index]), 3),
+        "local_forward_m": round(float(arrays["local_forward_m"][index]), 3),
+        "local_right_m": round(float(arrays["local_right_m"][index]), 3),
+        "local_up_m": round(float(arrays["local_up_m"][index]), 3),
+        "distance_m": round(float(distance_m[index]), 3),
+    }
+
+
+def _empty_frame_projection_debug(
+    observation_id: str | None,
+    pose: PosePoint,
+    *,
+    status: str = "empty",
+) -> dict[str, Any]:
+    return {
+        "frame_status": status,
         "projected_points": 0,
         "sampled_points": [],
         "depth_mode_ranges": {
@@ -400,6 +817,68 @@ def _merge_range_accumulator(destination: dict[str, Any], source_summary: dict[s
             destination[key] = [math.inf, -math.inf]
         destination[key][0] = min(float(destination[key][0]), float(source_range[0]))
         destination[key][1] = max(float(destination[key][1]), float(source_range[1]))
+
+
+def _merge_voxel_evidence(destination: _VoxelEvidence, source: _VoxelEvidence) -> None:
+    """Merge one committed frame's evidence into the persistent world voxel."""
+
+    destination.counts.update(source.counts)
+    destination.point_count += int(source.point_count)
+    destination.max_z = max(float(destination.max_z), float(source.max_z))
+    destination.observation_ids.update(source.observation_ids)
+
+
+def _limit_debug_points(
+    points: list[dict[str, Any]],
+    limit: int | None,
+) -> list[dict[str, Any]]:
+    """Return deterministic, history-spanning points for a lightweight snapshot."""
+
+    if limit is None or int(limit) >= len(points):
+        return list(points)
+    limit = max(0, int(limit))
+    if limit == 0 or not points:
+        return []
+    if limit == 1:
+        return [points[0]]
+    step = (len(points) - 1) / float(limit - 1)
+    return [points[int(round(index * step))] for index in range(limit)]
+
+
+def _recenter_projection_point(point: dict[str, Any], center_pose: PosePoint) -> dict[str, Any]:
+    """Refresh local coordinates from canonical world coordinates for a snapshot."""
+
+    result = dict(point)
+    world_x = point.get("world_x")
+    world_y = point.get("world_y")
+    world_z = point.get("world_z")
+    if world_x is None or world_y is None:
+        return result
+    local = _world_to_local(float(world_x), float(world_y), _float_or_none(world_z), center_pose)
+    result.update(
+        {
+            "local_forward_m": round(float(local["local_forward_m"]), 3),
+            "local_right_m": round(float(local["local_right_m"]), 3),
+            "local_up_m": round(float(local["local_up_m"]), 3),
+        }
+    )
+    return result
+
+
+def _recenter_comparison_sample(sample: dict[str, Any], center_pose: PosePoint) -> dict[str, Any]:
+    result = dict(sample)
+    for mode in (DEPTH_MODE_OPTICAL_Z, DEPTH_MODE_RAY_DISTANCE):
+        point = sample.get(mode)
+        if isinstance(point, dict):
+            result[mode] = _recenter_projection_point(point, center_pose)
+    return result
+
+
+def _float_or_none(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _voxel_labels(voxels: dict[tuple[int, int, int], _VoxelEvidence]) -> list[dict[str, Any]]:

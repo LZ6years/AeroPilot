@@ -38,6 +38,7 @@ class PhaseWindowContextBuilder:
         state: MissionState,
         base_planner_context: dict[str, Any],
         observation_before: dict[str, Any],
+        runtime_control_context: dict[str, Any] | None = None,
     ) -> PhaseWindowContext:
         """Return the complete model-facing context for the current phase window."""
 
@@ -46,6 +47,9 @@ class PhaseWindowContextBuilder:
         progress = self.phase_progress_evidence(state)
         observation_summary = self.clean_observation_for_model(observation_before)
         planner_payload = dict(base_planner_context)
+        runtime_control = self.compact_runtime_control_context(runtime_control_context)
+        if runtime_control:
+            planner_payload["runtime_control"] = runtime_control
         planner_payload.update(
             {
                 "phase_metrics": metrics,
@@ -128,6 +132,48 @@ class PhaseWindowContextBuilder:
         if isinstance(pose, dict):
             data["pose"] = clean_pose_for_model(pose)
         return data
+
+    @staticmethod
+    def compact_runtime_control_context(runtime_control_context: dict[str, Any] | None) -> dict[str, Any]:
+        """Return the short model-facing runtime control capability summary."""
+
+        if not isinstance(runtime_control_context, dict):
+            return {}
+        available = runtime_control_context.get("available", [])
+        status = runtime_control_context.get("status", {})
+        contracts = runtime_control_context.get("contracts", {})
+        recommendations = runtime_control_context.get("recommendations", {})
+        result: dict[str, Any] = {}
+        clean_available: list[str] = []
+        if isinstance(available, list):
+            clean_available = [str(item).strip() for item in available if str(item).strip()]
+            if clean_available:
+                result["available"] = clean_available
+        if isinstance(contracts, dict):
+            clean_contracts = {
+                str(name).strip(): str(value).strip()
+                for name, value in contracts.items()
+                if str(name).strip() in clean_available and str(value).strip()
+            }
+            if clean_contracts:
+                result["contracts"] = clean_contracts
+        if isinstance(status, dict):
+            clean_status = {
+                str(name).strip(): str(value).strip()
+                for name, value in status.items()
+                if str(name).strip() in clean_available and str(value).strip()
+            }
+            if clean_status:
+                result["status"] = clean_status
+        if isinstance(recommendations, dict):
+            clean_recommendations = {
+                str(name).strip(): str(value).strip()
+                for name, value in recommendations.items()
+                if str(name).strip() in clean_available and str(value).strip()
+            }
+            if clean_recommendations:
+                result["recommendations"] = clean_recommendations
+        return result
 
     @staticmethod
     def _safe_model_float(value: Any, default: float = 0.0) -> float:

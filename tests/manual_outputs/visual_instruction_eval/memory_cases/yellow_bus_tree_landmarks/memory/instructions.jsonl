@@ -1,1 +1,0 @@
-{"id": "inst_0001", "timestamp": "2026-05-24T10:12:02.712066+00:00", "instruction": "请识别画面中可作为视觉参照的黄色车辆和大树，并说明它们在画面中的相对位置。", "semantic_plan": {"phase": {"name": "identify_visual_landmarks", "meaning": "确认可稳定复用的视觉参照物"}}}

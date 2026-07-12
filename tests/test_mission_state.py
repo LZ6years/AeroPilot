@@ -35,6 +35,16 @@ def test_mission_state_advances_phase():
     assert state.current_phase_name == "search_landmark"
 
 
+def test_mission_state_tracks_semantic_plan_version():
+    state = make_state()
+    original_version = state.semantic_plan_version
+
+    state.apply_semantic_plan_update(state.semantic_plan)
+
+    assert state.semantic_plan_version == original_version + 1
+    assert state.to_dict()["semantic_plan_version"] == 1
+
+
 def test_mission_state_records_action_and_observation():
     state = make_state()
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from src.agent.semantic import SemanticPlanValidationError, semantic_plan_from_dict
@@ -142,14 +144,15 @@ def test_model_parser_prompt_requires_explicit_numeric_metrics():
 
     prompt = parser.system_prompt
 
-    assert "Use metrics only when the user explicitly gives a distance" in prompt
-    assert "An explicit number is required for a metric, but it is not sufficient by itself." in prompt
+    assert "The preceding system message is the authoritative FlyAgent identity" in prompt
+    assert "Numeric provenance is strict" in prompt
+    assert "every numeric target or quantity" in prompt
+    assert "An explicit number alone is not sufficient" in prompt
     assert "target-relative numbers such as orbit radius" in prompt
     assert "Do not convert them into planar_distance" in prompt
     assert "do not generate planar_distance=2*pi*N" in prompt
     assert "do not make exact radius confirmation a hard blocker" in prompt
     assert "Do not describe fixed tool sequences or exact paths" in prompt
-    assert "Do not invent numeric metric targets when the user did not provide them." in prompt
     assert "negative target" in prompt
     assert '"direction":' not in prompt
     assert "rearward displacement" in prompt
@@ -163,6 +166,87 @@ def test_model_parser_prompt_requires_explicit_numeric_metrics():
     assert "avoid defaulting to yaw_delta" in prompt
     assert "move to the trees" in prompt
     assert "Do not invent a distance metric." in prompt
+
+
+def test_model_parser_builds_flyagent_and_contract_as_separate_system_messages():
+    parser = TaskParser(
+        mode="model",
+        model_config=ModelConfig(
+            task_parser_mode="model",
+            provider="openai_compatible",
+            model_name="test-model",
+            api_key="test-key",
+            base_url="https://example.test/v1",
+        ),
+    )
+
+    messages = parser._build_model_messages("Progress past the visual landmark from the right side")
+    expected_rules = Path("memory/FLYAGENT.md").read_text(encoding="utf-8-sig").strip()
+
+    assert [message["role"] for message in messages] == ["system", "system", "user"]
+    assert messages[0]["content"] == expected_rules
+    assert messages[1]["content"] == parser.system_prompt
+    assert messages[2]["content"] == "Progress past the visual landmark from the right side"
+    assert "你是 FlyAgent" in messages[0]["content"]
+    assert "Required JSON shape" in messages[1]["content"]
+    assert "你是 FlyAgent" not in messages[1]["content"]
+
+
+def test_model_parser_custom_contract_keeps_default_flyagent_rules(tmp_path):
+    custom_prompt = tmp_path / "custom_task_parser.txt"
+    custom_prompt.write_text("Return one custom semantic JSON object.", encoding="utf-8")
+    parser = TaskParser(
+        mode="model",
+        model_config=ModelConfig(
+            task_parser_mode="model",
+            provider="openai_compatible",
+            model_name="test-model",
+            api_key="test-key",
+            base_url="https://example.test/v1",
+            task_parser_prompt_path=str(custom_prompt),
+        ),
+    )
+
+    messages = parser._build_model_messages("test instruction")
+
+    assert messages[0]["content"] == Path("memory/FLYAGENT.md").read_text(encoding="utf-8-sig").strip()
+    assert messages[1]["content"] == "Return one custom semantic JSON object."
+
+
+@pytest.mark.parametrize(
+    ("file_content", "error"),
+    [(None, "not found"), ("", "is empty")],
+)
+def test_model_parser_requires_nonempty_flyagent_rules(tmp_path, monkeypatch, file_content, error):
+    rules_path = tmp_path / "FLYAGENT.md"
+    if file_content is not None:
+        rules_path.write_text(file_content, encoding="utf-8")
+    monkeypatch.setattr("src.agent.semantic.task_parser.DEFAULT_AGENT_RULES_PATH", rules_path)
+
+    with pytest.raises(TaskParserConfigError, match=error):
+        TaskParser(
+            mode="model",
+            model_config=ModelConfig(
+                task_parser_mode="model",
+                provider="openai_compatible",
+                model_name="test-model",
+                api_key="test-key",
+                base_url="https://example.test/v1",
+            ),
+        )
+
+
+def test_rule_based_parser_does_not_load_flyagent_rules(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        "src.agent.semantic.task_parser.DEFAULT_AGENT_RULES_PATH",
+        tmp_path / "missing" / "FLYAGENT.md",
+    )
+
+    parser = TaskParser(mode="rule_based")
+    result = parser.parse("前面右转会有一个黑色的路灯，右转面向路灯后停下")
+
+    assert parser.agent_rules == ""
+    assert result.plan.task_goal.target == "black street lamp"
 
 
 def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespace():

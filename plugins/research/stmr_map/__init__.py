@@ -6,3 +6,11 @@ default planner context: all outputs are human/debug artifacts until explicitly
 enabled by a later context integration.
 """
 
+from .core import IncrementalStmrMapState, IncrementalStmrUpdate, StmrMap, build_stmr_map
+
+__all__ = [
+    "IncrementalStmrMapState",
+    "IncrementalStmrUpdate",
+    "StmrMap",
+    "build_stmr_map",
+]

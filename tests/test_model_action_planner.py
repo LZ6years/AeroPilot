@@ -16,7 +16,7 @@ from src.agent.planning.model_action_planner import (
 from src.agent.planning.model_inputs import build_model_user_content
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK
-from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
+from src.agent.planning.schemas import CoupledActionPhasePlan, RuntimeControlAction, ShortHorizonPlan
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
 from src.runtime.configs.model_config import ModelConfig
@@ -211,6 +211,10 @@ def test_model_user_content_puts_flyagent_rules_before_task_fragments():
             "rules": {"text": "FlyAgent baseline flight rules.", "source": "memory/FLYAGENT.md"},
             "active_instruction": "Turn toward the visual target.",
             "semantic_goal": {"target": "visual target"},
+            "runtime_control": {
+                "available": ["semantic_plan_update"],
+                "contracts": {"semantic_plan_update": "Review the semantic contract when confidence is low."},
+            },
             "phase_progress_evidence": {"motion_progress": {"yaw_only_so_far": False}},
             "fragments": [
                 {
@@ -238,11 +242,12 @@ def test_model_user_content_puts_flyagent_rules_before_task_fragments():
 
     assert isinstance(content, str)
     text_context = json.loads(content)
-    assert list(text_context)[:9] == [
+    assert list(text_context)[:10] == [
         "rules",
         "active_instruction",
         "current_phase",
         "semantic_goal",
+        "runtime_control",
         "phase_progress_evidence",
         "fragments",
         "allowed_action_constraints",
@@ -474,7 +479,7 @@ def test_model_user_content_inserts_label_before_semantic_image_input():
                     "type": "image",
                     "input_id": "image_1_current_observation",
                     "role": "current_observation",
-                    "usage": "Use as the current visual evidence for this decision.",
+                    "usage": "LATEST image; use for current visibility and action decisions.",
                     "mime_type": "image/png",
                     "encoding": "data_url",
                     "data": image_data,
@@ -491,14 +496,14 @@ def test_model_user_content_inserts_label_before_semantic_image_input():
     model_input = text_context["fragments"][0]["model_inputs"][0]
     assert model_input["input_id"] == "image_1_current_observation"
     assert model_input["role"] == "current_observation"
-    assert model_input["usage"] == "Use as the current visual evidence for this decision."
+    assert model_input["usage"] == "LATEST image; use for current visibility and action decisions."
     assert model_input["data"].startswith("<omitted encoded model input data")
     assert content[1] == {
         "type": "text",
         "text": (
             "Model input label: input_id=image_1_current_observation; "
             "role=current_observation; "
-            "usage=Use as the current visual evidence for this decision."
+            "usage=LATEST image; use for current visibility and action decisions."
         ),
     }
     assert content[2] == {"type": "image_url", "image_url": {"url": image_data}}
@@ -585,6 +590,36 @@ def test_model_action_planner_accepts_open_phase_name():
     assert len(plan.steps) == 1
     assert "phase_transition" not in plan.to_dict()
     assert plan.agent_messages[0].type == "progress"
+
+
+def test_coupled_action_phase_plan_round_trips_control_actions():
+    plan = CoupledActionPhasePlan.from_dict(
+        {
+            "phase": "orient_leftward",
+            "phase_decision": {"decision": "continue_current_phase", "reason": "target not aligned yet"},
+            "action_window": make_action_window(),
+            "agent_messages": make_agent_messages(),
+            "control_actions": [
+                {
+                    "name": "semantic_plan_update",
+                    "reason": "current phase contract is too strict for observed evidence",
+                    "payload": {"reason": "completion evidence should use available observations"},
+                }
+            ],
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+        },
+        require_agent_messages=True,
+    )
+
+    assert plan.control_actions == [
+        RuntimeControlAction(
+            name="semantic_plan_update",
+            reason="current phase contract is too strict for observed evidence",
+            payload={"reason": "completion evidence should use available observations"},
+        )
+    ]
+    assert plan.to_dict()["control_actions"][0]["name"] == "semantic_plan_update"
+    assert plan.to_short_horizon_plan().to_dict().get("control_actions") is None
 
 
 def test_short_horizon_plan_direct_constructor_has_no_planner_side_transition():
@@ -1201,6 +1236,38 @@ def test_model_action_planner_coupled_continue_repairs_tool_contract_violation()
     assert plan.action_window.requires_intermediate_observation is True
     assert planner.last_repair_result["status"] == "repaired"
     assert repair_planner.contexts[0].violation["code"] == "action_window_intermediate_observation_requires_single_step"
+
+
+def test_model_action_planner_preserves_control_actions_after_tool_repair():
+    repair_planner = StubRepairPlanner(
+        [
+            {
+                "phase": "orient_leftward",
+                "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "repaired hold"}],
+            }
+        ]
+    )
+    planner = StubModelActionPlanner(
+        {
+            "phase": "orient_leftward",
+            "control_actions": [
+                {
+                    "name": "semantic_plan_update",
+                    "reason": "phase contract is blocking progress",
+                    "payload": {"reason": "contract should be revisited"},
+                }
+            ],
+            "steps": [{"kind": "tool", "tool": "uav.fake", "args": {}, "reason": "bad"}],
+        },
+        max_repair_attempts=1,
+        repair_planner=repair_planner,
+    )
+
+    plan = planner.plan_next_with_phase_decision(make_state(), make_context())
+
+    assert plan.steps[0].tool == "uav.hover"
+    assert plan.control_actions[0].name == "semantic_plan_update"
+    assert plan.control_actions[0].payload == {"reason": "contract should be revisited"}
 
 
 def test_model_action_planner_coupled_transition_with_steps_is_not_tool_repaired():

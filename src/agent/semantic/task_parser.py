@@ -13,6 +13,9 @@ from src.agent.semantic.validator import semantic_plan_from_dict, validate_seman
 from src.runtime.configs.model_config import ModelConfig, load_model_config
 
 
+DEFAULT_AGENT_RULES_PATH = Path(__file__).resolve().parents[3] / "memory" / "FLYAGENT.md"
+
+
 class TaskParserConfigError(RuntimeError):
     """Raised when model parsing is requested without usable model config."""
 
@@ -22,6 +25,7 @@ class TaskParser:
         self.model_config = model_config or load_model_config()
         self.mode = mode or self.model_config.task_parser_mode
         self.system_prompt = self._load_system_prompt()
+        self.agent_rules = self._load_agent_rules() if self.mode == "model" else ""
 
     def parse(self, instruction: str) -> TaskParseResult:
         clean_instruction = instruction.strip()
@@ -209,10 +213,7 @@ class TaskParser:
         endpoint = self.model_config.chat_completions_url()
         payload = {
             "model": self.model_config.model_name,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": instruction},
-            ],
+            "messages": self._build_model_messages(instruction),
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
@@ -238,6 +239,15 @@ class TaskParser:
         content = data["choices"][0]["message"]["content"]
         return _loads_json_object(content)
 
+    def _build_model_messages(self, instruction: str) -> list[dict[str, str]]:
+        """Keep shared agent rules separate from the parser output contract."""
+
+        return [
+            {"role": "system", "content": self.agent_rules},
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": instruction},
+        ]
+
     def _load_system_prompt(self) -> str:
         prompt_path = self.model_config.task_parser_prompt_path
         if prompt_path:
@@ -245,6 +255,16 @@ class TaskParser:
         else:
             path = Path(__file__).resolve().parent / "prompts" / "task_parser_system.txt"
         return path.read_text(encoding="utf-8").strip()
+
+    @staticmethod
+    def _load_agent_rules() -> str:
+        path = DEFAULT_AGENT_RULES_PATH
+        if not path.exists():
+            raise TaskParserConfigError(f"FlyAgent rules file not found: {path}")
+        text = path.read_text(encoding="utf-8-sig").strip()
+        if not text:
+            raise TaskParserConfigError(f"FlyAgent rules file is empty: {path}")
+        return text
 
     @staticmethod
     def _contains_any(text: str, candidates: tuple[str, ...]) -> bool:

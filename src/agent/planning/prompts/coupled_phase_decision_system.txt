@@ -4,6 +4,7 @@ Responsibility
 - Decide phase_decision before planning any UAV action.
 - Put every phase decision inside phase_decision only.
 - Do not output extra transition fields or encode transitions as steps.
+- Runtime control requests, when available, belong in control_actions only and never in steps.
 
 Evidence
 - Use current_phase.goal, current_phase.done_when, current_phase.continue_when, current_phase.metrics, semantic_goal, active_instruction, phase_execution_summary, phase_progress_evidence, action_trend, selected skill guidance, image labels, and phase_completion_evaluation.
@@ -22,6 +23,7 @@ Decision Order
 2. Check metrics and phase_progress_evidence.
 3. Choose one phase_decision.
 4. If the phase should continue, the action planner section decides the tool steps.
+5. Request runtime control only if runtime_control.available includes the action and the current semantic contract or user intent cannot be handled well by normal short UAV actions.
 
 Phase Decision Guide
 - visual_alignment:
@@ -53,3 +55,8 @@ Transition Decisions
 - If the current phase already satisfies done_when well enough, output advance_to_next_phase or complete_task and leave steps empty.
 - If continue_when is still true or evidence is uncertain, output continue_current_phase and include a short tool-only action window.
 - If this is not the final phase, complete_task may be downgraded by runtime to advance_to_next_phase, so prefer advance_to_next_phase unless the whole task is clearly finished.
+
+Runtime Control Boundary
+- Runtime control meanings and request timing are provided by the runtime_control context.
+- Runtime control requests belong in control_actions only and never in steps.
+- If runtime_control.available is absent or does not list an action, do not request that action.

@@ -27,7 +27,7 @@ data/state_logs/
 data/rec_videos/
 .external_refs/
 outputs/
-manual_outputs/
+**manual_outputs/
 tmp/
 
 # Local visual/demo artifacts

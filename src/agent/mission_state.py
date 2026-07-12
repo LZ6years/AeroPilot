@@ -32,6 +32,7 @@ class MissionState:
     current_phase_window_count_value: int = 0
     max_phase_window_count: int = 100
     current_phase_origin_pose: dict[str, Any] = field(default_factory=dict)
+    semantic_plan_version: int = 0
     completed: bool = False
     stopped: bool = False
     stopped_reason: str | None = None
@@ -132,6 +133,12 @@ class MissionState:
     def mark_completed(self) -> None:
         self.completed = True
 
+    def apply_semantic_plan_update(self, semantic_plan: SemanticPlan) -> None:
+        """Replace the semantic plan after runtime validates a current-phase patch."""
+
+        self.semantic_plan = semantic_plan
+        self.semantic_plan_version += 1
+
     def mark_stopped(self, reason: str, source: str = "runtime") -> None:
         # Stopped means the runtime hit an abnormal guard. It is intentionally
         # separate from completed so eval/reporting can treat the task as
@@ -169,6 +176,7 @@ class MissionState:
             "run_id": self.run_id,
             "user_instruction": self.user_instruction,
             "semantic_plan": self.semantic_plan.to_dict(),
+            "semantic_plan_version": self.semantic_plan_version,
             "current_phase_index": self.current_phase_index,
             "current_phase": self.current_phase_name,
             "current_phase_key": self.current_phase_key,

@@ -16,6 +16,7 @@ from src.agent.safety import SafetyDecision
 from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
 from src.agent.semantic.schemas import TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
+from src.agent.semantic.validator import apply_semantic_plan_patch
 from src.env_client.base import EnvClient
 from src.env_client.schemas import SceneInstance
 from src.memory.flight_memory import FlightMemory
@@ -23,8 +24,10 @@ from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
 from src.perception.raw_observation import RawObservation
-from src.runtime.control import UavStabilizer
+from src.runtime.control import RuntimeControlExecutor, UavStabilizer
+from src.runtime.control.actions import SemanticPlanUpdateJob
 from src.runtime.configs.action_config import UavActionConfig
+from src.runtime.configs.runtime_control_config import RuntimeControlConfig, load_runtime_control_config
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.context import PhaseWindowContextBuilder
 from src.tools.dispatcher import ToolDispatcher
@@ -46,6 +49,8 @@ class TaskRuntime:
         shutdown_policy: str = "hover",
         action_config: UavActionConfig | None = None,
         stabilization_config: UavStabilizationConfig | None = None,
+        runtime_control_config: RuntimeControlConfig | None = None,
+        semantic_plan_updater: Any | None = None,
         event_sink: Callable[[dict[str, Any]], None] | None = None,
         runtime_loop_guard_windows: int = 100,
         enable_action_planner_debug: bool = False,
@@ -65,6 +70,10 @@ class TaskRuntime:
         self.plugin_registry = PluginRegistry.from_config()
         self.tools = ToolDispatcher(env_client, plugin_registry=self.plugin_registry)
         self.stabilizer = UavStabilizer(self.tools, recorder, stabilization_config)
+        self.runtime_control = RuntimeControlExecutor(
+            runtime_control_config or load_runtime_control_config(),
+            semantic_plan_updater=semantic_plan_updater,
+        )
         # Optional synchronous stream for CLI/TUI frontends. The recorder remains
         # the historical source of truth; this sink is only for live user display.
         self.event_sink = event_sink
@@ -254,6 +263,7 @@ class TaskRuntime:
 
     def _execute_phase_loop(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
         while not state.completed and not state.stopped:
+            self._apply_completed_semantic_plan_update(state)
             state.record_phase_window_started()
             plan, safety_decision, transition = self._run_phase_window(scene, agent_id, state)
             self._apply_phase_transition(scene, agent_id, state, plan, safety_decision, transition)
@@ -317,11 +327,20 @@ class TaskRuntime:
 
         phase_name = state.current_phase_name
         phase_key = state.current_phase_key
+        semantic_plan_version = state.semantic_plan_version
         observation_before = dict(state.latest_observation)
         state.ensure_current_phase_progress(observation_before)
         state.update_current_phase_progress(observation_before)
         context = self.context_builder.build(state, self._memory_for_state(state))
-        phase_window_context = self.phase_window_context_builder.build(state, context, observation_before)
+        runtime_control_context = self.runtime_control.model_context(
+            self._runtime_control_recommendation_context(state)
+        )
+        phase_window_context = self.phase_window_context_builder.build(
+            state,
+            context,
+            observation_before,
+            runtime_control_context=runtime_control_context,
+        )
         coupled_context = phase_window_context.planner_payload
         model_context = phase_window_context.model_context
         self.recorder.write_json("contexts/latest_context.json", coupled_context)
@@ -338,6 +357,8 @@ class TaskRuntime:
         transition = coupled_plan.phase_decision
         raw_plan = coupled_plan.to_short_horizon_plan()
         self._debug_event("model_action_planned", coupled_plan.to_dict())
+        control_results = self.runtime_control.validate_all(coupled_plan.control_actions)
+        self._record_runtime_control_results(coupled_plan.control_actions, control_results)
         safety_decision = SafetyDecision(raw_plan, [])
         planner_debug_ref = self._write_action_planner_debug_artifact(
             state,
@@ -489,7 +510,25 @@ class TaskRuntime:
             last_window_measurements=window_measurements,
             tool_facts_delta=self._tool_facts_from_executed_steps(executed_steps),
         )
+        self._submit_semantic_plan_updates_after_window(
+            state,
+            coupled_plan.control_actions,
+            control_results,
+            phase_key=phase_key,
+            semantic_plan_version=semantic_plan_version,
+            observation_before=observation_before,
+            observation_after=observation_after,
+        )
         return plan, safety_decision, PhaseTransition.continue_current_phase(transition.reason)
+
+    def _runtime_control_recommendation_context(self, state: MissionState) -> dict[str, Any]:
+        """Return compact runtime evidence used only by runtime-control recommendations."""
+
+        return {
+            "phase_execution_summary": state.current_phase_execution_summary,
+            "completed": state.completed,
+            "stopped": state.stopped,
+        }
 
     def _apply_phase_transition(
         self,
@@ -815,6 +854,149 @@ class TaskRuntime:
         self.recorder.write_json("state/latest_state.json", state_data)
         self.recorder.write_json("state/flight_memory.json", self._memory_for_state(state).to_dict())
         self._debug_event("mission_state_updated", self._state_summary(state))
+
+    def _apply_completed_semantic_plan_update(self, state: MissionState) -> None:
+        result = self.runtime_control.take_completed_semantic_plan_update()
+        if result is None:
+            return
+        payload = result.to_dict()
+        if result.status != "completed":
+            self._debug_event("runtime_control_action_completed", {"name": "semantic_plan_update", **payload})
+            return
+        discard_reason = ""
+        if not self.runtime_control.config.is_enabled("semantic_plan_update"):
+            discard_reason = "runtime_control_action_disabled"
+        elif not self.runtime_control.config.is_exposed("semantic_plan_update"):
+            discard_reason = "runtime_control_action_not_exposed"
+        elif result.job.run_id != state.run_id:
+            discard_reason = "run_id_mismatch"
+        elif result.job.phase_key != state.current_phase_key:
+            discard_reason = "phase_key_mismatch"
+        elif result.job.semantic_plan_version != state.semantic_plan_version:
+            discard_reason = "semantic_plan_version_mismatch"
+        if discard_reason:
+            self._debug_event("semantic_plan_update_discarded", {**payload, "discard_reason": discard_reason})
+            return
+        try:
+            updated_plan = apply_semantic_plan_patch(
+                state.semantic_plan,
+                state.current_phase_index,
+                result.patch,
+            )
+        except Exception as exc:
+            self._debug_event(
+                "semantic_plan_update_discarded",
+                {**payload, "discard_reason": "invalid_patch", "error_type": type(exc).__name__, "error": str(exc)},
+            )
+            return
+        state.apply_semantic_plan_update(updated_plan)
+        self.recorder.write_json(
+            "state/semantic_plan.json",
+            {
+                "instruction": state.user_instruction,
+                "parser_mode": "runtime_updated",
+                "validation_ok": True,
+                "plan": state.semantic_plan.to_dict(),
+                "semantic_plan_version": state.semantic_plan_version,
+            },
+        )
+        self._event(
+            "runtime_control_action_completed",
+            {
+                "name": "semantic_plan_update",
+                "status": "applied",
+                "phase_key": state.current_phase_key,
+                "semantic_plan_version": state.semantic_plan_version,
+            },
+        )
+        self._debug_event("semantic_plan_update_applied", payload)
+
+    def _submit_semantic_plan_updates_after_window(
+        self,
+        state: MissionState,
+        actions,
+        results,
+        *,
+        phase_key: str,
+        semantic_plan_version: int,
+        observation_before: dict[str, Any],
+        observation_after: dict[str, Any],
+    ) -> None:
+        for action, result in zip(actions, results):
+            if action.name != "semantic_plan_update" or result.status != "accepted":
+                continue
+            job = SemanticPlanUpdateJob(
+                run_id=state.run_id,
+                phase_key=phase_key,
+                semantic_plan_version=semantic_plan_version,
+                request_payload=dict(action.payload),
+                updater_context=self._semantic_plan_update_context(
+                    state,
+                    action,
+                    phase_key=phase_key,
+                    semantic_plan_version=semantic_plan_version,
+                    observation_before=observation_before,
+                    observation_after=observation_after,
+                ),
+            )
+            submit_result = self.runtime_control.submit_semantic_plan_update(job)
+            self._debug_event(
+                "runtime_control_action_started",
+                {
+                    "name": "semantic_plan_update",
+                    "status": submit_result.status,
+                    "reason": submit_result.reason,
+                    "phase_key": phase_key,
+                    "semantic_plan_version": semantic_plan_version,
+                },
+            )
+
+    def _semantic_plan_update_context(
+        self,
+        state: MissionState,
+        action,
+        *,
+        phase_key: str,
+        semantic_plan_version: int,
+        observation_before: dict[str, Any],
+        observation_after: dict[str, Any],
+    ) -> dict[str, Any]:
+        current_phase = {}
+        if state.current_phase_index < len(state.semantic_plan.phases):
+            current_phase = state.semantic_plan.phases[state.current_phase_index].to_dict()
+        return {
+            "run_id": state.run_id,
+            "user_instruction": state.user_instruction,
+            "semantic_plan": state.semantic_plan.to_dict(),
+            "semantic_plan_version": semantic_plan_version,
+            "current_phase_key": phase_key,
+            "current_phase_index": state.current_phase_index,
+            "current_phase": current_phase,
+            "planner_request": {
+                "reason": action.reason,
+                "payload": dict(action.payload),
+            },
+            "phase_execution_summary": state.current_phase_execution_summary,
+            "phase_progress_evidence": self._phase_progress_evidence(state),
+            "observation_before": self.phase_window_context_builder.clean_observation_for_model(observation_before),
+            "observation_after": self.phase_window_context_builder.clean_observation_for_model(observation_after),
+        }
+
+    def _record_runtime_control_results(self, actions, results) -> None:
+        for action, result in zip(actions, results):
+            request_payload = {
+                "name": action.name,
+                "reason": action.reason,
+                "status": result.status,
+            }
+            self._event("runtime_control_action_requested", request_payload)
+            self._debug_event(
+                "runtime_control_action_completed",
+                {
+                    "request": action.to_dict(),
+                    "result": result.to_dict(),
+                },
+            )
 
     def _event(self, event: str, payload: dict) -> None:
         self.recorder.event(event, payload)
