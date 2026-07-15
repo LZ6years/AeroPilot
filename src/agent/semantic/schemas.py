@@ -64,7 +64,6 @@ class SemanticPlan:
     intent: str
     task_goal: TaskGoal
     phases: list[SemanticPhase]
-    uncertainties: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "SemanticPlan":
@@ -77,7 +76,6 @@ class SemanticPlan:
                 for index, item in enumerate(phases, start=1)
                 if isinstance(item, dict)
             ],
-            uncertainties=_string_list(data.get("uncertainties")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -85,7 +83,6 @@ class SemanticPlan:
             "intent": self.intent,
             "task_goal": self.task_goal.to_dict(),
             "phases": [phase.to_dict() for phase in self.phases],
-            "uncertainties": list(self.uncertainties),
         }
 
 

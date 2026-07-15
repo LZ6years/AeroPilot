@@ -58,6 +58,7 @@ def write_case_review(case_dir: str | Path, case_payload: dict[str, Any]) -> str
     ndtw = case_payload.get("ndtw", {})
     metric_interpretation = ndtw.get("metric_interpretation") or metric_interpretation_for_class(case.get("class_name"))
     sr = case_payload.get("sr_judge", {})
+    stmr = case_payload.get("stmr", {}) if isinstance(case_payload.get("stmr"), dict) else {}
     lines = [
         f"# UAV-Flow Case Review: {case.get('case_id')}",
         "",
@@ -78,6 +79,9 @@ def write_case_review(case_dir: str | Path, case_payload: dict[str, Any]) -> str
         f"- Metric mode: {metric_interpretation.get('mode')} position_zeroed={metric_interpretation.get('position_zeroed')} sample_step={metric_interpretation.get('sample_step')}",
         f"- Metric interpretation: {metric_interpretation.get('summary')}",
         f"- SR judge: {sr.get('status')}",
+        f"- STMR: mode={stmr.get('mode')} status={stmr.get('status')} processed={stmr.get('processed_observation_count', 0)} stale={stmr.get('stale')}",
+        f"- STMR map: `{stmr.get('png_path')}`",
+        f"- STMR batch parity: {(stmr.get('batch_incremental_parity') or {}).get('equivalent')}",
         "",
         "## Actions",
         "",

@@ -89,3 +89,21 @@ runs/plugin_system_real_probe_<timestamp>/
 - 外接能力以后通过 callable skill 暴露为 `skill.*`，但当前默认关闭。
 - 不暴露 `target_pos / reference_path_preprocessed / end_pos`。
 - 不允许 skill 绕过 validator、dispatcher、safety。
+
+## 语义计划 Criteria 注入
+
+Model task parser 使用独立的两阶段流程：
+
+```text
+用户指令
+  -> structure model 生成 intent / task_goal / phase index,total,name,goal
+  -> 每个 phase 独立选择相关 knowledge skill
+  -> criteria model 生成 done_when / continue_when / observe / metrics
+  -> 确定性合并并执行 semantic validator
+```
+
+Structure 调用不加载 skill。phase 数量、顺序、名称和 goal 只能来自用户指令，skill 不能修改这些字段。
+
+Criteria selector 不设置数量硬上限，可以保留任意数量的合法选择，但 prompt 要求选择最小必要集合。Runtime 只校验名称、去重并保持顺序，不截断合法结果。selector 失败时，该 phase 使用 `FLYAGENT.md` 基础规则继续生成 criteria。
+
+Parser 侧只加载有长度限制的 `SKILL.md` 正文，不向 selector 或 criteria model 提供 references、source path、scripts 或 callable capability。Planner 仍按当前 runtime evidence 独立选择 skill；parser 的选择结果不会传给 planner 作为隐式决定。

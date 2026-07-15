@@ -2,7 +2,33 @@
 
 This package is a standalone implementation of a Semantic-Topo-Metric-like
 research pipeline for UAV-Flow recordings. It does not participate in the
-default planner context or flight runtime.
+default planner context or flight runtime. UAV-Flow can explicitly install its
+stateful online adapter in the existing `map` context slot for controlled
+`shadow` or planner-visible canary runs.
+
+## Online UAV-Flow Context Integration
+
+The experimental provider keeps the normal fragment order and contributes one
+map image through `map.model_inputs`. The shared model-input adapter therefore
+sends existing RGB images first, the STMR image next, and the compact JSON
+context last. The STMR image is labelled as semantic history rather than
+verified traversability.
+
+Modes are `off` (default), `shadow` (build artifacts without changing the
+model-facing map fragment), and `planner` (attach one STMR PNG). UAV-Flow also
+enables its existing real depth capture only for the two STMR modes. Run the
+preflight before launching UE; the STMR modes require the project environment
+with Torch and Transformers:
+
+```powershell
+F:\conda_env\flyagent\python.exe evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
+  --preflight-only --stmr-mode shadow
+```
+
+The staged five-class canary is available at
+`tests/manual/uav_flow_eval/run_stmr_canary.py`. Models are warmed before UE is
+started so missing dependencies or an incomplete model download fail early
+instead of wasting a benchmark run.
 
 ## Processing Blocks
 
@@ -20,7 +46,7 @@ Instruction
   -> metric voxel pooling
   -> top-height / sub-goal-priority column projection
   -> 20 x 20 UAV-centered semantic matrix
-  -> path stamp (-1)
+  -> path stamp (-1) + ordered START/ENTRY -> NOW direction overlay
   -> PNG / lightweight 3D HTML / JSON
 ```
 
@@ -38,7 +64,11 @@ Each block has one responsibility:
 - **Incremental voxel pooling** projects each observation once and permanently
   merges its evidence into process-local world-coordinate voxels.
 - **Column projection** selects a top-down semantic label per metric column.
-- **Path stamping** marks the recorded UAV trajectory as `-1` after semantics.
+- **Path stamping** marks visited cells as `-1` after semantics. The PNG also
+  overlays the ordered actual pose trace: orange arrowheads point from older to
+  newer poses, the green `NOW` marker shows current heading, and map top is the
+  current UAV forward direction. The full fractional trace stays in debug JSON;
+  planner context receives only a compact numeric trajectory summary.
 
 ## Urban Query Priors
 

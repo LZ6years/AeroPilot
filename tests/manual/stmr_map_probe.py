@@ -251,6 +251,8 @@ def _run_stmr_probe_impl(
         "semantic_matrix": stmr_map.semantic_matrix,
         "semantic_legend": {str(key): dict(value) for key, value in sorted(stmr_map.semantic_legend.items())},
         "path_cells": stmr_map.path_cells,
+        "trajectory_trace": stmr_map.trajectory_trace,
+        "trajectory_summary": stmr_map.trajectory_summary,
         "current_cell": stmr_map.current_cell,
         "center_pose": stmr_map.center_pose,
         "map_config": stmr_map.map_config,
@@ -482,6 +484,8 @@ def _stmr_parity(incremental: StmrMap, batch: StmrMap) -> dict[str, Any]:
         == batch.projection_debug.get("semantic_cell_counts"),
         "source_observation_ids": incremental.projection_debug.get("source_observation_ids")
         == batch.projection_debug.get("source_observation_ids"),
+        "trajectory_trace": incremental.trajectory_trace == batch.trajectory_trace,
+        "trajectory_summary": incremental.trajectory_summary == batch.trajectory_summary,
         "center_pose": incremental.center_pose == batch.center_pose,
     }
     mismatches = [name for name, matches in checks.items() if not matches]

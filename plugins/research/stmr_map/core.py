@@ -45,6 +45,7 @@ STMR_LOCAL_EXTENT_M = STMR_GRID_SIZE * STMR_METERS_PER_CELL
 DEFAULT_VOXEL_SIZE_M = 1.0
 DEFAULT_STRIDE = 2
 DEFAULT_MAX_DEPTH_M = 80.0
+TRAJECTORY_POSITION_EPSILON_M = 0.05
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,8 @@ class StmrMap:
     semantic_matrix: list[list[int]]
     semantic_legend: dict[int, dict[str, Any]]
     path_cells: list[dict[str, int]]
+    trajectory_trace: list[dict[str, Any]]
+    trajectory_summary: dict[str, Any]
     current_cell: dict[str, int] | None
     center_pose: dict[str, Any]
     map_config: dict[str, Any]
@@ -288,6 +291,8 @@ class IncrementalStmrMapState:
                 semantic_matrix=_empty_matrix(self.grid_size),
                 semantic_legend=legend,
                 path_cells=[],
+                trajectory_trace=[],
+                trajectory_summary=_empty_trajectory_summary(),
                 current_cell=None,
                 center_pose={},
                 map_config=_map_config(
@@ -328,6 +333,12 @@ class IncrementalStmrMapState:
             self.grid_size,
             self.meters_per_cell,
         )
+        trajectory_trace, trajectory_summary = _pose_trace(
+            self._trajectory_path,
+            center_pose,
+            self.grid_size,
+            self.meters_per_cell,
+        )
         _stamp_path(matrix, path_cells)
         selected_points = _limit_debug_points(self._sampled_points, debug_point_limit)
         sampled_points = [_recenter_projection_point(item, center_pose) for item in selected_points]
@@ -339,6 +350,8 @@ class IncrementalStmrMapState:
             semantic_matrix=matrix,
             semantic_legend=legend,
             path_cells=path_cells,
+            trajectory_trace=trajectory_trace,
+            trajectory_summary=trajectory_summary,
             current_cell={"row": self.grid_size // 2, "col": self.grid_size // 2},
             center_pose=center_pose.to_model_dict(),
             map_config=_map_config(
@@ -990,6 +1003,109 @@ def _pose_cells(
     return cells
 
 
+def _pose_trace(
+    poses: list[PosePoint],
+    center_pose: PosePoint,
+    grid_size: int,
+    meters_per_cell: float,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Project ordered poses without collapsing sub-cell motion.
+
+    ``path_cells`` remains the compatibility representation stamped into the
+    semantic matrix. This trace is a separate visual/model aid: fractional
+    coordinates preserve direction even when several movements stay inside one
+    coarse 5 m cell, and segment IDs prevent lines across off-map gaps.
+    """
+
+    trace: list[dict[str, Any]] = []
+    segment_index = -1
+    previous_visible = False
+    previous_distinct_pose: PosePoint | None = None
+    task_start_visible = False
+    total_translation_m = 0.0
+    recent_motion: dict[str, float] | None = None
+
+    for sequence_index, pose in enumerate(poses):
+        if previous_distinct_pose is not None:
+            dx = pose.x - previous_distinct_pose.x
+            dy = pose.y - previous_distinct_pose.y
+            distance_m = math.hypot(dx, dy)
+            if distance_m < TRAJECTORY_POSITION_EPSILON_M:
+                continue
+            total_translation_m += distance_m
+            delta_local = _world_delta_to_local(dx, dy, center_pose)
+            recent_motion = {
+                "forward_delta_m": round(delta_local["local_forward_m"], 3),
+                "right_delta_m": round(delta_local["local_right_m"], 3),
+                "distance_m": round(distance_m, 3),
+            }
+
+        previous_distinct_pose = pose
+        point = _fractional_grid_point(pose, center_pose, grid_size, meters_per_cell)
+        visible = point is not None
+        if sequence_index == 0:
+            task_start_visible = visible
+        if not visible:
+            previous_visible = False
+            continue
+        if not previous_visible:
+            segment_index += 1
+        trace.append(
+            {
+                "sequence_index": sequence_index,
+                "segment_index": segment_index,
+                "row": point["row"],
+                "col": point["col"],
+                "local_forward_m": point["local_forward_m"],
+                "local_right_m": point["local_right_m"],
+                "observation_id": pose.observation_id,
+            }
+        )
+        previous_visible = True
+
+    recent = recent_motion or {"forward_delta_m": 0.0, "right_delta_m": 0.0, "distance_m": 0.0}
+    summary = {
+        "pose_count": len(poses),
+        "visible_trace_point_count": len(trace),
+        "visible_segment_count": len({int(item["segment_index"]) for item in trace}),
+        "visible_start_marker": "START" if trace and task_start_visible else ("ENTRY" if trace else None),
+        "total_translation_m": round(total_translation_m, 3),
+        "recent_motion_local_m": recent,
+        "translation_status": "actual_translation" if recent_motion is not None else "stationary_or_yaw_only",
+        "direction_convention": "ordered_trace_old_to_new; arrowheads_toward_newer_poses; image_top_is_current_uav_forward",
+    }
+    return trace, summary
+
+
+def _fractional_grid_point(
+    pose: PosePoint,
+    center_pose: PosePoint,
+    grid_size: int,
+    meters_per_cell: float,
+) -> dict[str, float] | None:
+    local = _world_to_local(pose.x, pose.y, pose.z, center_pose)
+    center = grid_size // 2
+    row = center - local["local_forward_m"] / meters_per_cell
+    col = center + local["local_right_m"] / meters_per_cell
+    # Integer row/col values are cell centers, hence the half-cell boundary.
+    if row < -0.5 or col < -0.5 or row >= grid_size - 0.5 or col >= grid_size - 0.5:
+        return None
+    return {
+        "row": round(row, 4),
+        "col": round(col, 4),
+        "local_forward_m": round(local["local_forward_m"], 3),
+        "local_right_m": round(local["local_right_m"], 3),
+    }
+
+
+def _world_delta_to_local(dx: float, dy: float, center_pose: PosePoint) -> dict[str, float]:
+    yaw_rad = math.radians(center_pose.yaw_deg or 0.0)
+    return {
+        "local_forward_m": math.cos(yaw_rad) * dx + math.sin(yaw_rad) * dy,
+        "local_right_m": -math.sin(yaw_rad) * dx + math.cos(yaw_rad) * dy,
+    }
+
+
 def _stamp_path(matrix: list[list[int]], path_cells: list[dict[str, int]]) -> None:
     for cell in path_cells:
         row, col = cell["row"], cell["col"]
@@ -1221,6 +1337,23 @@ def _empty_debug(status: str) -> dict[str, Any]:
         "top_height_projection": [],
         "subgoal_priority_hits": [],
         "alignment_warnings": [],
+    }
+
+
+def _empty_trajectory_summary() -> dict[str, Any]:
+    return {
+        "pose_count": 0,
+        "visible_trace_point_count": 0,
+        "visible_segment_count": 0,
+        "visible_start_marker": None,
+        "total_translation_m": 0.0,
+        "recent_motion_local_m": {
+            "forward_delta_m": 0.0,
+            "right_delta_m": 0.0,
+            "distance_m": 0.0,
+        },
+        "translation_status": "stationary_or_yaw_only",
+        "direction_convention": "ordered_trace_old_to_new; arrowheads_toward_newer_poses; image_top_is_current_uav_forward",
     }
 
 

@@ -44,7 +44,6 @@ class DefaultInstructionContextModule(ContextModule):
             content={
                 "current_instruction": current_instruction,
                 "instruction_history": history_summary,
-                "uncertainties": _compact_uncertainties(plan.get("uncertainties", [])),
             },
             goals=goals,
             confidence="high",
@@ -58,7 +57,6 @@ class DefaultInstructionContextModule(ContextModule):
             "content_fields": {
                 "current_instruction": "Compact structured summary of the active instruction and parsed mission goal.",
                 "instruction_history": "Recent instruction summaries; full semantic plans remain in memory/debug artifacts.",
-                "uncertainties": "Known uncertainties from task parsing that should make planning more conservative.",
             },
             "goal_fields": {
                 "mission_goal": "Overall parsed mission goal.",
@@ -120,9 +118,3 @@ def _target_label(goal: Any) -> str:
     if goal.get("target"):
         return str(goal.get("target"))
     return ""
-
-
-def _compact_uncertainties(items: Any, max_items: int = 5) -> list[Any]:
-    if not isinstance(items, list):
-        return []
-    return list(items[:max_items])

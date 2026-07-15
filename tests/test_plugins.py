@@ -13,6 +13,7 @@ from src.memory.flight_memory import FlightMemory
 from src.plugins.core.discovery import PluginDiscovery
 from src.plugins.core.registry import PluginRegistry
 from src.plugins.skills import SkillContentLoader
+from src.plugins.skills.semantic_criteria import SemanticCriteriaSkillResolver
 from src.plugins.skills.selection import ModelSkillSelector, SkillSelectionResult
 from src.runtime.configs.model_config import ModelConfig
 
@@ -146,6 +147,64 @@ def test_skill_loader_lists_references_without_executing_scripts():
     )
     assert planner_guidance_with_ref["requested_references"][0]["path"] == "references/search_under_uncertainty.md"
     assert "30-45 degrees" in planner_guidance_with_ref["requested_references"][0]["text"]
+
+
+def test_semantic_criteria_skill_resolver_keeps_all_valid_skills_without_internal_resources():
+    class InspectingSelector:
+        def __init__(self):
+            self.context = None
+
+        def select(self, selection_context, catalog):
+            self.context = selection_context
+            names = [skill.name for skill in catalog.skills]
+            return SkillSelectionResult(
+                requested_skill_names=[*names, names[0], "disabled_or_unknown_skill"],
+                accepted_skill_names=[*names, names[0], "disabled_or_unknown_skill"],
+                requested_references={names[0]: ["references/search_under_uncertainty.md"]},
+                status="selected",
+            )
+
+    selector = InspectingSelector()
+    resolver = SemanticCriteriaSkillResolver(
+        ModelConfig(model_name="test-model", api_key="secret"),
+        plugin_registry=_uav_flight_registry(),
+        selector=selector,
+        content_loader=SkillContentLoader(max_skill_chars=80),
+    )
+
+    result = resolver.resolve(
+        "Face and then pass the landmark while preserving safe distance.",
+        {"target": "landmark", "target_attributes": {}, "final_state": "past_landmark"},
+        {"index": 2, "total": 2, "name": "pass_landmark", "goal": "Pass the landmark"},
+    )
+
+    assert result.selected_skill_names == [skill.name for skill in _uav_flight_registry().skill_catalog.skills]
+    assert len(result.selected_skill_names) == len(EXPECTED_UAV_FLIGHT_SKILLS)
+    assert "skill_selection_rejected:disabled_or_unknown_skill" in result.warnings
+    assert "semantic_criteria_skill_references_ignored" in result.warnings
+    assert all("semantic_criteria_skill_truncated:" in warning for warning in result.warnings[-5:])
+    assert selector.context["current_phase"] == {
+        "index": 2,
+        "name": "pass_landmark",
+        "goal": "Pass the landmark",
+    }
+    for listing in selector.context["available_skills"]:
+        assert set(listing) == {"name", "description", "summary"}
+    for guidance in result.selected_skills:
+        assert set(guidance) == {"name", "description", "skill_text"}
+        assert len(guidance["skill_text"]) <= 80
+
+
+def test_semantic_skill_guidance_preserves_completion_tail_within_bound():
+    catalog = _uav_flight_registry().skill_catalog
+    accepted, _ = catalog.validate_selection(["route_traversal_and_passage"])
+
+    guidance = SkillContentLoader(max_skill_chars=800).load_semantic_guidance(accepted[0])
+
+    assert len(guidance["skill_text"]) <= 800
+    assert "bounded middle omitted" in guidance["skill_text"]
+    assert "useful completion evidence" in guidance["skill_text"]
+    assert guidance["truncated"] is True
 
 
 def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmation():

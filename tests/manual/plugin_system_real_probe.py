@@ -427,7 +427,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             final_state=final_state,
         ),
         phases=[phase],
-        uncertainties=[],
     )
 
 
@@ -461,7 +460,6 @@ def _semantic_plan_from_hint(instruction: str, hint: dict[str, Any]) -> Semantic
             final_state=final_state,
         ),
         phases=[phase],
-        uncertainties=[str(item).strip() for item in hint.get("uncertainties", []) if str(item).strip()],
     )
 
 

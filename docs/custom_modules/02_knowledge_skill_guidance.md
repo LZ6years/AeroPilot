@@ -150,3 +150,17 @@ runs/plugin_system_real_probe_<timestamp>/
 - context 中有 `name == "skills"`；
 - `skills.facts == []`；
 - real probe 中 invalid name 为 0，且不会对简单动作选择大量 skill。
+
+## 6. Task Parser 中的 Knowledge Skill
+
+同一份通用 knowledge skill 也可以参与 model task parser，但职责比 planner 注入更窄：它只帮助定义某个不可变 phase 的完成条件、继续条件、证据来源和合法 metric。
+
+```text
+structure：不加载 skill，只生成 phase name 和 goal
+criteria：对每个 phase 单独选 skill，再生成 done_when / continue_when / observe / metrics
+planner：运行时重新独立选择，不复用 parser 的选择结果
+```
+
+Parser criteria 注入只包含 `name + description + bounded SKILL.md body`。它不读取 reference 文件，不暴露本地路径、脚本或 callable capability。skill 正文也不应出现 parser schema 字段；criteria model 负责把通用飞行知识映射到 semantic schema。
+
+没有 skill 数量硬上限。selector 应选择全部真正相关的知识，同时保持最小必要集合，不能为了保险加载整个 catalog。未知、重复或未启用名称由 registry 拒绝或去重，合法选择不会被 runtime 截断。

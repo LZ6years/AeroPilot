@@ -41,7 +41,6 @@ def make_parse_result() -> TaskParseResult:
                     "metrics": [],
                 }
             ],
-            "uncertainties": ["target_identity_requires_observation"],
         }
     )
     return TaskParseResult("turn right and find the black street lamp", "model", plan)

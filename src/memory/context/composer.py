@@ -129,7 +129,6 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
         "instruction": {
             "current_instruction": "Current instruction summary.",
             "instruction_history": "Recent compact instruction summaries.",
-            "uncertainties": "Known parser uncertainties.",
         },
         "skills": {
             "selected_skills": "Selected skill summaries, bounded SKILL.md guidance text, and any explicitly requested reference text.",

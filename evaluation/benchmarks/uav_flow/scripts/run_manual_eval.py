@@ -136,6 +136,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-loop-guard-windows", type=int, default=100, help="Runtime loop guard window count.")
     parser.add_argument("--parser-mode", default="model", help="Task parser mode.")
     parser.add_argument("--env-path", default=None, help="Optional .env path for model config.")
+    parser.add_argument("--stmr-mode", choices=["off", "shadow", "planner"], default=None, help="Optional online STMR experiment mode.")
+    parser.add_argument("--stmr-prior", default=None, help="Named STMR detector-query prior.")
+    parser.add_argument("--stmr-max-queries", type=int, default=None, help="Maximum task-plus-prior detector queries.")
+    parser.add_argument("--stmr-device", choices=["auto", "cuda", "cpu"], default=None, help="Device for GroundingDINO and SAM.")
     parser.add_argument("--preflight-only", action="store_true", help="Check real UnrealCV imports and exit before launching UE.")
     return parser
 
@@ -160,6 +164,14 @@ def _config_from_args(args: argparse.Namespace) -> UavFlowEvalConfig:
         data["max_cases"] = args.max_cases
     if args.env_path:
         data["env_path"] = args.env_path
+    if args.stmr_mode:
+        data["stmr_mode"] = args.stmr_mode
+    if args.stmr_prior:
+        data["stmr_prior"] = args.stmr_prior
+    if args.stmr_max_queries is not None:
+        data["stmr_max_queries"] = args.stmr_max_queries
+    if args.stmr_device:
+        data["stmr_device"] = args.stmr_device
     return UavFlowEvalConfig.from_dict(data)
 
 
@@ -185,6 +197,10 @@ def _config_summary(config: UavFlowEvalConfig, eval_id: str | None) -> dict[str,
         "runtime_loop_guard_windows": config.runtime_loop_guard_windows,
         "parser_mode": config.parser_mode,
         "env_path": config.env_path,
+        "stmr_mode": config.stmr_mode,
+        "stmr_prior": config.stmr_prior,
+        "stmr_max_queries": config.stmr_max_queries,
+        "stmr_device": config.stmr_device,
     }
 
 
@@ -204,7 +220,10 @@ def _real_unrealcv_preflight(config: UavFlowEvalConfig) -> dict[str, Any]:
     repo_text = str(repo)
     if repo_text not in sys.path:
         sys.path.insert(0, repo_text)
-    for module_name in ("gym", "gym_unrealcv", "unrealcv"):
+    required_modules = ["gym", "gym_unrealcv", "unrealcv"]
+    if config.stmr_mode != "off":
+        required_modules.extend(["torch", "transformers"])
+    for module_name in required_modules:
         spec = importlib.util.find_spec(module_name)
         result["imports"][module_name] = {
             "found": spec is not None,

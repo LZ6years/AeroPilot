@@ -1,0 +1,356 @@
+"""Tests for stateful STMR map-context integration without real model weights."""
+
+from __future__ import annotations
+
+import base64
+import json
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+from plugins.research.stmr_map.context_modules.map import PluginContextModule, STMR_MAP_USAGE
+from plugins.research.stmr_map.online import StmrOnlineMapBuilder, StmrOnlineMapResult
+from plugins.research.stmr_map.perception import StmrPerceptionSession
+from plugins.research.stmr_map.perception.grounding_dino_backend import DetectionResult
+from plugins.research.stmr_map.perception.sam_backend import SamMaskResult
+from src.agent.planning.model_inputs import build_model_user_content
+from src.memory.context.schemas import MemorySourceBundle, StageContextInput
+from src.memory.flight_memory import FlightMemory
+from src.memory.stores import MapMemoryStore, MemoryRecordReader
+
+
+def test_online_builder_processes_completed_observation_once(tmp_path):
+    _write_complete_memory(tmp_path, include_pose=True)
+    grounding = _FakeGrounding()
+    sam = _FakeSam()
+    builder = StmrOnlineMapBuilder(
+        session=StmrPerceptionSession(grounding_backend=grounding, sam_backend=sam),
+        device="cpu",
+    )
+    memory = _memory(tmp_path)
+    stage = _stage_context()
+
+    first = builder.build(memory, stage)
+    second = builder.build(memory, stage)
+
+    assert first.status == second.status == "ready"
+    assert first.processed_observation_count == second.processed_observation_count == 1
+    assert first.point_count == second.point_count
+    assert grounding.calls == sam.calls == 1
+    assert first.png_path and first.png_path.exists()
+    assert first.json_path and first.json_path.exists()
+    manifest_path = first.json_path.parent / "render_history.json"
+    history = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert history["snapshot_count"] == 1
+    assert history["snapshots"][0]["observation_id"] == "obs_0001"
+    assert Path(history["snapshots"][0]["png_path"]).exists()
+    debug = builder.debug_summary()
+    frame_total = debug["profiling"]["stages"]["stmr_online_frame_total"]
+    assert frame_total["sample_count"] == 1
+    assert debug["profiling"]["stages"]["stmr_online_perception_map_total"]["sample_count"] == 1
+    assert debug["profiling"]["stages"]["stmr_online_png_render"]["sample_count"] == 1
+    assert debug["render_history"]["snapshot_count"] == 1
+    assert debug["batch_incremental_parity"]["equivalent"] is True
+
+
+def test_online_builder_preserves_one_render_for_each_successful_observation(tmp_path):
+    _write_complete_memory(tmp_path, include_pose=True, observation_count=2)
+    grounding = _FakeGrounding()
+    sam = _FakeSam()
+    builder = StmrOnlineMapBuilder(
+        session=StmrPerceptionSession(grounding_backend=grounding, sam_backend=sam),
+        device="cpu",
+    )
+
+    result = builder.build(_memory(tmp_path), _stage_context())
+    repeated = builder.build(_memory(tmp_path), _stage_context())
+    manifest = json.loads((result.json_path.parent / "render_history.json").read_text(encoding="utf-8"))
+
+    assert result.processed_observation_count == repeated.processed_observation_count == 2
+    assert grounding.calls == sam.calls == 2
+    assert manifest["snapshot_count"] == 2
+    assert [item["observation_id"] for item in manifest["snapshots"]] == ["obs_0001", "obs_0002"]
+    assert [item["processed_observation_count"] for item in manifest["snapshots"]] == [1, 2]
+    assert len(list((result.json_path.parent / "snapshots").glob("*.png"))) == 2
+
+
+def test_online_builder_keeps_latest_map_when_history_copy_fails(tmp_path, monkeypatch):
+    _write_complete_memory(tmp_path, include_pose=True)
+    builder = StmrOnlineMapBuilder(
+        session=StmrPerceptionSession(grounding_backend=_FakeGrounding(), sam_backend=_FakeSam()),
+        device="cpu",
+    )
+
+    def fail_copy(*args, **kwargs):
+        raise OSError("synthetic history storage failure")
+
+    monkeypatch.setattr("plugins.research.stmr_map.online.shutil.copy2", fail_copy)
+    result = builder.build(_memory(tmp_path), _stage_context())
+    debug = builder.debug_summary()
+
+    assert result.status == "ready"
+    assert result.processed_observation_count == 1
+    assert result.png_path and result.png_path.exists()
+    assert debug["render_history"]["snapshot_count"] == 0
+    assert any("stmr_render_history_write_failed:obs_0001" in item for item in debug["warnings"])
+
+
+def test_online_builder_waits_for_pose_then_retries(tmp_path):
+    _write_complete_memory(tmp_path, include_pose=False)
+    grounding = _FakeGrounding()
+    sam = _FakeSam()
+    builder = StmrOnlineMapBuilder(
+        session=StmrPerceptionSession(grounding_backend=grounding, sam_backend=sam),
+        device="cpu",
+    )
+
+    pending = builder.build(_memory(tmp_path), _stage_context())
+    _write_pose(tmp_path)
+    recovered = builder.build(_memory(tmp_path), _stage_context())
+    repeated = builder.build(_memory(tmp_path), _stage_context())
+
+    assert pending.status == "waiting_for_complete_observation"
+    assert grounding.calls == sam.calls == 1
+    assert recovered.status == repeated.status == "ready"
+    assert recovered.processed_observation_count == repeated.processed_observation_count == 1
+
+
+def test_online_builder_persists_failure_summary_without_snapshot(tmp_path):
+    class FailingGrounding(_FakeGrounding):
+        def detect(self, rgb_path, prompts, *, profiler=None):
+            self.calls += 1
+            raise RuntimeError("synthetic detector failure")
+
+    _write_complete_memory(tmp_path, include_pose=True)
+    builder = StmrOnlineMapBuilder(
+        session=StmrPerceptionSession(grounding_backend=FailingGrounding(), sam_backend=_FakeSam()),
+        device="cpu",
+    )
+
+    result = builder.build(_memory(tmp_path), _stage_context())
+    payload = json.loads(result.json_path.read_text(encoding="utf-8"))
+
+    assert result.status == "failed_no_snapshot"
+    assert result.png_path is None
+    assert payload["debug"]["failures"][0]["error_type"] == "RuntimeError"
+    assert payload["debug"]["failures"][0]["error"] == "synthetic detector failure"
+
+
+def test_map_context_shadow_is_baseline_and_planner_adds_one_image(tmp_path):
+    png = tmp_path / "stmr.png"
+    Image.new("RGB", (4, 4), (20, 40, 60)).save(png)
+    result = StmrOnlineMapResult(
+        status="ready",
+        stale=False,
+        latest_observation_id="obs_0001",
+        processed_observation_count=1,
+        point_count=16,
+        voxel_count=3,
+        center_pose={"x": 0.0, "y": 0.0, "z": 0.0, "yaw_deg": 0.0},
+        map_config={"grid_size": 20, "meters_per_cell": 5.0, "orientation": "uav_forward_up"},
+        semantic_cell_counts={"building": 2},
+        trajectory_summary={
+            "pose_count": 1,
+            "recent_motion_local_m": {"forward_delta_m": 0.0, "right_delta_m": 0.0, "distance_m": 0.0},
+            "translation_status": "stationary_or_yaw_only",
+        },
+        png_path=png,
+        json_path=None,
+    )
+    fake = _FakeOnlineBuilder(result)
+    sources = MemorySourceBundle(FlightMemory("run", "map", "scene", "uav"), MapMemoryStore())
+
+    shadow = PluginContextModule(mode="shadow", online_builder=fake).build(sources, _stage_context())
+    planner = PluginContextModule(mode="planner", online_builder=fake).build(sources, _stage_context())
+
+    assert shadow.model_inputs == []
+    assert "stmr" not in shadow.content
+    assert len(planner.model_inputs) == 1
+    assert planner.model_inputs[0]["usage"] == STMR_MAP_USAGE
+    assert "START/ENTRY to NOW" in planner.model_inputs[0]["usage"]
+    assert "image top is current forward" in planner.model_inputs[0]["usage"]
+    assert planner.content["stmr"]["representation"] == "semantic_history_not_traversability"
+    assert planner.content["stmr"]["trajectory_summary"]["pose_count"] == 1
+    assert "trajectory_trace" not in planner.content["stmr"]
+
+
+def test_map_context_failure_falls_back_without_model_input():
+    sources = MemorySourceBundle(FlightMemory("run", "map", "scene", "uav"), MapMemoryStore())
+
+    planner = PluginContextModule(mode="planner", online_builder=_ExplodingOnlineBuilder()).build(
+        sources,
+        _stage_context(),
+    )
+    shadow = PluginContextModule(mode="shadow", online_builder=_ExplodingOnlineBuilder()).build(
+        sources,
+        _stage_context(),
+    )
+
+    assert planner.model_inputs == []
+    assert planner.risks[-1]["type"] == "stmr_map_unavailable"
+    assert shadow.model_inputs == []
+    assert shadow.risks == []
+
+
+def test_stmr_media_follows_rgb_and_precedes_context_json(tmp_path):
+    rgb_data = _tiny_png_data_url(tmp_path / "rgb.png", (10, 20, 30))
+    map_data = _tiny_png_data_url(tmp_path / "map.png", (30, 20, 10))
+    context = {
+        "active_instruction": "follow the road",
+        "fragments": [
+            {
+                "name": "image",
+                "content": {"selected_frames": [{"role": "current_observation"}]},
+                "model_inputs": [
+                    {
+                        "type": "image",
+                        "role": "current_observation",
+                        "usage": "NOW | CURRENT OBSERVATION.",
+                        "encoding": "data_url",
+                        "data": rgb_data,
+                    }
+                ],
+            },
+            {
+                "name": "map",
+                "content": {"stmr": {"representation": "semantic_history_not_traversability"}},
+                "model_inputs": [
+                    {
+                        "type": "image",
+                        "role": "stmr_semantic_map",
+                        "usage": STMR_MAP_USAGE,
+                        "encoding": "data_url",
+                        "data": map_data,
+                    }
+                ],
+            },
+        ],
+    }
+
+    content = build_model_user_content(context)
+
+    assert isinstance(content, list)
+    assert [part["type"] for part in content] == ["text", "image_url", "text", "image_url", "text"]
+    assert content[0]["text"] == "NOW | CURRENT OBSERVATION."
+    assert content[2]["text"] == STMR_MAP_USAGE
+    assert content[1]["image_url"]["url"] == rgb_data
+    assert content[3]["image_url"]["url"] == map_data
+    assert map_data not in content[-1]["text"]
+    assert json.loads(content[-1]["text"])["fragments"][-1]["name"] == "map"
+
+
+class _FakeGrounding:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def detect(self, rgb_path, prompts, *, profiler=None):
+        self.calls += 1
+        return [DetectionResult((1, 1, 7, 7), "building", 0.95, "building")]
+
+    def warmup(self, *, profiler=None):
+        return None
+
+
+class _FakeSam:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def segment(self, rgb_path, detections, *, profiler=None):
+        self.calls += 1
+        mask = np.zeros((8, 8), dtype=bool)
+        mask[1:7, 1:7] = True
+        return [SamMaskResult(detections[0], mask, 0.95)]
+
+    def warmup(self, *, profiler=None):
+        return None
+
+
+class _FakeOnlineBuilder:
+    def __init__(self, result: StmrOnlineMapResult) -> None:
+        self.result = result
+        self.calls = 0
+
+    def build(self, memory, stage_context):
+        self.calls += 1
+        return self.result
+
+    def debug_summary(self):
+        return self.result.context_content()
+
+
+class _ExplodingOnlineBuilder:
+    def build(self, memory, stage_context):
+        raise RuntimeError("synthetic STMR failure")
+
+
+def _write_complete_memory(run_dir: Path, *, include_pose: bool, observation_count: int = 1) -> None:
+    memory_dir = run_dir / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    frames = []
+    for index in range(1, observation_count + 1):
+        observation_id = f"obs_{index:04d}"
+        rgb = run_dir / f"rgb_{index:04d}.png"
+        depth = run_dir / f"depth_{index:04d}.npy"
+        Image.new("RGB", (8, 8), (10 * index, 20, 30)).save(rgb)
+        np.save(depth, np.full((8, 8), 8.0 + index, dtype=np.float32))
+        frames.extend(
+            [
+                {
+                    "id": f"rgb_{index:04d}",
+                    "observation_id": observation_id,
+                    "modality": "rgb",
+                    "path": str(rgb),
+                },
+                {
+                    "id": f"depth_{index:04d}",
+                    "observation_id": observation_id,
+                    "modality": "depth",
+                    "path": str(depth),
+                    "metadata": {"fov_degrees": 90.0},
+                },
+            ]
+        )
+    (memory_dir / "frames.jsonl").write_text("\n".join(json.dumps(item) for item in frames) + "\n", encoding="utf-8")
+    (memory_dir / "actions.jsonl").write_text("", encoding="utf-8")
+    (memory_dir / "observations.jsonl").write_text("", encoding="utf-8")
+    if include_pose:
+        _write_pose(run_dir, observation_count=observation_count)
+    else:
+        (memory_dir / "poses.jsonl").write_text("", encoding="utf-8")
+
+
+def _write_pose(run_dir: Path, *, observation_count: int = 1) -> None:
+    path = run_dir / "memory" / "poses.jsonl"
+    poses = [
+        {
+            "id": f"pose_{index:04d}",
+            "observation_id": f"obs_{index:04d}",
+            "pose": {"x": float(index - 1), "y": 0.0, "z": 0.0, "yaw_deg": 0.0},
+        }
+        for index in range(1, observation_count + 1)
+    ]
+    path.write_text("\n".join(json.dumps(item) for item in poses) + "\n", encoding="utf-8")
+
+
+def _memory(run_dir: Path) -> FlightMemory:
+    return FlightMemory(
+        "run",
+        "map",
+        "scene",
+        "uav",
+        active_instruction="follow the building",
+        memory_reader=MemoryRecordReader(run_dir),
+    )
+
+
+def _stage_context() -> StageContextInput:
+    return StageContextInput(
+        active_instruction="follow the building",
+        semantic_goal={"target": "building"},
+    )
+
+
+def _tiny_png_data_url(path: Path, color: tuple[int, int, int]) -> str:
+    Image.new("RGB", (2, 2), color).save(path)
+    return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")

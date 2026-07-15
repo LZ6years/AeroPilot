@@ -79,6 +79,25 @@ def test_disabled_profiler_does_not_record_or_require_cuda():
     assert profiler.summary()["sample_count"] == 0
 
 
+def test_cpu_profiler_does_not_initialize_torch_runtime():
+    class ExplodingTorch:
+        @property
+        def cuda(self):
+            raise AssertionError("CPU profiling must not access Torch CUDA")
+
+    profiler = StageProfiler(
+        device="cpu",
+        torch_module=ExplodingTorch(),
+        process=_Process(),
+    )
+
+    with profiler.stage("cpu_only"):
+        pass
+
+    assert profiler.records[0]["cpu_rss_after_mb"] == 128.0
+    assert profiler.records[0]["cuda_peak_allocated_mb"] is None
+
+
 def test_profile_summary_aggregates_cases_and_variants():
     runs = [
         {

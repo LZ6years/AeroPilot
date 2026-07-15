@@ -524,7 +524,6 @@ def test_task_runtime_validates_runtime_control_request_without_executing_it(tmp
             },
         ),
     )
-
     state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
     recorder.close()
 
@@ -555,6 +554,27 @@ def test_task_runtime_validates_runtime_control_request_without_executing_it(tmp
         for record in events
     )
     assert "ask_user" not in planner.contexts[0]["runtime_control"]["available"]
+
+
+def test_task_runtime_uses_injected_context_builder(tmp_path):
+    class InjectedContextBuilder:
+        def build(self, state, memory):
+            return {"active_instruction": state.user_instruction, "fragments": []}
+
+    recorder = AsyncRunLogger(tmp_path / "injected_context")
+    server = LocalSimulationServer([make_package()], run_dir=tmp_path / "injected_context")
+    injected = InjectedContextBuilder()
+
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=HoverOnlyPlanner(),
+        context_builder=injected,
+    )
+    recorder.close()
+
+    assert runtime.context_builder is injected
 
 
 def test_task_runtime_loads_runtime_control_config_from_env(tmp_path, monkeypatch):

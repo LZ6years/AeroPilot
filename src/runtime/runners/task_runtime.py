@@ -54,6 +54,7 @@ class TaskRuntime:
         event_sink: Callable[[dict[str, Any]], None] | None = None,
         runtime_loop_guard_windows: int = 100,
         enable_action_planner_debug: bool = False,
+        context_builder: ObservationContextBuilder | None = None,
     ) -> None:
         if shutdown_policy not in self.SHUTDOWN_POLICIES:
             raise ValueError(f"Unsupported shutdown policy: {shutdown_policy}")
@@ -77,7 +78,10 @@ class TaskRuntime:
         # Optional synchronous stream for CLI/TUI frontends. The recorder remains
         # the historical source of truth; this sink is only for live user display.
         self.event_sink = event_sink
-        self.context_builder = ObservationContextBuilder(
+        # Evaluation and experimental integrations may replace one context
+        # provider without changing global plugin configuration.  Runtime owns
+        # when context is built; the injected builder still owns its contents.
+        self.context_builder = context_builder or ObservationContextBuilder(
             action_config=action_config,
             safety_config=self.safety.safety_config,
             plugin_registry=self.plugin_registry,
@@ -108,6 +112,9 @@ class TaskRuntime:
         # Execute one short-horizon window per semantic phase.
         self._current_turn_agent_messages = []
         parse_result = self.task_parser.parse(instruction)
+        parse_trace = getattr(self.task_parser, "last_parse_trace", {})
+        if isinstance(parse_trace, dict) and parse_trace:
+            self._debug_event("task_parser_phase_skill_trace", parse_trace)
         return self.run_parsed_task(
             map_id,
             parse_result,

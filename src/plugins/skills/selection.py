@@ -110,9 +110,16 @@ class SkillSelectionResult:
 class ModelSkillSelector:
     """Ask the configured model which enabled knowledge skills to load."""
 
-    def __init__(self, model_config: ModelConfig | None = None, *, enabled: bool = True) -> None:
+    def __init__(
+        self,
+        model_config: ModelConfig | None = None,
+        *,
+        enabled: bool = True,
+        system_prompt: str | None = None,
+    ) -> None:
         self.model_config = model_config or load_model_config()
         self.enabled = bool(enabled)
+        self.system_prompt = system_prompt or SKILL_SELECTION_SYSTEM_PROMPT
 
     def select(self, selection_context: dict[str, Any], catalog: SkillCatalog) -> SkillSelectionResult:
         if not self.enabled:
@@ -188,7 +195,7 @@ class ModelSkillSelector:
         payload = {
             "model": self.model_config.model_name,
             "messages": [
-                {"role": "system", "content": SKILL_SELECTION_SYSTEM_PROMPT},
+                {"role": "system", "content": self.system_prompt},
                 {"role": "user", "content": json.dumps(selection_context, ensure_ascii=False)},
             ],
             "temperature": 0,

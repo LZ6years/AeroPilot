@@ -237,6 +237,7 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
     ndtw = result.get("ndtw", {}) if isinstance(result.get("ndtw"), dict) else {}
     sr = result.get("sr_judge", {}) if isinstance(result.get("sr_judge"), dict) else {}
     visual = result.get("visual_diagnostics", {}) if isinstance(result.get("visual_diagnostics"), dict) else {}
+    stmr = result.get("stmr", {}) if isinstance(result.get("stmr"), dict) else {}
     plot = result.get("plot_result", {}) if isinstance(result.get("plot_result"), dict) else {}
     rgb_frames = _rgb_frames(result, artifacts)
     actions = artifacts.get("actions", []) if isinstance(artifacts.get("actions"), list) else []
@@ -273,6 +274,7 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
       {_kv("SR status", sr.get("status"))}
       {_kv("SR failure", sr.get("failure_type"))}
       {_kv("Visual diagnostics", _visual_summary(visual))}
+      {_stmr_quick_review(stmr)}
       {_kv("Planner windows", decision_stats.get("window_count"))}
       {_kv("Decisions", _decision_counts_text(decision_stats))}
       {_kv("Behavior flags", ", ".join(flags) if flags else "none")}
@@ -288,6 +290,7 @@ def _case_page(eval_path: Path, case_dir: Path, result: dict[str, Any]) -> str:
 <section>
   <h2>Visual</h2>
   {_key_frame_gallery(case_dir, rgb_frames, include_descriptions=True, run_dir=run_dir)}
+  {_stmr_render_panel(case_dir, stmr)}
   <details open>
     <summary>All RGB Frames</summary>
     {_rgb_gallery(case_dir, rgb_frames)}
@@ -501,6 +504,7 @@ def _artifact_links(case_dir: Path, result: dict[str, Any], run_dir: Path | None
         _link(case_dir, case_dir / "case.json", "case.json"),
         _link(case_dir, case_dir / "ndtw.json", "ndtw.json"),
         _link(case_dir, case_dir / "sr_judge.json", "sr_judge.json"),
+        _link(case_dir, case_dir / "stmr_summary.json", "stmr_summary.json"),
     ]
     for key, label in [("trajectory_2d", "trajectory_2d"), ("trajectory_3d", "trajectory_3d")]:
         if plot.get(key):
@@ -513,12 +517,180 @@ def _artifact_links(case_dir: Path, result: dict[str, Any], run_dir: Path | None
                 _link(case_dir, run_dir / "memory" / "agent_messages.jsonl", "agent_messages.jsonl"),
                 _link(case_dir, run_dir / "artifacts" / "rgb", "rgb folder"),
                 _link(case_dir, run_dir / "debug" / "action_planner", "action planner debug"),
+                _link(case_dir, run_dir / "contexts" / "stmr_map", "STMR map folder"),
             ]
         )
     review_path = result.get("review_path")
     if review_path:
         links.append(_link(case_dir, _path_from_result(review_path, None), "summary review path"))
     return "\n".join(links)
+
+
+def _stmr_quick_review(stmr: dict[str, Any]) -> str:
+    """Keep disabled STMR out of the standard UAV-Flow quick review."""
+
+    if not stmr or stmr.get("mode") in (None, "off"):
+        return ""
+    return "\n".join(
+        [
+            _kv("STMR", f"{stmr.get('mode')} / {stmr.get('status')}"),
+            _kv("STMR observations", stmr.get("processed_observation_count")),
+            _kv("STMR parity", (stmr.get("batch_incremental_parity") or {}).get("equivalent")),
+        ]
+    )
+
+
+def _stmr_render_panel(case_dir: Path, stmr: dict[str, Any]) -> str:
+    """Render report-only STMR history inside a closed native HTML panel."""
+
+    if not stmr or stmr.get("mode") in (None, "off"):
+        return ""
+    latest_path = _existing_result_path(stmr.get("png_path"))
+    snapshots = _stmr_render_snapshots(stmr)
+    if latest_path is None and not snapshots:
+        return ""
+
+    key_snapshots = _evenly_sample(snapshots, limit=8)
+    if key_snapshots:
+        key_gallery = '<div class="frames key">' + "\n".join(
+            _stmr_snapshot_card(case_dir, item, lazy=False, final=item is snapshots[-1])
+            for item in key_snapshots
+        ) + "</div>"
+    elif latest_path is not None:
+        key_gallery = '<div class="frames key">' + _frame_card(
+            case_dir,
+            latest_path,
+            "Final STMR map",
+            "Legacy run: incremental render history was not recorded.",
+        ) + "</div>"
+    else:
+        key_gallery = '<p class="empty">No STMR rendering snapshots found.</p>'
+
+    all_history = ""
+    if snapshots:
+        all_history = (
+            '<details class="stmr-history"><summary>全部 STMR 历史地图 '
+            f'({_e(len(snapshots))})</summary><div class="frames all">'
+            + "\n".join(_stmr_snapshot_card(case_dir, item, lazy=True) for item in snapshots)
+            + "</div></details>"
+        )
+
+    semantic_cells = stmr.get("semantic_cell_counts") if isinstance(stmr.get("semantic_cell_counts"), dict) else {}
+    profiling = stmr.get("profiling") if isinstance(stmr.get("profiling"), dict) else {}
+    stages = profiling.get("stages") if isinstance(profiling.get("stages"), dict) else {}
+    history = stmr.get("render_history") if isinstance(stmr.get("render_history"), dict) else {}
+    return f"""
+<details class="stmr-render-panel">
+  <summary>显示/隐藏 STMR 渲染过程</summary>
+  <div class="stmr-render-content">
+    <p class="empty">Semantic history for localization and accumulated relations only; not verified traversability.</p>
+    <dl class="mini-kv">
+      {_kv("Mode / status", f"{stmr.get('mode')} / {stmr.get('status')}")}
+      {_kv("Snapshots", history.get("snapshot_count", len(snapshots)))}
+      {_kv("Processed / failed", f"{stmr.get('processed_observation_count')} / {stmr.get('failed_observation_count')}")}
+      {_kv("Points / voxels", f"{stmr.get('point_count')} / {stmr.get('voxel_count')}")}
+      {_kv("Batch parity", (stmr.get("batch_incremental_parity") or {}).get("equivalent"))}
+    </dl>
+    <h3>Incremental Key Frames</h3>
+    {key_gallery}
+    {all_history}
+    <h3>Semantic Cells</h3>
+    <pre>{_e(json.dumps(semantic_cells, ensure_ascii=False, indent=2))}</pre>
+    <h3>STMR Performance</h3>
+    {_stmr_timing_table(stages)}
+  </div>
+</details>
+"""
+
+
+def _stmr_render_snapshots(stmr: dict[str, Any]) -> list[dict[str, Any]]:
+    history = stmr.get("render_history") if isinstance(stmr.get("render_history"), dict) else {}
+    manifest_path = _existing_result_path(history.get("manifest_path"))
+    if manifest_path is None:
+        json_path = _existing_result_path(stmr.get("json_path"))
+        candidate = json_path.parent / "render_history.json" if json_path is not None else None
+        manifest_path = candidate if candidate is not None and candidate.exists() else None
+    manifest = _read_json(manifest_path) if manifest_path is not None else {}
+    values = manifest.get("snapshots") if isinstance(manifest.get("snapshots"), list) else []
+    snapshots = []
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        path = _existing_result_path(value.get("png_path"))
+        if path is None:
+            continue
+        snapshots.append({**value, "_path": path})
+    return snapshots
+
+
+def _existing_result_path(value: Any) -> Path | None:
+    path = _path_from_result(value, None)
+    return path if path is not None and path.exists() else None
+
+
+def _evenly_sample(values: list[dict[str, Any]], *, limit: int) -> list[dict[str, Any]]:
+    if len(values) <= limit:
+        return list(values)
+    if limit <= 1:
+        return [values[-1]]
+    indices = [round(index * (len(values) - 1) / (limit - 1)) for index in range(limit)]
+    return [values[index] for index in dict.fromkeys(indices)]
+
+
+def _stmr_snapshot_card(
+    base: Path,
+    snapshot: dict[str, Any],
+    *,
+    lazy: bool,
+    final: bool = False,
+) -> str:
+    path = snapshot.get("_path")
+    if not isinstance(path, Path):
+        return ""
+    href = _href(base, path)
+    observation_id = snapshot.get("observation_id")
+    label = "Final" if final else f"Step {snapshot.get('sequence')}"
+    description = (
+        f"{observation_id}; observations={snapshot.get('processed_observation_count')}, "
+        f"points={snapshot.get('point_count')}, voxels={snapshot.get('voxel_count')}"
+    )
+    loading = ' loading="lazy"' if lazy else ""
+    return f"""
+<figure>
+  <a href="{href}"><img src="{href}" alt="{_e(label)}"{loading}></a>
+  <figcaption>{_e(label)} - <code>{_e(path.name)}</code><br><span>{_e(description)}</span></figcaption>
+</figure>
+"""
+
+
+def _stmr_timing_table(stages: dict[str, Any]) -> str:
+    names = (
+        "grounding_inference",
+        "sam_inference",
+        "stmr_incremental_projection",
+        "stmr_incremental_merge",
+        "stmr_incremental_snapshot",
+        "stmr_online_png_render",
+        "stmr_online_frame_total",
+        "stmr_online_perception_map_total",
+    )
+    rows = []
+    for name in names:
+        value = stages.get(name)
+        if not isinstance(value, dict):
+            continue
+        rows.append(
+            f"<tr><td><code>{_e(name)}</code></td><td>{_e(value.get('sample_count'))}</td>"
+            f"<td>{_e(value.get('p50_ms'))}</td><td>{_e(value.get('p95_ms'))}</td></tr>"
+        )
+    if not rows:
+        return '<p class="empty">No STMR profiling stages found.</p>'
+    return (
+        '<table class="compact-table"><thead><tr><th>Stage</th><th>Samples</th>'
+        '<th>P50 ms</th><th>P95 ms</th></tr></thead><tbody>'
+        + "".join(rows)
+        + "</tbody></table>"
+    )
 
 
 def _rgb_frames(result: dict[str, Any], artifacts: dict[str, Any]) -> list[Path]:
@@ -1207,6 +1379,12 @@ def _page(title: str, body: str) -> str:
     pre {{ white-space: pre-wrap; overflow-wrap: anywhere; background: #f6f8fb; border: 1px solid var(--line); border-radius: 8px; padding: 10px; max-height: 360px; overflow: auto; font-size: 12px; }}
     details.planner-debug {{ border: 1px solid var(--line); border-radius: 8px; background: #fff; margin: 10px 0; padding: 12px; }}
     details.planner-debug summary {{ cursor: pointer; font-weight: 700; color: #344054; }}
+    details.stmr-render-panel {{ border: 1px solid var(--line); border-radius: 8px; background: #fff; margin: 18px 0; padding: 12px; }}
+    details.stmr-render-panel > summary {{ cursor: pointer; font-weight: 700; color: var(--accent); }}
+    .stmr-render-content {{ margin-top: 14px; }}
+    .stmr-render-content h3 {{ margin: 18px 0 10px; font-size: 15px; color: #344054; }}
+    details.stmr-history {{ margin-top: 12px; border-top: 1px solid var(--line); padding-top: 10px; }}
+    details.stmr-history > summary {{ cursor: pointer; font-weight: 600; color: #344054; }}
     .debug-grid {{ display: grid; grid-template-columns: minmax(0, 0.46fr) minmax(0, 0.54fr); gap: 14px; margin-top: 12px; }}
     .debug-grid article {{ padding: 12px; }}
     .debug-grid h3 {{ margin: 0 0 10px; font-size: 15px; }}

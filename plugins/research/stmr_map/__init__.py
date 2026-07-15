@@ -1,16 +1,18 @@
 """Standalone STMR research module.
 
 This package mirrors the Semantic-Topo-Metric Representation pipeline used in
-the STMR paper. It is intentionally separate from custom_map and from the
-default planner context: all outputs are human/debug artifacts until explicitly
-enabled by a later context integration.
+the STMR paper.  The core remains standalone; UAV-Flow may explicitly install
+the online adapter as its ``map`` context provider for controlled evaluation.
 """
 
 from .core import IncrementalStmrMapState, IncrementalStmrUpdate, StmrMap, build_stmr_map
+from .online import StmrOnlineMapBuilder, StmrOnlineMapResult
 
 __all__ = [
     "IncrementalStmrMapState",
     "IncrementalStmrUpdate",
     "StmrMap",
+    "StmrOnlineMapBuilder",
+    "StmrOnlineMapResult",
     "build_stmr_map",
 ]

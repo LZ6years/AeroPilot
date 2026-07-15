@@ -19,6 +19,10 @@
   "enable_visual_diagnostics": false,
   "visual_diagnostics_max_frames": 12,
   "enable_action_planner_debug": false,
+  "stmr_mode": "off",
+  "stmr_prior": "default_uav_prior",
+  "stmr_max_queries": 16,
+  "stmr_device": "auto",
   "action_config_overrides": {
     "linear_velocity_mps": 1.0,
     "move_duration_sec": 1.0,

@@ -36,6 +36,8 @@ def render_stmr_html(
         "semantic_matrix": stmr_map.semantic_matrix,
         "semantic_legend": {str(key): dict(value) for key, value in sorted(stmr_map.semantic_legend.items())},
         "path_cells": stmr_map.path_cells,
+        "trajectory_trace": stmr_map.trajectory_trace,
+        "trajectory_summary": stmr_map.trajectory_summary,
         "current_cell": stmr_map.current_cell,
         "center_pose": stmr_map.center_pose,
         "map_config": stmr_map.map_config,
@@ -531,6 +533,8 @@ def _html(payload: str) -> str:
       ['subgoal_priority_hits', (debug.subgoal_priority_hits || []).length],
       ['current_cell', DATA.current_cell || {}],
       ['path_cells', (DATA.path_cells || []).length],
+      ['trajectory_trace_points', (DATA.trajectory_trace || []).length],
+      ['trajectory_summary', DATA.trajectory_summary || {}],
     ]);
     const timing = DATA.pipeline_timing || {};
     const timingStages = timing.stages || {};

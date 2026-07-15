@@ -60,7 +60,10 @@ class StageProfiler:
             yield token
             return
 
-        torch = self._torch()
+        # CPU-only profiling needs wall time and RSS but no Torch runtime.
+        # Avoiding that import also prevents unnecessary CUDA initialization
+        # and native-library conflicts in lightweight report/test processes.
+        torch = None if self.device == "cpu" else self._torch()
         cuda_enabled = self._cuda_enabled(torch)
         if cuda_enabled:
             self._cuda_synchronize(torch)

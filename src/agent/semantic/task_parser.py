@@ -5,9 +5,15 @@ from __future__ import annotations
 import json
 import urllib.error
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from src.agent.semantic.parser_contracts import (
+    SemanticPlanStructure,
+    merge_semantic_plan,
+    validate_phase_criteria,
+)
 from src.agent.semantic.schemas import SemanticPlan, TaskParseResult
 from src.agent.semantic.validator import semantic_plan_from_dict, validate_semantic_plan
 from src.runtime.configs.model_config import ModelConfig, load_model_config
@@ -21,17 +27,34 @@ class TaskParserConfigError(RuntimeError):
 
 
 class TaskParser:
-    def __init__(self, mode: str | None = None, model_config: ModelConfig | None = None) -> None:
+    def __init__(
+        self,
+        mode: str | None = None,
+        model_config: ModelConfig | None = None,
+        *,
+        phase_skill_resolver: Any | None = None,
+    ) -> None:
         self.model_config = model_config or load_model_config()
         self.mode = mode or self.model_config.task_parser_mode
-        self.system_prompt = self._load_system_prompt()
-        self.agent_rules = self._load_agent_rules() if self.mode == "model" else ""
+        self.config_warnings: list[str] = []
+        self.last_parse_trace: dict[str, Any] = {}
+        if self.mode == "model":
+            self.agent_rules = self._load_agent_rules()
+            self.structure_prompt = self._load_structure_prompt()
+            self.criteria_prompt = self._load_criteria_prompt()
+            self.phase_skill_resolver = phase_skill_resolver or self._default_phase_skill_resolver()
+        else:
+            self.agent_rules = ""
+            self.structure_prompt = ""
+            self.criteria_prompt = ""
+            self.phase_skill_resolver = None
 
     def parse(self, instruction: str) -> TaskParseResult:
         clean_instruction = instruction.strip()
         if not clean_instruction:
             raise ValueError("instruction must not be empty")
         if self.mode == "rule_based":
+            self.last_parse_trace = {"strategy": "rule_based", "phases": [], "warnings": []}
             plan = self._parse_rule_based(clean_instruction)
         elif self.mode == "model":
             plan = self._parse_with_model(clean_instruction)
@@ -68,11 +91,6 @@ class TaskParser:
                             ["uncertainty is acknowledged and the UAV is stable"],
                             ["the UAV is not stable enough to wait"],
                         ),
-                    ],
-                    "uncertainties": [
-                        "target_description_is_underspecified",
-                        "multiple_candidates_may_exist",
-                        "user_clarification_may_be_required",
                     ],
                 }
             )
@@ -112,11 +130,6 @@ class TaskParser:
                             ["UAV is not stable or not plausibly in front of the entrance"],
                         ),
                     ],
-                    "uncertainties": [
-                        "left_turn_angle_may_not_be_exact",
-                        "entrance_may_not_be_visible_after_first_turn",
-                        "front_of_target_requires_observation_and_depth",
-                    ],
                 }
             )
         if self._contains_any(instruction, ("车", "车辆", "汽车")):
@@ -148,11 +161,6 @@ class TaskParser:
                             ["UAV is stable near the vehicle with safe distance"],
                             ["UAV is not stable or safe distance is unclear"],
                         ),
-                    ],
-                    "uncertainties": [
-                        "target_identity_requires_observation",
-                        "safe_distance_requires_depth_or_user_constraint",
-                        "target_may_move_or_be_occluded",
                     ],
                 }
             )
@@ -192,11 +200,6 @@ class TaskParser:
                             observe=["phase_execution_summary"],
                         ),
                     ],
-                    "uncertainties": [
-                        "right_turn_angle_may_not_be_exact",
-                        "target_may_not_be_visible_after_first_turn",
-                        "target_identity_requires_observation",
-                    ],
                 }
             )
         raise ValueError("rule_based parser does not support this instruction yet")
@@ -206,14 +209,71 @@ class TaskParser:
             raise TaskParserConfigError("Model task parser requires FLYAGENT_MODEL_API_KEY")
         if self.model_config.provider != "openai_compatible":
             raise TaskParserConfigError(f"Unsupported model provider: {self.model_config.provider}")
-        response = self._call_openai_compatible(instruction)
-        return semantic_plan_from_dict(response)
+        structure = self._call_json_contract(
+            self._build_structure_messages(instruction),
+            SemanticPlanStructure.from_dict,
+            contract_name="semantic structure",
+        )
+        criteria_by_phase: list[dict[str, Any]] = []
+        phase_traces: list[dict[str, Any]] = []
+        for phase in structure.phases:
+            guidance, selection_trace = self._resolve_phase_guidance(instruction, structure, phase)
+            criteria = self._call_json_contract(
+                self._build_phase_criteria_messages(instruction, structure, phase, guidance),
+                lambda data, immutable_phase=phase: validate_phase_criteria(
+                    data,
+                    immutable_phase,
+                    instruction=instruction,
+                    task_goal=structure.task_goal,
+                ),
+                contract_name=f"phase criteria {phase['index']}:{phase['name']}",
+            )
+            criteria_by_phase.append(criteria)
+            phase_traces.append(
+                {
+                    "index": phase["index"],
+                    "name": phase["name"],
+                    **selection_trace,
+                    "criteria_status": "ok",
+                }
+            )
+        self.last_parse_trace = {
+            "strategy": "structure_then_phase_skill_criteria",
+            "phases": phase_traces,
+            "warnings": list(self.config_warnings),
+        }
+        return merge_semantic_plan(structure, criteria_by_phase)
 
-    def _call_openai_compatible(self, instruction: str) -> dict[str, Any]:
+    def _call_json_contract(
+        self,
+        messages: list[dict[str, str]],
+        validator: Callable[[dict[str, Any]], Any],
+        *,
+        contract_name: str,
+    ) -> Any:
+        first_content = self._request_model_content(messages)
+        try:
+            return validator(_loads_json_object(first_content))
+        except Exception as first_exc:
+            repair_messages = [
+                *messages,
+                {"role": "assistant", "content": first_content},
+                {
+                    "role": "user",
+                    "content": (
+                        f"The previous response violated the {contract_name} contract: "
+                        f"{str(first_exc)[:500]}. Return one corrected JSON object only."
+                    ),
+                },
+            ]
+            second_content = self._request_model_content(repair_messages)
+            return validator(_loads_json_object(second_content))
+
+    def _request_model_content(self, messages: list[dict[str, str]]) -> str:
         endpoint = self.model_config.chat_completions_url()
         payload = {
             "model": self.model_config.model_name,
-            "messages": self._build_model_messages(instruction),
+            "messages": messages,
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
@@ -237,24 +297,100 @@ class TaskParser:
         except urllib.error.URLError as exc:
             raise RuntimeError(f"Model task parser request failed: {exc}") from exc
         content = data["choices"][0]["message"]["content"]
-        return _loads_json_object(content)
+        return str(content)
 
-    def _build_model_messages(self, instruction: str) -> list[dict[str, str]]:
-        """Keep shared agent rules separate from the parser output contract."""
+    def _build_structure_messages(self, instruction: str) -> list[dict[str, str]]:
+        """Build the skill-free task-structure request."""
 
         return [
             {"role": "system", "content": self.agent_rules},
-            {"role": "system", "content": self.system_prompt},
+            {"role": "system", "content": self.structure_prompt},
             {"role": "user", "content": instruction},
         ]
 
-    def _load_system_prompt(self) -> str:
-        prompt_path = self.model_config.task_parser_prompt_path
-        if prompt_path:
-            path = Path(prompt_path)
-        else:
-            path = Path(__file__).resolve().parent / "prompts" / "task_parser_system.txt"
+    def _build_phase_criteria_messages(
+        self,
+        instruction: str,
+        structure: SemanticPlanStructure,
+        phase: dict[str, Any],
+        guidance: list[dict[str, Any]],
+    ) -> list[dict[str, str]]:
+        messages = [{"role": "system", "content": self.agent_rules}]
+        if guidance:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Selected knowledge for this immutable semantic phase follows. "
+                        "Treat it as domain guidance, not observation, tools, or output schema.\n\n"
+                        + json.dumps(guidance, ensure_ascii=False)
+                    ),
+                }
+            )
+        messages.extend(
+            [
+                {"role": "system", "content": self.criteria_prompt},
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "instruction": instruction,
+                            "task_goal": structure.task_goal,
+                            "phase": dict(phase),
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ]
+        )
+        return messages
+
+    def _resolve_phase_guidance(
+        self,
+        instruction: str,
+        structure: SemanticPlanStructure,
+        phase: dict[str, Any],
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+        try:
+            result = self.phase_skill_resolver.resolve(instruction, structure.task_goal, phase)
+            trace = result.trace()
+            return list(result.selected_skills), trace
+        except Exception as exc:
+            return [], {
+                "selection_status": "resolver_error",
+                "selected_skills": [],
+                "warnings": [f"semantic_criteria_skill_resolution_failed:{str(exc)[:240]}"],
+            }
+
+    def _load_structure_prompt(self) -> str:
+        configured = self.model_config.task_parser_structure_prompt_path
+        path = Path(configured) if configured else self._default_prompt_path("task_parser_structure_system.txt")
         return path.read_text(encoding="utf-8").strip()
+
+    def _load_criteria_prompt(self) -> str:
+        configured = self.model_config.task_parser_criteria_prompt_path
+        legacy = self.model_config.task_parser_prompt_path
+        if configured:
+            path = Path(configured)
+            if legacy:
+                self.config_warnings.append("legacy_task_parser_prompt_path_ignored")
+        elif legacy:
+            path = Path(legacy)
+            self.config_warnings.append("legacy_task_parser_prompt_path_used_for_criteria")
+        else:
+            path = self._default_prompt_path("task_parser_phase_criteria_system.txt")
+        return path.read_text(encoding="utf-8").strip()
+
+    @staticmethod
+    def _default_prompt_path(name: str) -> Path:
+        return Path(__file__).resolve().parent / "prompts" / name
+
+    def _default_phase_skill_resolver(self):
+        # Lazy import keeps rule-based parsing independent from plugin discovery
+        # and avoids making semantic schemas depend on plugin implementation.
+        from src.plugins.skills.semantic_criteria import SemanticCriteriaSkillResolver
+
+        return SemanticCriteriaSkillResolver(self.model_config)
 
     @staticmethod
     def _load_agent_rules() -> str:

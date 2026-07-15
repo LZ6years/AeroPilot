@@ -21,9 +21,14 @@ from evaluation.benchmarks.uav_flow.sr_judge import judge_success
 from evaluation.benchmarks.uav_flow.trajectory import export_trajectory, target_local_from_case
 from evaluation.benchmarks.uav_flow.unrealcv_scenario import UavFlowBenchmarkEnvClient
 from evaluation.benchmarks.uav_flow.visual_diagnostics import write_visual_diagnostics
+from plugins.research.stmr_map.context_modules.map import PluginContextModule as StmrMapContextModule
+from plugins.research.stmr_map.perception import StmrPerceptionSession
 from src.agent.safety import SafetySupervisor
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.semantic.task_parser import TaskParser
+from src.memory.context.registry import ContextModuleRegistry
+from src.perception.context_builder import ObservationContextBuilder
+from src.plugins import PluginRegistry
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.model_config import load_model_config
 from src.runtime.configs.safety_config import load_uav_safety_config
@@ -35,11 +40,14 @@ from src.runtime.runners.task_runtime import TaskRuntime
 class UavFlowBenchmarkRunner:
     """Outer benchmark harness; TaskRuntime remains the owner of task logic."""
 
-    def __init__(self, config: UavFlowEvalConfig) -> None:
+    def __init__(self, config: UavFlowEvalConfig, *, stmr_session: Any | None = None) -> None:
         self.config = config
         self.model_config = load_model_config(config.env_path)
         self.action_config = _benchmark_action_config(config)
         self.safety_config = _benchmark_safety_config(config)
+        self.plugin_registry = PluginRegistry.from_config()
+        self._stmr_session = stmr_session
+        self._stmr_warmed = False
 
     def load_cases(self) -> list[UavFlowCase]:
         cases = load_cases(
@@ -55,6 +63,7 @@ class UavFlowBenchmarkRunner:
         return cases
 
     def run(self, *, eval_id: str | None = None) -> dict[str, Any]:
+        self._prepare_stmr()
         eval_dir = create_eval_dir(self.config.output_dir, eval_id)
         console_lines = [f"uav_flow_eval: output={eval_dir}"]
         results = []
@@ -85,6 +94,7 @@ class UavFlowBenchmarkRunner:
         return {"eval_dir": str(eval_dir), "summary_paths": summary_paths, "results": results}
 
     def run_case(self, case: UavFlowCase, eval_dir: str | Path) -> dict[str, Any]:
+        self._prepare_stmr()
         result, _ = self._run_case(case, eval_dir)
         return result
 
@@ -104,6 +114,7 @@ class UavFlowBenchmarkRunner:
             env_client = self._make_env_client(case, run_dir)
         status = "ok"
         error: dict[str, Any] | None = None
+        stmr_module: StmrMapContextModule | None = None
         try:
             if needs_prepare:
                 env_client.prepare_case(case, run_dir, scene_id=case.case_id)
@@ -115,16 +126,19 @@ class UavFlowBenchmarkRunner:
                 "benchmark/uav_flow_case_evaluation_truth.json",
                 case.evaluation_truth(),
             )
+            planner = ModelActionPlanner(self.model_config)
+            context_builder, stmr_module = self._context_builder(planner)
             runtime = TaskRuntime(
                 env_client,
                 recorder,
                 TaskParser(mode=self.config.parser_mode, model_config=self.model_config),
-                planner=ModelActionPlanner(self.model_config),
+                planner=planner,
                 safety=SafetySupervisor(self.safety_config),
                 shutdown_policy=self.config.shutdown_policy,
                 action_config=self.action_config,
                 runtime_loop_guard_windows=self.config.runtime_loop_guard_windows,
                 enable_action_planner_debug=self.config.enable_action_planner_debug,
+                context_builder=context_builder,
             )
             state = runtime.run_task(
                 "uav_flow_downtownwest",
@@ -157,6 +171,8 @@ class UavFlowBenchmarkRunner:
         finally:
             recorder.close()
 
+        stmr_summary = _stmr_summary(stmr_module)
+        stmr_summary["mode"] = self.config.stmr_mode
         trajectory_meta = export_trajectory(case, env_client.pose_history, case_dir / "uav_agent_trajectory.json")
         run_artifacts = run_artifact_summary(run_dir, self.action_config)
         ndtw_result = evaluate_case_ndtw(
@@ -203,6 +219,7 @@ class UavFlowBenchmarkRunner:
             "plot_result": plot_result,
             "ndtw": ndtw_result,
             "sr_judge": sr_result,
+            "stmr": stmr_summary,
         }
         review_path = write_case_review(case_dir, case_payload)
         write_case_outputs(
@@ -213,6 +230,7 @@ class UavFlowBenchmarkRunner:
                 "sr_judge.json": sr_result,
                 "plot_result.json": plot_result,
                 "visual_diagnostics_summary.json": visual_diagnostics,
+                "stmr_summary.json": stmr_summary,
             },
         )
         return {
@@ -231,8 +249,62 @@ class UavFlowBenchmarkRunner:
             "plot_result": plot_result,
             "ndtw": ndtw_result,
             "sr_judge": sr_result,
+            "stmr": stmr_summary,
             "error": error,
         }, env_client
+
+    def _context_builder(
+        self,
+        planner: Any,
+    ) -> tuple[ObservationContextBuilder | None, StmrMapContextModule | None]:
+        """Build a case-local experimental map provider without global config changes."""
+
+        if self.config.stmr_mode == "off":
+            return None, None
+        stmr_module = StmrMapContextModule(
+            mode=self.config.stmr_mode,
+            session=self._shared_stmr_session(),
+            prior=self.config.stmr_prior,
+            max_queries=self.config.stmr_max_queries,
+            device=self.config.stmr_device,
+        )
+        default_registry = ContextModuleRegistry.default(
+            plugin_registry=self.plugin_registry,
+            enable_model_skill_selection=getattr(planner, "planner_mode", "") == "model",
+        )
+        modules = dict(default_registry.modules)
+        modules["map"] = stmr_module
+        registry = ContextModuleRegistry(
+            modules,
+            disabled=default_registry.disabled,
+            module_order=default_registry.module_order,
+        )
+        return (
+            ObservationContextBuilder(
+                action_config=self.action_config,
+                safety_config=self.safety_config,
+                registry=registry,
+                plugin_registry=self.plugin_registry,
+                enable_model_skill_selection=getattr(planner, "planner_mode", "") == "model",
+            ),
+            stmr_module,
+        )
+
+    def _shared_stmr_session(self) -> Any:
+        if self._stmr_session is None:
+            self._stmr_session = StmrPerceptionSession(device=self.config.stmr_device)
+        return self._stmr_session
+
+    def _prepare_stmr(self) -> None:
+        """Load optional perception models before launching a real UE process."""
+
+        if self.config.stmr_mode == "off" or self._stmr_warmed:
+            return
+        session = self._shared_stmr_session()
+        warmup = getattr(session, "warmup", None)
+        if callable(warmup):
+            warmup()
+        self._stmr_warmed = True
 
     def _make_env_client(self, case: UavFlowCase, run_dir: str | Path) -> UavFlowBenchmarkEnvClient:
         return UavFlowBenchmarkEnvClient(
@@ -245,6 +317,10 @@ class UavFlowBenchmarkRunner:
             resolution=self.config.resolution,
             seed=self.config.seed,
             action_config=self.action_config,
+            # The default UAV-Flow adapter intentionally captures RGB/pose
+            # only.  STMR explicitly opts into its existing raw UnrealCV depth
+            # path without changing baseline benchmark behavior.
+            enable_research_frame_capture=self.config.stmr_mode != "off",
         )
 
 
@@ -268,6 +344,21 @@ def _shared_env_failure(result: dict[str, Any]) -> bool:
         return False
     text = f"{error.get('error_type', '')} {error.get('error', '')}".lower()
     return any(term in text for term in ("unrealcv", "scene initialization", "object placement", "prepare_case"))
+
+
+def _stmr_summary(module: StmrMapContextModule | None) -> dict[str, Any]:
+    """Keep evaluation reporting fail-open when optional parity diagnostics fail."""
+
+    if module is None:
+        return {"mode": "off", "status": "disabled"}
+    try:
+        return module.debug_summary()
+    except Exception as exc:
+        return {
+            "status": "summary_failed",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
 
 
 def _write_html_review_from_summary(eval_dir: str | Path, summary_paths: dict[str, str]) -> dict[str, str]:

@@ -15,10 +15,14 @@ logic.
 - `memory/FLYAGENT.md` is the shared Agent identity and general flight-knowledge
   baseline for both model planning and model semantic task parsing. Load it as
   its own model message instead of copying its guidance into parser prompts.
-- `src/agent/semantic/prompts/task_parser_system.txt` owns the semantic-plan
-  output schema, field meanings, and parsing contract. It must not duplicate
-  general UAV identity, spatial reasoning, or flight knowledge from
-  `memory/FLYAGENT.md`.
+- `src/agent/semantic/prompts/task_parser_structure_system.txt` owns only task
+  intent, task goal, and immutable phase structure. Phase count, order, name,
+  and goal come from the user instruction before any skill is selected.
+- `src/agent/semantic/prompts/task_parser_phase_criteria_system.txt` owns the
+  per-phase `done_when`, `continue_when`, `observe`, and `metrics` contract. It
+  may apply selected knowledge guidance, but it must not rewrite task or phase
+  structure and must not duplicate general UAV identity or flight knowledge
+  from `memory/FLYAGENT.md`.
 - `plugins/knowledge/*/SKILL.md` contains reusable domain knowledge. Skills must
   not depend on local context field names, debug schemas, benchmark cases, or
   project-private runtime details.
@@ -89,6 +93,20 @@ Planner and parser prompts may reference the model contract they own, but they
 should not reintroduce obsolete fields or teach reusable skills about internal
 schemas. Keep old debug, evaluation, and report concepts out of model-facing
 prompt examples unless that prompt explicitly owns the field.
+
+Model task parsing uses two distinct stages. The structure stage sees no skill
+body. After structure is validated, each phase independently selects all and
+only the knowledge skills relevant to its completion, continuation, evidence,
+or metric criteria. There is no runtime hard limit on the number selected, but
+the selector should choose the smallest genuinely relevant set. Parser-time
+selection loads bounded `SKILL.md` knowledge only: no references, source paths,
+or callable capabilities.
+
+Parser-time and planner-time skill selection are independent. Parser selection
+helps define a phase's semantic criteria; planner selection helps choose the
+next action from current runtime evidence. Do not carry one stage's selected
+skill list into the other as an implicit decision or let a skill determine
+phase count, order, name, or goal.
 
 Do not restore model-facing `direction` shorthand for movement. UAV movement
 plans use numeric velocity arguments, and semantic direction should be expressed

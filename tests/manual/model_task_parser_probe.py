@@ -113,6 +113,8 @@ def main() -> None:
         try:
             result = parser.parse(instruction)
             print(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+            print("Phase skill trace:")
+            print(json.dumps(parser.last_parse_trace, indent=2, ensure_ascii=False))
         except Exception as exc:
             print(f"FAILED: {type(exc).__name__}: {exc}")
 

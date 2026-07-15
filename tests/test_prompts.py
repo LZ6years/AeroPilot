@@ -4,58 +4,65 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.plugins.skills.semantic_criteria import SEMANTIC_CRITERIA_SKILL_SELECTION_PROMPT
 from src.plugins.skills.selection import SKILL_SELECTION_SYSTEM_PROMPT
 
 
-def test_task_parser_prompt_contains_lightweight_semantic_plan_contract():
-    prompt = (Path("src") / "agent" / "semantic" / "prompts" / "task_parser_system.txt").read_text(encoding="utf-8")
+def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
+    prompt_dir = Path("src") / "agent" / "semantic" / "prompts"
+    structure = (prompt_dir / "task_parser_structure_system.txt").read_text(encoding="utf-8")
+    criteria = (prompt_dir / "task_parser_phase_criteria_system.txt").read_text(encoding="utf-8")
+    structure_shape = structure.split("Boundaries:", 1)[0]
+    criteria_shape = criteria.split("Immutable structure:", 1)[0]
 
-    assert '"intent"' in prompt
-    assert '"task_goal"' in prompt
-    assert '"target_attributes"' in prompt
-    assert '"direction":' not in prompt
-    assert '"done_when"' in prompt
-    assert '"observe"' in prompt
-    assert '"continue_when"' in prompt
-    assert '"metrics"' in prompt
-    assert '"action_bias"' not in prompt
-    assert '"forward_distance | right_distance | up_distance | planar_distance | yaw_delta | hover_stability"' in prompt
-    assert "uav.turn_relative" in prompt
-    assert "env.observe" in prompt
-    assert "uav.<tool_name>" in prompt
-    assert "distance_m" in prompt
-    assert "Numeric provenance is strict" in prompt
-    assert "every numeric target or quantity" in prompt
-    assert "An explicit number alone is not sufficient" in prompt
-    assert "target-relative numbers such as orbit radius" in prompt
-    assert "Do not convert them into planar_distance" in prompt
-    assert "do not generate planar_distance=2*pi*N" in prompt
-    assert "do not make exact radius confirmation a hard blocker" in prompt
-    assert "Do not describe fixed tool sequences or exact paths" in prompt
-    assert "Do not invent a distance metric." in prompt
-    assert "rearward displacement" in prompt
-    assert "backward movement" not in prompt
-    assert "Numeric angle role rules" in prompt
-    assert "A numeric angle is not automatically a yaw angle" in prompt
-    assert "orientation_role" in prompt
-    assert "horizontal_displacement_role" in prompt
-    assert "vertical_path_role" in prompt
-    assert "deviation from the vertical up/down direction" in prompt
-    assert "atan(sqrt(vx^2 + vy^2) / abs(vz))" in prompt
-    assert "Do not describe this as an angle relative to the horizontal plane" in prompt
-    assert "forward_distance = D*cos(A)" in prompt
-    assert "right_distance is signed lateral displacement" in prompt
-    assert "avoid defaulting to yaw_delta" in prompt
-    assert "Seeing or facing a target is useful evidence" in prompt
-    assert "target-side passage relation" not in prompt
-    assert "UAV route lies on the target's right" not in prompt
-    assert "opposite image side" not in prompt
-    assert "completion_criteria" not in prompt
-    assert "visual_alignment" not in prompt
-    assert "visual_smoke" not in prompt
-    assert '"kind"' not in prompt
-    assert '"axis"' not in prompt
-    assert '"meaning"' not in prompt
+    assert not (prompt_dir / "task_parser_system.txt").exists()
+    assert '"intent"' in structure_shape
+    assert '"task_goal"' in structure_shape
+    assert '"target_attributes"' in structure_shape
+    assert '"done_when"' not in structure_shape
+    assert '"observe"' not in structure_shape
+    assert '"continue_when"' not in structure_shape
+    assert '"metrics"' not in structure_shape
+    assert "phase count" in structure
+    assert "Phase structure comes from user intent" in structure
+    assert "does not decide execution feasibility or downgrade the request for safety" in structure
+    assert "Cover the complete requested outcome" in structure
+    assert "Every explicit terminal result" in structure
+    assert "phase name and goal" in structure
+    assert '"prepare for X"' in structure
+    assert "controlled descent and a landed/stable result" in structure
+    assert "check every requested outcome verb" in structure
+    assert "Never add exact or exactly" in structure
+    assert '"done_when"' in criteria_shape
+    assert '"observe"' in criteria_shape
+    assert '"continue_when"' in criteria_shape
+    assert '"metrics"' in criteria_shape
+    assert '"intent"' not in criteria_shape
+    assert '"task_goal"' not in criteria_shape
+    assert '"forward_distance | right_distance | up_distance | planar_distance | yaw_delta | hover_stability"' in criteria
+    assert "target-relative" in criteria
+    assert "not phase-start planar_distance" in criteria
+    assert "user instruction is the only numeric source" in criteria
+    assert "current metric schema has no target-distance metric" in criteria
+    assert "Never add yaw_delta=0" in criteria
+    assert "Criteria must cover the immutable phase goal through completion" in criteria
+    assert "terminal result has already occurred" in criteria
+    assert "controlled descent or altitude/surface progress" in criteria
+    assert "exception never permits invented numbers" in criteria
+    assert '"Move to a position N meters from a target"' in criteria
+    assert "Do not infer yaw_delta=360" in criteria
+    assert "scan every number" in criteria
+    assert 'Do not add parenthetical examples, "e.g." expansions' in criteria
+    assert "invented lower/upper bounds" in criteria
+    assert "roughly aligned" in criteria
+    assert "exact center" in criteria
+    assert 'Bare "centered in the camera frame" is too strict' in criteria
+    assert "A small left/right offset alone is not a reason to continue" in criteria
+    assert "uav.turn_relative" in structure
+    assert "uav.move_body" in criteria
+    assert '"action_bias"' not in structure + criteria
+    assert '"direction":' not in structure + criteria
+    assert '"uncertainties"' not in structure + criteria
 
 
 def test_legacy_action_and_phase_judge_prompts_removed():
@@ -155,7 +162,13 @@ def test_flyagent_rules_contain_general_visual_action_alignment_without_internal
     assert "不能作为到达目标某侧或完成经过的证据" in rules
     assert "向前、后、左、右、上、下" not in rules
 
-    parser_prompt = (Path("src") / "agent" / "semantic" / "prompts" / "task_parser_system.txt").read_text(encoding="utf-8")
+    parser_prompt = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in [
+            Path("src/agent/semantic/prompts/task_parser_structure_system.txt"),
+            Path("src/agent/semantic/prompts/task_parser_phase_criteria_system.txt"),
+        ]
+    )
     duplicated_route_rules = [
         "画面中的左右位置可以仅因转向而改变",
         "语义计划不得把“目标在画面左侧或右侧”解释成“无人机在目标右侧或左侧”",
@@ -356,3 +369,15 @@ def test_skill_selection_prompt_keeps_compound_locate_and_approach_phases_covere
     for name in hardcoded_skill_names:
         assert name not in prompt
     assert "prefer search_under_uncertainty over" not in prompt
+
+
+def test_semantic_criteria_skill_selection_has_no_hard_count_or_reference_requests():
+    prompt = " ".join(SEMANTIC_CRITERIA_SKILL_SELECTION_PROMPT.split())
+
+    assert "There is no numeric selection limit" in prompt
+    assert "smallest genuinely useful set" in prompt
+    assert "completion conditions, continuation conditions, evidence sources, or valid metrics" in prompt
+    assert "phase name, goal, order, or task meaning" in prompt
+    assert "requested_references" not in prompt
+    assert "at most" not in prompt
+    assert "Default to 0-1" not in prompt

@@ -448,6 +448,136 @@ def test_html_review_handles_missing_rgb_actions_and_messages(tmp_path):
     assert "No agent messages recorded." in case_html
 
 
+def test_html_review_embeds_closed_stmr_render_history_panel(tmp_path):
+    eval_dir = tmp_path / "eval"
+    case_dir = eval_dir / "cases" / "stmr"
+    run_dir = tmp_path / "runs" / "stmr"
+    stmr_dir = run_dir / "contexts" / "stmr_map"
+    snapshot_dir = stmr_dir / "snapshots"
+    snapshot_dir.mkdir(parents=True)
+    case_dir.mkdir(parents=True)
+    latest = stmr_dir / "latest_stmr_map.png"
+    latest.write_bytes(b"png")
+    latest_json = stmr_dir / "latest_stmr_map.json"
+    latest_json.write_text("{}", encoding="utf-8")
+    snapshots = []
+    for index in range(1, 11):
+        path = snapshot_dir / f"{index:04d}_obs_{index:04d}.png"
+        path.write_bytes(b"png")
+        snapshots.append(
+            {
+                "sequence": index,
+                "observation_id": f"obs_{index:04d}",
+                "processed_observation_count": index,
+                "point_count": index * 100,
+                "voxel_count": index * 10,
+                "png_path": str(path),
+            }
+        )
+    manifest = stmr_dir / "render_history.json"
+    manifest.write_text(
+        json.dumps({"schema_version": "stmr_render_history_v1", "snapshot_count": 10, "snapshots": snapshots}),
+        encoding="utf-8",
+    )
+    summary = {
+        "metrics": {"case_count": 1},
+        "failure_counts": {},
+        "cases": [
+            {
+                "case_id": "stmr",
+                "class_name": "Approach",
+                "status": "ok",
+                "case_dir": str(case_dir),
+                "run_dir": str(run_dir),
+                "run_artifacts": {},
+                "ndtw": {},
+                "sr_judge": {},
+                "stmr": {
+                    "mode": "planner",
+                    "status": "ready",
+                    "png_path": str(latest),
+                    "json_path": str(latest_json),
+                    "processed_observation_count": 10,
+                    "failed_observation_count": 0,
+                    "point_count": 1000,
+                    "voxel_count": 100,
+                    "semantic_cell_counts": {"route_surface": 12},
+                    "batch_incremental_parity": {"equivalent": True},
+                    "render_history": {"snapshot_count": 10, "manifest_path": str(manifest)},
+                    "profiling": {
+                        "stages": {
+                            "stmr_incremental_projection": {
+                                "sample_count": 10,
+                                "p50_ms": 12.5,
+                                "p95_ms": 20.0,
+                            }
+                        }
+                    },
+                },
+            }
+        ],
+    }
+
+    write_html_review(eval_dir, summary)
+    case_html = (case_dir / "review.html").read_text(encoding="utf-8")
+
+    assert '<details class="stmr-render-panel">' in case_html
+    assert '<details class="stmr-render-panel" open>' not in case_html
+    assert "显示/隐藏 STMR 渲染过程" in case_html
+    key_section = case_html.split('<details class="stmr-history">', 1)[0].rsplit(
+        "<h3>Incremental Key Frames</h3>", 1
+    )[1]
+    assert key_section.count("<figure>") == 8
+    assert "全部 STMR 历史地图 (10)" in case_html
+    assert 'loading="lazy"' in case_html
+    assert "route_surface" in case_html
+    assert "stmr_incremental_projection" in case_html
+    assert "12.5" in case_html
+
+
+def test_html_review_hides_off_stmr_and_falls_back_for_legacy_history(tmp_path):
+    eval_dir = tmp_path / "eval"
+    off_case_dir = eval_dir / "cases" / "off"
+    legacy_case_dir = eval_dir / "cases" / "legacy"
+    legacy_map = tmp_path / "legacy_stmr.png"
+    legacy_map.write_bytes(b"png")
+    summary = {
+        "metrics": {"case_count": 2},
+        "failure_counts": {},
+        "cases": [
+            {
+                "case_id": "off",
+                "class_name": "Move",
+                "status": "ok",
+                "case_dir": str(off_case_dir),
+                "run_artifacts": {},
+                "ndtw": {},
+                "sr_judge": {},
+                "stmr": {"mode": "off", "status": "disabled"},
+            },
+            {
+                "case_id": "legacy",
+                "class_name": "Approach",
+                "status": "ok",
+                "case_dir": str(legacy_case_dir),
+                "run_artifacts": {},
+                "ndtw": {},
+                "sr_judge": {},
+                "stmr": {"mode": "planner", "status": "ready", "png_path": str(legacy_map)},
+            },
+        ],
+    }
+
+    write_html_review(eval_dir, summary)
+    off_html = (off_case_dir / "review.html").read_text(encoding="utf-8")
+    legacy_html = (legacy_case_dir / "review.html").read_text(encoding="utf-8")
+
+    assert "显示/隐藏 STMR 渲染过程" not in off_html
+    assert "<dt>STMR</dt>" not in off_html
+    assert "显示/隐藏 STMR 渲染过程" in legacy_html
+    assert "Legacy run: incremental render history was not recorded." in legacy_html
+
+
 def test_html_review_displays_coupled_planner_decision(tmp_path):
     eval_dir = tmp_path / "eval"
     case_dir = eval_dir / "cases" / "coupled"

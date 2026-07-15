@@ -130,6 +130,38 @@ class SkillContentLoader:
             data["capability"] = capability
         return {key: value for key, value in data.items() if value not in (None, "", [], {})}
 
+    def load_semantic_guidance(self, skill: Skill) -> dict[str, Any]:
+        """Load bounded knowledge text for semantic phase-criteria generation.
+
+        Semantic parsing needs domain guidance, not skill-local resources or
+        callable capability metadata. Keeping this shape separate prevents the
+        parser from learning runtime tools while still allowing selected
+        knowledge to influence completion and continuation conditions.
+        """
+
+        body = skill.body.strip()
+        bounded = _bounded_semantic_body(body, self.max_skill_chars)
+        return {
+            "name": skill.name,
+            "description": skill.description,
+            "skill_text": bounded,
+            "truncated": len(body) > len(bounded),
+        }
+
+
+def _bounded_semantic_body(body: str, max_chars: int) -> str:
+    """Keep both operating guidance and end-of-file completion guidance."""
+
+    if len(body) <= max_chars:
+        return body
+    marker = "\n\n[... bounded middle omitted ...]\n\n"
+    if max_chars <= len(marker):
+        return body[:max_chars].rstrip()
+    available = max(0, max_chars - len(marker))
+    head_chars = (available * 2) // 3
+    tail_chars = available - head_chars
+    return f"{body[:head_chars].rstrip()}{marker}{body[-tail_chars:].lstrip()}"
+
 
 def _load_reference(skill: Skill, path, max_chars: int) -> dict[str, Any]:
     resolved = path.resolve()

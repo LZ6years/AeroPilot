@@ -490,6 +490,75 @@ def test_stmr_path_is_stamped_as_minus_one(tmp_path):
     assert stmr_map.semantic_matrix[10][10] == -1
 
 
+def test_stmr_trajectory_trace_preserves_ordered_subcell_motion():
+    poses = [
+        PosePoint(x=0.0, y=0.0, z=0.0, yaw_deg=0.0, observation_id="obs_0001"),
+        PosePoint(x=1.0, y=0.0, z=0.0, yaw_deg=0.0, observation_id="obs_0002"),
+        PosePoint(x=2.0, y=0.0, z=0.0, yaw_deg=0.0, observation_id="obs_0003"),
+    ]
+
+    trace, summary = stmr_core._pose_trace(poses, poses[-1], 20, 5.0)
+
+    assert len(trace) == 3
+    assert {round(item["row"]) for item in trace} == {10}
+    assert [item["row"] for item in trace] == [10.4, 10.2, 10.0]
+    assert [item["sequence_index"] for item in trace] == [0, 1, 2]
+    assert summary["visible_start_marker"] == "START"
+    assert summary["recent_motion_local_m"] == {
+        "forward_delta_m": 1.0,
+        "right_delta_m": 0.0,
+        "distance_m": 1.0,
+    }
+
+
+def test_stmr_trajectory_trace_recenters_yaw_and_breaks_off_map_segments():
+    poses = [
+        PosePoint(x=0.0, y=0.0, z=0.0, yaw_deg=0.0),
+        PosePoint(x=100.0, y=0.0, z=0.0, yaw_deg=0.0),
+        PosePoint(x=1.0, y=0.0, z=0.0, yaw_deg=90.0),
+    ]
+
+    trace, summary = stmr_core._pose_trace(poses, poses[-1], 20, 5.0)
+
+    assert [item["segment_index"] for item in trace] == [0, 1]
+    assert summary["visible_segment_count"] == 2
+    assert summary["recent_motion_local_m"]["forward_delta_m"] == pytest.approx(0.0, abs=1e-3)
+    assert summary["recent_motion_local_m"]["right_delta_m"] == pytest.approx(99.0)
+    assert trace[-1]["row"] == trace[-1]["col"] == 10.0
+
+
+def test_stmr_trajectory_trace_marks_entry_and_ignores_yaw_only_history():
+    center = PosePoint(x=0.0, y=0.0, z=0.0, yaw_deg=90.0, observation_id="obs_0003")
+    entry_trace, entry_summary = stmr_core._pose_trace(
+        [PosePoint(x=-100.0, y=0.0), center],
+        center,
+        20,
+        5.0,
+    )
+    stationary_trace, stationary_summary = stmr_core._pose_trace(
+        [PosePoint(x=0.0, y=0.0, yaw_deg=0.0), center],
+        center,
+        20,
+        5.0,
+    )
+
+    assert entry_trace[-1]["row"] == entry_trace[-1]["col"] == 10.0
+    assert entry_summary["visible_start_marker"] == "ENTRY"
+    assert stationary_trace == [
+        {
+            "sequence_index": 0,
+            "segment_index": 0,
+            "row": 10.0,
+            "col": 10.0,
+            "local_forward_m": 0.0,
+            "local_right_m": 0.0,
+            "observation_id": None,
+        }
+    ]
+    assert stationary_summary["translation_status"] == "stationary_or_yaw_only"
+    assert stationary_summary["recent_motion_local_m"]["distance_m"] == 0.0
+
+
 def test_incremental_stmr_matches_batch_and_keeps_all_history(tmp_path):
     full_records = _incremental_records(tmp_path)
     first_records = _records_with_observations(full_records, {"obs_0001"})
@@ -507,6 +576,8 @@ def test_incremental_stmr_matches_batch_and_keeps_all_history(tmp_path):
     assert duplicate.new_projected_point_count == 0
     assert second.processed_observation_ids == ("obs_0002",)
     assert incremental.semantic_matrix == batch.semantic_matrix
+    assert incremental.trajectory_trace == batch.trajectory_trace
+    assert incremental.trajectory_summary == batch.trajectory_summary
     assert incremental.center_pose == batch.center_pose
     assert incremental.projection_debug["voxel_count"] == batch.projection_debug["voxel_count"]
     assert incremental.projection_debug["semantic_cell_counts"] == batch.projection_debug["semantic_cell_counts"]

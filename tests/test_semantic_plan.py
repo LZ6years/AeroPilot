@@ -25,7 +25,6 @@ def make_plan(**overrides):
                 "metrics": [],
             }
         ],
-        "uncertainties": ["target_identity_requires_observation"],
     }
     data.update(overrides)
     return data
@@ -40,6 +39,15 @@ def test_semantic_plan_accepts_valid_plan():
     assert plan.phases[0].total == 1
     assert plan.phases[0].done_when == ["black street lamp or strong candidate is visible"]
     assert "action_bias" not in plan.phases[0].to_dict()
+
+
+def test_semantic_plan_drops_legacy_uncertainties_on_round_trip():
+    data = make_plan()
+    data["uncertainties"] = ["legacy parser note"]
+
+    plan = semantic_plan_from_dict(data)
+
+    assert "uncertainties" not in plan.to_dict()
 
 
 def test_semantic_plan_ignores_legacy_action_bias_input():

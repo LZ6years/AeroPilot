@@ -351,7 +351,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
                 metrics=[],
             )
         ],
-        uncertainties=[],
     )
 
 

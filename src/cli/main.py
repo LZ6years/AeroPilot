@@ -185,6 +185,9 @@ def run_parse_task(args: argparse.Namespace) -> None:
         result = parser.parse(args.instruction)
         payload = result.to_dict()
         recorder.write_json("state/semantic_plan.json", payload)
+        if parser.last_parse_trace:
+            recorder.write_json("debug/task_parser_phase_skills.json", parser.last_parse_trace)
+            recorder.event("task_parser_phase_skill_trace", parser.last_parse_trace)
         recorder.event("task_parsed", payload)
         recorder.info("parse task completed", run_dir=str(run_dir))
         print(json.dumps(payload, indent=2, ensure_ascii=False))

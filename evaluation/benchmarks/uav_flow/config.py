@@ -43,6 +43,10 @@ class UavFlowEvalConfig:
     enable_visual_diagnostics: bool = False
     visual_diagnostics_max_frames: int = 12
     enable_action_planner_debug: bool = False
+    stmr_mode: str = "off"
+    stmr_prior: str = "default_uav_prior"
+    stmr_max_queries: int = 16
+    stmr_device: str = "auto"
     max_cases: int | None = None
     test_jsons_path_override: str | None = None
     classified_instr_path_override: str | None = None
@@ -79,6 +83,10 @@ class UavFlowEvalConfig:
             enable_visual_diagnostics=bool(data.get("enable_visual_diagnostics", False)),
             visual_diagnostics_max_frames=int(data.get("visual_diagnostics_max_frames", cls.visual_diagnostics_max_frames)),
             enable_action_planner_debug=bool(data.get("enable_action_planner_debug", False)),
+            stmr_mode=_choice(data.get("stmr_mode", "off"), {"off", "shadow", "planner"}, "stmr_mode"),
+            stmr_prior=str(data.get("stmr_prior", "default_uav_prior")),
+            stmr_max_queries=max(1, int(data.get("stmr_max_queries", 16))),
+            stmr_device=_choice(data.get("stmr_device", "auto"), {"auto", "cuda", "cpu"}, "stmr_device"),
             max_cases=_optional_int(data.get("max_cases")),
             test_jsons_path_override=_optional_str(
                 data.get("test_jsons_path", data.get("test_jsons_path_override"))
@@ -142,3 +150,11 @@ def _float_dict(value: Any) -> dict[str, float]:
         except (TypeError, ValueError):
             continue
     return result
+
+
+def _choice(value: Any, allowed: set[str], field_name: str) -> str:
+    normalized = str(value).strip().lower()
+    if normalized not in allowed:
+        choices = ", ".join(sorted(allowed))
+        raise ValueError(f"Invalid {field_name}: {value!r}; expected one of: {choices}")
+    return normalized

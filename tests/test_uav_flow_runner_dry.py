@@ -63,7 +63,6 @@ def test_dry_env_client_generates_real_rgb_artifact_for_default_image_module(tmp
                         "metrics": [],
                     }
                 ],
-                "uncertainties": [],
             }
         )
     state = MissionState(run_id=tmp_path.name, user_instruction=case.selected_instruction, semantic_plan=plan)
@@ -113,7 +112,6 @@ class FakeTaskParser:
                         "metrics": [],
                     }
                 ],
-                "uncertainties": [],
             }
         )
         return TaskParseResult(instruction=instruction, parser_mode="fake", plan=plan)
@@ -163,9 +161,11 @@ def test_runner_dry_writes_review_truth_artifact_and_rgb_summary(tmp_path, monke
     assert runner.config.runtime_loop_guard_windows == 7
     assert result["completed"] is True
     assert result["stopped"] is False
+    assert result["stmr"] == {"mode": "off", "status": "disabled"}
     assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "review.md").exists()
     assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "plot_result.json").exists()
     assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "visual_diagnostics.json").exists()
+    assert (tmp_path / "eval" / "manual" / "cases" / case.case_id / "stmr_summary.json").exists()
     case_payload = (tmp_path / "eval" / "manual" / "cases" / case.case_id / "case.json").read_text(encoding="utf-8")
     assert "reference_path_preprocessed" in case_payload
     assert "evaluation_truth_leak_check" not in case_payload
@@ -185,6 +185,77 @@ def test_config_roundtrip_includes_reuse_real_unrealcv_env():
     assert config.limit_per_class == 3
     assert UavFlowEvalConfig.from_dict({}).reuse_real_unrealcv_env is True
     assert config.to_dict()["reuse_real_unrealcv_env"] is False
+
+
+def test_config_roundtrip_includes_stmr_experiment_fields():
+    config = UavFlowEvalConfig.from_dict(
+        {
+            "stmr_mode": "planner",
+            "stmr_prior": "urban_uav_prior_v1",
+            "stmr_max_queries": 12,
+            "stmr_device": "cpu",
+        }
+    )
+
+    assert config.stmr_mode == "planner"
+    assert config.stmr_prior == "urban_uav_prior_v1"
+    assert config.stmr_max_queries == 12
+    assert config.stmr_device == "cpu"
+    assert UavFlowEvalConfig.from_dict({}).stmr_mode == "off"
+
+
+def test_runner_builds_case_local_stmr_context_without_global_config():
+    class Planner:
+        planner_mode = "model"
+
+    session = object()
+    runner = UavFlowBenchmarkRunner(
+        UavFlowEvalConfig.from_dict({"stmr_mode": "shadow", "stmr_device": "cpu"}),
+        stmr_session=session,
+    )
+
+    context_builder, stmr_module = runner._context_builder(Planner())
+
+    assert context_builder is not None
+    assert stmr_module is not None
+    assert stmr_module.mode == "shadow"
+    assert stmr_module.online_builder.session is session
+    assert context_builder.composer.registry.modules["map"] is stmr_module
+
+
+def test_runner_enables_research_depth_capture_only_for_stmr(tmp_path):
+    case = make_case()
+    baseline = UavFlowBenchmarkRunner(UavFlowEvalConfig.from_dict({"stmr_mode": "off"}))
+    stmr = UavFlowBenchmarkRunner(
+        UavFlowEvalConfig.from_dict({"stmr_mode": "shadow"}),
+        stmr_session=object(),
+    )
+
+    baseline_client = baseline._make_env_client(case, tmp_path / "baseline")
+    stmr_client = stmr._make_env_client(case, tmp_path / "stmr")
+
+    assert baseline_client.enable_research_frame_capture is False
+    assert stmr_client.enable_research_frame_capture is True
+
+
+def test_runner_warms_shared_stmr_session_once_before_cases():
+    class Session:
+        def __init__(self):
+            self.calls = 0
+
+        def warmup(self):
+            self.calls += 1
+
+    session = Session()
+    runner = UavFlowBenchmarkRunner(
+        UavFlowEvalConfig.from_dict({"stmr_mode": "shadow"}),
+        stmr_session=session,
+    )
+
+    runner._prepare_stmr()
+    runner._prepare_stmr()
+
+    assert session.calls == 1
 
 
 def test_problem_case_config_loads_fixed_regression_cases():
