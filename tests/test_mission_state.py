@@ -13,6 +13,10 @@ def make_state() -> MissionState:
     return MissionState("run_test", result.instruction, result.plan)
 
 
+def test_mission_state_default_phase_window_limit_is_40():
+    assert make_state().max_phase_window_count == 40
+
+
 def movement_phase(index: int, total: int, name: str, goal: str) -> SemanticPhase:
     return SemanticPhase(
         index=index,
@@ -20,7 +24,6 @@ def movement_phase(index: int, total: int, name: str, goal: str) -> SemanticPhas
         name=name,
         goal=goal,
         done_when=[f"{goal} is complete"],
-        observe=["phase_execution_summary"],
         continue_when=[f"{goal} is incomplete"],
         metrics=[],
     )

@@ -7,6 +7,7 @@ import time
 import pytest
 
 from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal
+from src.agent.semantic.plan_updater import validate_semantic_plan_patch_numeric_provenance
 from src.agent.semantic.validator import (
     SemanticPlanValidationError,
     apply_semantic_plan_patch,
@@ -26,7 +27,6 @@ def make_plan() -> SemanticPlan:
                 name="orbit_target",
                 goal="orbit the target",
                 done_when=["exact radius is confirmed"],
-                observe=["latest_observation", "phase_execution_summary"],
                 continue_when=["exact radius is not confirmed"],
                 metrics=[],
             )
@@ -64,7 +64,6 @@ def test_semantic_plan_patch_can_append_generic_recovery_phase():
                 "name": "recover_reference",
                 "goal": "recover usable reference evidence",
                 "done_when": ["reference evidence is usable again"],
-                "observe": ["latest_observation", "phase_execution_summary"],
                 "continue_when": ["reference evidence is still missing"],
                 "metrics": [],
             },
@@ -89,6 +88,51 @@ def test_semantic_plan_patch_rejects_unsupported_phase_field():
 def test_semantic_plan_patch_rejects_primitive_tool_tokens():
     with pytest.raises(SemanticPlanValidationError, match="primitive action"):
         validate_semantic_plan_patch({"phase": {"goal": "call uav.move_body to fix the plan"}})
+
+
+def test_semantic_plan_update_rejects_invented_numeric_thresholds():
+    patch = validate_semantic_plan_patch(
+        {
+            "phase": {
+                "done_when": ["target remains visible for 3 consecutive observations"],
+                "continue_when": ["radius differs by more than 0.5 meters"],
+            }
+        }
+    )
+
+    with pytest.raises(SemanticPlanValidationError, match="unsupported numeric"):
+        validate_semantic_plan_patch_numeric_provenance(
+            patch,
+            instruction="Circle around the person at a radius of 3.0 meters",
+            current_phase={"goal": "orbit at a radius of 3.0 meters", "metrics": []},
+        )
+
+
+def test_semantic_plan_update_can_reuse_instruction_and_current_contract_numbers():
+    patch = validate_semantic_plan_patch(
+        {
+            "phase": {
+                "done_when": ["the requested 3.0 meter relation is supported"],
+                "metrics": [
+                    {
+                        "name": "planar_distance",
+                        "target": 5.0,
+                        "unit": "m",
+                        "tolerance": 1.0,
+                        "correction_allowed": True,
+                    }
+                ],
+            }
+        }
+    )
+
+    result = validate_semantic_plan_patch_numeric_provenance(
+        patch,
+        instruction="Move 5 meters while preserving a 3.0 meter relation",
+        current_phase={"metrics": [{"target": 5.0, "tolerance": 1.0}]},
+    )
+
+    assert result == patch
 
 
 class FakeUpdater:

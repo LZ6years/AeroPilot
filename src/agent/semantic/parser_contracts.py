@@ -16,7 +16,16 @@ from src.agent.semantic.validator import semantic_plan_from_dict
 
 STRUCTURE_TOP_LEVEL_FIELDS = {"intent", "task_goal", "phases"}
 STRUCTURE_PHASE_FIELDS = {"index", "total", "name", "goal"}
-CRITERIA_FIELDS = {"index", "name", "done_when", "observe", "continue_when", "metrics"}
+CRITERIA_FIELDS = {"index", "name", "done_when", "continue_when", "metrics"}
+METRIC_FIELDS = {"name", "target", "unit", "tolerance", "correction_allowed"}
+METRIC_NAMES = {
+    "forward_distance",
+    "right_distance",
+    "up_distance",
+    "planar_distance",
+    "yaw_delta",
+    "hover_stability",
+}
 _NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d+)?|\.\d+)")
 
 
@@ -81,11 +90,11 @@ def validate_phase_criteria(
     if index != int(phase["index"]) or name != str(phase["name"]):
         raise TaskParserContractError("phase criteria index/name does not match immutable phase structure")
     done_when = _string_list(data.get("done_when"), "done_when", require_nonempty=True)
-    observe = _string_list(data.get("observe"), "observe")
     continue_when = _string_list(data.get("continue_when"), "continue_when")
     metrics = data.get("metrics")
     if not isinstance(metrics, list) or any(not isinstance(item, dict) for item in metrics):
         raise TaskParserContractError("phase criteria metrics must be a list of objects")
+    metrics = [_validate_phase_metric(item) for item in metrics]
     if instruction is not None:
         _validate_visual_alignment_precision(instruction, done_when)
         _validate_numeric_provenance(
@@ -99,10 +108,60 @@ def validate_phase_criteria(
         "index": index,
         "name": name,
         "done_when": done_when,
-        "observe": observe,
         "continue_when": continue_when,
         "metrics": [dict(item) for item in metrics],
     }
+
+
+def normalize_phase_criteria_metrics(
+    data: dict[str, Any],
+    *,
+    instruction: str,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Remove only well-formed metrics whose target has no user numeric source.
+
+    Metric provenance is a recoverable criteria defect: dropping an invented
+    deterministic metric leaves the semantic ``done_when`` contract available
+    for model judgment. Malformed metrics remain untouched so normal contract
+    repair still handles schema errors instead of silently discarding them.
+    """
+
+    if not isinstance(data, dict):
+        return data, []
+    raw_metrics = data.get("metrics")
+    if not isinstance(raw_metrics, list):
+        return dict(data), []
+
+    instruction_numbers = _numbers(instruction)
+    kept_metrics: list[Any] = []
+    warnings: list[dict[str, Any]] = []
+    for metric_index, metric in enumerate(raw_metrics):
+        if not isinstance(metric, dict):
+            kept_metrics.append(metric)
+            continue
+        if _phase_metric_schema_error(metric) is not None:
+            kept_metrics.append(metric)
+            continue
+        name = str(metric.get("name", "")).strip()
+        target = _optional_float(metric.get("target"))
+        if target is None or _metric_target_has_numeric_source(
+            name,
+            target,
+            instruction_numbers,
+        ):
+            kept_metrics.append(metric)
+            continue
+        warnings.append(
+            {
+                "code": "unsupported_metric_numeric_source_removed",
+                "metric_index": metric_index,
+                "metric": dict(metric),
+            }
+        )
+
+    normalized = dict(data)
+    normalized["metrics"] = kept_metrics
+    return normalized, warnings
 
 
 def merge_semantic_plan(
@@ -120,7 +179,6 @@ def merge_semantic_plan(
             {
                 **dict(phase),
                 "done_when": clean["done_when"],
-                "observe": clean["observe"],
                 "continue_when": clean["continue_when"],
                 "metrics": clean["metrics"],
             }
@@ -211,29 +269,61 @@ def _validate_numeric_provenance(
                 f"phase criteria condition contains numbers absent from the user instruction: {unsupported}"
             )
 
-    target_distance = _optional_float(
-        dict(task_goal.get("target_attributes", {})).get("distance_m")
-        if isinstance(task_goal.get("target_attributes", {}), dict)
-        else None
-    )
     for metric in metrics:
         name = str(metric.get("name", "")).strip()
         target = _optional_float(metric.get("target"))
         if target is None:
             raise TaskParserContractError(f"phase criteria metric {name or '<unnamed>'} requires numeric target")
-        if name == "planar_distance" and target_distance is not None and _same_abs(target, target_distance):
-            raise TaskParserContractError(
-                "target-relative task_goal distance_m cannot be used as phase-start planar_distance"
-            )
-        if _contains_abs(instruction_numbers, target):
-            continue
-        if name in {"forward_distance", "right_distance"} and len(instruction_numbers) >= 2:
-            # A horizontal distance plus bearing may be decomposed into signed
-            # forward/right components by the criteria contract.
+        if _metric_target_has_numeric_source(name, target, instruction_numbers):
             continue
         raise TaskParserContractError(
             f"phase criteria metric target {target} for {name or '<unnamed>'} has no numeric source in the user instruction"
         )
+
+
+def _metric_target_has_numeric_source(
+    name: str,
+    target: float,
+    instruction_numbers: list[float],
+) -> bool:
+    if _contains_abs(instruction_numbers, target):
+        return True
+    if name in {"forward_distance", "right_distance"} and len(instruction_numbers) >= 2:
+        # A horizontal distance plus bearing may be decomposed into signed
+        # forward/right components by the criteria contract.
+        return True
+    return False
+
+
+def _validate_phase_metric(metric: dict[str, Any]) -> dict[str, Any]:
+    error = _phase_metric_schema_error(metric)
+    if error is not None:
+        raise TaskParserContractError(error)
+    return dict(metric)
+
+
+def _phase_metric_schema_error(metric: dict[str, Any]) -> str | None:
+    unknown = sorted(set(metric) - METRIC_FIELDS)
+    if unknown:
+        return f"phase criteria metric contains unsupported fields: {unknown}"
+    missing = sorted(METRIC_FIELDS - set(metric))
+    if missing:
+        return f"phase criteria metric is missing fields: {missing}"
+    name = str(metric.get("name", "")).strip()
+    if name not in METRIC_NAMES:
+        return f"phase criteria metric name is unsupported: {name or '<empty>'}"
+    if isinstance(metric.get("target"), bool) or _optional_float(metric.get("target")) is None:
+        return f"phase criteria metric {name} requires numeric target"
+    unit = str(metric.get("unit", "")).strip()
+    if not unit:
+        return f"phase criteria metric {name} requires unit"
+    tolerance = metric.get("tolerance")
+    tolerance_value = None if isinstance(tolerance, bool) else _optional_float(tolerance)
+    if tolerance_value is None or tolerance_value < 0:
+        return f"phase criteria metric {name} requires non-negative numeric tolerance"
+    if not isinstance(metric.get("correction_allowed"), bool):
+        return f"phase criteria metric {name} correction_allowed must be boolean"
+    return None
 
 
 def _validate_visual_alignment_precision(instruction: str, done_when: list[str]) -> None:

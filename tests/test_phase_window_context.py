@@ -21,7 +21,6 @@ def make_state() -> MissionState:
                     "target is visible",
                     "UAV has moved meaningfully closer to target",
                 ],
-                observe=["latest_observation", "phase_execution_summary"],
                 continue_when=["target is not aligned"],
                 metrics=[{"name": "yaw_delta", "target": 30.0, "unit": "deg", "tolerance": 5.0}],
             )
@@ -64,6 +63,8 @@ def test_phase_window_context_adds_runtime_evidence_and_model_context():
     assert "velocity" not in result.model_context["latest_observation_summary"]["pose"]
     assert "runtime_control" not in result.planner_payload
     assert "runtime_control" not in result.model_context
+    assert "phase_progress_evidence" not in result.model_context
+    assert "phase_execution_summary" not in result.model_context
 
 
 def test_phase_window_context_adds_compact_runtime_control_when_available():
@@ -100,7 +101,8 @@ def test_phase_window_context_adds_compact_runtime_control_when_available():
     }
     assert result.model_context["runtime_control"] == result.planner_payload["runtime_control"]
     assert list(result.planner_payload).index("runtime_control") < list(result.planner_payload).index("phase_metrics")
-    assert list(result.model_context).index("runtime_control") < list(result.model_context).index("phase_progress_evidence")
+    assert "phase_progress_evidence" not in result.model_context
+    assert "phase_execution_summary" not in result.model_context
 
 
 def test_phase_window_context_marks_yaw_only_progress():
@@ -137,7 +139,6 @@ def test_phase_window_context_model_context_uses_neutral_no_metric_completion():
                 name="visual_phase",
                 goal="judge a visual phase",
                 done_when=["visual evidence is sufficient"],
-                observe=["latest_observation"],
                 continue_when=["visual evidence is insufficient"],
                 metrics=[],
             )
@@ -145,11 +146,13 @@ def test_phase_window_context_model_context_uses_neutral_no_metric_completion():
     )
     state = MissionState("run-context", "judge visual target", plan)
 
-    result = PhaseWindowContextBuilder().build(state, {"fragments": []}, {"pose": {}})
+    base_context = {
+        "current_phase": state.semantic_plan.phases[0].to_dict(),
+        "fragments": [],
+    }
+    result = PhaseWindowContextBuilder().build(state, base_context, {"pose": {}})
 
     assert result.planner_payload["phase_completion_evaluation"]["all_within_tolerance"] is False
-    assert result.model_context["phase_completion_evaluation"] == {
-        "deterministic_status": "not_measurable",
-        "requires_model_judgment": True,
-        "reason": "No deterministic phase metrics are available; judge completion from current_phase done_when/continue_when, images, and phase_progress_evidence.",
-    }
+    assert result.planner_payload["current_phase"]["continue_when"] == ["visual evidence is insufficient"]
+    assert result.model_context["current_phase"]["continue_when"] == ["visual evidence is insufficient"]
+    assert "phase_completion_evaluation" not in result.model_context

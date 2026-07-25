@@ -14,6 +14,7 @@ from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.safety import SafetySupervisor
 from src.agent.safety import SafetyDecision
 from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
+from src.agent.semantic.plan_updater import validate_semantic_plan_patch_numeric_provenance
 from src.agent.semantic.schemas import TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.agent.semantic.validator import apply_semantic_plan_patch
@@ -52,7 +53,7 @@ class TaskRuntime:
         runtime_control_config: RuntimeControlConfig | None = None,
         semantic_plan_updater: Any | None = None,
         event_sink: Callable[[dict[str, Any]], None] | None = None,
-        runtime_loop_guard_windows: int = 100,
+        runtime_loop_guard_windows: int = 40,
         enable_action_planner_debug: bool = False,
         context_builder: ObservationContextBuilder | None = None,
     ) -> None:
@@ -361,6 +362,21 @@ class TaskRuntime:
             self._record_model_action_contract_repair_events(exc.repair_attempts)
             raise
         self._record_model_action_contract_repair_events(getattr(self.planner, "last_repair_attempts", []))
+        request_recovery = dict(
+            getattr(self.planner, "last_model_request_recovery", {}) or {}
+        )
+        if request_recovery.get("status") == "recovered":
+            self._debug_event("model_action_request_recovered", request_recovery)
+        completion_result = dict(getattr(self.planner, "last_completion_result", {}) or {})
+        completion_payload = {
+            "phase": coupled_plan.phase,
+            "phase_key": phase_key,
+            "window_index": state.current_phase_window_count,
+            **completion_result,
+        }
+        self._event("phase_completion_assessed", completion_payload)
+        if completion_result.get("fallback"):
+            self._debug_event("phase_completion_contract_fallback", completion_payload)
         transition = coupled_plan.phase_decision
         raw_plan = coupled_plan.to_short_horizon_plan()
         self._debug_event("model_action_planned", coupled_plan.to_dict())
@@ -885,6 +901,12 @@ class TaskRuntime:
             self._debug_event("semantic_plan_update_discarded", {**payload, "discard_reason": discard_reason})
             return
         try:
+            current_phase = state.semantic_plan.phases[state.current_phase_index].to_dict()
+            validate_semantic_plan_patch_numeric_provenance(
+                result.patch,
+                instruction=state.user_instruction,
+                current_phase=current_phase,
+            )
             updated_plan = apply_semantic_plan_patch(
                 state.semantic_plan,
                 state.current_phase_index,
@@ -1131,6 +1153,11 @@ class TaskRuntime:
         if coupled_plan is not None:
             payload["coupled_plan"] = coupled_plan.to_dict()
             payload["coupled_phase_decision"] = coupled_plan.phase_decision.to_dict()
+        request_recovery = dict(
+            getattr(self.planner, "last_model_request_recovery", {}) or {}
+        )
+        if request_recovery:
+            payload["model_request_recovery"] = request_recovery
         self.recorder.write_json(name, payload)
         return name
 

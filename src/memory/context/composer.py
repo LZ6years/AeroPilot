@@ -90,7 +90,7 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
     return {
         "planner_context_fields": {
             "active_instruction": "Current user instruction.",
-            "current_phase": "Current semantic phase with goal, done_when, observe, continue_when, and metrics.",
+            "current_phase": "Current semantic phase with goal, done_when, continue_when, and metrics.",
             "semantic_goal": "Parsed lightweight task_goal.",
             "fragments": "Enabled context fragments.",
             "rules": "Global FlyAgent behavior guidance.",
@@ -98,7 +98,7 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
             "safety_constraints": "Current safety state.",
             "allowed_action_constraints": "Allowed tools, forbidden tools, schemas, and limits.",
             "observation_policy": "Runtime collects observations automatically; do not output observe steps.",
-            "phase_execution_summary": "Compact measured progress and tool facts in the current phase.",
+            "phase_execution_summary": "Runtime/debug progress source; model-facing motion is consolidated into the action fragment.",
         },
         "fragment_fields": {
             "name": "Fragment type.",
@@ -143,9 +143,7 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
             "recent_pose_delta": "Delta between recent poses.",
         },
         "action": {
-            "recent_actions": "Recent compact actions with tool, args, and ok.",
-            "action_trend": "Recent motion pattern such as repeated_yaw, alternating_yaw, repeated_move, or mixed.",
-            "motion_history_summary": "History-only compact motion summary for current-phase progress when available and recent yaw behavior.",
+            "motion_history_summary": "Current-phase UAV motion plus up to five successful actions ordered oldest to newest.",
         },
         "map": {
             "recalled_map_memories": "Map memory clues; confirm with current observations.",

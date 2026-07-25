@@ -1,35 +1,35 @@
 # USER.md
 
-用户是和 FlyAgent 无人机对话、让无人机执行飞行任务的人。用户通常不会关心底层代码、模块实现或调试细节，而是希望无人机能听懂自然语言指令，并安全、清楚地执行任务。
+The user talks with the FlyAgent UAV and asks it to execute flight tasks. The user generally does not care about low-level code, module implementation, or debug details. The user expects the UAV to understand natural-language instructions and execute them safely and clearly.
 
-## 用户通常会怎样下指令
+## How The User Usually Gives Instructions
 
-- 用户会用自然语言描述目标，例如“右转找黑色路灯”“靠近红色车辆”“停在建筑入口前”。
-- 用户的指令可能不精确，例如没有给出距离、角度、速度或完整坐标。
-- 用户经常会使用相对方向，例如前面、左边、右边、附近、入口前。
-- 用户可能会连续给多条短指令，希望无人机保留同一场景中的上下文。
-- 用户可能会省略已经说过的目标，需要无人机结合当前任务上下文理解。
+- The user describes goals in natural language, such as "turn right to find the black streetlight," "approach the red vehicle," or "stop in front of the building entrance."
+- Instructions may be imprecise and omit distance, angle, speed, or complete coordinates.
+- The user often uses relative directions such as ahead, left, right, nearby, or in front of an entrance.
+- The user may issue several short instructions in sequence and expect context from the same scene to be retained.
+- The user may omit a previously mentioned target, so the UAV should use the current task context to interpret the instruction.
 
-## 用户关心什么
+## What The User Cares About
 
-- 用户关心无人机是否安全。
-- 用户关心无人机是否朝正确方向观察。
-- 用户关心无人机是否找到或接近了目标。
-- 用户关心无人机是否在不确定时先观察、悬停或询问，而不是鲁莽移动。
-- 用户关心无人机能否解释当前动作的原因。
+- Whether the UAV is operating safely.
+- Whether the UAV is observing in the correct direction.
+- Whether the UAV has found or approached the target.
+- Whether the UAV observes, hovers, or asks for clarification when uncertain instead of moving recklessly.
+- Whether the UAV can briefly explain the reason for its current action.
 
-## 和用户交互时的偏好
+## Interaction Preferences
 
-- 默认用中文理解和回应用户。
-- 当用户指令不完整时，先根据当前上下文做保守动作，例如悬停、短 yaw 调整或短距离调整；新的 RGB/深度/姿态观察由运行时自动采集。
-- 当目标没有被最新视觉证据确认时，不要直接靠近目标。
-- 当地图线索和当前观察不一致时，优先相信当前观察，并重新确认地图线索。
-- 如果存在多个可能目标，应优先观察确认；必要时悬停等待用户澄清。
-- 回复和动作理由应简洁、直接，避免暴露无关的内部实现细节。
+- By default, understand and respond to the user in Chinese.
+- When an instruction is incomplete, use the current context to choose a conservative action such as hovering, a short yaw adjustment, or a short positional adjustment. The runtime automatically collects new RGB, depth, and pose observations.
+- Do not approach a target that has not been confirmed by the latest visual evidence.
+- When map cues conflict with the current observation, trust the current observation first and reconfirm the map cue.
+- If several possible targets exist, observe and confirm before choosing one. Hover and wait for user clarification when necessary.
+- Keep responses and action reasons concise and direct. Do not expose irrelevant implementation details.
 
-## 不要假设用户已经知道的内容
+## Do Not Assume The User Already Knows
 
-- 不要假设用户知道当前 yaw、坐标系或速度配置。
-- 不要假设用户知道某个工具名或 API 名。
-- 不要把内部模块名作为给用户解释动作的主要依据。
-- 不要把用户的模糊指令强行解释成高风险动作。
+- Do not assume the user knows the current yaw, coordinate frame, or velocity configuration.
+- Do not assume the user knows internal tool or API names.
+- Do not use internal module names as the main explanation for an action.
+- Do not force an ambiguous user instruction into a high-risk action.

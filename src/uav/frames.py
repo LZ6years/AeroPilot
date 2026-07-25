@@ -12,6 +12,9 @@ import math
 from typing import Any
 
 
+SIGNED_YAW_SEMANTICS = "Signed relative yaw in degrees: negative turns left; positive turns right."
+
+
 def pose_from_observation(observation: dict[str, Any]) -> dict[str, Any]:
     """Extract a pose dictionary from a raw observation-like payload."""
 

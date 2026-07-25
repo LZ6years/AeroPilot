@@ -6,61 +6,45 @@ summary: Select for visual target search, confirmation, facing, centering, obser
 
 # Visual Target Task Reasoning
 
-Use this guidance when the instruction depends on finding, confirming, seeing,
-facing, centering, observing, or keeping attention on a visual target. The latest
-image or visual description is more important than old hints or cumulative yaw.
+## Application Boundary
 
-Classify the latest target state before choosing an action:
-1. target absent: no target-like cue is visible;
-2. weak candidate: something may match the target but is ambiguous;
-3. visible target: the target is reasonably identifiable, even if it is a little
-   left or right of center;
-4. stable target: the target is visible and roughly aligned; this includes a
-   possible choice to stop, and a small left/right offset alone is not enough to
-   keep micro-adjusting.
+Use this guidance for finding, confirming, facing, inspecting, or attending to a
+visual target. Match evidence to the objective: facing needs identity and a
+usable bearing; inspection may need requested detail. Visual alignment cannot
+prove route, distance, orbit, or landing progress. In a compound task, target
+confirmation may only establish a cue for later movement.
 
-For target absent or weak-candidate states, search or confirm instead of
-claiming the visual objective is complete. When detailed search scale matters,
-request the search-under-uncertainty reference.
+## Evidence Model
 
-For visible or stable target states, reason about whether the target appears
-left, right, centered, occluded, or near the image edge, and whether the last
-action improved or worsened the visual relation.
+Classify the latest evidence as target absent, weak candidate, directional
+target cue, or inspection-ready. A directional cue identifies the target and
+gives a usable image bearing even when nonessential detail is hidden.
+Frame-boundary clipping can make bearing unreliable; incidental occlusion does
+not when identity and bearing remain clear. Motion history can reveal
+oscillation but cannot create visibility or target-relative bearing.
 
-If a visible target stays in view across several small or alternating yaw
-corrections, treat it as a stable target unless the latest image shows it is
-clearly off-view, strongly occluded, or not identifiable.
+## Decision Procedure
 
-Do not chase perfect centering. If repeated small yaw corrections keep the
-target visible without clearer progress, prefer hover/confirm and treat the
-visible, stable alignment as enough evidence for the current visual objective.
+1. Classify the latest evidence before acting.
+2. For target absent, search within a bound. For a weak candidate, hover or make
+   a small confirming adjustment. Request
+   [search guidance](references/search_under_uncertainty.md) when search scale
+   needs more detail.
+3. For facing, correct only when the cue is near the frame boundary or too
+   ambiguous for a usable bearing. Do not demand inspection quality.
+4. Re-observe after correction; stop alternating or unhelpful corrections.
 
-When recent motion history is available, use it as history only. It can warn
-about oscillation or repeated small corrections, but it is not a detector and
-should not override the latest visual evidence.
+## Completion And Stop
 
-Image-side alignment is for visual centering or facing, not for every possible
-turn. When the current intent is to face, center, observe, or keep attention on a
-visible target:
-- left target -> left/negative yaw, or hover if the evidence is already stable.
-- right target -> right/positive yaw, or hover if the evidence is already stable.
-- centered or roughly centered target -> hover, confirm, or treat the stable
-  visual alignment as sufficient evidence instead of making another tiny yaw
-  correction.
+For facing, an identifiable cue inside the forward view with usable bearing is
+sufficient. Modest offset, incidental occlusion, and missing nonessential
+detail are acceptable. Exact centering, full visibility, or confirmation hover
+apply only when explicitly requested. When vision only enabled movement, use
+the movement objective's completion evidence instead of requiring continuous
+visibility.
 
-Self-check before yaw: if the user-facing message or action reason says the
-target is on the left, the yaw choice for centering should also be
-left/negative. If it says the target is on the right, the yaw choice for
-centering should be right/positive. If the chosen yaw goes the opposite way,
-first check whether the intent is really broad search, checking another side,
-avoidance, or a camera-frame exception. If it is not, rewrite the plan as
-hover/confirm or a same-side small yaw.
+## Recovery
 
-Do not use current cumulative yaw as if it were the target's image-side offset.
-The latest image side is the primary cue for visual centering; cumulative yaw
-can affect correction size or the choice to stop, but it should not invert the
-image-side action for a visible target.
-
-Do not invent target visibility from metadata. Do not mark a target-facing task
-complete only because a yaw command was issued. This guidance is not a detector
-and must not be treated as observed fact.
+If identity or bearing is ambiguous, hover or use a bounded correction. Re-check
+yaw that conflicts with the stated image side. Do not restart broad search for
+modest offset or incidental occlusion after establishing a usable cue.

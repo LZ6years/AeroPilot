@@ -17,7 +17,6 @@ Allowed JSON Shape
     "name": "optional short snake_case recovery phase name",
     "goal": "optional generic recovery objective",
     "done_when": ["optional observable recovery completion condition"],
-    "observe": ["latest_observation", "phase_execution_summary"],
     "continue_when": ["optional recovery continuation condition"],
     "metrics": []
   }
@@ -32,4 +31,19 @@ Rules
 - Do not rewrite task_goal, instruction, full phases, parser mode, runtime status, tools, or safety.
 - Do not include primitive action names such as uav.turn_relative, uav.move_body, env.observe, get_pose, get_frames, takeoff, or land.
 - Metrics remain semantic completion evidence only. Do not invent a numeric metric unless it is directly supported by the user instruction and current semantic contract.
+- Do not introduce numeric thresholds anywhere in goal, done_when, continue_when, metrics, or an appended recovery phase. A number may only repeat a value already present in the user instruction or current phase contract.
 - Prefer relaxing impossible or unobservable completion evidence into observable, conservative conditions rather than changing the task meaning.
+- Every done_when list item is a required core condition. Put alternative sufficient evidence paths inside the same item with explicit either/or wording; do not split alternatives into separate required items.
+- Put independently assessable required facts in separate done_when items. Do not combine target confirmation, a requested spatial relation, and stabilization into one item merely because all are required.
+- Never begin a done_when list item with "or" or "alternatively"; keep that alternative inside the preceding item.
+- Write the minimum sufficient completed state, not an ideal view, preferred proof, or extra confirmation. Preserve the user's requested precision without silently strengthening it.
+- Do not strengthen an approximate target-distance condition into calibrated exact proof, or add hover, hold, or stabilization unless the user requested that terminal behavior.
+- For a numeric target-relative standoff, keep target confirmation separate from a directly judgeable qualitative distance condition with no clear evidence of being substantially nearer or farther.
+- Treat done_when as the complete operational test for the phase goal. Do not leave a hidden part of the goal for the planner to add after every condition is supported.
+- For visual facing or orientation without an explicit precision request, an identifiable cue clearly inside the forward view with a usable bearing can support broad facing. Do not require exact centering, full visibility, an unobstructed appearance, or a confirmation hover.
+- Express the terminal relation without requiring one exact camera manifestation when consistent observation change and phase-relative motion can jointly support completion.
+- Treat continue_when as non-exhaustive clarification, not as a completion gate or extra positive completion requirements.
+- Do not make a state that is allowed by a valid done_when path sufficient continuation evidence by itself. Add the concrete missing, contradictory, reversal, blockage, or wrong-relation evidence that distinguishes non-completion.
+- For route-reference passage, preserve either of two independently sufficient paths in one core condition: observation and motion can show the reference moving from ahead into a side, rearward, or non-blocking relation; or an established route relation plus sustained consistent translation can carry the UAV beyond a cue that leaves the forward view without reversal, blockage, or conflicting evidence. Do not require both paths, reacquisition, or continued visibility.
+- Never use bare route-reference absence as continue_when. If absence is relevant, couple it in the same condition with an unestablished route relation, absent or insufficient meaningful translation, or concrete conflicting evidence.
+- Before returning, check whether the phase goal could already be achieved while a proposed done_when item remains false only because a preferred visual manifestation or extra confirmation is missing. If so, broaden that item to the minimum sufficient condition or preserve the valid alternative path.

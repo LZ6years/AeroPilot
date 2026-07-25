@@ -387,7 +387,9 @@ def test_html_review_combines_case_metrics_rgb_actions_and_messages(tmp_path):
     assert "Runtime Applied Phase State Events" in case_html
     assert "coupled_planner_phase_decided" in case_html
     assert "phase_transition_continued" in case_html
-    assert "Coupled mode: one model call made both the phase decision and action decision" in case_html
+    assert "Legacy Coupled Planner Decision" in case_html
+    assert "no structured completion assessment was recorded" in case_html
+    assert "one model call made both the phase decision" not in case_html
     assert "Judge Context Summary" not in case_html
     assert "Executed Window" not in case_html
     assert "open full phase decision json" not in case_html
@@ -578,7 +580,7 @@ def test_html_review_hides_off_stmr_and_falls_back_for_legacy_history(tmp_path):
     assert "Legacy run: incremental render history was not recorded." in legacy_html
 
 
-def test_html_review_displays_coupled_planner_decision(tmp_path):
+def test_html_review_displays_structured_completion_and_derived_transition(tmp_path):
     eval_dir = tmp_path / "eval"
     case_dir = eval_dir / "cases" / "coupled"
     run_dir = tmp_path / "runs" / "coupled"
@@ -591,7 +593,10 @@ def test_html_review_displays_coupled_planner_decision(tmp_path):
                 "window_index": 1,
                 "model_context": {
                     "active_instruction": "Turn",
-                    "current_phase": {"name": "p"},
+                    "current_phase": {
+                        "name": "p",
+                        "done_when": ["the person is clearly visible and roughly aligned"],
+                    },
                     "phase_progress_evidence": {
                         "motion_progress": {
                             "has_translation": False,
@@ -610,6 +615,17 @@ def test_html_review_displays_coupled_planner_decision(tmp_path):
                     "reason": "target already aligned",
                     "agent_messages": [],
                 },
+                "coupled_plan": {
+                    "completion_assessment": {
+                        "done_when": [
+                            {
+                                "index": 0,
+                                "status": "supported",
+                                "evidence": "NOW shows the person clearly in the forward view",
+                            }
+                        ]
+                    }
+                },
                 "safety_decision": {"interventions": [], "plan_changed": False},
             },
             ensure_ascii=False,
@@ -619,6 +635,22 @@ def test_html_review_displays_coupled_planner_decision(tmp_path):
     (run_dir / "events.jsonl").write_text(
         "\n".join(
             [
+                json.dumps(
+                    {
+                        "event": "phase_completion_assessed",
+                        "payload": {
+                            "phase": "p",
+                            "phase_key": "p",
+                            "window_index": 1,
+                            "semantic_complete": True,
+                            "metric_complete": True,
+                            "derived_decision": "advance_to_next_phase",
+                            "fallback": True,
+                            "fallback_reasons": ["model_phase_decision_ignored"],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
                 json.dumps(
                     {
                         "event": "coupled_planner_phase_decided",
@@ -666,12 +698,89 @@ def test_html_review_displays_coupled_planner_decision(tmp_path):
     write_html_review(eval_dir, summary)
 
     case_html = (case_dir / "review.html").read_text(encoding="utf-8")
-    assert "Coupled Planner Decision" in case_html
+    assert "Completion Assessment" in case_html
+    assert "the person is clearly visible and roughly aligned" in case_html
+    assert "NOW shows the person clearly in the forward view" in case_html
+    assert "supported" in case_html
+    assert "semantic_complete" in case_html
+    assert "metric_complete" in case_html
+    assert "model_phase_decision_ignored" in case_html
+    assert "Derived Phase Transition" in case_html
+    assert "Action Plan" in case_html
+    assert "one model call made both the phase decision" not in case_html
+    assert "Coupled Planner Decision" not in case_html
     assert "coupled_planner_phase_decided" in case_html
     assert "coupled_planner" in case_html
     assert "No UAV tool is executed" in case_html
     assert "Phase progress evidence" in case_html
     assert "yaw_only_so_far" in case_html
+
+
+def test_html_review_labels_legacy_coupled_decision_without_assessment(tmp_path):
+    eval_dir = tmp_path / "eval"
+    case_dir = eval_dir / "cases" / "legacy"
+    run_dir = tmp_path / "runs" / "legacy"
+    debug_dir = run_dir / "debug" / "action_planner"
+    debug_dir.mkdir(parents=True)
+    case_dir.mkdir(parents=True)
+    (debug_dir / "p_window_001.json").write_text(
+        json.dumps(
+            {
+                "phase": "p",
+                "window_index": 1,
+                "model_context": {
+                    "active_instruction": "Turn",
+                    "current_phase": {"name": "p"},
+                    "fragments": [],
+                },
+                "raw_plan": {"steps": [], "action_window": {}, "agent_messages": []},
+                "safe_plan": {"steps": [], "action_window": {}, "agent_messages": []},
+                "coupled_phase_decision": {
+                    "decision": "continue_current_phase",
+                    "reason": "legacy decision",
+                },
+                "safety_decision": {"interventions": [], "plan_changed": False},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (case_dir / "case.json").write_text(
+        json.dumps(
+            {
+                "case": {
+                    "case_id": "legacy",
+                    "selected_instruction": "Turn",
+                    "class_name": "Turn",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    summary = {
+        "metrics": {"case_count": 1},
+        "failure_counts": {},
+        "cases": [
+            {
+                "case_id": "legacy",
+                "class_name": "Turn",
+                "status": "ok",
+                "case_dir": str(case_dir),
+                "run_dir": str(run_dir),
+                "run_artifacts": {"actions": []},
+                "ndtw": {},
+                "sr_judge": {},
+            }
+        ],
+    }
+
+    write_html_review(eval_dir, summary)
+
+    case_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    assert "Legacy Coupled Planner Decision" in case_html
+    assert "no structured completion assessment was recorded" in case_html
+    assert "Completion Assessment" not in case_html
+    assert "one model call made both the phase decision" not in case_html
 
 
 def test_html_review_marks_missing_after_frame_without_reusing_last_rgb(tmp_path):

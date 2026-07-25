@@ -89,7 +89,7 @@ flowchart TD
 - `run-task` 和交互式 CLI 使用 `ModelActionPlanner`。
 - 模型不能输出 `kind="observe"`。
 - `phase_transition` 不再由 action plan 输出，而是在执行后判断。
-- `phase_execution_summary` 进入 planner 和执行后 judge 输入，用于减少重复转向/重复前进。
+- runtime 保留 `phase_execution_summary` 作为进展源；planner 只接收统一的 `motion_history_summary`，结合 phase-start-relative UAV motion 和最近动作顺序减少重复转向或前进。
 
 ### M5: 原始观察与上下文管理
 

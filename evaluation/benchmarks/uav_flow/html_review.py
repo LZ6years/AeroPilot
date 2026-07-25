@@ -794,12 +794,32 @@ def _action_planner_debug_records(run_dir: Path | None) -> list[dict[str, Any]]:
     debug_dir = run_dir / "debug" / "action_planner"
     if not debug_dir.exists():
         return []
+    completion_results: dict[tuple[str, int], dict[str, Any]] = {}
+    for item in _read_jsonl(run_dir / "events.jsonl"):
+        event = item.get("event") or item.get("kind")
+        payload = item.get("payload", {})
+        if event != "phase_completion_assessed" or not isinstance(payload, dict):
+            continue
+        window_index = payload.get("window_index")
+        if not isinstance(window_index, int):
+            continue
+        for phase_id in (payload.get("phase_key"), payload.get("phase")):
+            if phase_id:
+                completion_results[(str(phase_id), window_index)] = payload
+
     records: list[dict[str, Any]] = []
     for path in sorted(debug_dir.glob("*.json")):
         payload = _read_json(path)
         if not payload:
             continue
         payload["_path"] = str(path)
+        window_index = payload.get("window_index")
+        if isinstance(window_index, int):
+            for phase_id in (payload.get("phase_key"), payload.get("phase")):
+                result = completion_results.get((str(phase_id), window_index))
+                if result is not None:
+                    payload["_phase_completion_result"] = result
+                    break
         records.append(payload)
     return records
 
@@ -1009,6 +1029,11 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
             if isinstance(record.get("coupled_phase_decision"), dict)
             else {}
         )
+        coupled_plan = record.get("coupled_plan") if isinstance(record.get("coupled_plan"), dict) else {}
+        has_completion_assessment = isinstance(
+            coupled_plan.get("completion_assessment"),
+            dict,
+        )
         safety = record.get("safety_decision", {}) if isinstance(record.get("safety_decision"), dict) else {}
         items.append(
             """
@@ -1040,10 +1065,11 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
     <article>
       <h3>Planner Output</h3>
       <p class="empty">{planner_note}</p>
+      {completion_block}
       {coupled_block}
-      <h4>Raw plan</h4>
+      <h4>Action Plan</h4>
       {_plan_raw}
-      <h4>Safety-reviewed plan</h4>
+      <h4>Safety-reviewed Action Plan</h4>
       {_plan_safe}
       <h4>Safety</h4>
       <pre>{safety}</pre>
@@ -1057,9 +1083,12 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
                 execution=_e(_tool_execution_label(coupled_decision, _plan_tools(safe_plan))),
                 _active=_kv("Instruction", context.get("active_instruction")),
                 _phase=_kv("Current phase", (context.get("current_phase") or {}).get("name") if isinstance(context.get("current_phase"), dict) else context.get("current_phase")),
-                _decision=_kv("Phase decision", coupled_decision.get("decision")),
+                _decision=_kv(
+                    "Derived phase transition" if has_completion_assessment else "Legacy phase decision",
+                    coupled_decision.get("decision"),
+                ),
                 _execution=_kv("Tool execution", _tool_execution_label(coupled_decision, _plan_tools(safe_plan))),
-                _reason=_kv("Decision reason", coupled_decision.get("guard_reason") or coupled_decision.get("reason")),
+                _reason=_kv("Transition reason", coupled_decision.get("guard_reason") or coupled_decision.get("reason")),
                 _metrics=_kv("Phase metrics", json.dumps(context.get("phase_metrics", []), ensure_ascii=False)),
                 _exec=_kv("Phase execution summary", json.dumps(_compact_phase_execution(context.get("phase_execution_summary", {})), ensure_ascii=False)),
                 _progress=_kv("Phase progress evidence", json.dumps(_compact_progress_evidence(progress), ensure_ascii=False)),
@@ -1069,8 +1098,17 @@ def _planner_debug(base: Path, records: list[dict[str, Any]]) -> str:
                 _tool_diff=_kv("Raw -> safe tools", f"{_plan_tools(raw_plan)} -> {_plan_tools(safe_plan)}"),
                 artifact=_link(base, _path_from_result(record.get("_path"), None), "open full debug json"),
                 model_context=_e(model_context_text),
-                planner_note=_e(_planner_output_note(coupled_decision)),
-                coupled_block=_coupled_decision_block(coupled_decision),
+                planner_note=_e(
+                    _planner_output_note(
+                        coupled_decision,
+                        structured=has_completion_assessment,
+                    )
+                ),
+                completion_block=_completion_assessment_block(record, model_context),
+                coupled_block=_coupled_decision_block(
+                    coupled_decision,
+                    structured=has_completion_assessment,
+                ),
                 _plan_raw=_plan_block(raw_plan),
                 _plan_safe=_plan_block(safe_plan),
                 safety=_e(json.dumps(_compact_safety(safety), ensure_ascii=False, indent=2)),
@@ -1229,23 +1267,122 @@ def _selected_skill_guidance_summary(fragment: dict[str, Any]) -> list[dict[str,
     return result
 
 
-def _planner_output_note(coupled_decision: dict[str, Any]) -> str:
+def _planner_output_note(
+    coupled_decision: dict[str, Any],
+    *,
+    structured: bool,
+) -> str:
     if coupled_decision:
         decision = coupled_decision.get("decision")
-        if decision in {"advance_to_next_phase", "complete_task"}:
-            return "Coupled mode: one model call made both the phase decision and action decision; No UAV tool is executed for this transition window."
-        return "Coupled mode: one model call made both the phase decision and action decision; runtime executed the safety-reviewed action window."
+        if structured:
+            if decision in {"advance_to_next_phase", "complete_task"}:
+                return "The model assessed each done_when item, and planner code derived the phase transition. No UAV tool is executed for this transition window."
+            return "The model assessed each done_when item, and planner code derived the phase transition. Runtime then executed the safety-reviewed action window."
+        return "Legacy coupled record: no structured completion assessment was recorded, so the saved phase decision is shown as-is."
     return "Planner output is a legacy debug record without a coupled phase decision."
 
 
-def _coupled_decision_block(coupled_decision: dict[str, Any]) -> str:
+def _coupled_decision_block(
+    coupled_decision: dict[str, Any],
+    *,
+    structured: bool,
+) -> str:
     if not coupled_decision:
         return ""
     return """
-      <h4>Coupled Planner Decision</h4>
+      <h4>{title}</h4>
       <pre>{decision}</pre>
 """.format(
+        title="Derived Phase Transition" if structured else "Legacy Coupled Planner Decision",
         decision=_e(json.dumps(coupled_decision, ensure_ascii=False, indent=2))
+    )
+
+
+def _completion_assessment_block(
+    record: dict[str, Any],
+    model_context: dict[str, Any],
+) -> str:
+    coupled_plan = record.get("coupled_plan")
+    coupled_plan = coupled_plan if isinstance(coupled_plan, dict) else {}
+    assessment = coupled_plan.get("completion_assessment")
+    if not isinstance(assessment, dict):
+        return ""
+
+    current_phase = model_context.get("current_phase")
+    current_phase = current_phase if isinstance(current_phase, dict) else {}
+    done_when = current_phase.get("done_when")
+    done_when = done_when if isinstance(done_when, list) else []
+    items = assessment.get("done_when")
+    items = items if isinstance(items, list) else []
+
+    rows = []
+    inferred_statuses: list[str] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        index = item.get("index")
+        status = str(item.get("status") or "")
+        inferred_statuses.append(status)
+        condition = (
+            done_when[index]
+            if isinstance(index, int) and 0 <= index < len(done_when)
+            else "Condition text unavailable"
+        )
+        rows.append(
+            """
+<tr>
+  <td>{index}</td><td>{condition}</td><td>{status}</td><td>{evidence}</td>
+</tr>
+""".format(
+                index=_e(index),
+                condition=_e(condition),
+                status=_badge(status) if status else "",
+                evidence=_e(item.get("evidence")),
+            )
+        )
+
+    result = record.get("_phase_completion_result")
+    result = result if isinstance(result, dict) else {}
+    semantic_complete = result.get("semantic_complete")
+    if semantic_complete is None and inferred_statuses:
+        semantic_complete = all(status == "supported" for status in inferred_statuses)
+    metric_complete = result.get("metric_complete", "not recorded")
+    coupled_decision = record.get("coupled_phase_decision")
+    coupled_decision = coupled_decision if isinstance(coupled_decision, dict) else {}
+    derived_decision = result.get("derived_decision") or coupled_decision.get("decision")
+    fallback = result.get("fallback", False)
+    fallback_reasons = result.get("fallback_reasons", [])
+
+    table = (
+        """
+<table class="compact-table">
+  <thead><tr><th>Index</th><th>Done When</th><th>Status</th><th>Evidence</th></tr></thead>
+  <tbody>{rows}</tbody>
+</table>
+""".format(rows="\n".join(rows))
+        if rows
+        else '<p class="empty">No valid done_when assessment rows were recorded.</p>'
+    )
+    return """
+      <h4>Completion Assessment</h4>
+      {table}
+      <dl class="kv">
+        {semantic}
+        {metric}
+        {decision}
+        {fallback}
+        {fallback_reasons}
+      </dl>
+""".format(
+        table=table,
+        semantic=_kv("semantic_complete", semantic_complete),
+        metric=_kv("metric_complete", metric_complete),
+        decision=_kv("derived_decision", derived_decision),
+        fallback=_kv("fallback", fallback),
+        fallback_reasons=_kv(
+            "fallback_reasons",
+            json.dumps(fallback_reasons, ensure_ascii=False),
+        ),
     )
 
 

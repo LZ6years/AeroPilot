@@ -82,7 +82,6 @@ def cases_from_run_dir(run_dir: str | Path, limit: int = DEFAULT_LIMIT) -> list[
                     "name": "real_engine_visual_check",
                     "goal": "extract visual facts relevant to the current phase from a real RGB frame",
                     "done_when": ["relevant visual facts are described"],
-                    "observe": ["latest_observation"],
                     "continue_when": ["relevant visual facts are unclear"],
                     "metrics": [],
                 },
@@ -150,7 +149,12 @@ def evaluate_case_context(
         if isinstance(item, dict) and item.get("type") == "image"
     ]
     image_input = image_inputs[0] if image_inputs else {}
-    text_part = user_content[0]["text"] if isinstance(user_content, list) and user_content else user_content
+    text_parts = [
+        item.get("text", "")
+        for item in user_content
+        if isinstance(user_content, list) and isinstance(item, dict) and item.get("type") == "text"
+    ]
+    text_part = text_parts[-1] if text_parts else user_content
     expected = case.get("expected", {}) if isinstance(case.get("expected"), dict) else {}
     forbidden_terms = [str(item) for item in expected.get("forbidden_terms", [])]
     output_text = json.dumps(model_result.get("parsed", {}), ensure_ascii=False) if model_result else ""
@@ -163,7 +167,7 @@ def evaluate_case_context(
         and image_input.get("data", "").startswith("data:image/"),
         "json_text_omits_base64": isinstance(text_part, str)
         and "data:image/" not in text_part
-        and "<omitted encoded model input data" in text_part,
+        and "<omitted encoded model input data" not in text_part,
         "planner_saw_image_part": _has_image_part(user_content),
         "must_mentions_hit": must_mentions_hit,
         "forbidden_terms_hit": forbidden_terms_hit,
@@ -359,7 +363,6 @@ def _normalise_case(item: dict[str, Any], index: int) -> dict[str, Any]:
             "name": "visual_check",
             "goal": "describe visual facts relevant to the current phase",
             "done_when": ["relevant visual facts are described"],
-            "observe": ["latest_observation"],
             "continue_when": ["relevant visual facts are unclear"],
             "metrics": [],
         },

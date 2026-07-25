@@ -31,7 +31,7 @@ description: Use when a UAV task depends on seeing, facing, observing, centering
 ---
 ```
 
-正文标题自由，runtime 不解析固定的 `## When To Use / Rules / Do Not`。这些标题可以写，但只是普通文本。
+`knowledge.*` 正文统一使用 `Application Boundary`、`Evidence Model`、`Decision Procedure`、`Completion And Stop` 和 `Recovery` 五段式写作契约。它用于保持知识完整、紧凑和可审查，但不是 runtime schema：runtime 仍把标题和正文当作普通 Markdown，不解析章节，也不按消费者路由章节。callable skill 可以使用适合其能力的其他结构。
 
 ## 渐进加载流程
 
@@ -41,18 +41,18 @@ PluginRegistry discovers enabled skills
   -> model selects skill names
   -> runtime validates selected names
   -> SkillContentLoader loads SKILL.md body
-  -> SkillResourceLoader loads bounded reference.md / references/*.md
+  -> SkillResourceLoader loads only explicitly requested references
   -> selected skill content enters skills fragment
 ```
 
-planner 没有通用 `read_file` 能力。runtime 只允许读取被选中 skill 目录内的受限资源。
+planner 没有通用 `read_file` 能力。runtime 只允许读取被选中 skill 目录内、且由 selector 显式请求的受限资源。核心 knowledge 正文遵守 2400 字符写作预算；reference 用于公式、长示例和可选动作细节，不能承载 parser criteria 必需的完成语义。
 
 ## Skills Fragment
 
 `skills` fragment 包含：
 
 - `available_skills`：轻量 listing。
-- `selected_skills`：被选中后展开的正文、references、assets、capability metadata。
+- `selected_skills`：被选中后展开的正文，以及显式请求的 references 和可用 capability metadata。
 - `available_capabilities`：当前 enabled callable skills；默认知识库调试时为空。
 - `facts`：始终为空。
 
@@ -98,7 +98,7 @@ Model task parser 使用独立的两阶段流程：
 用户指令
   -> structure model 生成 intent / task_goal / phase index,total,name,goal
   -> 每个 phase 独立选择相关 knowledge skill
-  -> criteria model 生成 done_when / continue_when / observe / metrics
+  -> criteria model 生成 done_when / continue_when / metrics
   -> 确定性合并并执行 semantic validator
 ```
 
@@ -106,4 +106,4 @@ Structure 调用不加载 skill。phase 数量、顺序、名称和 goal 只能�
 
 Criteria selector 不设置数量硬上限，可以保留任意数量的合法选择，但 prompt 要求选择最小必要集合。Runtime 只校验名称、去重并保持顺序，不截断合法结果。selector 失败时，该 phase 使用 `FLYAGENT.md` 基础规则继续生成 criteria。
 
-Parser 侧只加载有长度限制的 `SKILL.md` 正文，不向 selector 或 criteria model 提供 references、source path、scripts 或 callable capability。Planner 仍按当前 runtime evidence 独立选择 skill；parser 的选择结果不会传给 planner 作为隐式决定。
+Parser 侧只加载有长度限制的 `SKILL.md` 正文，不向 selector 或 criteria model 提供 references、source path、scripts 或 callable capability。因此每份核心正文必须保留应用边界、证据模型和完成/停止知识。Planner 仍按当前 runtime evidence 独立选择 skill；parser 的选择结果不会传给 planner 作为隐式决定。

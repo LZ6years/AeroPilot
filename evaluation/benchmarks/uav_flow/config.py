@@ -39,7 +39,7 @@ class UavFlowEvalConfig:
     shutdown_policy: str = "hover"
     action_config_overrides: dict[str, float] = field(default_factory=dict)
     safety_overrides: dict[str, float] = field(default_factory=dict)
-    runtime_loop_guard_windows: int = 100
+    runtime_loop_guard_windows: int = 40
     enable_visual_diagnostics: bool = False
     visual_diagnostics_max_frames: int = 12
     enable_action_planner_debug: bool = False

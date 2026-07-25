@@ -33,8 +33,9 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     assert "controlled descent and a landed/stable result" in structure
     assert "check every requested outcome verb" in structure
     assert "Never add exact or exactly" in structure
+    assert "Do not rewrite them as centered in the image or camera" in structure
     assert '"done_when"' in criteria_shape
-    assert '"observe"' in criteria_shape
+    assert '"observe"' not in criteria_shape
     assert '"continue_when"' in criteria_shape
     assert '"metrics"' in criteria_shape
     assert '"intent"' not in criteria_shape
@@ -54,10 +55,29 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     assert "scan every number" in criteria
     assert 'Do not add parenthetical examples, "e.g." expansions' in criteria
     assert "invented lower/upper bounds" in criteria
-    assert "roughly aligned" in criteria
-    assert "exact center" in criteria
-    assert 'Bare "centered in the camera frame" is too strict' in criteria
-    assert "A small left/right offset alone is not a reason to continue" in criteria
+    assert "Every done_when item is a required core condition" in criteria
+    assert "independently assessable required facts in separate done_when items" in criteria
+    assert "target confirmation, a requested spatial relation, and stabilization" in criteria
+    assert "alternatives that can each support the same core condition remain together" in criteria
+    assert "inside the same item" in criteria
+    assert 'Never begin a done_when list item with "or" or "alternatively"' in criteria
+    assert "minimum sufficient completed state" in criteria
+    assert "identifiable target cue is clearly inside the forward view" in criteria
+    assert "Modest lateral offset, incidental scene occlusion" in criteria
+    assert "Do not require exact centering, full-body or full-object visibility" in criteria
+    assert "State the terminal task relation directly" in criteria
+    assert "continue_when gives non-exhaustive clarification" in criteria
+    assert "must not treat a state that can occur on a valid done_when path as unfinished by itself" in criteria
+    assert "route reference being absent is not sufficient continuation evidence" in criteria
+    assert "two alternative sufficient paths" in criteria
+    assert "Do not require both paths, reacquisition, or continued reference visibility" in criteria
+    assert 'never write bare reference absence, "reference not visible", or "reference not yet visible"' in criteria
+    assert "preferred visual manifestation or extra confirmation" in criteria
+    assert "numeric target-relative standoff without a deterministic target-distance metric" in criteria
+    assert "visual scale and available perspective, depth, scene, or observation-change cues" in criteria
+    assert "no clear evidence that the target is substantially nearer or farther" in criteria
+    assert "Do not phrase it as a demand to verify, measure, or confirm the exact number" in criteria
+    assert "Do not add hover, hold, or stabilization" in criteria
     assert "uav.turn_relative" in structure
     assert "uav.move_body" in criteria
     assert '"action_bias"' not in structure + criteria
@@ -139,28 +159,28 @@ def test_model_facing_prompts_and_reusable_skills_do_not_leak_benchmark_repairs(
 def test_flyagent_rules_contain_general_visual_action_alignment_without_internal_terms():
     rules = (Path("memory") / "FLYAGENT.md").read_text(encoding="utf-8")
 
-    assert "视觉方向与动作一致性" in rules
-    assert "画面左侧对应左向调整" in rules
-    assert "画面右侧对应右向调整" in rules
-    assert "负 yaw 表示向左转" in rules
-    assert "正 yaw 表示向右转" in rules
-    assert "向同侧做小幅转向" in rules
-    assert "相反方向" in rules
-    assert "为了把当前侧的可见参考居中" in rules
-    assert "不能同时说向右转是为了让它居中" in rules
-    assert "基础飞行常识始终适用" in rules
-    assert "空间关系与路线关系" in rules
-    assert "画面中的左右位置可以仅因转向而改变" in rules
-    assert "不能单独证明无人机已经到达目标的某一物理侧" in rules
-    assert "从目标右侧经过”表示无人机航线位于目标右侧" in rules
-    assert "不表示目标应在画面右侧" in rules
-    assert "目标通常位于画面左侧" in rules
-    assert "语义计划不得把“目标在画面左侧或右侧”解释成“无人机在目标右侧或左侧”" in rules
-    assert "搜索阶段只确认目标和可行路线" in rules
-    assert "侧向经过阶段必须依赖平移或路线进展" in rules
-    assert "只转向只能用于搜索或观察" in rules
-    assert "不能作为到达目标某侧或完成经过的证据" in rules
-    assert "向前、后、左、右、上、下" not in rules
+    assert "## Visual Direction And Action Consistency" in rules
+    assert "A cue on the left side of the image calls for a leftward alignment adjustment" in rules
+    assert "a cue on the right calls for a rightward alignment adjustment" in rules
+    assert "negative yaw means turn left" not in rules
+    assert "positive yaw means turn right" not in rules
+    assert "make a small turn toward the same side" in rules
+    assert "A turn toward the opposite side" in rules
+    assert "not centering the currently visible cue" in rules
+    assert "it must not also say that turning right will center it" in rules
+    assert "Basic flight knowledge always applies" in rules
+    assert "## Spatial And Route Relations" in rules
+    assert "Image-side position can change from yaw alone" in rules
+    assert "cannot by itself prove that the UAV has reached a physical side of a target" in rules
+    assert '"Pass the target on its right" means the UAV route lies on the target\'s right' in rules
+    assert "it does not mean the target should appear on the right side of the image" in rules
+    assert "the target will usually appear on the left" in rules
+    assert 'A semantic plan must not translate "the target is on the left or right of the image"' in rules
+    assert "A search phase only confirms the target and a plausible route" in rules
+    assert "A side-passage phase must rely on translation or route progress" in rules
+    assert "Yaw alone can support search or observation" in rules
+    assert "cannot prove reaching a target side or completing passage" in rules
+    assert "move forward, backward, left, right, up, or down in sequence" not in rules
 
     parser_prompt = "\n".join(
         path.read_text(encoding="utf-8")
@@ -170,11 +190,11 @@ def test_flyagent_rules_contain_general_visual_action_alignment_without_internal
         ]
     )
     duplicated_route_rules = [
-        "画面中的左右位置可以仅因转向而改变",
-        "语义计划不得把“目标在画面左侧或右侧”解释成“无人机在目标右侧或左侧”",
-        "搜索阶段只确认目标和可行路线",
-        "侧向经过阶段必须依赖平移或路线进展",
-        "只转向只能用于搜索或观察",
+        "Image-side position can change from yaw alone",
+        'A semantic plan must not translate "the target is on the left or right of the image"',
+        "A search phase only confirms the target and a plausible route",
+        "A side-passage phase must rely on translation or route progress",
+        "Yaw alone can support search or observation",
     ]
     for rule in duplicated_route_rules:
         assert rule not in parser_prompt
@@ -222,8 +242,23 @@ def test_semantic_plan_update_prompt_is_limited_to_current_phase_patch():
     assert '"done_when"' in prompt
     assert '"continue_when"' in prompt
     assert '"metrics"' in prompt
+    assert '"observe"' not in prompt
     assert "Do not rewrite task_goal, instruction, full phases" in prompt
     assert "Do not output UAV tool names" in prompt
+    assert "one exact camera manifestation" in prompt
+    assert "Treat continue_when as non-exhaustive clarification" in prompt
+    assert "allowed by a valid done_when path" in prompt
+    assert "Every done_when list item is a required core condition" in prompt
+    assert "independently assessable required facts in separate done_when items" in prompt
+    assert "Do not strengthen an approximate target-distance condition" in prompt
+    assert "keep target confirmation separate from a directly judgeable qualitative distance condition" in prompt
+    assert "inside the same item with explicit either/or wording" in prompt
+    assert 'Never begin a done_when list item with "or" or "alternatively"' in prompt
+    assert "minimum sufficient completed state" in prompt
+    assert "independently sufficient paths" in prompt
+    assert "Do not require both paths, reacquisition, or continued visibility" in prompt
+    assert "Never use bare route-reference absence as continue_when" in prompt
+    assert "preferred visual manifestation or extra confirmation" in prompt
     assert "uav.turn_relative" in prompt
     assert "uav.move_body" in prompt
     assert "evaluation sample" in prompt
@@ -238,10 +273,11 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     action_prompt = (prompt_dir / "coupled_action_planner_system.txt").read_text(encoding="utf-8")
 
     assert not (prompt_dir / "coupled_action_phase_planner_system.txt").exists()
-    assert "phase_decision" in phase_prompt
+    assert "Do not output phase_decision" in phase_prompt
+    assert "completion_assessment" in phase_prompt
     assert "control_actions" in phase_prompt
     assert "Runtime Control Boundary" in phase_prompt
-    assert "Runtime control meanings and request timing are provided by the runtime_control context" in phase_prompt
+    assert "Runtime control meanings and request timing are provided by runtime_control context" in phase_prompt
     assert "Runtime control requests belong in control_actions only and never in steps" in phase_prompt
     assert "Ask for semantic_plan_update" not in phase_prompt
     assert "Ask for ask_user" not in phase_prompt
@@ -249,38 +285,53 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "phase_execution_summary.window_count is already high" not in phase_prompt
     assert "repeated same-kind actions have produced meaningful phase_progress_evidence" not in phase_prompt
     assert "endless small corrective actions" not in phase_prompt
-    assert "Phase Decision Guide" in phase_prompt
-    assert "visual_alignment" in phase_prompt
-    assert "route_traversal" in phase_prompt
-    assert "spatial_relation" in phase_prompt
-    assert "circulation_or_orbit" in phase_prompt
-    assert "phase_progress_evidence" in phase_prompt
+    assert "Completion Contract" in phase_prompt
+    assert "Every done_when list item is a required core condition" in phase_prompt
+    assert "explicit either/or inside one done_when item" in phase_prompt
+    assert "continue_when is non-exhaustive clarification" in phase_prompt
+    assert "It is not a completion gate" in phase_prompt
+    assert "Residual possibility, optional optimization" in phase_prompt
+    assert 'Never use "no calibrated measurement", "no exact depth"' in phase_prompt
+    assert "familiar target scale, apparent size, perspective, ground contact" in phase_prompt
+    assert "mark contradicted when the available cues clearly indicate substantially nearer or farther" in phase_prompt
+    assert "Reserve unknown for cases where the target or usable range cues are genuinely unavailable" in phase_prompt
+    assert "Phase Decision Guide" not in phase_prompt
+    assert "visual_alignment" not in phase_prompt
+    assert "route_traversal" not in phase_prompt
+    assert "spatial_relation" not in phase_prompt
+    assert "circulation_or_orbit" not in phase_prompt
+    assert "fragments.action.content.motion_history_summary" in phase_prompt
+    assert "phase_start_relative_uav_motion summarizes the whole phase" in phase_prompt
+    assert "Never claim that no translation occurred" in phase_prompt
+    assert "recent_execution is only a short tail" in phase_prompt
+    assert "phase_progress_evidence" not in phase_prompt
+    assert "phase_execution_summary" not in phase_prompt
+    assert "action_trend" not in phase_prompt
+    assert "yaw_only_so_far" not in phase_prompt
     assert "Metric Authority" in phase_prompt
-    assert "all_within_tolerance is true" in phase_prompt
+    assert "all_within_tolerance result" in phase_prompt
     assert "Tolerance is the completion band" in phase_prompt
-    assert "non-metric evidence" in phase_prompt
+    assert "absence of a deterministic metric is not missing evidence" in phase_prompt
     assert "vertical flight-path angle" not in phase_prompt
     assert "yaw, heading, vehicle pitch" not in phase_prompt
-    assert "do not advance from yaw alone" in phase_prompt
-    assert "meaningful lateral or tangential progress" in phase_prompt
-    assert "repeating radius/standoff corrections" in phase_prompt
-    assert "visible and roughly aligned; or target remains visible after repeated tiny yaw/alternating yaw corrections" in phase_prompt
-    assert "slightly left/right of center" in phase_prompt
-    assert "evidence to stop micro-adjusting and advance" in phase_prompt
-    assert "one short translation or left/right image placement" in phase_prompt
-    assert "repeated small yaw corrections should not block advance" not in phase_prompt
+    assert "exactly one object for each current_phase.done_when item" in phase_prompt
+    assert "status must be supported, unknown, or contradicted" in phase_prompt
+    assert "evidence is explanatory only" in phase_prompt
+    assert "cannot change supported back to unknown" in phase_prompt
+    assert "do not invent an additional requirement" in phase_prompt
+    assert "If continue_when is still true or evidence is uncertain" not in phase_prompt
 
-    assert "phase_decision" in action_prompt
+    assert "Do not output phase_decision" in action_prompt
+    assert "completion_assessment" in action_prompt
     assert "control_actions" in action_prompt
     assert "Runtime Control Actions" in action_prompt
     assert "Never put ask_user or semantic_plan_update in steps" in action_prompt
     assert "runtime_control.available" in action_prompt
-    assert "semantic_plan_update may be requested in control_actions alongside the normal 1-3 safe UAV tool steps" in action_prompt
+    assert "semantic_plan_update may be requested alongside 1-3 safe UAV tool steps" in action_prompt
     assert "semantic_plan_update payload must include reason" in action_prompt
     assert "goal, done_when, continue_when, or metrics" in action_prompt
-    assert "continue_current_phase | advance_to_next_phase | complete_task" in action_prompt
     assert "steps must be []" in action_prompt
-    assert "Never set it true with multiple steps" in action_prompt
+    assert "use exactly one step" in action_prompt
     assert "kind=\"observe\"" in action_prompt
     assert "uav.hover" in action_prompt
     assert "uav.turn_relative" in action_prompt
@@ -300,12 +351,13 @@ def test_orbit_skill_stays_compact_and_action_oriented():
     skill = (Path("plugins") / "knowledge" / "uav_flight" / "orbit_and_surround" / "SKILL.md").read_text(
         encoding="utf-8"
     )
+    normalized = " ".join(skill.lower().split())
 
-    assert "yaw alone is not orbit progress" in skill
-    assert "lateral or tangential shift" in skill
-    assert "shift segment -> yaw re-align -> next shift segment" in skill
-    assert "brief support work" in skill
-    assert "continue orbit movement instead of" in skill
+    assert "yaw alone is not orbit progress" in normalized
+    assert "lateral or tangential translation" in normalized
+    assert "brief radial repair and resume circulation" in normalized
+    assert "stop orbit movement" in normalized
+    assert "repeated radial corrections" in normalized
     assert "Estimate radius" not in skill
     forbidden_internal_terms = [
         "phase_progress_evidence",

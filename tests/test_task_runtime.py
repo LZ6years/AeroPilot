@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 
 import pytest
@@ -36,6 +37,12 @@ from src.sim_server.server import LocalSimulationServer
 
 LAMP_TASK = "前面右转会有一个黑色的路灯，右转面向路灯后停下"
 ENTRANCE_TASK = "左转寻找建筑入口，并停在入口前"
+
+
+def test_task_runtime_default_loop_guard_is_40():
+    parameter = inspect.signature(TaskRuntime.__init__).parameters["runtime_loop_guard_windows"]
+
+    assert parameter.default == 40
 
 
 def make_package() -> MapPackage:
@@ -72,7 +79,6 @@ def make_single_phase_parse_result(
                     name=phase_name,
                     goal="complete the single test phase",
                     done_when=["single test phase is complete"],
-                    observe=["latest_observation", "phase_execution_summary"],
                     continue_when=["single test phase is not complete"],
                     metrics=[],
                 )
@@ -101,7 +107,6 @@ def make_visual_target_parse_result(
                     name=phase_name,
                     goal="align the UAV view with the target",
                     done_when=["visible target is identifiable", "view is roughly aligned with the target"],
-                    observe=["latest_observation", "phase_execution_summary"],
                     continue_when=["target is not visually confirmed"],
                     metrics=[],
                 )
@@ -127,7 +132,6 @@ def make_approach_parse_result() -> TaskParseResult:
                         "sunshade is clearly visible",
                         "UAV has moved meaningfully closer to sunshade than at phase start",
                     ],
-                    observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
                     continue_when=["UAV has not moved closer yet"],
                     metrics=[],
                 )
@@ -150,7 +154,6 @@ def make_two_phase_parse_result() -> TaskParseResult:
                     name="phase_one",
                     goal="finish phase one",
                     done_when=["phase one is complete"],
-                    observe=["latest_observation", "phase_execution_summary"],
                     continue_when=["phase one is not complete"],
                     metrics=[],
                 ),
@@ -160,7 +163,6 @@ def make_two_phase_parse_result() -> TaskParseResult:
                     name="phase_two",
                     goal="finish phase two",
                     done_when=["phase two is complete"],
-                    observe=["latest_observation", "phase_execution_summary"],
                     continue_when=["phase two is not complete"],
                     metrics=[],
                 ),
@@ -695,6 +697,47 @@ def test_task_runtime_applies_semantic_plan_update_on_later_boundary(tmp_path):
     )
 
 
+def test_task_runtime_discards_semantic_update_with_invented_numeric_threshold(tmp_path):
+    run_dir = tmp_path / "semantic_plan_update_numeric_rejection_run"
+    recorder = AsyncRunLogger(run_dir)
+    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    planner = CompleteAfterSemanticUpdatePlanner()
+    updater = FakeSemanticPlanUpdater(
+        {
+            "phase": {
+                "done_when": ["updated completion evidence persists for 3 observations"],
+            }
+        }
+    )
+    runtime = TaskRuntime(
+        LocalEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+        runtime_loop_guard_windows=4,
+        runtime_control_config=RuntimeControlConfig(
+            enabled=True,
+            actions={"semantic_plan_update": RuntimeControlActionConfig(enabled=True, exposed=True)},
+        ),
+        semantic_plan_updater=updater,
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    discarded = [
+        record
+        for record in load_event_records(run_dir)
+        if record["event"] == "semantic_plan_update_discarded"
+    ]
+    assert state.stopped
+    assert state.semantic_plan_version == 0
+    assert discarded
+    assert discarded[0]["payload"]["discard_reason"] == "invalid_patch"
+    assert "unsupported numeric" in discarded[0]["payload"]["error"]
+
+
 def test_task_runtime_can_land_on_shutdown(tmp_path):
     run_dir = tmp_path / "task_run_land"
     recorder = AsyncRunLogger(run_dir)
@@ -1065,6 +1108,21 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
 def test_task_runtime_action_planner_debug_writes_redacted_context(tmp_path):
     class OneTurnPlanner:
         planner_mode = "model"
+        last_model_request_recovery = {
+            "status": "recovered",
+            "attempt_count": 3,
+            "degraded_to_now_only": True,
+            "attempts": [
+                {"attempt": 1, "status": "failed", "image_mode": "all", "image_count": 2},
+                {"attempt": 2, "status": "failed", "image_mode": "all", "image_count": 2},
+                {
+                    "attempt": 3,
+                    "status": "ok",
+                    "image_mode": "current_only",
+                    "image_count": 1,
+                },
+            ],
+        }
 
         def plan_next_with_phase_decision(self, state, context=None):
             plan = ShortHorizonPlan(
@@ -1096,7 +1154,17 @@ def test_task_runtime_action_planner_debug_writes_redacted_context(tmp_path):
     assert payload["raw_plan"]["steps"][0]["tool"] == "uav.turn_relative"
     assert payload["safe_plan"]["steps"][0]["tool"] == "uav.turn_relative"
     assert "safety_decision" in payload
+    assert payload["model_request_recovery"]["status"] == "recovered"
+    assert payload["model_request_recovery"]["degraded_to_now_only"] is True
     assert "data:image" not in debug_files[0].read_text(encoding="utf-8")
+    events = load_event_records(run_dir)
+    recovered = [
+        record
+        for record in events
+        if record["event"] == "model_action_request_recovered"
+    ]
+    assert len(recovered) == 1
+    assert recovered[0]["payload"]["attempt_count"] == 3
     assert state.completed or state.stopped
 
 
@@ -1376,17 +1444,20 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
             self.contexts.append(context)
             return {
                 "phase": context["current_phase"]["name"],
-                "phase_decision": {"decision": ADVANCE_TO_NEXT_PHASE, "reason": "context verification phase complete"},
-                "action_window": {
-                    "intent": "hold while checking context windows",
-                    "scope": "current_phase_only",
-                    "requires_intermediate_observation": False,
-                    "expected_effect": "context remains valid while UAV holds",
+                "completion_assessment": {
+                    "done_when": [
+                        {
+                            "index": index,
+                            "status": "supported",
+                            "evidence": "the context verification condition is satisfied",
+                        }
+                        for index, _ in enumerate(context["current_phase"]["done_when"])
+                    ]
                 },
                 "agent_messages": [
                     {
                         "type": "progress",
-                        "content": "我会先悬停，用于检查上下文窗口。",
+                        "content": "The context verification phase is complete.",
                         "evidence_refs": [],
                         "confidence": "medium",
                         "requires_user_reply": False,
@@ -1441,8 +1512,10 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     assert (run_dir / "memory/instructions.jsonl").read_text(encoding="utf-8").count("\n") >= len(instructions)
     assert fragments["instruction"]["content"]["current_instruction"]["text"] == instructions[-1]
     assert len(fragments["instruction"]["content"]["instruction_history"]) == 5
-    assert 1 <= len(fragments["action"]["content"]["recent_actions"]) <= 2
-    assert all(item["history_only"] is True for item in fragments["action"]["content"]["recent_actions"])
+    motion_history = fragments["action"]["content"]["motion_history_summary"]
+    assert 1 <= len(motion_history["recent_execution"]) <= 5
+    assert motion_history["recent_execution_order"] == "oldest_to_newest"
+    assert all("ok" not in item for item in motion_history["recent_execution"])
     assert fragments["pose"]["metadata"]["pose_history_count"] <= 3
     assert fragments["image"]["metadata"]["observation_count"] <= 3
     assert fragments["image"]["artifact_refs"]
@@ -1450,7 +1523,9 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     assert "flight_memory" not in latest_context
     assert "recent_actions" not in latest_context
     assert "instruction_history" not in latest_context
-    assert "model_action_planned" in [record["event"] for record in events]
+    event_names = [record["event"] for record in events]
+    assert "phase_completion_assessed" in event_names
+    assert "model_action_planned" in event_names
 
 
 def test_task_runtime_normalizes_yaw_wraparound_delta(tmp_path):

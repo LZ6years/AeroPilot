@@ -41,7 +41,6 @@ def _semantic_hint(
         "phase_name": phase_name,
         "phase_goal": phase_goal,
         "done_when": [final_state],
-        "observe": ["latest_observation", "phase_execution_summary"],
         "continue_when": ["task-relevant progress is insufficient"],
         "metrics": list(metrics or []),
     }
@@ -153,7 +152,11 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
     },
     "Pass": {
         "expected_any": ["route_traversal_and_passage"],
-        "forbidden": ["vertical_landing_and_altitude_control", "orbit_and_surround"],
+        "forbidden": [
+            "approach_and_standoff",
+            "vertical_landing_and_altitude_control",
+            "orbit_and_surround",
+        ],
         "max_selected": 3,
         "semantic_hint": _semantic_hint(
             intent="route_traversal",

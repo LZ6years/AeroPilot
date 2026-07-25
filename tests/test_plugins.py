@@ -13,6 +13,7 @@ from src.memory.flight_memory import FlightMemory
 from src.plugins.core.discovery import PluginDiscovery
 from src.plugins.core.registry import PluginRegistry
 from src.plugins.skills import SkillContentLoader
+from src.plugins.skills.loader import DEFAULT_MAX_SKILL_CHARS
 from src.plugins.skills.semantic_criteria import SemanticCriteriaSkillResolver
 from src.plugins.skills.selection import ModelSkillSelector, SkillSelectionResult
 from src.runtime.configs.model_config import ModelConfig
@@ -36,6 +37,14 @@ REMOVED_UAV_FLIGHT_SKILLS = {
     "obstacle_and_safety_awareness",
     "task_completion_evidence",
 }
+
+KNOWLEDGE_SKILL_SECTIONS = [
+    "Application Boundary",
+    "Evidence Model",
+    "Decision Procedure",
+    "Completion And Stop",
+    "Recovery",
+]
 
 
 def make_stage_context(result) -> StageContextInput:
@@ -73,6 +82,28 @@ def test_plugin_discovery_finds_only_current_uav_flight_skills():
     assert result.warnings == []
 
 
+def test_uav_knowledge_skills_follow_compact_five_section_contract():
+    catalog = _uav_flight_registry().skill_catalog
+
+    for skill in catalog.skills:
+        headings = [
+            line.removeprefix("## ").strip()
+            for line in skill.body.splitlines()
+            if line.startswith("## ")
+        ]
+        assert headings == KNOWLEDGE_SKILL_SECTIONS, skill.name
+        assert len(skill.body.strip()) <= DEFAULT_MAX_SKILL_CHARS, skill.name
+        for index, heading in enumerate(KNOWLEDGE_SKILL_SECTIONS):
+            marker = f"## {heading}"
+            start = skill.body.index(marker) + len(marker)
+            end = (
+                skill.body.index(f"## {KNOWLEDGE_SKILL_SECTIONS[index + 1]}")
+                if index + 1 < len(KNOWLEDGE_SKILL_SECTIONS)
+                else len(skill.body)
+            )
+            assert skill.body[start:end].strip(), f"{skill.name}:{heading}"
+
+
 def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources():
     catalog = _uav_flight_registry().skill_catalog
 
@@ -96,19 +127,20 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
     assert summary["summary"]
     assert summary["available_references"] == ["references/search_under_uncertainty.md"]
     assert "Visual Target Task Reasoning" in summary["skill_text"]
-    assert "Classify the latest target state before choosing an action" in summary["skill_text"]
-    assert "target is reasonably identifiable, even if it is a little" in summary["skill_text"]
-    assert "roughly aligned" in summary["skill_text"]
-    assert "treat it as a stable target" in summary["skill_text"]
-    assert "small left/right" in summary["skill_text"]
-    assert "offset alone is not enough" in summary["skill_text"]
-    assert "left target -> left/negative yaw" in summary["skill_text"]
-    assert "Self-check before yaw" in summary["skill_text"]
-    assert "cumulative yaw" in summary["skill_text"]
-    assert "choice to stop" in summary["skill_text"]
-    assert "Do not chase perfect centering" in summary["skill_text"]
-    assert "visual alignment as sufficient evidence" in summary["skill_text"]
-    assert "recent motion history" in summary["skill_text"]
+    normalized_summary = " ".join(summary["skill_text"].split())
+    assert "## Evidence Model" in summary["skill_text"]
+    assert "target absent" in normalized_summary
+    assert "weak candidate" in normalized_summary
+    assert "directional target cue" in normalized_summary
+    assert "inspection-ready" in normalized_summary
+    assert "usable image bearing" in normalized_summary
+    assert "Modest offset, incidental occlusion" in normalized_summary
+    assert "broad usable forward region" not in normalized_summary
+    assert "only when explicitly requested" in normalized_summary
+    assert "Do not restart broad search" in normalized_summary
+    assert "stop alternating or unhelpful corrections" in normalized_summary
+    assert "left/negative yaw" not in normalized_summary
+    assert "right/positive yaw" not in normalized_summary
     assert "current phase decision" not in summary["skill_text"]
     assert "good enough to advance" not in summary["skill_text"]
     assert "motion_history_summary" not in summary["skill_text"]
@@ -203,7 +235,8 @@ def test_semantic_skill_guidance_preserves_completion_tail_within_bound():
 
     assert len(guidance["skill_text"]) <= 800
     assert "bounded middle omitted" in guidance["skill_text"]
-    assert "useful completion evidence" in guidance["skill_text"]
+    assert "## Application Boundary" in guidance["skill_text"]
+    assert "translation evidence with repeated yaw" in guidance["skill_text"]
     assert guidance["truncated"] is True
 
 
@@ -217,8 +250,8 @@ def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmati
 
     assert "target absent" in normalized_skill_text
     assert "weak candidate" in normalized_skill_text
-    assert "visible target" in normalized_skill_text
-    assert "stable target" in normalized_skill_text
+    assert "directional target cue" in normalized_skill_text
+    assert "inspection-ready" in normalized_skill_text
     assert "30-45 degrees" not in normalized_skill_text
     assert "current phase decision" not in normalized_skill_text
     assert "artifact paths" not in normalized_skill_text
@@ -228,38 +261,41 @@ def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmati
     assert "continue a 30-45 degree broad sweep as if it were confirmation" in normalized_reference_text
 
 
-def test_vertical_landing_skill_contains_controlled_stopping_guidance_without_internal_fields():
+def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_reference():
     skill_text = Path(
         "plugins/knowledge/uav_flight/vertical_landing_and_altitude_control/SKILL.md"
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill_text.split())
 
-    assert "controlled descent" in normalized
-    assert "angled descent" in normalized
+    reference_text = Path(
+        "plugins/knowledge/uav_flight/vertical_landing_and_altitude_control/references/angled_vertical_motion.md"
+    ).read_text(encoding="utf-8")
+    normalized_reference = " ".join(reference_text.split())
+
+    assert "controlled landing" in normalized
+    assert "angled ascent/descent" in normalized
     assert "Stop descending" in normalized
     assert "requested drop is reached" in normalized
     assert "landing surface is near enough" in normalized
-    assert "shorten each vertical step" in normalized
-    assert "prefer hover" in normalized
+    assert "shorten adjustments" in normalized
+    assert "hover or use a smaller adjustment" in normalized
     assert "landing region" in normalized
     assert "altitude or surface-related progress" in normalized
     assert "near a surface" in normalized
     assert "vertical error" in normalized
-    assert "path's deviation from the vertical ascent/descent direction" in normalized
-    assert "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))" in normalized
-    assert "sqrt(vx^2 + vy^2) = abs(vz) * tan(angle)" in normalized
-    assert "smaller angle is closer to straight vertical movement" in normalized
-    assert "Starting with pure vertical motion does not satisfy a non-zero path-deviation angle" in normalized
+    assert "deviation from the vertical ascent/descent axis" in normalized
+    assert "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))" not in normalized
+    assert "sqrt(vx^2 + vy^2) = abs(vz) * tan(angle)" not in normalized
+    assert "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))" in normalized_reference
+    assert "sqrt(vx^2 + vy^2) = abs(vz) * tan(angle)" in normalized_reference
+    assert "smaller angle is closer to straight vertical motion" in normalized_reference
+    assert "non-zero horizontal component" in normalized_reference
     assert "relative to the horizontal plane" not in normalized
     assert "abs(vertical_speed) / horizontal_speed = tan(angle)" not in normalized
-    assert "does not mean the UAV should turn in the horizontal plane" in normalized
     assert "yaw, heading, vehicle pitch, or camera angle" in normalized
-    assert "small ascent or descent angles" in normalized
-    assert "tiny repeated vertical steps" in normalized
-    assert "effective bounded step" in normalized
-    assert "inside the reasonable tolerance band" in normalized
+    assert "effective bounded progress" in normalized
+    assert "reasonable tolerance" in normalized
     assert "decimal-level correction" in normalized
-    assert "Do not keep descending only because the word \"land\" appears" in normalized
     assert "hidden benchmark" not in normalized
     forbidden_terms = [
         "UAV-Flow",
@@ -273,27 +309,64 @@ def test_vertical_landing_skill_contains_controlled_stopping_guidance_without_in
         assert term not in skill_text
 
 
-def test_route_traversal_skill_contains_passage_guidance_without_overlapping_internals():
+def test_route_traversal_skill_keeps_completion_core_and_optional_examples():
     skill_text = Path(
         "plugins/knowledge/uav_flight/route_traversal_and_passage/SKILL.md"
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill_text.split())
+    reference_text = Path(
+        "plugins/knowledge/uav_flight/route_traversal_and_passage/references/route_progress_examples.md"
+    ).read_text(encoding="utf-8")
+    normalized_reference = " ".join(reference_text.split())
 
     assert "route progress" in normalized
     assert "pass through" in normalized
     assert "gap" in normalized
-    assert "Passage tasks are about route progress, not perfect visual centering" in normalized
     assert "bounded translation" in normalized
-    assert "visual change over time as route evidence" in normalized
-    assert "first useful view of the route with the latest view" in normalized
-    assert "landmark itself as the destination" in normalized
-    assert "exact geometric boundary, axis, or entrance line" in normalized
-    assert "spatial route relation" in normalized
-    assert "Yaw can inspect that relation, but it cannot by itself place the UAV" in normalized
-    assert "Side relations usually need lateral or forward movement evidence" in normalized
-    assert "Do not treat one small translation or a visually plausible side relation" in normalized
+    assert "first useful route view with the latest view" in normalized
+    assert "cue as a destination" in normalized
+    assert "exact geometric boundary" in normalized
+    assert "Yaw can inspect a route but cannot place the UAV" in normalized
+    assert "Cue absence alone is ambiguous" in normalized
+    assert "Either path is independently sufficient" in normalized
+    assert "cue moving from ahead to the side, rear" in normalized
+    assert "cue leaves the forward view" in normalized
+    assert "Do not require both paths, reacquisition, continued visibility" in normalized
+    assert "Passing A Landmark On One Side" in normalized_reference
+    assert "Crossing A Gap Or Opening" in normalized_reference
+    assert "camera reorientation rather than traversal" in normalized_reference
     assert "next semantic step" not in normalized
     assert "good enough to continue" not in normalized
+    forbidden_terms = [
+        "UAV-Flow",
+        "UnrealCV",
+        "phase_progress_evidence",
+        "current_phase",
+        "context",
+        "case id",
+    ]
+    for term in forbidden_terms:
+        assert term not in skill_text
+
+
+def test_approach_skill_stops_before_overshoot_and_excludes_route_references():
+    skill_text = Path(
+        "plugins/knowledge/uav_flight/approach_and_standoff/SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(skill_text.split())
+
+    assert "not when the endpoint is through, past, beyond, across, or around a route reference" in normalized
+    assert "final held front/back/side position" in normalized
+    assert "A side relation belongs here only when the final task state is to stop" in normalized
+    assert "even if the route also names a side" in normalized
+    assert "Stop when current evidence supports the requested relation" in normalized
+    assert "Do not keep approaching until the target fills the view" in normalized
+    assert "Yaw cannot reach a distance or requested side" in normalized
+    assert "Combine these cues for a rough range estimate" in normalized
+    assert "familiar target scale, ground contact, nearby scene geometry" in normalized
+    assert "do not move closer merely to improve ranging" in normalized
+    assert "no clear evidence of being substantially nearer or farther" in normalized
+    assert "do not demand decimal-level certainty" in normalized
     forbidden_terms = [
         "UAV-Flow",
         "UnrealCV",
@@ -336,27 +409,13 @@ def test_orbit_and_surround_skill_contains_orbit_guidance_without_runtime_intern
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill_text.split())
 
-    assert "Core rule: keep a plausible target or reference relation" in normalized
-    assert "Use this guidance when" not in normalized
-    assert "visible target such as" not in normalized
-    assert "orbit radius is distance to the target" in normalized
-    assert "not UAV local pose origin or phase displacement" in normalized
-    assert "brief support work, not the main orbit behavior" in normalized
-    assert "lateral or tangential shift" in normalized
-    assert "yaw alone is not orbit progress" in normalized
-    assert "shift segment -> yaw re-align -> next shift segment" in normalized
-    assert "orbit direction controls shift direction, not yaw sign" in normalized
-    assert "target left -> left/negative yaw" in normalized
-    assert "target right -> right/positive yaw" in normalized
-    assert "but not re-centering" in normalized
-    assert "near the image edge, partly lost, or unclear" in normalized
-    assert "yaw re-align or hover to recover before shifting again" in normalized
-    assert "consistent shift direction" in normalized
-    assert "safety, target recovery, or a clearly wrong orbit direction" in normalized
-    assert "Radius repair" in normalized
-    assert "continue orbit movement instead of repeating standoff correction" in normalized
-    assert "Estimate radius" not in normalized
-    assert "Stop: stop orbit motions" in normalized
+    assert "lateral or tangential translation" in normalized
+    assert "Yaw alone is not orbit progress" in normalized
+    assert "not displacement from the UAV's local origin" in normalized
+    assert "brief radial repair and resume circulation" in normalized
+    assert "Orbit direction controls the shift direction, not the yaw sign" in normalized
+    assert "Stop orbit movement" in normalized
+    assert "repeated radial corrections" in normalized
     assert "semantic phase" not in normalized
     assert "phase_decision" not in normalized
     assert "phase_progress_evidence" not in normalized
@@ -370,13 +429,13 @@ def test_orbit_and_surround_skill_contains_orbit_guidance_without_runtime_intern
 def test_flyagent_contains_visual_direction_basics_without_case_specific_terms():
     rules = Path("memory/FLYAGENT.md").read_text(encoding="utf-8")
 
-    assert "视觉方向与动作一致性" in rules
-    assert "画面左侧对应左向调整" in rules
-    assert "画面右侧对应右向调整" in rules
-    assert "负 yaw 表示向左转" in rules
-    assert "正 yaw 表示向右转" in rules
-    assert "不能同时说向右转是为了让它居中" in rules
-    assert "空间关系与路线关系" in rules
+    assert "## Visual Direction And Action Consistency" in rules
+    assert "A cue on the left side of the image calls for a leftward alignment adjustment" in rules
+    assert "a cue on the right calls for a rightward alignment adjustment" in rules
+    assert "negative yaw means turn left" not in rules
+    assert "positive yaw means turn right" not in rules
+    assert "it must not also say that turning right will center it" in rules
+    assert "## Spatial And Route Relations" in rules
     forbidden_terms = [
         "UAV-Flow",
         "case id",

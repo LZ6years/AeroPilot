@@ -1,43 +1,52 @@
 ---
 name: approach_and_standoff
-description: Use when the UAV should approach, travel to, move near, retreat from, follow, or keep a requested distance or side position relative to a target or landmark.
-summary: Select for target-relative approach, retreat, following, requested side/front/back positioning, or standoff tasks where distance or relative position is the active concern.
+description: Use when the UAV should finish near, farther from, following, or holding a requested distance or side position relative to a destination target; not when the endpoint is through, past, beyond, across, or around a route reference.
+summary: Select only when target-relative proximity, separation, following, or a final held front/back/side position is the terminal concern; exclude route traversal.
 ---
 
 # Approach And Standoff
 
-Use this guidance when the instruction asks the UAV to get closer to a person,
-object, vehicle, entrance, building, or landmark, travel to a requested side of
-it, back away from it, or maintain a requested distance from it. Approach tasks
-are target-relative; they usually require target confirmation before meaningful
-movement.
+## Application Boundary
 
-First establish or refresh the target relation. If the target is visible, reason
-qualitatively about direction, visual scale, depth evidence when available, free
-space, and whether closing distance, increasing distance, or repositioning
-laterally better satisfies the requested relation. If the target is not visible,
-search or stabilize before moving toward an assumed location.
+Use this guidance when the destination is a target and the active concern is
+closeness, separation, following, or stopping at a requested front/back/side
+relation. A side relation belongs here only when the final task state is to stop
+or hold near the target on that side. Do not use it when the endpoint is to pass
+through, past, beyond, across, or around a route reference, even if the route
+also names a side; preserving target visibility can conflict with traversal.
 
-Prefer short, verifiable moves when distance or path clearance is uncertain.
-After moving, use the next observation to update whether the UAV is closer,
-farther, safer, or still misaligned. If the task asks for a standoff distance,
-avoid overshooting into the target and avoid finishing just because the UAV
-turned.
+## Evidence Model
 
-Do not move blindly toward a target that is not visually confirmed or otherwise
-well supported by current evidence. Do not confuse "face the target" with
-"reach the requested distance."
+Approach is target-relative. Use target confirmation, apparent size, familiar
+target scale, ground contact, nearby scene geometry, perspective or depth cues,
+free space, and change after translation. Combine these cues for a rough range
+estimate when calibrated sensing is absent. UAV displacement from a local
+origin is not target distance. Yaw cannot reach a distance or requested side.
 
-Approach and standoff decisions should consider target visibility and qualitative
-bearing, whether there is clear free space between the UAV and target, whether
-the requested relation is "near", "at a distance", "follow", or "inspect", and
-whether recent movement already changed the relation enough to re-observe.
+## Decision Procedure
 
-Side relations such as left side, right side, front side, beside, or adjacent are
-spatial relations, not just visual centering requests. Turning can help inspect
-the relation, but it does not by itself place the UAV on a requested side. Use
-translation evidence and current visual relation to decide whether the UAV is
-actually approaching, offsetting, or holding the requested side.
+1. Confirm or refresh the target relation before meaningful translation.
+2. Decide whether closing, retreating, holding, or lateral repositioning best
+   serves the requested relation.
+3. Treat a target that already appears very large, clipped, or near the camera
+   as clear near-range evidence; do not move closer merely to improve ranging.
+4. Use bounded, verifiable movement when distance or clearance is uncertain.
+5. Re-observe and check whether the relation changed in the intended direction
+   before continuing or correcting.
 
-For people and vehicles, keep movements conservative unless the task explicitly
-requires close inspection.
+## Completion And Stop
+
+Stop when current evidence supports the requested relation with reasonable task
+precision. For numeric standoff, broadly consistent visual or depth cues with
+no clear evidence of being substantially nearer or farther are enough; do not
+demand decimal-level certainty. Do not keep approaching until the target fills
+the view, becomes occluded, or leaves too little stopping margin merely to
+obtain exact proof. Facing the target is not the same as reaching the requested
+relation.
+
+## Recovery
+
+If the target is absent or identity is uncertain, stabilize or search instead
+of moving toward an assumed location. If motion changes the relation in the
+wrong direction, stop and reassess before correcting. Near people, vehicles, or
+limited free space, use smaller changes and preserve stopping margin.

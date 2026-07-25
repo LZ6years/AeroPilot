@@ -58,7 +58,6 @@ def test_dry_env_client_generates_real_rgb_artifact_for_default_image_module(tmp
                         "name": "turn_to_target",
                         "goal": "face the visible person",
                         "done_when": ["person is visible and roughly faced"],
-                        "observe": ["latest_observation"],
                         "continue_when": ["person is not confirmed"],
                         "metrics": [],
                     }
@@ -107,7 +106,6 @@ class FakeTaskParser:
                         "name": "benchmark_phase",
                         "goal": "complete benchmark smoke",
                         "done_when": ["benchmark smoke task is complete"],
-                        "observe": ["latest_observation", "phase_execution_summary"],
                         "continue_when": ["benchmark smoke task is incomplete"],
                         "metrics": [],
                     }
@@ -184,7 +182,14 @@ def test_config_roundtrip_includes_reuse_real_unrealcv_env():
     assert config.reuse_real_unrealcv_env is False
     assert config.limit_per_class == 3
     assert UavFlowEvalConfig.from_dict({}).reuse_real_unrealcv_env is True
+    assert UavFlowEvalConfig.from_dict({}).runtime_loop_guard_windows == 40
     assert config.to_dict()["reuse_real_unrealcv_env"] is False
+
+
+def test_manual_eval_cli_defaults_loop_guard_to_40():
+    from evaluation.benchmarks.uav_flow.scripts.run_manual_eval import _parser
+
+    assert _parser().parse_args([]).runtime_loop_guard_windows == 40
 
 
 def test_config_roundtrip_includes_stmr_experiment_fields():

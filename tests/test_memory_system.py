@@ -313,7 +313,7 @@ def test_context_composer_preserves_all_selected_skills_when_over_budget(tmp_pat
     assert context["metadata"]["budget"]["trimmed_fragments"] == []
 
 
-def test_action_module_reads_jsonl_refs_and_outputs_compact_recent_actions(tmp_path):
+def test_action_module_reads_jsonl_refs_and_outputs_unified_motion_history(tmp_path):
     writer = MemoryEventWriter(tmp_path)
     reader = MemoryRecordReader(tmp_path)
     memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", active_instruction="鍙宠浆瀵绘壘榛戣壊璺伅", memory_reader=reader)
@@ -350,16 +350,23 @@ def test_action_module_reads_jsonl_refs_and_outputs_compact_recent_actions(tmp_p
     )
     action = _fragment(context, "action")
 
-    assert len(action["content"]["recent_actions"]) == 2
-    assert action["content"]["recent_actions"][-1] == {"tool": "uav.hover", "args": {}, "ok": True, "history_only": True}
-    assert all(item["history_only"] is True for item in action["content"]["recent_actions"])
-    assert action["content"]["motion_history_summary"]["phase"] == "stop"
-    assert action["content"]["motion_history_summary"]["window_count"] == 7
-    assert action["content"]["motion_history_summary"]["turn_count"] == 6
-    assert action["content"]["motion_history_summary"]["net_yaw_deg"] == 60.0
-    assert action["content"]["motion_history_summary"]["history_only"] is True
+    summary = action["content"]["motion_history_summary"]
+    assert summary["window_count"] == 7
+    assert summary["phase_start_relative_uav_motion"] == {
+        "forward_m": 0.0,
+        "right_m": 0.0,
+        "up_m": 0.0,
+        "planar_m": 0.0,
+        "yaw_delta_deg": 60.0,
+    }
+    assert summary["recent_execution_order"] == "oldest_to_newest"
+    assert len(summary["recent_execution"]) == 5
+    assert summary["recent_execution"][-1] == {"tool": "uav.hover", "args": {}}
+    assert all("ok" not in item for item in summary["recent_execution"])
     assert "motion_history_summary_sources" in action["metadata"]
-    assert "result" not in action["content"]["recent_actions"][-1]
+    assert "recent_actions" not in action["content"]
+    assert "action_trend" not in action["content"]
+    assert "result" not in summary["recent_execution"][-1]
     assert "action_effect_summaries" not in action["content"]
     assert action["facts"] == []
     assert action["inferences"] == []
@@ -478,7 +485,6 @@ def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
                         "name": "search_landmark",
                         "goal": "identify the entrance candidate",
                         "done_when": ["entrance candidate is visible"],
-                        "observe": ["latest_observation"],
                         "continue_when": ["entrance identity is unclear"],
                         "metrics": [],
                     },
@@ -531,7 +537,6 @@ def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
                 "name": "search_landmark",
                 "goal": "identify the entrance candidate",
                 "done_when": ["entrance candidate is visible"],
-                "observe": ["latest_observation"],
                 "continue_when": ["entrance identity is unclear"],
                 "metrics": [],
             }
@@ -727,8 +732,9 @@ def test_default_modules_describe_their_outputs():
     assert "selected_skills" in descriptions["skills"]["content_fields"]
     assert "selected_frames" in descriptions["image"]["content_fields"]
     assert "latest_pose" in descriptions["pose"]["content_fields"]
-    assert "recent_actions" in descriptions["action"]["content_fields"]
     assert "motion_history_summary" in descriptions["action"]["content_fields"]
+    assert "recent_actions" not in descriptions["action"]["content_fields"]
+    assert "action_trend" not in descriptions["action"]["content_fields"]
     assert "motion_history_summary_sources" in descriptions["action"]["metadata_fields"]
     assert "recalled_map_memories" in descriptions["map"]["content_fields"]
 

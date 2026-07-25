@@ -14,12 +14,26 @@ import json
 from typing import Any
 
 
-def build_model_user_content(context: dict[str, Any]) -> str | list[dict[str, Any]]:
-    """Build an OpenAI-compatible user message from sanitized context and inputs."""
+def build_model_user_content(
+    context: dict[str, Any],
+    *,
+    image_mode: str = "all",
+) -> str | list[dict[str, Any]]:
+    """Build an OpenAI-compatible user message from sanitized context and inputs.
+
+    ``current_only`` is a provider-recovery mode. It omits phase-start media
+    and the two-image temporal rule while preserving the normal model context.
+    """
+
+    if image_mode not in {"all", "current_only"}:
+        raise ValueError(f"unsupported image_mode: {image_mode}")
 
     sanitized_context = sanitize_context_for_model_text(context)
     text = json.dumps(sanitized_context, ensure_ascii=False)
-    media_parts, supplemental_text_parts = _model_input_parts(context)
+    media_parts, supplemental_text_parts = _model_input_parts(
+        context,
+        image_mode=image_mode,
+    )
     if not media_parts and not supplemental_text_parts:
         return text
     if not media_parts:
@@ -30,12 +44,18 @@ def build_model_user_content(context: dict[str, Any]) -> str | list[dict[str, An
     return [*media_parts, {"type": "text", "text": trailing_text}]
 
 
-def _model_input_parts(context: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+def _model_input_parts(
+    context: dict[str, Any],
+    *,
+    image_mode: str,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     media_parts: list[dict[str, Any]] = []
     supplemental_text_parts: list[dict[str, Any]] = []
     for item in _iter_model_inputs(context):
         input_type = item.get("type")
         if input_type == "image":
+            if image_mode == "current_only" and item.get("role") != "current_observation":
+                continue
             part = _image_part(item)
             if part is not None:
                 label = _input_label_part(item)
@@ -43,6 +63,8 @@ def _model_input_parts(context: dict[str, Any]) -> tuple[list[dict[str, Any]], l
                     media_parts.append(label)
                 media_parts.append(part)
         elif input_type == "text":
+            if image_mode == "current_only" and item.get("role") == "temporal_evidence_rule":
+                continue
             part = _text_part(item)
             if part is not None:
                 supplemental_text_parts.append(part)
@@ -107,7 +129,6 @@ def sanitize_context_for_model_text(context: dict[str, Any]) -> dict[str, Any]:
     _remove_debug_only_top_level_fields(sanitized)
     _remove_model_facing_direction_shorthand(sanitized)
     _normalize_model_facing_phase_completion(sanitized)
-    _compact_model_facing_phase_execution_summary(sanitized)
     fragments = sanitized.get("fragments", [])
     if isinstance(fragments, list):
         compact_fragments = []
@@ -143,14 +164,25 @@ def _clean_selected_skills(fragment: dict[str, Any]) -> None:
 def _compact_model_facing_fragment(fragment: dict[str, Any]) -> dict[str, Any] | None:
     compact: dict[str, Any] = {}
     name = fragment.get("name")
+    # Image roles are already bound to provider-ready media by adjacent labels.
+    # Repeating selection/debug metadata in JSON adds no evidence and can make
+    # the model treat "not interpreted" audit state as a completion blocker.
+    if name == "image":
+        return None
     if isinstance(name, str) and name.strip():
         compact["name"] = name
 
     content = fragment.get("content")
     if isinstance(content, dict):
-        if name == "image":
-            _compact_image_selected_frames(content)
-        cleaned_content = _drop_empty_values(content)
+        model_content = copy.deepcopy(content)
+        for key in (
+            "visual_evidence",
+            "selected_frames",
+            "interpretation_status",
+            "attached_image_count",
+        ):
+            model_content.pop(key, None)
+        cleaned_content = _drop_empty_values(model_content)
         if cleaned_content:
             compact["content"] = cleaned_content
 
@@ -160,24 +192,6 @@ def _compact_model_facing_fragment(fragment: dict[str, Any]) -> dict[str, Any] |
             compact[key] = value
 
     return compact or None
-
-
-def _compact_image_selected_frames(content: dict[str, Any]) -> None:
-    selected = content.get("selected_frames")
-    if not isinstance(selected, list):
-        return
-    compact_frames: list[dict[str, str]] = []
-    for item in selected:
-        if not isinstance(item, dict):
-            continue
-        compact = {
-            key: value.strip()
-            for key in ("role", "usage")
-            if isinstance((value := item.get(key)), str) and value.strip()
-        }
-        if compact:
-            compact_frames.append(compact)
-    content["selected_frames"] = compact_frames
 
 
 def _drop_empty_values(data: dict[str, Any]) -> dict[str, Any]:
@@ -215,10 +229,8 @@ def _order_model_text_context(context: dict[str, Any]) -> dict[str, Any]:
         "current_phase",
         "semantic_goal",
         "runtime_control",
-        "phase_progress_evidence",
         "fragments",
         "allowed_action_constraints",
-        "phase_execution_summary",
         "user_preferences",
         "phase_completion_evaluation",
         "latest_observation_summary",
@@ -248,6 +260,8 @@ def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
     context.pop("context_schema", None)
     context.pop("metadata", None)
     context.pop("disabled_fragments", None)
+    context.pop("phase_progress_evidence", None)
+    context.pop("phase_execution_summary", None)
 
 
 def _remove_phase_judge_debug_fields(context: dict[str, Any]) -> None:
@@ -299,10 +313,6 @@ def _remove_model_facing_direction_shorthand(context: dict[str, Any]) -> None:
             if isinstance(move_schema, dict):
                 _sanitize_move_body_schema(move_schema)
 
-    summary = context.get("phase_execution_summary")
-    if isinstance(summary, dict):
-        _sanitize_phase_execution_summary(summary)
-
     fragments = context.get("fragments")
     if isinstance(fragments, list):
         for fragment in fragments:
@@ -324,14 +334,6 @@ def _sanitize_move_body_schema(schema: dict[str, Any]) -> None:
     ]
 
 
-def _sanitize_phase_execution_summary(summary: dict[str, Any]) -> None:
-    tool_facts = summary.get("tool_facts")
-    if not isinstance(tool_facts, dict):
-        return
-    tool_facts.pop("move_duration_by_direction_success", None)
-    tool_facts.pop("move_duration_by_direction_attempted", None)
-
-
 def _normalize_model_facing_phase_completion(context: dict[str, Any]) -> None:
     evaluation = context.get("phase_completion_evaluation")
     if not isinstance(evaluation, dict):
@@ -339,25 +341,7 @@ def _normalize_model_facing_phase_completion(context: dict[str, Any]) -> None:
     measurable_count = int(evaluation.get("measurable_count") or 0)
     metrics_count = int(evaluation.get("metrics_count") or 0)
     if metrics_count == 0 or measurable_count == 0:
-        context["phase_completion_evaluation"] = {
-            "deterministic_status": "not_measurable",
-            "requires_model_judgment": True,
-            "reason": "No deterministic phase metrics are available; judge completion from current_phase done_when/continue_when, images, and phase_progress_evidence.",
-        }
-
-
-def _compact_model_facing_phase_execution_summary(context: dict[str, Any]) -> None:
-    summary = context.get("phase_execution_summary")
-    if not isinstance(summary, dict):
-        return
-    tool_facts = summary.get("tool_facts") if isinstance(summary.get("tool_facts"), dict) else {}
-    compact: dict[str, Any] = {}
-    for key in ("phase", "window_count", "max_window_count"):
-        if summary.get(key) is not None:
-            compact[key] = summary[key]
-    if isinstance(tool_facts, dict) and tool_facts.get("tools_executed"):
-        compact["tools_executed"] = dict(tool_facts["tools_executed"])
-    context["phase_execution_summary"] = compact
+        context.pop("phase_completion_evaluation", None)
 
 
 def _remove_empty_and_debug_top_level_fields(context: dict[str, Any]) -> None:
@@ -393,9 +377,14 @@ def _sanitize_action_fragment(fragment: dict[str, Any]) -> None:
     content = fragment.get("content")
     if not isinstance(content, dict):
         return
-    recent_actions = content.get("recent_actions")
-    if isinstance(recent_actions, list):
-        for item in recent_actions:
+    content.pop("recent_actions", None)
+    content.pop("action_trend", None)
+    summary = content.get("motion_history_summary")
+    if not isinstance(summary, dict):
+        return
+    recent_execution = summary.get("recent_execution")
+    if isinstance(recent_execution, list):
+        for item in recent_execution:
             if not isinstance(item, dict):
                 continue
             item["args"] = _model_facing_tool_args(item.get("tool"), item.get("args"))

@@ -36,7 +36,6 @@ class SemanticPhase:
     name: str
     goal: str
     done_when: list[str] = field(default_factory=list)
-    observe: list[str] = field(default_factory=list)
     continue_when: list[str] = field(default_factory=list)
     metrics: list[dict[str, Any]] = field(default_factory=list)
 
@@ -50,7 +49,6 @@ class SemanticPhase:
             name=str(data.get("name", "")).strip(),
             goal=str(data.get("goal", "")).strip(),
             done_when=_string_list(data.get("done_when")),
-            observe=_string_list(data.get("observe")),
             continue_when=_string_list(data.get("continue_when")),
             metrics=_dict_list(data.get("metrics")),
         )

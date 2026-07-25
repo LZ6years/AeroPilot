@@ -125,7 +125,7 @@ python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
 | `enable_sr_judge` | `True` | 生成 SR judge 结果，但注意它可能误判 |
 | `enable_visual_diagnostics` | `True` | 额外生成视觉诊断结果 |
 | `enable_action_planner_debug` | `True` | HTML 中展示每轮 action planner 输入/输出，适合调试 |
-| `runtime_loop_guard_windows` | `100` | 避免小样本过早截断 |
+| `runtime_loop_guard_windows` | `40` | 限制单个 phase 的最大规划窗口数 |
 | `parser_mode` | `"model"` | 使用模型做 semantic parser |
 
 ## 6. 每次运行后看什么
@@ -265,10 +265,10 @@ runs/<run_id>/contexts/latest_action_planner_model_context.json
 
 ```text
 fragments[].name == "action"
-content.action_trend
+content.motion_history_summary.recent_execution
 ```
 
-如果 `motion_pattern.type == "alternating_yaw"`，planner 应该减少机械 `+5/-5` 震荡。若仍出现，需要看 action planner debug 卡片中该轮模型是否读到了 action trend。
+动作按 `oldest_to_newest` 排列；如果近期 `yaw_deg` 正负交替，planner 应该减少机械 `+5/-5` 震荡。若仍出现，需要看 action planner debug 卡片中该轮模型是否读到了这份统一运动历史。
 
 ## 10. 跑完后清理
 

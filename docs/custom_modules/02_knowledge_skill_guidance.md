@@ -34,7 +34,7 @@ plugins/knowledge/uav_flight/<skill_folder>/SKILL.md
 
 如果新增一个独立知识包，例如 `inspection`，再把 `knowledge.inspection` 加到 `configs/plugins.json.plugins.enabled`。
 
-## 2. SKILL.md 最小格式
+## 2. SKILL.md 写作格式
 
 ```markdown
 ---
@@ -44,35 +44,51 @@ description: Use when the UAV needs to keep a visible target near the center of 
 
 # Keep Target Centered
 
-Use this guidance when the task depends on continuously facing or following a visual target.
+## Application Boundary
 
-Rules:
-- Prefer small corrections rather than large oscillating turns.
-- If the target is lost, stop forward movement and reacquire visual evidence.
+Describe when this knowledge applies, when it does not, and the boundary with adjacent skills.
 
-Do not:
-- Do not claim the target is centered from image file paths alone.
-- Do not move toward a target when visual evidence is uncertain.
+## Evidence Model
+
+Describe useful evidence and conclusions that the evidence cannot support.
+
+## Decision Procedure
+
+Give short state-based steps: assess evidence, choose a movement type, then re-observe.
+
+## Completion And Stop
+
+Define sufficient completion evidence and when further correction should stop.
+
+## Recovery
+
+Describe conservative recovery for missing, conflicting, or no-progress evidence.
 ```
 
-`name` 是模型选择 skill 时使用的稳定名字，建议 snake_case。`description` 很重要，它决定模型什么时候会选择这个 skill。正文标题自由，runtime 不解析固定标题。
+`name` 是模型选择 skill 时使用的稳定名字，建议 snake_case。`description` 很重要，它决定模型什么时候会选择这个 skill。
+
+这五段是 `knowledge.*` 的写作契约，不是新的 runtime schema。runtime 仍把正文作为普通 Markdown 整体加载，不解析标题，也不会按 planner/parser 分别裁剪章节。callable skill 不强制使用这套结构。
+
+核心正文应控制在 2400 字符以内，并保留 parser criteria 生成完成条件所需的应用边界、证据模型和停止知识。`Decision Procedure` 应按状态教学，不写死一串 primitive UAV tools 或固定动作参数。
 
 ## 3. reference.md 什么时候用
 
-如果正文短，全部写在 `SKILL.md` 里即可。
-
-如果有补充例子、术语、判断标准，可以放：
+核心完成语义必须留在 `SKILL.md`。公式、长例子、搜索尺度和非必要动作细节可以放：
 
 ```text
 reference.md
 references/*.md
 ```
 
-当前 loader 会读取：
+当前加载边界：
 
-- `SKILL.md` 正文，默认最多 2400 字符；
-- `reference.md`，默认最多 1600 字符；
-- `references/*.md`，不递归更深目录。
+- catalog 常驻只暴露轻量 metadata；
+- planner 选中 skill 后读取完整 `SKILL.md`，因此正文必须主动遵守 2400 字符预算；
+- planner 只有显式请求时才读取对应 reference，每份最多 1600 字符；
+- parser criteria 只读取 bounded `SKILL.md`，不读取任何 reference；
+- references 只使用一层目录，不建立深层引用链。
+
+正文应直接说明何时需要某份 reference，例如“复杂侧向通过证据不足时请求 `references/route_progress_examples.md`”。不要在正文和 reference 中重复同一套规则。
 
 ## 4. 如何进入 planner context
 
@@ -105,7 +121,7 @@ planner context 中的形态：
       {
         "name": "keep_target_centered",
         "skill_text": "...",
-        "references": [{"path": "reference.md", "text": "..."}],
+        "requested_references": [{"path": "reference.md", "text": "..."}],
         "capability": null
       }
     ]
@@ -157,10 +173,10 @@ runs/plugin_system_real_probe_<timestamp>/
 
 ```text
 structure：不加载 skill，只生成 phase name 和 goal
-criteria：对每个 phase 单独选 skill，再生成 done_when / continue_when / observe / metrics
+criteria：对每个 phase 单独选 skill，再生成 done_when / continue_when / metrics
 planner：运行时重新独立选择，不复用 parser 的选择结果
 ```
 
-Parser criteria 注入只包含 `name + description + bounded SKILL.md body`。它不读取 reference 文件，不暴露本地路径、脚本或 callable capability。skill 正文也不应出现 parser schema 字段；criteria model 负责把通用飞行知识映射到 semantic schema。
+Parser criteria 注入只包含 `name + description + bounded SKILL.md body`。它不读取 reference 文件，不暴露本地路径、脚本或 callable capability。因此应用边界、证据含义、合理完成精度和停止条件必须保留在核心正文；只有公式、长案例和可选执行细节可以下沉。skill 正文不应出现 parser schema 字段；criteria model 负责把通用飞行知识映射到 semantic schema。
 
 没有 skill 数量硬上限。selector 应选择全部真正相关的知识，同时保持最小必要集合，不能为了保险加载整个 catalog。未知、重复或未启用名称由 registry 拒绝或去重，合法选择不会被 runtime 截断。

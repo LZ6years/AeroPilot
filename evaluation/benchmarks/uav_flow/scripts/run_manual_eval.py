@@ -19,7 +19,7 @@ By default this script runs a small real-UnrealCV debug batch:
 - enable_sr_judge: True
 - enable_visual_diagnostics: True
 - enable_action_planner_debug: True
-- runtime_loop_guard_windows: 100
+- runtime_loop_guard_windows: 40
 - parser_mode: model
 
 Common commands
@@ -133,7 +133,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-sr-judge", action="store_true", help="Disable SR judge.")
     parser.add_argument("--no-visual-diagnostics", action="store_true", help="Disable visual diagnostics.")
     parser.add_argument("--no-action-planner-debug", action="store_true", help="Disable action planner debug artifacts.")
-    parser.add_argument("--runtime-loop-guard-windows", type=int, default=100, help="Runtime loop guard window count.")
+    parser.add_argument("--runtime-loop-guard-windows", type=int, default=40, help="Runtime loop guard window count.")
     parser.add_argument("--parser-mode", default="model", help="Task parser mode.")
     parser.add_argument("--env-path", default=None, help="Optional .env path for model config.")
     parser.add_argument("--stmr-mode", choices=["off", "shadow", "planner"], default=None, help="Optional online STMR experiment mode.")

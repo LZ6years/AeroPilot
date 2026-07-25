@@ -19,7 +19,7 @@ logic.
   intent, task goal, and immutable phase structure. Phase count, order, name,
   and goal come from the user instruction before any skill is selected.
 - `src/agent/semantic/prompts/task_parser_phase_criteria_system.txt` owns the
-  per-phase `done_when`, `continue_when`, `observe`, and `metrics` contract. It
+  per-phase `done_when`, `continue_when`, and `metrics` contract. It
   may apply selected knowledge guidance, but it must not rewrite task or phase
   structure and must not duplicate general UAV identity or flight knowledge
   from `memory/FLYAGENT.md`.
@@ -60,9 +60,9 @@ Model-facing context should be small, current, and decision useful:
 - current instruction and semantic phase;
 - current observation image;
 - phase-start reference image when distinct;
-- compact action or motion history summaries;
-- a very small number of history-only examples;
-- compact phase progress and completion evidence.
+- one compact motion history summary containing phase-start-relative UAV motion
+  and a short oldest-to-newest successful-action sequence;
+- compact phase completion evidence.
 
 Human/debug/review data may be larger and more detailed:
 - raw planner context and raw model outputs;
@@ -82,6 +82,38 @@ reference project-private fields such as `current_phase`, `phase_decision`,
 benchmark artifacts from `plugins/knowledge/*/SKILL.md`. Phrase skill guidance
 as general UAV behavior, visual reasoning, movement, route, safety, or
 completion knowledge.
+
+Semantic completion uses one shared contract across criteria generation,
+semantic updates, and phase decisions. Every `done_when` list item is a required
+core condition; alternative sufficient evidence paths belong inside one item
+with explicit either/or wording. Conditions describe the minimum sufficient
+completed state rather than an ideal view or preferred proof. `continue_when`
+is non-exhaustive clarification only: it can explain missing or conflicting
+evidence, but it is not a completion gate or an additional positive condition.
+It must not classify a state allowed by a valid completion path as unfinished
+without concrete contradictory evidence. Phase-start-relative cumulative motion
+describes the whole phase; a short recent-action tail must not override it.
+Task-type evidence knowledge belongs in dynamically selected knowledge skills;
+the coupled model classifies every `done_when` item as `supported`, `unknown`,
+or `contradicted`, while planner code alone combines those judgments with
+deterministic metrics to derive the phase transition. Free-text evidence is
+explanatory and must not be parsed as control logic. The phase-decision prompt
+must not duplicate separate visual, route, orbit, or landing tutorials.
+
+Knowledge skills under `plugins/knowledge/*/SKILL.md` use one compact authoring
+contract in this order: `Application Boundary`, `Evidence Model`, `Decision
+Procedure`, `Completion And Stop`, and `Recovery`. This convention applies to
+knowledge guidance only; callable skills may use the structure appropriate to
+their external capability. Runtime treats these headings as ordinary Markdown
+and does not parse or route sections independently.
+
+Keep each core knowledge body within the current 2400-character guidance
+budget. The core must retain the evidence and completion knowledge needed by
+semantic criteria generation. Move formulas, long examples, search scales, and
+optional action detail to one-level `references/*.md` files, and state clearly
+when a planner should request each reference. Do not move essential completion
+conditions into references because parser-time criteria selection does not load
+them.
 
 When two knowledge files describe one continuous reasoning chain, prefer one
 primary skill plus optional references over multiple overlapping skills. For

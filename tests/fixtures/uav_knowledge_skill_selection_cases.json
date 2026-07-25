@@ -127,7 +127,9 @@
     "expected_any": [
       "route_traversal_and_passage"
     ],
-    "forbidden": [],
+    "forbidden": [
+      "approach_and_standoff"
+    ],
     "max_selected": 3
   },
   {
@@ -135,7 +137,9 @@
     "expected_any": [
       "route_traversal_and_passage"
     ],
-    "forbidden": [],
+    "forbidden": [
+      "approach_and_standoff"
+    ],
     "max_selected": 3
   },
   {
@@ -143,7 +147,9 @@
     "expected_any": [
       "route_traversal_and_passage"
     ],
-    "forbidden": [],
+    "forbidden": [
+      "approach_and_standoff"
+    ],
     "max_selected": 2
   },
   {
@@ -151,7 +157,9 @@
     "expected_any": [
       "route_traversal_and_passage"
     ],
-    "forbidden": [],
+    "forbidden": [
+      "approach_and_standoff"
+    ],
     "max_selected": 3
   },
   {
@@ -159,7 +167,9 @@
     "expected_any": [
       "route_traversal_and_passage"
     ],
-    "forbidden": [],
+    "forbidden": [
+      "approach_and_standoff"
+    ],
     "max_selected": 3
   },
   {
@@ -322,6 +332,7 @@
       "route_traversal_and_passage"
     ],
     "forbidden": [
+      "approach_and_standoff",
       "vertical_landing_and_altitude_control"
     ],
     "max_selected": 2
@@ -332,6 +343,7 @@
       "route_traversal_and_passage"
     ],
     "forbidden": [
+      "approach_and_standoff",
       "vertical_landing_and_altitude_control"
     ],
     "max_selected": 3
@@ -342,6 +354,7 @@
       "route_traversal_and_passage"
     ],
     "forbidden": [
+      "approach_and_standoff",
       "vertical_landing_and_altitude_control"
     ],
     "max_selected": 3

@@ -6,60 +6,50 @@ summary: Select for through, past, between, passage, gap, corridor, opening, or 
 
 # Route Traversal And Passage
 
-Use this guidance when the instruction asks the UAV to pass through a region,
-go through or between objects, cross a passage, or use a requested side of a
-landmark or obstacle as part of a route.
+## Application Boundary
 
-Do not use this guidance merely because the instruction says to travel to,
-move to, or approach a landmark from a side. When the landmark is the
-destination and the active concern is relative position, distance, or side
-placement around that target, use approach and standoff reasoning instead.
+Use this guidance to pass through, past, between, beyond, or along a requested
+side of a passage, gap, opening, corridor, or cue. Do not treat the cue as a
+destination when route progress is the concern. Use approach reasoning when the
+task ends at a target-relative position.
 
-Passage tasks are about route progress, not perfect visual centering. First
-identify the relevant passage, gap, side, or route cue well enough to choose a
-safe short movement. Once the passage or side is visible and plausible, prefer
-bounded translation through, past, between, or along the route over repeated yaw
-micro-corrections.
+## Evidence Model
 
-Use visual change over time as route evidence. Compare the first useful view of
-the route with the latest view: a cue that was ahead of the UAV may later move
-to the side, behind, out of the blocking path, or become less relevant after the
-UAV has translated. Those changes can support passage progress when they agree
-with recent movement.
+Passage evidence combines meaningful translation with visual change over time.
+A cue that began ahead may move sideways, behind, outside the blocking path, or
+out of view. Once the cue and route relation are established, consistent
+translation remains evidence when the cue is no longer visible. Cue absence
+alone is ambiguous: it neither proves completion nor requires renewed search.
+Yaw can inspect a route but cannot place the UAV on a side or prove traversal.
 
-Keep the boundaries separate:
-- If the target or route cue is not visible or remains ambiguous, use search
-  behavior to gather new evidence.
-- If a visible target only needs facing or attention, use visual-target
-  reasoning.
-- If the task is mainly to get near or keep distance from a target, use approach
-  and standoff reasoning.
-- If the route is narrow, cluttered, occluded, or near people, use obstacle and
-  safety reasoning to keep movements conservative.
+## Decision Procedure
 
-For side-based passage, remember that "from the left side" or "from the right
-side" is a spatial route relation. Yaw can inspect that relation, but it cannot
-by itself place the UAV on the requested side or move the UAV through the route.
-Side relations usually need lateral or forward movement evidence, not just a
-changed camera bearing.
+1. Establish the route, requested side, or gap and usable free space.
+2. Prefer bounded translation through or past it over repeated centering.
+3. Compare the first useful route view with the latest view and accumulated
+   translation; use their agreement as route evidence.
+4. Reacquire the cue only if its identity or relation was not established, or
+   movement evidence is insufficient or contradictory.
 
-If repeated yaw changes keep the same target or gap in view without improving
-the route decision, stop chasing a better-centered image. Prefer a bounded
-translation that actually advances through, past, between, or along the
-requested side of the route. Hover only when motion safety or route identity is
-uncertain.
+Request [route progress examples](references/route_progress_examples.md) when a
+complex side passage or disappearing cue needs more detailed interpretation.
 
-Do not treat a landmark itself as the destination when the instruction says to
-pass through, go around, or use a side of it. The landmark is a route reference;
-the UAV should make route progress relative to that reference while preserving
-the requested side relation and safety.
+## Completion And Stop
 
-Do not treat one small translation or a visually plausible side relation as
-enough passage evidence unless recent movement also supports meaningful route
-progress.
+Either path is independently sufficient: meaningful translation agrees
+with the cue moving from ahead to the side, rear, or beyond the blocking route;
+or, after establishing the cue and relation, directionally consistent
+translation carries the UAV beyond it while the cue leaves the forward view
+without reversal, blockage, or conflicting evidence. Do not require both paths,
+reacquisition, continued visibility, or a particular final image side after
+sufficient route progress. Do not wait for an exact geometric boundary the
+camera cannot establish.
 
-Do not wait forever for an exact geometric boundary, axis, or entrance line that
-cannot be directly observed. If the route cue is clear, motion has been
-meaningful, and the latest view suggests the UAV has moved through, past,
-between, or beyond the relevant cue, treat that as useful completion evidence
-rather than continuing to chase a perfect view.
+## Recovery
+
+If route identity, side, or free space was never established, inspect before
+translating. If movement is insufficient, contradictory, or the route remains
+ahead and blocking, gather evidence before another substantial move. After
+valid passage progress, do not replace translation evidence with repeated yaw
+to recover the cue. Shorten movement in narrow, cluttered, or people-adjacent
+routes.

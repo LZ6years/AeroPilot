@@ -140,7 +140,7 @@ def main() -> None:
         # duplicate full historical records.
         "instruction_history_refs": flight_memory["instruction_history"],
         "last_recent_pose_ref": flight_memory["recent_pose_refs"][-1] if flight_memory["recent_pose_refs"] else None,
-        "recent_actions": _recent_actions(context),
+        "motion_history_summary": _motion_history_summary(context),
     }
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
@@ -169,11 +169,11 @@ def _count(events: list[dict], event_name: str) -> int:
     return sum(1 for item in events if item["event"] == event_name)
 
 
-def _recent_actions(context: dict) -> list[dict]:
+def _motion_history_summary(context: dict) -> dict:
     for fragment in context["fragments"]:
         if fragment["name"] == "action":
-            return fragment["content"].get("recent_actions", [])
-    return []
+            return fragment["content"].get("motion_history_summary", {})
+    return {}
 
 
 if __name__ == "__main__":

@@ -9,6 +9,7 @@ from src.agent.messages import AgentMessage
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 
 ACTION_WINDOW_SCOPE_CURRENT_PHASE = "current_phase_only"
+VALID_DONE_WHEN_ASSESSMENT_STATUSES = {"supported", "unknown", "contradicted"}
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,81 @@ class RuntimeControlAction:
 
 
 @dataclass(frozen=True)
+class DoneWhenAssessment:
+    """Model judgment for one zero-based ``done_when`` condition."""
+
+    index: int
+    status: str
+    evidence: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "DoneWhenAssessment":
+        allowed_fields = {"index", "status", "evidence"}
+        extra_fields = sorted(set(data) - allowed_fields)
+        if extra_fields:
+            raise ValueError(
+                "DoneWhenAssessment contains unsupported fields: "
+                + ", ".join(extra_fields)
+            )
+        index = data.get("index")
+        if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+            raise ValueError("DoneWhenAssessment index must be a non-negative integer")
+        status = str(data.get("status", "")).strip()
+        if status not in VALID_DONE_WHEN_ASSESSMENT_STATUSES:
+            raise ValueError(
+                "DoneWhenAssessment status must be one of: "
+                + ", ".join(sorted(VALID_DONE_WHEN_ASSESSMENT_STATUSES))
+            )
+        evidence = str(data.get("evidence", "")).strip()
+        if not evidence:
+            raise ValueError("DoneWhenAssessment evidence must not be empty")
+        return cls(index=index, status=status, evidence=evidence)
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "index": self.index,
+            "status": self.status,
+            "evidence": self.evidence,
+        }
+
+
+@dataclass(frozen=True)
+class CompletionAssessment:
+    """Structured semantic evidence judgments returned by the coupled model."""
+
+    done_when: list[DoneWhenAssessment]
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "CompletionAssessment":
+        extra_fields = sorted(set(data) - {"done_when"})
+        if extra_fields:
+            raise ValueError(
+                "CompletionAssessment contains unsupported fields: "
+                + ", ".join(extra_fields)
+            )
+        raw_items = data.get("done_when")
+        if not isinstance(raw_items, list):
+            raise ValueError("CompletionAssessment done_when must be a list")
+        if any(not isinstance(item, dict) for item in raw_items):
+            raise ValueError("CompletionAssessment done_when items must be objects")
+        return cls(done_when=[DoneWhenAssessment.from_dict(dict(item)) for item in raw_items])
+
+    def validate_coverage(self, expected_count: int) -> None:
+        """Require exactly one assessment for every semantic condition."""
+
+        indices = [item.index for item in self.done_when]
+        expected = list(range(expected_count))
+        if sorted(indices) != expected or len(indices) != len(set(indices)):
+            raise ValueError(
+                "CompletionAssessment must cover each done_when index exactly once; "
+                f"expected={expected}, actual={indices}"
+            )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {"done_when": [item.to_dict() for item in self.done_when]}
+
+
+@dataclass(frozen=True)
 class ShortHorizonPlan:
     phase: str
     steps: list[PlannedStep]
@@ -193,6 +269,7 @@ class CoupledActionPhasePlan:
     action_window: ActionWindow = field(default_factory=ActionWindow.default)
     agent_messages: list[AgentMessage] = field(default_factory=list)
     control_actions: list[RuntimeControlAction] = field(default_factory=list)
+    completion_assessment: CompletionAssessment | None = None
 
     @classmethod
     def from_dict(
@@ -222,6 +299,12 @@ class CoupledActionPhasePlan:
             control_actions_data = []
         if not isinstance(control_actions_data, list):
             raise ValueError("CoupledActionPhasePlan control_actions must be a list")
+        completion_assessment_data = data.get("completion_assessment")
+        completion_assessment = (
+            CompletionAssessment.from_dict(dict(completion_assessment_data))
+            if isinstance(completion_assessment_data, dict)
+            else None
+        )
 
         action_window_data = data.get("action_window")
         action_window = (
@@ -248,6 +331,7 @@ class CoupledActionPhasePlan:
             action_window=action_window,
             agent_messages=[AgentMessage.from_dict(dict(item)) for item in messages_data],
             control_actions=[RuntimeControlAction.from_dict(dict(item)) for item in control_actions_data],
+            completion_assessment=completion_assessment,
         )
 
     def to_short_horizon_plan(self) -> ShortHorizonPlan:
@@ -259,7 +343,7 @@ class CoupledActionPhasePlan:
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "phase": self.phase,
             "phase_decision": self.phase_decision.to_dict(),
             "agent_messages": [message.to_dict() for message in self.agent_messages],
@@ -267,3 +351,6 @@ class CoupledActionPhasePlan:
             "action_window": self.action_window.to_dict(),
             "steps": [step.to_dict() for step in self.steps],
         }
+        if self.completion_assessment is not None:
+            data["completion_assessment"] = self.completion_assessment.to_dict()
+        return data

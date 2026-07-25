@@ -10,7 +10,6 @@
         "name": "search_visual_entrance",
         "goal": "identify building entrance, doorway, entrance sign, or building-base opening candidates",
         "done_when": ["entrance candidate visibility is described"],
-        "observe": ["latest_observation"],
         "continue_when": ["entrance candidate remains unclear"],
         "metrics": []
       },
@@ -29,7 +28,6 @@
         "name": "identify_visual_landmarks",
         "goal": "identify stable reusable visual landmarks",
         "done_when": ["at least one stable landmark and its image position are described"],
-        "observe": ["latest_observation"],
         "continue_when": ["no stable landmark is visible"],
         "metrics": []
       },
@@ -48,7 +46,6 @@
         "name": "check_visible_free_space",
         "goal": "describe visible open paved area and nearby visual context",
         "done_when": ["foreground or midground open-area visibility is described"],
-        "observe": ["latest_observation"],
         "continue_when": ["free-space visibility cannot be described"],
         "metrics": []
       },
@@ -67,7 +64,6 @@
         "name": "verify_entrance_visibility",
         "goal": "judge whether an entrance sign is clearly visible",
         "done_when": ["entrance-sign visibility and related visual references are described"],
-        "observe": ["latest_observation"],
         "continue_when": ["entrance-sign visibility is unclear"],
         "metrics": []
       },
@@ -86,7 +82,6 @@
         "name": "separate_target_from_landmarks",
         "goal": "distinguish entrance target candidates from vehicle visual references",
         "done_when": ["vehicles are described as references or non-targets unless a clear entrance candidate exists"],
-        "observe": ["latest_observation"],
         "continue_when": ["target/non-target distinction remains unclear"],
         "metrics": []
       },
@@ -105,7 +100,6 @@
         "name": "relate_vehicle_to_building_base",
         "goal": "describe vehicle positions relative to building-base candidate areas",
         "done_when": ["vehicle and building-base relative positions are described"],
-        "observe": ["latest_observation"],
         "continue_when": ["relative positions are unclear"],
         "metrics": []
       },

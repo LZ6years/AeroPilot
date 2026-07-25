@@ -142,7 +142,8 @@ module 不做：
 - `allowed_action_constraints` 是 `ToolContractValidator` 的动作契约来源。
 - `observation_policy` 告诉模型观察由 runtime 自动完成。
 - `phase_transition_policy` 告诉模型 action plan 不输出 `phase_transition`，阶段推进在执行后判断。
-- `phase_execution_summary` 告诉模型当前 phase 已累计执行过什么，包含 phase 起点、窗口记录、累计位移、归一化累计 yaw 和累计工具事实。
+- `phase_execution_summary` 保留为 runtime/debug 的原始 phase 进展来源，不直接发送给模型。
+- planner 只读取 action fragment 中的 `motion_history_summary`：phase-start-relative UAV motion，以及按从旧到新排列的最近成功动作。
 
 ## 6. facts / inferences / goals / risks
 

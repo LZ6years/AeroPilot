@@ -12,11 +12,13 @@ from typing import Any
 from src.agent.semantic.parser_contracts import (
     SemanticPlanStructure,
     merge_semantic_plan,
+    normalize_phase_criteria_metrics,
     validate_phase_criteria,
 )
 from src.agent.semantic.schemas import SemanticPlan, TaskParseResult
 from src.agent.semantic.validator import semantic_plan_from_dict, validate_semantic_plan
 from src.runtime.configs.model_config import ModelConfig, load_model_config
+from src.uav.frames import SIGNED_YAW_SEMANTICS
 
 
 DEFAULT_AGENT_RULES_PATH = Path(__file__).resolve().parents[3] / "memory" / "FLYAGENT.md"
@@ -121,7 +123,6 @@ class TaskParser:
                             "move closer to the entrance front area",
                             ["entrance remains identifiable", "UAV has made meaningful approach progress"],
                             ["entrance identity is unclear", "movement has not made approach progress"],
-                            observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
                         ),
                         _phase(
                             "stop",
@@ -153,7 +154,6 @@ class TaskParser:
                             "move closer to the vehicle while preserving safe standoff",
                             ["vehicle remains identifiable", "UAV is closer while keeping a safe distance"],
                             ["vehicle identity is unclear", "safe approach relation is not yet plausible"],
-                            observe=["latest_observation", "phase_start_reference", "phase_execution_summary"],
                         ),
                         _phase(
                             "stop",
@@ -197,7 +197,6 @@ class TaskParser:
                             "hover after facing the street lamp",
                             ["UAV is stable and the target-facing task is satisfied"],
                             ["UAV is not stable"],
-                            observe=["phase_execution_summary"],
                         ),
                     ],
                 }
@@ -216,31 +215,55 @@ class TaskParser:
         )
         criteria_by_phase: list[dict[str, Any]] = []
         phase_traces: list[dict[str, Any]] = []
+        normalization_warnings: list[dict[str, Any]] = []
         for phase in structure.phases:
             guidance, selection_trace = self._resolve_phase_guidance(instruction, structure, phase)
-            criteria = self._call_json_contract(
-                self._build_phase_criteria_messages(instruction, structure, phase, guidance),
-                lambda data, immutable_phase=phase: validate_phase_criteria(
+            criteria_warnings: list[dict[str, Any]] = []
+
+            def validate_criteria(
+                data: dict[str, Any],
+                immutable_phase: dict[str, Any] = phase,
+            ) -> dict[str, Any]:
+                normalized, warnings = normalize_phase_criteria_metrics(
                     data,
+                    instruction=instruction,
+                )
+                criteria_warnings.clear()
+                criteria_warnings.extend(warnings)
+                return validate_phase_criteria(
+                    normalized,
                     immutable_phase,
                     instruction=instruction,
                     task_goal=structure.task_goal,
-                ),
+                )
+
+            criteria = self._call_json_contract(
+                self._build_phase_criteria_messages(instruction, structure, phase, guidance),
+                validate_criteria,
                 contract_name=f"phase criteria {phase['index']}:{phase['name']}",
             )
             criteria_by_phase.append(criteria)
-            phase_traces.append(
-                {
-                    "index": phase["index"],
-                    "name": phase["name"],
-                    **selection_trace,
-                    "criteria_status": "ok",
-                }
-            )
+            phase_trace = {
+                "index": phase["index"],
+                "name": phase["name"],
+                **selection_trace,
+                "criteria_status": "normalized" if criteria_warnings else "ok",
+            }
+            if criteria_warnings:
+                phase_trace["criteria_warnings"] = list(criteria_warnings)
+                normalization_warnings.extend(
+                    {
+                        "phase_index": phase["index"],
+                        "phase_name": phase["name"],
+                        **warning,
+                    }
+                    for warning in criteria_warnings
+                )
+            phase_traces.append(phase_trace)
         self.last_parse_trace = {
             "strategy": "structure_then_phase_skill_criteria",
             "phases": phase_traces,
-            "warnings": list(self.config_warnings),
+            "warnings": [*self.config_warnings, *normalization_warnings],
         }
         return merge_semantic_plan(structure, criteria_by_phase)
 
@@ -315,7 +338,16 @@ class TaskParser:
         phase: dict[str, Any],
         guidance: list[dict[str, Any]],
     ) -> list[dict[str, str]]:
-        messages = [{"role": "system", "content": self.agent_rules}]
+        messages = [
+            {"role": "system", "content": self.agent_rules},
+            {
+                "role": "system",
+                "content": (
+                    "Semantic motion-metric convention: yaw_delta uses the same signed yaw convention as flight "
+                    f"tools. {SIGNED_YAW_SEMANTICS}"
+                ),
+            },
+        ]
         if guidance:
             messages.append(
                 {
@@ -420,14 +452,12 @@ def _phase(
     done_when: list[str],
     continue_when: list[str],
     *,
-    observe: list[str] | None = None,
     metrics: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "name": name,
         "goal": goal,
         "done_when": done_when,
-        "observe": observe or ["latest_observation", "phase_execution_summary"],
         "continue_when": continue_when,
         "metrics": metrics or [],
     }
