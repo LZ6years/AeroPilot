@@ -15,6 +15,9 @@ from typing import Any
 from src.agent.mission_state import MissionState
 from src.agent.phase import evaluate_phase_completion
 from src.agent.planning.model_inputs import sanitize_context_for_model_text
+from src.env_client import SceneCapabilities
+
+
 @dataclass(frozen=True)
 class PhaseWindowContext:
     """Model/debug payloads prepared for a single phase window."""
@@ -35,6 +38,7 @@ class PhaseWindowContextBuilder:
         base_planner_context: dict[str, Any],
         observation_before: dict[str, Any],
         runtime_control_context: dict[str, Any] | None = None,
+        scene_capabilities: SceneCapabilities | None = None,
     ) -> PhaseWindowContext:
         """Return the complete model-facing context for the current phase window."""
 
@@ -42,6 +46,7 @@ class PhaseWindowContextBuilder:
         completion = evaluate_phase_completion(metrics, state.current_phase_execution_summary)
         progress = self.phase_progress_evidence(state)
         planner_payload = dict(base_planner_context)
+        self._apply_scene_capabilities(planner_payload, scene_capabilities)
         runtime_control = self.compact_runtime_control_context(runtime_control_context)
         if runtime_control:
             planner_payload["runtime_control"] = runtime_control
@@ -59,6 +64,63 @@ class PhaseWindowContextBuilder:
             phase_completion_evaluation=completion,
             phase_progress_evidence=progress,
         )
+
+    @staticmethod
+    def _apply_scene_capabilities(
+        planner_payload: dict[str, Any],
+        capabilities: SceneCapabilities | None,
+    ) -> None:
+        """Narrow model-visible primitive tools to the resolved Backend.
+
+        EnvClient v1 still permits compatibility clients without a capability
+        snapshot. In that legacy case the pre-existing PlannerContext remains
+        unchanged. A real unified Backend supplies capabilities, so Runtime can
+        expose a compact contract without leaking deployment hosts or paths.
+        """
+
+        if capabilities is None:
+            return
+
+        planner_payload["simulator_contract"] = {
+            "protocol": capabilities.protocol,
+            "control_mode": capabilities.control_mode,
+            "supported_actions": list(capabilities.supported_actions),
+            "observation_modalities": list(
+                capabilities.observation_modalities
+            ),
+            "requires_takeoff": capabilities.requires_takeoff,
+            "supports_soft_reset": capabilities.supports_soft_reset,
+        }
+
+        raw_constraints = planner_payload.get("allowed_action_constraints", {})
+        constraints = (
+            dict(raw_constraints)
+            if isinstance(raw_constraints, dict)
+            else {}
+        )
+        supported_uav_tools = {
+            f"uav.{action}" for action in capabilities.supported_actions
+        }
+        if "planner_tools" in constraints:
+            raw_tools = constraints.get("planner_tools")
+            if isinstance(raw_tools, list):
+                constraints["planner_tools"] = [
+                    str(tool)
+                    for tool in raw_tools
+                    if not str(tool).startswith("uav.")
+                    or str(tool) in supported_uav_tools
+                ]
+
+        if "action_schemas" in constraints:
+            raw_schemas = constraints.get("action_schemas")
+            if isinstance(raw_schemas, dict):
+                constraints["action_schemas"] = {
+                    str(name): schema
+                    for name, schema in raw_schemas.items()
+                    if not str(name).startswith("uav.")
+                    or str(name) in supported_uav_tools
+                }
+        planner_payload["allowed_action_constraints"] = constraints
 
     @staticmethod
     def current_phase_metrics(state: MissionState) -> list[dict[str, Any]]:

@@ -84,7 +84,13 @@ class MemoryEventWriter:
             "pose",
             {
                 "pose": dict(pose),
-                "coordinate_frame": "airsim_ned",
+                # Pose producers own coordinate semantics. The memory store
+                # preserves a self-described frame and uses an honest generic
+                # marker when older clients omit it instead of guessing AirSim.
+                "coordinate_frame": str(
+                    pose.get("coordinate_frame")
+                    or "canonical_unspecified"
+                ),
                 "source": source,
                 "action_id": action_id,
                 "observation_id": observation_id,

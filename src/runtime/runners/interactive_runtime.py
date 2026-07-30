@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from src.agent.mission_state import MissionState
+from src.runtime.configs import TaskExecutionOptions
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.uav import pose_delta, pose_from_observation
 
@@ -28,6 +29,7 @@ class InteractiveTaskSession:
         scene_id: str | None = None,
         available_map_ids: list[str] | None = None,
         event_sink: Callable[[dict[str, Any]], None] | None = None,
+        execution_options: TaskExecutionOptions | None = None,
     ) -> None:
         self.runtime = runtime
         self.recorder = runtime.recorder
@@ -38,6 +40,10 @@ class InteractiveTaskSession:
         # Kept on the session so future TUI shells can inspect or replace the
         # live event consumer without reaching into TaskRuntime internals.
         self.event_sink = event_sink
+        # A continuous session must not silently fall back to default
+        # modalities after the first turn. The CLI/Benchmark composition root
+        # resolves one run-level profile and stores its Runtime half here.
+        self.execution_options = execution_options or TaskExecutionOptions()
         self.last_state: MissionState | None = None
         self.last_summary: dict[str, Any] | None = None
         self.closed = False
@@ -74,6 +80,7 @@ class InteractiveTaskSession:
                 scene_policy="reuse_running",
                 stop_scene_on_finish=False,
                 scene_id=self.scene_id,
+                execution_options=self.execution_options,
             )
             self.last_state = state
             summary = build_turn_summary(

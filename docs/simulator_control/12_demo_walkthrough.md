@@ -31,6 +31,47 @@ MapPackage
 - `simulator_env_client_demo.py`解释底层配置和生命周期；
 - `real_engine_instruction_demo.py`解释 TaskRuntime/Planner 如何消费 EnvClient。
 
+另有一个不调用 LLM、默认不产生飞行动作的 Runtime 初始化验收工具：
+
+```text
+tests/manual/task_runtime_episode_options_probe.py
+```
+
+它同时适用于 AirSim ComputerVision 与 UnrealCV。默认先读取当前 canonical pose，
+再把相同 pose 作为 `TaskExecutionOptions.initial_pose`交给 TaskRuntime，因此可以
+检查 episode placement、Profile、Capabilities 与首帧观测，而不主动改变位置。
+
+```powershell
+python tests/manual/task_runtime_episode_options_probe.py `
+  --config <your-map-config.json> `
+  --map-id <your-map-id> `
+  --observation-profile <your-observation-profile.json> `
+  --execution managed
+```
+
+仅在确实要验收指定 episode 起点时，才同时传入：
+
+```text
+--x <meters> --y <meters> --z <meters>
+--yaw-deg <degrees> --pitch-deg <degrees> --roll-deg <degrees>
+```
+
+Probe 产物位于 `runs/manual_task_runtime_probe/<run-id>/`，重点检查：
+
+```text
+config/observation_profile.json
+config/task_execution_options.json
+state/scene_instance.json
+state/scene_capabilities.json
+state/initial_pose_probe.json
+contexts/latest_context.json
+summary.json
+cleanup.json
+```
+
+`summary.json`记录 Profile、Capabilities、初始/最终 pose 和 ownership；
+`cleanup.json`单独记录 owned/attached 场景的清理结果。
+
 ## 第一步：列出路由
 
 ```powershell

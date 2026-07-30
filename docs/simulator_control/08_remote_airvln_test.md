@@ -211,3 +211,30 @@ runs/manual_airsim_capture_matrix/20260730_172725_827842/
 - Worker 和 scene files 只写入远端用户目录下的 `.flyagent/scenes`。
 
 Worker 始终使用 detached process group，不依赖 user-systemd 或 linger。
+
+## 2026-07-30 TaskRuntime 对齐复测状态
+
+本轮 Runtime 对齐完成后，计划使用
+`tests/manual/task_runtime_episode_options_probe.py`再次执行“不移动”的
+ComputerVision 初始化验收。执行时 `10.68.240.49:10182`连续三次 TCP 连接均在约
+5 秒超时，SSH 握手无法开始，因此本轮状态明确为：
+
+```text
+Runtime initialization retest: BLOCKED_BY_NETWORK
+Backend strict visual acceptance above: PASSED
+```
+
+没有启动或停止任何远程进程，也没有修改远端 settings。网络/VPN 恢复后可运行：
+
+```powershell
+$env:FLYAGENT_SSH_KEY = "C:\Users\HP\.ssh\id_rsa_npu_wzq"
+
+python tests/manual/task_runtime_episode_options_probe.py `
+  --config configs/maps/remote_ssh.example.json `
+  --map-id airsim_remote_env_1 `
+  --observation-profile configs/observations/airsim_depth_vis.example.json `
+  --execution managed
+```
+
+该命令默认先读取当前 pose，再将相同 pose 作为 episode initial pose，不执行 Planner
+飞行动作；`MANAGED`仍遵守 attach-or-start 和 ownership-aware cleanup。

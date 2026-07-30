@@ -146,6 +146,60 @@ TaskRuntime 通过 `TaskExecutionOptions.from_observation_profile()`消费它，
 根据 `SceneCapabilities.observation_modalities`做快速校验。v1 要求 modalities 包含
 `pose`，但 `rgb`和 `depth`可以按 Benchmark 的 Agent 输入配置选择。
 
+## TaskRuntime 的统一组装
+
+CLI、Interactive session、真实 Agent Demo 与后续 Benchmark runner 应只加载一次
+Profile：
+
+```python
+profile = load_observation_profile(
+    "configs/observations/airsim_default.example.json"
+)
+options = TaskExecutionOptions.from_observation_profile(profile)
+
+client = SimulatorEnvClient(
+    server,
+    observation_profile=profile,
+)
+runtime = TaskRuntime(client, recorder, parser, planner=planner)
+
+state = runtime.run_task(
+    map_id,
+    instruction,
+    agent_id=agent_id,
+    scene_id=scene_id,
+    execution_options=options,
+)
+```
+
+不要分别维护“EnvClient 默认观测”和“Runtime 默认观测”。否则 Adapter 可能采集
+DepthVis，而 Agent loop 却仍按另一个 modality 集合运行。多轮
+`InteractiveTaskSession`会保留同一个 `TaskExecutionOptions`实例，保证一轮会话内
+的观测契约不漂移。
+
+启动场景后，Runtime 使用 `SceneInstance.capabilities`完成三层保护：
+
+1. preflight、stabilizer 与 shutdown 只执行 Backend 声明支持的动作；
+2. PlannerContext 的 `planner_tools`和 action schemas 被过滤；
+3. 自定义 Planner 的 tool step 在进入 ToolDispatcher 前再次校验。
+
+显式 `planner_tools=[]`表示当前没有可供 Planner 使用的 primitive，不会恢复成默认
+hover、turn、move。`SceneCapabilities=None`只为尚未迁移到统一底层的旧 Client
+保留兼容行为。
+
+运行记录包括：
+
+```text
+config/observation_profile.json
+config/runtime_environment.json
+state/scene_instance.json
+state/scene_capabilities.json
+contexts/latest_context.json
+```
+
+Pose 的 `coordinate_frame`由 Backend/Adapter 自描述并原样进入 Memory；旧生产者未
+提供时记录为 `canonical_unspecified`，Memory 不会根据协议名称猜测坐标系。
+
 ## SimulationExecutionMode
 
 ```python

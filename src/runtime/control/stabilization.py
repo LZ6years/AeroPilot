@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from src.agent.planning.schemas import PlannedStep
+from src.env_client import SceneCapabilities
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.tools.dispatcher import ToolDispatcher
 from src.uav import pose_from_observation, velocity_norm_mps
@@ -36,6 +37,7 @@ class UavStabilizer:
         agent_id: str,
         phase: str,
         step: PlannedStep,
+        capabilities: SceneCapabilities | None = None,
     ) -> dict[str, Any]:
         """Wait after a motion step and return a serializable summary."""
 
@@ -52,11 +54,28 @@ class UavStabilizer:
             return self._skip({**base, "reason": "disabled"})
         if tool not in self.config.motion_tools:
             return self._skip({**base, "reason": "non_motion_tool"})
+        if (
+            capabilities is not None
+            and "pose" not in capabilities.observation_modalities
+        ):
+            return self._skip(
+                {**base, "reason": "pose_observation_unsupported"}
+            )
 
         started = time.monotonic()
         self._event("uav_stabilization_started", base)
-        brake_data = self._zero_velocity_brake(scene_instance_id, agent_id, base)
-        hover_data: dict[str, Any] | None = self._optional_hover(scene_instance_id, agent_id, base)
+        brake_data = self._zero_velocity_brake(
+            scene_instance_id,
+            agent_id,
+            base,
+            capabilities,
+        )
+        hover_data: dict[str, Any] | None = self._optional_hover(
+            scene_instance_id,
+            agent_id,
+            base,
+            capabilities,
+        )
 
         poll_count = 0
         last_velocity: float | None = None
@@ -108,11 +127,18 @@ class UavStabilizer:
         self,
         scene_instance_id: str,
         agent_id: str,
+        capabilities: SceneCapabilities | None = None,
     ) -> dict[str, Any]:
         """Wait before the initial preflight observation."""
 
         step = PlannedStep.tool_step("uav.move_body", {}, "preflight stabilization")
-        return self.wait_after_step(scene_instance_id, agent_id, "preflight", step)
+        return self.wait_after_step(
+            scene_instance_id,
+            agent_id,
+            "preflight",
+            step,
+            capabilities=capabilities,
+        )
 
     def _skip(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = {**payload, "status": "skipped"}
@@ -124,10 +150,21 @@ class UavStabilizer:
         scene_instance_id: str,
         agent_id: str,
         base: dict[str, Any],
+        capabilities: SceneCapabilities | None,
     ) -> dict[str, Any] | None:
         duration = float(self.config.zero_velocity_brake_duration_sec)
         if duration <= 0.0:
             return None
+        if capabilities is not None and not capabilities.supports("move_body"):
+            result = {
+                "status": "skipped",
+                "reason": "move_body_unsupported",
+            }
+            self._event(
+                "stabilization_action_skipped",
+                {**base, "action": "move_body", **result},
+            )
+            return result
         args = {"vx": 0.0, "vy": 0.0, "vz": 0.0, "duration": duration}
         result = self.tools.call(scene_instance_id, agent_id, "uav.move_body", args).to_dict()
         self._event(
@@ -141,9 +178,20 @@ class UavStabilizer:
         scene_instance_id: str,
         agent_id: str,
         base: dict[str, Any],
+        capabilities: SceneCapabilities | None,
     ) -> dict[str, Any] | None:
         if not self.config.hover_after_brake:
             return None
+        if capabilities is not None and not capabilities.supports("hover"):
+            result = {
+                "status": "skipped",
+                "reason": "hover_unsupported",
+            }
+            self._event(
+                "stabilization_action_skipped",
+                {**base, "action": "hover", **result},
+            )
+            return result
         result = self.tools.call(scene_instance_id, agent_id, "uav.hover", {}).to_dict()
         self._event("uav_stabilization_hover_requested", {**base, "result": result})
         return result

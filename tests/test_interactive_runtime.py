@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from src.env_client import ObservationProfile
+from src.runtime.configs import TaskExecutionOptions
 from src.runtime.runners.interactive_runtime import (
     InteractiveTaskSession,
     agent_messages_for_summary,
@@ -180,6 +182,29 @@ def test_interactive_session_reuses_scene_for_natural_language_turn(tmp_path):
     assert session.event_sink is live_sink
     assert "interactive/latest_summary.json" in recorder.json_files
     assert recorder.events[-1][0] == "interactive_instruction_completed"
+
+
+def test_interactive_session_reuses_same_task_execution_options(tmp_path):
+    recorder = FakeRecorder(tmp_path)
+    runtime = FakeRuntime(recorder)
+    profile = ObservationProfile(
+        modalities=("rgb", "pose"),
+        capture_sources={"rgb": "scene"},
+    )
+    options = TaskExecutionOptions.from_observation_profile(profile)
+    session = InteractiveTaskSession(
+        runtime,
+        "m1",
+        execution_options=options,
+    )
+
+    session.submit_instruction("first")
+    session.submit_instruction("second")
+
+    assert [call[1]["execution_options"] for call in runtime.run_calls] == [
+        options,
+        options,
+    ]
 
 
 def test_interactive_session_can_start_scene_before_first_instruction(tmp_path):

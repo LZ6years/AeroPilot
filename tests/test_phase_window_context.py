@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from src.agent.mission_state import MissionState
 from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal
+from src.env_client.schemas import SceneCapabilities
 from src.runtime.context import PhaseWindowContextBuilder
 
 
@@ -155,3 +156,80 @@ def test_phase_window_context_model_context_uses_neutral_no_metric_completion():
     assert result.planner_payload["current_phase"]["continue_when"] == ["visual evidence is insufficient"]
     assert result.model_context["current_phase"]["continue_when"] == ["visual evidence is insufficient"]
     assert "phase_completion_evaluation" not in result.model_context
+
+
+def test_phase_window_context_filters_tools_using_scene_capabilities():
+    state = make_state()
+    base_context = {
+        "fragments": [],
+        "allowed_action_constraints": {
+            "planner_tools": [
+                "uav.hover",
+                "uav.turn_relative",
+                "uav.move_body",
+                "skill.inspect",
+            ],
+            "action_schemas": {
+                "uav.hover": {},
+                "uav.turn_relative": {"yaw_deg": {"type": "number"}},
+                "uav.move_body": {"vx": {"type": "number"}},
+                "skill.inspect": {"target": {"type": "string"}},
+            },
+        },
+    }
+    capabilities = SceneCapabilities(
+        protocol="unrealcv",
+        control_mode="actor_pose",
+        supported_actions=("connect", "turn_relative", "get_pose"),
+        observation_modalities=("rgb", "pose"),
+        requires_takeoff=False,
+        supports_soft_reset=False,
+    )
+
+    result = PhaseWindowContextBuilder().build(
+        state,
+        base_context,
+        {"pose": {}},
+        scene_capabilities=capabilities,
+    )
+
+    constraints = result.planner_payload["allowed_action_constraints"]
+    assert constraints["planner_tools"] == ["uav.turn_relative", "skill.inspect"]
+    assert set(constraints["action_schemas"]) == {"uav.turn_relative", "skill.inspect"}
+    assert result.planner_payload["simulator_contract"] == {
+        "protocol": "unrealcv",
+        "control_mode": "actor_pose",
+        "supported_actions": ["connect", "turn_relative", "get_pose"],
+        "observation_modalities": ["rgb", "pose"],
+        "requires_takeoff": False,
+        "supports_soft_reset": False,
+    }
+    assert base_context["allowed_action_constraints"]["planner_tools"] == [
+        "uav.hover",
+        "uav.turn_relative",
+        "uav.move_body",
+        "skill.inspect",
+    ]
+
+
+def test_phase_window_context_preserves_absent_legacy_tool_fields():
+    state = make_state()
+    capabilities = SceneCapabilities(
+        protocol="test",
+        control_mode="test",
+        supported_actions=(),
+        observation_modalities=("pose",),
+        requires_takeoff=False,
+        supports_soft_reset=False,
+    )
+
+    result = PhaseWindowContextBuilder().build(
+        state,
+        {"fragments": [], "allowed_action_constraints": {}},
+        {"pose": {}},
+        scene_capabilities=capabilities,
+    )
+
+    constraints = result.planner_payload["allowed_action_constraints"]
+    assert "planner_tools" not in constraints
+    assert "action_schemas" not in constraints

@@ -16,7 +16,9 @@ from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.agent.semantic.task_parser import TaskParser
 from src.cli.display import ANSI_BLUE, ANSI_DIM, CliNarrativePanel, clear_screen, color_text, print_json, print_summary
+from src.env_client import load_observation_profile
 from src.env_client.simulator_client import SimulatorEnvClient
+from src.runtime.configs import TaskExecutionOptions
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
 from src.runtime.configs.model_config import load_model_config
@@ -39,6 +41,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--action-config", default="configs/uav_action_config.json")
     parser.add_argument("--safety-config", default="configs/uav_safety_config.json")
+    parser.add_argument(
+        "--observation-profile",
+        default=None,
+        help=(
+            "Run-level observation profile JSON. The same profile controls "
+            "EnvClient capture sources and TaskRuntime modalities."
+        ),
+    )
     parser.add_argument(
         "--execution",
         choices=["attach", "managed"],
@@ -101,6 +111,10 @@ def main(argv: list[str] | None = None) -> int:
         run_task(args)
         return 0
     maps, port_policy = load_map_config(args.config)
+    observation_profile = load_observation_profile(args.observation_profile)
+    execution_options = TaskExecutionOptions.from_observation_profile(
+        observation_profile
+    )
     map_id = args.map_id or maps[0].map_id
     run_dir = RunStore(args.run_root).create_run_dir("smoke")
     recorder = AsyncRunLogger(run_dir)
@@ -108,13 +122,29 @@ def main(argv: list[str] | None = None) -> int:
     try:
         recorder.info("run started", command=args.command, map_id=map_id)
         recorder.write_json("config/map_package.json", selected_map.to_dict())
+        _write_runtime_environment_config(
+            recorder,
+            args,
+            observation_profile,
+            execution_options,
+            map_id,
+        )
         server = SimulationServer(
             maps,
             port_policy,
             Path(run_dir),
             execution_mode=args.execution,
+            show_display=not args.headless,
+            save_artifacts=args.save_artifacts,
         )
-        runtime = AgentRuntime(SimulatorEnvClient(server), recorder)
+        runtime = AgentRuntime(
+            SimulatorEnvClient(
+                server,
+                observation_profile=observation_profile,
+            ),
+            recorder,
+            observation_modalities=execution_options.observation_modalities,
+        )
         try:
             if args.command == "observation-smoke-test":
                 runtime.run_observation_smoke_test(map_id)
@@ -180,12 +210,17 @@ def run_task(args: argparse.Namespace) -> None:
     if not args.instruction:
         raise ValueError("run-task requires --instruction")
     maps, port_policy = load_map_config(args.config)
+    observation_profile = load_observation_profile(args.observation_profile)
+    execution_options = TaskExecutionOptions.from_observation_profile(
+        observation_profile
+    )
     map_id = args.map_id or maps[0].map_id
     run_dir = RunStore(args.run_root).create_run_dir("task")
     recorder = AsyncRunLogger(run_dir)
     model_config = load_model_config(args.env_path)
     parser_mode = args.parser_mode or model_config.task_parser_mode
     action_config = load_uav_action_config(args.action_config)
+    safety_config = load_uav_safety_config(args.safety_config)
     selected_map = next(pkg for pkg in maps if pkg.map_id == map_id)
     try:
         recorder.info(
@@ -206,21 +241,42 @@ def run_task(args: argparse.Namespace) -> None:
             },
         )
         recorder.write_json("config/uav_action_config.json", action_config.to_dict())
+        recorder.write_json("config/uav_safety_config.json", safety_config.to_dict())
+        _write_runtime_environment_config(
+            recorder,
+            args,
+            observation_profile,
+            execution_options,
+            map_id,
+        )
         server = SimulationServer(
             maps,
             port_policy,
             Path(run_dir),
             execution_mode=args.execution,
+            show_display=not args.headless,
             action_config=action_config,
+            save_artifacts=args.save_artifacts,
         )
         runtime = TaskRuntime(
-            SimulatorEnvClient(server),
+            SimulatorEnvClient(
+                server,
+                observation_profile=observation_profile,
+            ),
             recorder,
             TaskParser(mode=parser_mode, model_config=model_config),
             planner=ModelActionPlanner(model_config),
+            safety=SafetySupervisor(safety_config),
             shutdown_policy=args.shutdown_policy,
+            action_config=action_config,
         )
-        state = runtime.run_task(map_id, args.instruction)
+        state = runtime.run_task(
+            map_id,
+            args.instruction,
+            agent_id=args.agent_id,
+            scene_id=args.scene_id,
+            execution_options=execution_options,
+        )
         recorder.info("task run completed", run_dir=str(run_dir), completed=state.completed)
         print(json.dumps(state.to_dict(), indent=2, ensure_ascii=False))
         print(f"Run record: {run_dir}")
@@ -257,6 +313,10 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
     model_config = load_model_config(args.env_path)
     action_config = load_uav_action_config(args.action_config)
     safety_config = load_uav_safety_config(args.safety_config)
+    observation_profile = load_observation_profile(args.observation_profile)
+    execution_options = TaskExecutionOptions.from_observation_profile(
+        observation_profile
+    )
     parser_mode = args.parser_mode or "model"
     run_dir = RunStore(args.run_root).create_run_dir("interactive_cli")
     recorder = AsyncRunLogger(run_dir)
@@ -273,6 +333,13 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
     recorder.write_json("config/map_package.json", selected_map.to_dict())
     recorder.write_json("config/uav_action_config.json", action_config.to_dict())
     recorder.write_json("config/uav_safety_config.json", safety_config.to_dict())
+    _write_runtime_environment_config(
+        recorder,
+        args,
+        observation_profile,
+        execution_options,
+        map_id,
+    )
     recorder.write_json(
         "config/model_config.json",
         {
@@ -285,7 +352,10 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
         },
     )
     runtime = TaskRuntime(
-        SimulatorEnvClient(server),
+        SimulatorEnvClient(
+            server,
+            observation_profile=observation_profile,
+        ),
         recorder,
         TaskParser(mode=parser_mode, model_config=model_config),
         planner=ModelActionPlanner(model_config),
@@ -301,6 +371,39 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
         scene_id=args.scene_id,
         available_map_ids=[pkg.map_id for pkg in maps],
         event_sink=live_printer,
+        execution_options=execution_options,
+    )
+
+
+def _write_runtime_environment_config(
+    recorder,
+    args: argparse.Namespace,
+    observation_profile,
+    execution_options: TaskExecutionOptions,
+    map_id: str,
+) -> None:
+    """Persist the one resolved environment contract shared by CLI layers.
+
+    Keeping this snapshot beside the map package makes it possible to explain
+    both halves of an observation later: the profile selected the simulator
+    capture source, while TaskExecutionOptions selected what Runtime requested.
+    """
+
+    recorder.write_json(
+        "config/observation_profile.json",
+        observation_profile.to_dict(),
+    )
+    recorder.write_json(
+        "config/runtime_environment.json",
+        {
+            "map_id": map_id,
+            "scene_id": args.scene_id,
+            "agent_id": args.agent_id,
+            "execution": args.execution,
+            "show_display": not args.headless,
+            "save_artifacts": args.save_artifacts,
+            "task_execution_options": execution_options.to_dict(),
+        },
     )
 
 

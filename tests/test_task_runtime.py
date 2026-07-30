@@ -454,6 +454,7 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert state.airborne
     assert state.latest_observation
     assert (run_dir / "state/semantic_plan.json").exists()
+    assert (run_dir / "state/scene_capabilities.json").exists()
     assert not (run_dir / "mission_state.json").exists()
     assert not (run_dir / "latest_state.json").exists()
     assert not (run_dir / "flight_memory.json").exists()
@@ -483,6 +484,11 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     mission_state = json.loads((run_dir / "state/latest_state.json").read_text(encoding="utf-8"))
     latest_observation = json.loads((run_dir / "debug/latest_observation.json").read_text(encoding="utf-8"))
     latest_context = json.loads((run_dir / "contexts/latest_context.json").read_text(encoding="utf-8"))
+    scene_capabilities = json.loads(
+        (run_dir / "state/scene_capabilities.json").read_text(
+            encoding="utf-8"
+        )
+    )
     flight_memory = json.loads((run_dir / "state/flight_memory.json").read_text(encoding="utf-8"))
 
     assert "control_connected" in event_names
@@ -508,6 +514,9 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert (run_dir / "state/latest_state.json").exists()
     assert latest_observation["source"] == "automatic_phase_window"
     assert latest_context["active_instruction"]
+    assert latest_context["simulator_contract"] == scene_capabilities
+    assert "control_host" not in latest_context["simulator_contract"]
+    assert "control_port" not in latest_context["simulator_contract"]
     assert latest_context["current_phase"] is not None
     assert "context_schema" in latest_context
     assert "image" in latest_context["context_schema"]["module_content_fields"]
@@ -1969,6 +1978,73 @@ class _NoSetPoseBackend(AirSimBackend):
             requires_takeoff=capabilities.requires_takeoff,
             supports_soft_reset=capabilities.supports_soft_reset,
         )
+
+
+class _NoHoverBackend(AirSimBackend):
+    def describe_capabilities(self, package):
+        capabilities = super().describe_capabilities(package)
+        return SceneCapabilities(
+            protocol=capabilities.protocol,
+            control_mode=capabilities.control_mode,
+            supported_actions=tuple(
+                action
+                for action in capabilities.supported_actions
+                if action != "hover"
+            ),
+            observation_modalities=capabilities.observation_modalities,
+            requires_takeoff=capabilities.requires_takeoff,
+            supports_soft_reset=capabilities.supports_soft_reset,
+        )
+
+
+def test_task_runtime_rejects_custom_planner_unsupported_action(tmp_path):
+    run_dir = tmp_path / "unsupported_custom_planner_action"
+    recorder = AsyncRunLogger(run_dir)
+    registry = BackendRegistry()
+    registry.register(
+        "airsim",
+        lambda context: _NoHoverBackend(
+            use_real_uav=False,
+            action_config=context.action_config,
+        ),
+    )
+    server = SimulationServer(
+        [make_package()],
+        run_dir=run_dir,
+        backend_registry=registry,
+    )
+    runtime = TaskRuntime(
+        SimulatorEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=HoverOnlyPlanner(),
+        shutdown_policy="none",
+    )
+
+    with pytest.raises(RuntimeError, match="does not support hover"):
+        runtime.run_task("m1", LAMP_TASK)
+    recorder.close()
+
+    debug_events = [
+        json.loads(line)
+        for line in (run_dir / "debug/debug_events.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    rejected = [
+        event
+        for event in debug_events
+        if event["event"] == "runtime_action_capability_rejected"
+    ]
+    assert rejected
+    assert rejected[-1]["payload"]["tool"] == "uav.hover"
+    action_records = [
+        json.loads(line)
+        for line in (run_dir / "memory/actions.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert all(record["tool"] != "uav.hover" for record in action_records)
 
 
 def test_task_runtime_rejects_initial_pose_without_backend_capability(tmp_path):

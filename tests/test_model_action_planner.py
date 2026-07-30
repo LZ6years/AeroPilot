@@ -19,11 +19,41 @@ from src.agent.planning.model_action_planner import (
 )
 from src.agent.planning.model_inputs import build_model_user_content
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
+from src.agent.planning.tool_contract_validator import (
+    ToolContractValidationError,
+    ToolContractValidator,
+)
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK
 from src.agent.planning.schemas import CoupledActionPhasePlan, RuntimeControlAction, ShortHorizonPlan
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
 from src.runtime.configs.model_config import ModelConfig
+
+
+def test_tool_contract_explicit_empty_planner_tools_forbids_all_actions():
+    plan = ShortHorizonPlan.from_dict(
+        {
+            "phase": "phase_a",
+            "steps": [
+                {
+                    "kind": "tool",
+                    "tool": "uav.hover",
+                    "args": {},
+                    "reason": "hold position",
+                }
+            ],
+        }
+    )
+
+    with pytest.raises(ToolContractValidationError) as exc_info:
+        ToolContractValidator().validate(
+            plan,
+            "phase_a",
+            {"allowed_action_constraints": {"planner_tools": []}},
+        )
+
+    assert exc_info.value.violation.code == "tool_not_allowed"
+    assert exc_info.value.violation.expected == []
 
 
 class StubModelActionPlanner(ModelActionPlanner):
@@ -866,7 +896,11 @@ def test_model_action_planner_combines_coupled_prompt_fragments_in_order():
     assert overview_index < phase_index < action_index
     assert "Completion Contract" in prompt
     assert "Phase Decision Guide" not in prompt
-    assert "Allowed Tools For Incomplete Assessments" in prompt
+    assert "Candidate Tools For Incomplete Assessments" in prompt
+    assert (
+        "The only tools available in this call are listed in "
+        "allowed_action_constraints.planner_tools"
+    ) in prompt
     assert "coupled_action_phase_planner_system.txt" not in prompt
 
 

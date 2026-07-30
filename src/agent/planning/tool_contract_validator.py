@@ -379,9 +379,14 @@ class ToolContractValidator:
         return constraints if isinstance(constraints, dict) else {}
 
     def _allowed_tools(self, constraints: dict[str, Any]) -> set[str]:
-        tools = constraints.get("planner_tools")
-        if isinstance(tools, list) and tools:
-            return {str(item) for item in tools}
+        # Presence and truthiness have different meanings. An explicit empty
+        # list is a valid runtime contract saying the current Backend exposes
+        # no model-plannable actions; only an absent/malformed field uses the
+        # compatibility fallback.
+        if "planner_tools" in constraints:
+            tools = constraints.get("planner_tools")
+            if isinstance(tools, list):
+                return {str(item) for item in tools}
         return set(self.fallback_allowed_tools)
 
     def _fail(

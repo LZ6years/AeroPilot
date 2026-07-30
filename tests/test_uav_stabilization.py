@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from src.agent.planning.schemas import PlannedStep
-from src.env_client.schemas import ActionResult, Observation
+from src.env_client.schemas import ActionResult, Observation, SceneCapabilities
 from src.runtime.control import UavStabilizer
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 
@@ -33,6 +33,17 @@ class StubTools:
         if velocity is not None:
             pose["velocity"] = velocity
         return Observation(scene_instance_id, agent_id, modalities, {"pose": pose})
+
+
+def capabilities(actions, modalities=("pose",)):
+    return SceneCapabilities(
+        protocol="test",
+        control_mode="test",
+        supported_actions=tuple(actions),
+        observation_modalities=tuple(modalities),
+        requires_takeoff=False,
+        supports_soft_reset=False,
+    )
 
 
 def test_stabilizer_skips_non_motion_tool():
@@ -115,3 +126,49 @@ def test_stabilizer_skips_when_velocity_is_missing():
 
     assert result["status"] == "skipped"
     assert result["reason"] == "velocity_missing"
+
+
+def test_stabilizer_skips_unsupported_brake_and_hover():
+    tools = StubTools([{"x": 0.0, "y": 0.0, "z": 0.0}])
+    stabilizer = UavStabilizer(
+        tools,
+        Recorder(),
+        UavStabilizationConfig(poll_interval_sec=0.0, hover_after_brake=True),
+    )
+
+    result = stabilizer.wait_after_step(
+        "scene",
+        "uav_1",
+        "phase",
+        PlannedStep.tool_step("uav.turn_relative", {}, "turn"),
+        capabilities=capabilities(("turn_relative",)),
+    )
+
+    assert result["status"] == "completed"
+    assert result["brake_result"]["status"] == "skipped"
+    assert result["brake_result"]["reason"] == "move_body_unsupported"
+    assert result["hover_result"]["status"] == "skipped"
+    assert result["hover_result"]["reason"] == "hover_unsupported"
+    assert tools.calls == []
+
+
+def test_stabilizer_skips_polling_without_pose_observation():
+    tools = StubTools([{"x": 0.0, "y": 0.0, "z": 0.0}])
+    stabilizer = UavStabilizer(
+        tools,
+        Recorder(),
+        UavStabilizationConfig(poll_interval_sec=0.0),
+    )
+
+    result = stabilizer.wait_after_step(
+        "scene",
+        "uav_1",
+        "phase",
+        PlannedStep.tool_step("uav.move_body", {}, "move"),
+        capabilities=capabilities(("move_body",), modalities=("rgb",)),
+    )
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "pose_observation_unsupported"
+    assert tools.observations == 0
+    assert tools.calls == []

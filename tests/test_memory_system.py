@@ -98,6 +98,29 @@ def test_memory_event_writer_and_reader_round_trip(tmp_path):
     assert len(observation["frame_refs"]) == 2
 
 
+def test_memory_event_writer_preserves_pose_coordinate_frame(tmp_path):
+    writer = MemoryEventWriter(tmp_path)
+    reader = MemoryRecordReader(tmp_path)
+
+    explicit_ref = writer.write_pose(
+        {
+            "position": {"x": 1.0, "y": 2.0, "z": 3.0},
+            "coordinate_frame": "unrealcv_world_m",
+        },
+        "observation",
+    )
+    generic_ref = writer.write_pose(
+        {"position": {"x": 4.0, "y": 5.0, "z": 6.0}},
+        "observation",
+    )
+
+    assert reader.read_ref(explicit_ref)["coordinate_frame"] == "unrealcv_world_m"
+    assert (
+        reader.read_ref(generic_ref)["coordinate_frame"]
+        == "canonical_unspecified"
+    )
+
+
 def test_memory_event_writer_records_agent_messages_as_refs(tmp_path):
     writer = MemoryEventWriter(tmp_path)
     reader = MemoryRecordReader(tmp_path)

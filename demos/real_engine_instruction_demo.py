@@ -38,7 +38,8 @@ if str(REPO_ROOT) not in sys.path:
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.agent.semantic.task_parser import TaskParser
-from src.env_client import SimulatorEnvClient
+from src.env_client import SimulatorEnvClient, load_observation_profile
+from src.runtime.configs import TaskExecutionOptions
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
 from src.runtime.configs.model_config import load_model_config
@@ -69,7 +70,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--env-path", default=".env")
     parser.add_argument("--action-config", default="configs/uav_action_config.json")
     parser.add_argument("--safety-config", default="configs/uav_safety_config.json")
+    parser.add_argument(
+        "--observation-profile",
+        default=None,
+        help=(
+            "Run-level observation profile used by both EnvClient capture "
+            "routing and TaskRuntime modality selection."
+        ),
+    )
     parser.add_argument("--map-id", default="cityenviron_win64")
+    parser.add_argument("--scene-id", default=None)
+    parser.add_argument("--agent-id", default="uav_1")
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--parser-mode", choices=["model", "rule_based"], default="model")
     parser.add_argument("--shutdown-policy", choices=["hover", "land", "none"], default="hover")
@@ -117,6 +128,10 @@ def main() -> None:
     model_config = load_model_config(args.env_path)
     action_config = load_uav_action_config(args.action_config)
     safety_config = load_uav_safety_config(args.safety_config)
+    observation_profile = load_observation_profile(args.observation_profile)
+    execution_options = TaskExecutionOptions.from_observation_profile(
+        observation_profile
+    )
 
     selected_map = next(pkg for pkg in maps if pkg.map_id == args.map_id)
     # A continuous session keeps one UE scene alive for multiple instructions.
@@ -143,7 +158,17 @@ def main() -> None:
     # TaskParser(model) -> context builder -> ModelActionPlanner(model) ->
     # coupled phase decision -> ToolContractValidator -> SafetySupervisor ->
     # ToolDispatcher/UAV -> automatic observation when the phase continues.
-    runtime = make_runtime(args, SimulatorEnvClient(server), recorder, model_config, action_config, safety_config)
+    runtime = make_runtime(
+        args,
+        SimulatorEnvClient(
+            server,
+            observation_profile=observation_profile,
+        ),
+        recorder,
+        model_config,
+        action_config,
+        safety_config,
+    )
     summaries: list[dict[str, Any]] = []
     last_state = None
 
@@ -152,6 +177,10 @@ def main() -> None:
     print(f"parser_mode={args.parser_mode}, planner=ModelActionPlanner")
     print(f"shutdown_policy={args.shutdown_policy}")
     print(f"execution={args.execution}, headed={not args.headless}")
+    print(
+        "observation_modalities="
+        + ",".join(execution_options.observation_modalities)
+    )
     print(f"continuous_scene={not args.separate_scenes}")
     print(f"run_dir={run_dir}")
     print()
@@ -159,7 +188,16 @@ def main() -> None:
     try:
         # Write the resolved configuration once at the beginning. These files
         # make each run reproducible without exposing the raw API key.
-        write_common_config(recorder, selected_map, model_config, action_config, safety_config, args)
+        write_common_config(
+            recorder,
+            selected_map,
+            model_config,
+            action_config,
+            safety_config,
+            observation_profile,
+            execution_options,
+            args,
+        )
         for index, instruction in enumerate(instructions, start=1):
             if args.confirm_each:
                 input(f"[{index}/{len(instructions)}] Press Enter to run: {instruction}")
@@ -171,8 +209,11 @@ def main() -> None:
                 state = runtime.run_task(
                     args.map_id,
                     instruction,
+                    agent_id=args.agent_id,
                     scene_policy="isolated" if args.separate_scenes else "reuse_running",
                     stop_scene_on_finish=args.separate_scenes,
+                    scene_id=args.scene_id,
+                    execution_options=execution_options,
                 )
                 last_state = state
                 summary = build_state_summary(
@@ -189,7 +230,11 @@ def main() -> None:
                     "continuous_instruction_failed",
                     {"instruction": instruction, "error_type": type(exc).__name__, "error": str(exc)},
                 )
-                runtime.safe_hover_reused_scene(args.map_id)
+                runtime.safe_hover_reused_scene(
+                    args.map_id,
+                    args.agent_id,
+                    args.scene_id,
+                )
                 summary = build_error_summary(
                     run_dir,
                     instruction,
@@ -206,7 +251,12 @@ def main() -> None:
         # In continuous mode the scene is intentionally kept open across
         # instructions, so it must be closed once after the final instruction.
         if not args.separate_scenes:
-            runtime.finish_reused_scene(args.map_id, last_state)
+            runtime.finish_reused_scene(
+                args.map_id,
+                last_state,
+                agent_id=args.agent_id,
+                scene_id=args.scene_id,
+            )
         recorder.close()
 
     # demo/summary.json is the user-facing rollup. Raw events, contexts, memory,
@@ -286,7 +336,16 @@ def make_runtime(args: argparse.Namespace, client, recorder, model_config, actio
     )
 
 
-def write_common_config(recorder, selected_map, model_config, action_config, safety_config, args: argparse.Namespace) -> None:
+def write_common_config(
+    recorder,
+    selected_map,
+    model_config,
+    action_config,
+    safety_config,
+    observation_profile,
+    execution_options: TaskExecutionOptions,
+    args: argparse.Namespace,
+) -> None:
     """Persist resolved configuration for later debugging.
 
     Model config is redacted, while map/action/safety configs are written in
@@ -311,6 +370,22 @@ def write_common_config(recorder, selected_map, model_config, action_config, saf
     )
     recorder.write_json("config/uav_action_config.json", action_config.to_dict())
     recorder.write_json("config/uav_safety_config.json", safety_config.to_dict())
+    recorder.write_json(
+        "config/observation_profile.json",
+        observation_profile.to_dict(),
+    )
+    recorder.write_json(
+        "config/runtime_environment.json",
+        {
+            "map_id": args.map_id,
+            "scene_id": args.scene_id,
+            "agent_id": args.agent_id,
+            "execution": args.execution,
+            "show_display": not args.headless,
+            "save_artifacts": args.save_artifacts,
+            "task_execution_options": execution_options.to_dict(),
+        },
+    )
 
 
 def build_state_summary(

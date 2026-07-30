@@ -68,6 +68,31 @@ process_ownership, remote_process_id, settings_sha256, capabilities, status
 - `UavActionConfig`：默认动作尺度，例如默认前进速度、默认 yaw step。
 - `UavSafetyConfig`：安全硬上限，例如最大速度、最大 duration、累计 yaw scan budget。
 
+Runtime 还组合两个与 MapPackage 正交的运行级对象：
+
+- `ObservationProfile`：由 Benchmark runner、CLI 或 Demo 选择本次运行的 canonical
+  modality 与 capture source；同一个实例同时注入 `SimulatorEnvClient`。
+- `TaskExecutionOptions`：由同一个 Profile 构造，向 `TaskRuntime`提供 Agent 可见
+  modalities 和可选的 canonical episode initial pose。
+
+场景启动后，Backend 返回 `SceneCapabilities`。Runtime 将其作为唯一的模拟器能力事实：
+
+```mermaid
+flowchart LR
+    OP["ObservationProfile"] --> EC["SimulatorEnvClient<br/>capture sources"]
+    OP --> EO["TaskExecutionOptions<br/>modalities / initial pose"]
+    EO --> RT["TaskRuntime"]
+    EC --> RT
+    SC["SceneCapabilities"] --> RT
+    RT --> CTX["simulator_contract"]
+    RT --> PF["capability-aware preflight"]
+    RT --> ST["capability-aware stabilization / shutdown"]
+```
+
+这三个对象不会替代 Agent 闭环，只决定闭环可观察什么、初始状态是什么以及哪些
+primitive 可以安全执行。它们不携带 SSH、端口、executable、settings 或 Benchmark
+评测真值。
+
 ## 4. Runtime 分层
 
 `src/runtime` 按职责分层：
@@ -90,6 +115,17 @@ process_ownership, remote_process_id, settings_sha256, capabilities, status
 应用阶段推进结果
 写入 run artifacts
 ```
+
+每次启动统一 Backend 场景后，Runtime 还会：
+
+- 写入 `state/scene_capabilities.json`；
+- 在 PlannerContext 中加入精简的 `simulator_contract`；
+- 用 `supported_actions`过滤 `planner_tools`与对应 action schemas；
+- 在自定义 Planner 绕过模型 contract 时，于 ToolDispatcher 前再次拒绝不支持的动作；
+- 根据 capability 决定 takeoff、hover、brake、pose polling 与 land 是否执行或跳过。
+
+`SceneCapabilities=None`仅是旧 EnvClient（当前 UAV-Flow 路径）的临时兼容分支。
+新统一 Backend 不依赖该 fallback。
 
 ## 5. 动作规划链路
 

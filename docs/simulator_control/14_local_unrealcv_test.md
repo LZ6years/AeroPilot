@@ -203,3 +203,31 @@ Run：`runs/manual_local_unrealcv_probe/20260730_192119_692593`
 
 最终实现使用 Actor readback 等待 yaw 收敛。RGB、Depth、Segmentation 和动作均由
 统一 EnvClient 获取，不使用旧 UAV-Flow adapter 代替验收。
+
+## 2026-07-30 TaskRuntime 对齐验收
+
+在上述 Backend 闭环通过后，又使用确定性 Completion Planner 验证了完整 Runtime
+初始化路径：
+
+```text
+runs/manual_task_runtime_probe/task_runtime_probe_20260730_232925_cd9595/
+```
+
+该 Probe 先读取当前 Actor pose，再把同一 pose 作为
+`TaskExecutionOptions.initial_pose`，因此没有执行规划飞行动作。
+
+| 项目 | 结果 |
+|---|---|
+| Status | `completed` |
+| Scene capability | `unrealcv / actor_pose` |
+| Process ownership | `local` |
+| requires_takeoff | `false` |
+| Runtime takeoff | `preflight_takeoff_skipped`，无 takeoff 调用 |
+| Planner tools | `uav.hover`、`uav.turn_relative`、`uav.move_body` |
+| simulator_contract | 已写入 Planner Context，无 host/port/path |
+| Observation | RGB、Depth、Pose artifacts 已生成 |
+| Initial/final position | 一致 |
+| Cleanup | `completed=true`，9068 关闭，无 Collection 残留 |
+
+该结果验证的是“统一 Backend 能否被 TaskRuntime 正确消费”，不替代前一节包含转向、
+移动和恢复的底层动作验收。

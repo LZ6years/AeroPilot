@@ -105,7 +105,32 @@ Runtime 规则：
 - 只有真实 takeoff 成功后 `airborne=true`；
 - ComputerVision 和 UnrealCV 保持 `airborne=false`；
 - capability skip 写入 debug event，但不是动作失败；
-- Planner 的可用 action schemas 后续应从同一 capability snapshot 过滤。
+- Planner 的 `planner_tools`与 action schemas 从同一 capability snapshot 过滤；
+- 自定义 Planner 即使绕过模型 contract，Runtime 仍会在 ToolDispatcher 前拒绝
+  Backend 不支持的 primitive；
+- Stabilizer 仅在支持 pose observation 时轮询速度，仅在支持 `move_body`时发送
+  零速度 brake，仅在支持 `hover`时请求 hover。
+
+Runtime 将能力快照写入：
+
+```text
+runs/<run-id>/state/scene_capabilities.json
+```
+
+Planner 只看到部署无关的 `simulator_contract`：
+
+```json
+{
+  "protocol": "unrealcv",
+  "control_mode": "actor_pose",
+  "supported_actions": ["connect", "hover", "move_body", "turn_relative"],
+  "observation_modalities": ["rgb", "depth", "pose", "segmentation"],
+  "requires_takeoff": false,
+  "supports_soft_reset": false
+}
+```
+
+其中不包含 host、port、SSH、settings 或 executable。
 
 ## Action 与 Observation 路由
 
@@ -140,8 +165,8 @@ Backend 不允许根据 map_id 查找全局单例。未知或已停止 scene 必
 | ownership | stop_scene 行为 |
 |---|---|
 | local | 关闭 Backend，停止本地 owned process，释放端口 |
-| remote_started | 关闭 Backend，Remote Worker 停止 owned process，关闭 Tunnel |
-| remote_attached | 关闭 Backend 和 Tunnel，不停止外部 UE |
+| remote_managed | 关闭 Backend，Remote Worker 停止 owned process，关闭 Tunnel |
+| external | 关闭 Backend 和 Tunnel，不停止外部 UE |
 
 shutdown policy 同样能力驱动：
 

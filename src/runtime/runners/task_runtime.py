@@ -237,6 +237,16 @@ class TaskRuntime:
         if scene is None:
             self._debug_event("continuous_error_hover_skipped", {"reason": "not_running"})
             return
+        if scene.capabilities and not scene.capabilities.supports("hover"):
+            self._debug_event(
+                "continuous_error_hover_skipped",
+                {
+                    "reason": "backend_capability",
+                    "protocol": scene.capabilities.protocol,
+                    "control_mode": scene.capabilities.control_mode,
+                },
+            )
+            return
         try:
             result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
             self._debug_event("continuous_error_hover_completed", result.to_dict())
@@ -258,7 +268,7 @@ class TaskRuntime:
             known_scene = self._active_reused_scenes.get(key)
             scene = self.env_client.get_or_start_scene(map_id, scene_id)
             self._active_reused_scenes[key] = scene
-            self.recorder.write_json("state/scene_instance.json", scene.to_dict())
+            self._record_scene_contract(scene)
             if known_scene is not None and known_scene.scene_instance_id == scene.scene_instance_id:
                 self._debug_event("scene_reused", scene.to_dict())
             else:
@@ -266,9 +276,32 @@ class TaskRuntime:
             return scene
 
         scene = self.env_client.start_scene(map_id, scene_id)
-        self.recorder.write_json("state/scene_instance.json", scene.to_dict())
+        self._record_scene_contract(scene)
         self._debug_event("scene_started", scene.to_dict())
         return scene
+
+    def _record_scene_contract(self, scene: SceneInstance) -> None:
+        """Persist deployment-neutral scene facts used by Runtime."""
+
+        self.recorder.write_json("state/scene_instance.json", scene.to_dict())
+        if scene.capabilities is not None:
+            self.recorder.write_json(
+                "state/scene_capabilities.json",
+                {
+                    "protocol": scene.capabilities.protocol,
+                    "control_mode": scene.capabilities.control_mode,
+                    "supported_actions": list(
+                        scene.capabilities.supported_actions
+                    ),
+                    "observation_modalities": list(
+                        scene.capabilities.observation_modalities
+                    ),
+                    "requires_takeoff": scene.capabilities.requires_takeoff,
+                    "supports_soft_reset": (
+                        scene.capabilities.supports_soft_reset
+                    ),
+                },
+            )
 
     @staticmethod
     def _resolve_execution_options(
@@ -334,7 +367,9 @@ class TaskRuntime:
         stabilization = None
         if first_scene_use or options.initial_pose is not None:
             stabilization = self.stabilizer.wait_after_preflight(
-                scene.scene_instance_id, agent_id
+                scene.scene_instance_id,
+                agent_id,
+                capabilities=scene.capabilities,
             )
             stabilization_event = (
                 "preflight_stabilization_completed"
@@ -412,6 +447,15 @@ class TaskRuntime:
             self._debug_event("preflight_hover_completed", hover_data)
             if not hover_result.ok:
                 raise RuntimeError(f"Preflight hover failed: {hover_result.message}")
+        else:
+            self._debug_event(
+                "preflight_hover_skipped",
+                {
+                    "reason": "backend_capability",
+                    "protocol": capabilities.protocol,
+                    "control_mode": capabilities.control_mode,
+                },
+            )
 
     def _apply_initial_pose(
         self,
@@ -500,6 +544,7 @@ class TaskRuntime:
             context,
             observation_before,
             runtime_control_context=runtime_control_context,
+            scene_capabilities=scene.capabilities,
         )
         coupled_context = phase_window_context.planner_payload
         model_context = phase_window_context.model_context
@@ -612,6 +657,7 @@ class TaskRuntime:
             payload = {"phase": plan.phase, "step_index": index, "step": step.to_dict()}
             if step.kind != "tool" or not step.tool:
                 raise ValueError("runtime action plan requires tool steps; observation is automatic")
+            self._validate_step_capability(scene, step.tool)
             result = self.tool_telemetry.call_step(
                 scene_instance_id=scene.scene_instance_id,
                 agent_id=agent_id,
@@ -632,7 +678,13 @@ class TaskRuntime:
             self._record_action(state, step.tool, step.args, data)
             if not result.ok:
                 raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
-            stabilization = self.stabilizer.wait_after_step(scene.scene_instance_id, agent_id, plan.phase, step)
+            stabilization = self.stabilizer.wait_after_step(
+                scene.scene_instance_id,
+                agent_id,
+                plan.phase,
+                step,
+                capabilities=scene.capabilities,
+            )
             executed_steps.append({**payload, "result": data, "stabilization": stabilization})
             self._event(
                 "tool_step_completed",
@@ -949,6 +1001,38 @@ class TaskRuntime:
         self._write_state(state)
         return data
 
+    def _validate_step_capability(
+        self,
+        scene: SceneInstance,
+        tool_name: str,
+    ) -> None:
+        """Reject unsupported primitive actions before ToolDispatcher.
+
+        Model planners normally encounter the same restriction in
+        ToolContractValidator. This final guard also covers deterministic or
+        custom planners that do not use the model contract machinery.
+        """
+
+        if not tool_name.startswith("uav.") or scene.capabilities is None:
+            return
+        action = tool_name.removeprefix("uav.")
+        if scene.capabilities.supports(action):
+            return
+        payload = {
+            "tool": tool_name,
+            "action": action,
+            "protocol": scene.capabilities.protocol,
+            "control_mode": scene.capabilities.control_mode,
+            "supported_actions": list(
+                scene.capabilities.supported_actions
+            ),
+        }
+        self._debug_event("runtime_action_capability_rejected", payload)
+        raise RuntimeError(
+            f"{scene.capabilities.protocol}/"
+            f"{scene.capabilities.control_mode} does not support {action}"
+        )
+
     def _record_model_action_contract_repair_events(self, attempts: list[dict]) -> None:
         for attempt in attempts:
             requested_payload = {
@@ -1027,18 +1111,34 @@ class TaskRuntime:
             self._debug_event("shutdown_hover_completed", hover_data)
             if not hover_result.ok:
                 raise RuntimeError(f"Shutdown hover failed: {hover_result.message}")
+        else:
+            self._debug_event(
+                "shutdown_hover_skipped",
+                {
+                    "reason": "backend_capability",
+                    "protocol": capabilities.protocol,
+                    "control_mode": capabilities.control_mode,
+                },
+            )
 
-        if (
-            self.shutdown_policy == "land"
-            and (capabilities is None or capabilities.supports("land"))
-        ):
-            self._debug_event("shutdown_land_started", {"scene_instance_id": scene.scene_instance_id})
-            land_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.land", {})
-            land_data = land_result.to_dict()
-            self._record_action(state, "uav.land", {}, land_data)
-            self._debug_event("shutdown_land_completed", land_data)
-            if not land_result.ok:
-                raise RuntimeError(f"Shutdown land failed: {land_result.message}")
+        if self.shutdown_policy == "land":
+            if capabilities is None or capabilities.supports("land"):
+                self._debug_event("shutdown_land_started", {"scene_instance_id": scene.scene_instance_id})
+                land_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.land", {})
+                land_data = land_result.to_dict()
+                self._record_action(state, "uav.land", {}, land_data)
+                self._debug_event("shutdown_land_completed", land_data)
+                if not land_result.ok:
+                    raise RuntimeError(f"Shutdown land failed: {land_result.message}")
+            else:
+                self._debug_event(
+                    "shutdown_land_skipped",
+                    {
+                        "reason": "backend_capability",
+                        "protocol": capabilities.protocol,
+                        "control_mode": capabilities.control_mode,
+                    },
+                )
 
         self._write_state(state)
 

@@ -9,11 +9,17 @@ from src.tools.dispatcher import ToolDispatcher
 class AgentRuntime:
     """Minimal runtime shell that uses EnvClient as its only environment path."""
 
-    def __init__(self, env_client: EnvClient, recorder) -> None:
+    def __init__(
+        self,
+        env_client: EnvClient,
+        recorder,
+        observation_modalities: tuple[str, ...] = ("rgb", "depth", "pose"),
+    ) -> None:
         # Wire runtime dependencies while keeping environment access behind EnvClient.
         self.env_client = env_client
         self.recorder = recorder
         self.tools = ToolDispatcher(env_client)
+        self.observation_modalities = tuple(observation_modalities)
 
     def run_smoke_test(self, map_id: str, agent_id: str = "uav_1") -> None:
         # Run a minimal environment and UAV primitive verification loop.
@@ -27,7 +33,11 @@ class AgentRuntime:
                 actions.append(("takeoff", {}))
             if scene.capabilities is None or scene.capabilities.supports("hover"):
                 actions.append(("hover", {}))
-            actions.append(("turn_relative", {"yaw_deg": 5}))
+            if (
+                scene.capabilities is None
+                or scene.capabilities.supports("turn_relative")
+            ):
+                actions.append(("turn_relative", {"yaw_deg": 5}))
             for action, args in actions:
                 self.recorder.event("action_started", {"action": action, "args": args})
                 result = self.tools.call(scene.scene_instance_id, agent_id, f"uav.{action}", args)
@@ -36,7 +46,9 @@ class AgentRuntime:
                     raise RuntimeError(f"Action failed: {action}: {result.message}")
 
             observation = self.tools.observe(
-                scene.scene_instance_id, agent_id, ["rgb", "depth", "pose"]
+                scene.scene_instance_id,
+                agent_id,
+                self._supported_modalities(scene),
             )
             self.recorder.write_json("artifacts/observations/observation.json", observation.to_dict())
             self.recorder.event("observation_updated", observation.to_dict())
@@ -63,10 +75,33 @@ class AgentRuntime:
                 raise RuntimeError(f"Action failed: connect: {result.message}")
 
             observation = self.tools.observe(
-                scene.scene_instance_id, agent_id, ["rgb", "depth", "pose"]
+                scene.scene_instance_id,
+                agent_id,
+                self._supported_modalities(scene),
             )
             self.recorder.write_json("artifacts/observations/observation.json", observation.to_dict())
             self.recorder.event("observation_updated", observation.to_dict())
         finally:
             self.env_client.stop_scene(scene.scene_instance_id)
             self.recorder.event("scene_stopped", scene.to_dict())
+
+    def _supported_modalities(self, scene) -> list[str]:
+        """Validate smoke-test requests against the resolved Backend contract."""
+
+        if scene.capabilities is None:
+            return list(self.observation_modalities)
+        supported = {
+            str(value).strip().lower()
+            for value in scene.capabilities.observation_modalities
+        }
+        unsupported = [
+            value
+            for value in self.observation_modalities
+            if value not in supported
+        ]
+        if unsupported:
+            raise RuntimeError(
+                "Scene does not support requested smoke-test modalities: "
+                + ", ".join(unsupported)
+            )
+        return list(self.observation_modalities)

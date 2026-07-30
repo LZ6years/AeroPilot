@@ -14,10 +14,17 @@ from demos.real_engine_instruction_demo import (
     compact_summary,
     write_common_config,
 )
+from tests.manual.task_runtime_episode_options_probe import (
+    PROBE_INSTRUCTION,
+    _initial_pose_from_observation,
+)
+from src.agent.semantic.task_parser import TaskParser
+from src.env_client.observation_profile import ObservationProfile
 from src.env_client.schemas import MapPackage
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.model_config import ModelConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
+from src.runtime.configs.task_execution_options import TaskExecutionOptions
 
 
 class CaptureRecorder:
@@ -26,6 +33,38 @@ class CaptureRecorder:
 
     def write_json(self, name, data):
         self.files[name] = data
+
+
+def test_task_runtime_probe_uses_supported_deterministic_instruction():
+    parsed = TaskParser(mode="rule_based").parse(PROBE_INSTRUCTION)
+
+    assert parsed.plan.phases
+
+
+def test_task_runtime_probe_converts_canonical_pose_without_changing_frame():
+    pose = _initial_pose_from_observation(
+        {
+            "data": {
+                "pose": {
+                    "x": 11.0,
+                    "y": -7.0,
+                    "z": 4.5,
+                    "yaw_deg": 15.0,
+                    "coordinate_frame": "unrealcv_world_m",
+                }
+            }
+        }
+    )
+
+    assert pose.to_dict() == {
+        "x": 11.0,
+        "y": -7.0,
+        "z": 4.5,
+        "yaw_deg": 15.0,
+        "pitch_deg": 0.0,
+        "roll_deg": 0.0,
+        "ignore_collision": True,
+    }
 
 
 def test_real_engine_demo_summary_reports_pose_delta_and_artifacts(tmp_path):
@@ -197,7 +236,19 @@ def test_real_engine_demo_config_summary_redacts_model_api_key():
         }
     )
     model_config = ModelConfig(model_name="stub", api_key="secret-key", base_url="https://example.test/v1")
-    args = SimpleNamespace(parser_mode="model", shutdown_policy="hover", separate_scenes=False, save_artifacts=True)
+    profile = ObservationProfile()
+    execution_options = TaskExecutionOptions.from_observation_profile(profile)
+    args = SimpleNamespace(
+        parser_mode="model",
+        shutdown_policy="hover",
+        separate_scenes=False,
+        save_artifacts=True,
+        map_id="m1",
+        scene_id="scene_1",
+        agent_id="uav_1",
+        execution="managed",
+        headless=True,
+    )
 
     write_common_config(
         recorder,
@@ -205,6 +256,8 @@ def test_real_engine_demo_config_summary_redacts_model_api_key():
         model_config,
         UavActionConfig(),
         UavSafetyConfig(),
+        profile,
+        execution_options,
         args,
     )
 
@@ -213,6 +266,20 @@ def test_real_engine_demo_config_summary_redacts_model_api_key():
     assert "secret-key" not in str(recorder.files["config/model_config.json"])
     assert model_summary["has_api_key"] is True
     assert recorder.files["config/model_config.json"]["save_artifacts"] is True
+    assert recorder.files["config/observation_profile.json"]["modalities"] == [
+        "rgb",
+        "depth",
+        "pose",
+    ]
+    assert recorder.files["config/runtime_environment.json"] == {
+        "map_id": "m1",
+        "scene_id": "scene_1",
+        "agent_id": "uav_1",
+        "execution": "managed",
+        "show_display": False,
+        "save_artifacts": True,
+        "task_execution_options": execution_options.to_dict(),
+    }
 
 
 def test_real_engine_demo_action_windows_read_phase_events():

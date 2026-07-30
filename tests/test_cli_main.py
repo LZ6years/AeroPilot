@@ -283,6 +283,15 @@ def test_cli_defaults_to_chat_model_artifacts():
     assert args.save_artifacts is True
     assert args.execution == "managed"
     assert args.defer_scene_start is False
+    assert args.observation_profile is None
+
+
+def test_cli_accepts_observation_profile_path():
+    args = build_parser().parse_args(
+        ["--observation-profile", "configs/observations/custom.json"]
+    )
+
+    assert args.observation_profile == "configs/observations/custom.json"
 
 
 def test_cli_rejects_removed_simulator_dry_run_mode():

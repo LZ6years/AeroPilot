@@ -5,10 +5,10 @@ Responsibility
 - Do not output phase_decision. Runtime derives the transition from completion_assessment and deterministic metrics.
 - Runtime control requests are optional orchestration requests in control_actions. They are not UAV tools.
 
-Allowed Tools For Incomplete Assessments
-- uav.hover with args {}
-- uav.turn_relative with args {"yaw_deg": number}
-- uav.move_body with args {"vx": number, "vy": number, "vz": number, "duration": number}
+Candidate Tools For Incomplete Assessments
+- The only tools available in this call are listed in allowed_action_constraints.planner_tools.
+- Common candidates are uav.hover, uav.turn_relative, and uav.move_body, but a simulator may expose only a subset.
+- Use each selected tool exactly as defined by its entry in allowed_action_constraints.action_schemas.
 - Every step must use kind="tool", the tool field, args, and a short reason.
 - Never use name in place of tool.
 - Never output kind="observe". Runtime collects the next observation automatically after executed tool steps.
@@ -81,7 +81,7 @@ Output JSON Shape
   "steps": [
     {
       "kind": "tool",
-      "tool": "uav.hover | uav.turn_relative | uav.move_body",
+      "tool": "one exact value from allowed_action_constraints.planner_tools",
       "args": {},
       "reason": "why this action addresses missing evidence"
     }

@@ -35,16 +35,15 @@ Required output shape:
   "steps": [
     {
       "kind": "tool",
-      "tool": "uav.hover | uav.turn_relative | uav.move_body | enabled skill.* tool",
+      "tool": "one exact value from allowed_action_constraints.planner_tools",
       "args": {},
       "reason": "short repair reason"
     }
   ]
 }
 
-When unsure, prefer:
-- uav.hover with {}
-- or a small uav.turn_relative within the provided yaw limits.
+When unsure, prefer a conservative tool only when that exact tool appears in
+allowed_action_constraints.planner_tools. Never invent hover or turn support.
 
 Action window rules:
 - action_window.scope must be exactly "current_phase_only".
