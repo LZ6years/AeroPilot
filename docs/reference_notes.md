@@ -93,9 +93,9 @@ Agent Runtime
 
 ```text
 Agent Runtime
-  -> LocalEnvClient
-    -> LocalSimulationServer
-      -> Local UE/AirSim
+  -> SimulatorEnvClient
+    -> SimulationServer
+      -> Local/Remote UE
 ```
 
 注意：这里的 `EnvClient` 只是环境服务调用封装，不包含任务解析、规划、VLM 或用户交互。
@@ -105,9 +105,9 @@ Agent Runtime
 - `map_id`
 - `scene_id`
 - `agent_id`
-- `server_host`
-- `server_port`
-- `airsim_port`
+- `control_host`
+- `control_port`
+- `capabilities`
 
 ## 3. UAV-Flow
 

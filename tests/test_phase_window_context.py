@@ -56,11 +56,10 @@ def test_phase_window_context_adds_runtime_evidence_and_model_context():
     assert result.planner_payload["phase_metrics"] == result.phase_metrics
     assert result.planner_payload["phase_completion_evaluation"] == result.phase_completion_evaluation
     assert result.planner_payload["phase_progress_evidence"] == result.phase_progress_evidence
-    assert result.planner_payload["latest_observation_summary"] == result.latest_observation_summary
     assert result.phase_completion_evaluation["all_within_tolerance"] is True
-    assert result.latest_observation_summary["pose"]["position"]["x"] == 1.0
-    assert "velocity" not in result.latest_observation_summary["pose"]
-    assert "velocity" not in result.model_context["latest_observation_summary"]["pose"]
+    assert "latest_observation_summary" not in result.planner_payload
+    assert "latest_observation_summary" not in result.model_context
+    assert not hasattr(result, "latest_observation_summary")
     assert "runtime_control" not in result.planner_payload
     assert "runtime_control" not in result.model_context
     assert "phase_progress_evidence" not in result.model_context

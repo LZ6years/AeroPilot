@@ -14,6 +14,8 @@ from src.memory.stores import MapMemoryStore, RunMemoryStore
 from src.plugins import PluginRegistry
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
+from src.uav.commands import MOVE_BODY_ARGUMENT_SEMANTICS
+from src.uav.frames import SIGNED_YAW_SEMANTICS
 
 
 DEFAULT_MAP_MEMORY_PATH = Path("memory") / "map" / "map_memory.json"
@@ -44,6 +46,11 @@ class ObservationContextBuilder:
         self.map_memory = map_memory if map_memory is not None else MapMemoryStore.from_file(map_memory_path)
         self.run_memory = run_memory or RunMemoryStore()
 
+    def semantic_evidence_capabilities(self) -> list[str]:
+        """Describe configured evidence without building an observation context."""
+
+        return self.composer.registry.semantic_evidence_capabilities()
+
     def build(self, state: MissionState, flight_memory: FlightMemory | None = None) -> dict[str, Any]:
         if flight_memory is None:
             raise ValueError("ObservationContextBuilder requires a FlightMemory manifest; MissionState is not a memory source")
@@ -62,7 +69,7 @@ class ObservationContextBuilder:
             semantic_goal=state.semantic_plan.task_goal.to_dict(),
             safety_constraints=self._safety_constraints(state),
             allowed_action_constraints=self._allowed_action_constraints(),
-            observation_policy=self._observation_policy(),
+            observation_policy=self._observation_policy(state),
             phase_execution_summary=state.current_phase_execution_summary,
             metadata={
                 "run_id": state.run_id,
@@ -77,14 +84,15 @@ class ObservationContextBuilder:
         return state.semantic_plan.phases[state.current_phase_index].to_dict()
 
     def _safety_constraints(self, state: MissionState) -> dict[str, Any]:
-        max_yaw_scan = self.safety_config.max_yaw_scan_accum_deg
-        yaw_scan_accum = float(state.yaw_scan_accum_deg)
-        remaining = max(0.0, max_yaw_scan - yaw_scan_accum)
+        max_yaw_scan = self.safety_config.max_yaw_scan_extent_deg
+        yaw_scan_extent = float(state.yaw_scan_extent_deg)
+        remaining = max(0.0, max_yaw_scan - yaw_scan_extent)
         return {
             "hover_required": state.hover_required,
-            "yaw_scan_accum_deg": yaw_scan_accum,
+            "yaw_scan_offset_deg": float(state.yaw_scan_offset_deg),
+            "yaw_scan_extent_deg": yaw_scan_extent,
             "yaw_scan_remaining_deg": remaining,
-            "max_yaw_scan_accum_deg": max_yaw_scan,
+            "max_yaw_scan_extent_deg": max_yaw_scan,
             "yaw_scan_budget_exceeded": remaining <= 0.0,
         }
 
@@ -99,6 +107,9 @@ class ObservationContextBuilder:
             },
             "uav.turn_relative": {
                 "args": {"yaw_deg": "number"},
+                "argument_semantics": {
+                    "yaw_deg": SIGNED_YAW_SEMANTICS,
+                },
                 "limits": {
                     "yaw_deg_min": -abs(safety_config.max_yaw_step_deg),
                     "yaw_deg_max": abs(safety_config.max_yaw_step_deg),
@@ -113,6 +124,7 @@ class ObservationContextBuilder:
                         "duration": "number",
                     },
                 ],
+                "argument_semantics": dict(MOVE_BODY_ARGUMENT_SEMANTICS),
                 "limits": {
                     "abs_vx_vy_max": abs(safety_config.max_linear_velocity_mps),
                     "abs_vz_max": abs(safety_config.max_vertical_velocity_mps),
@@ -130,10 +142,10 @@ class ObservationContextBuilder:
             },
         }
 
-    def _observation_policy(self) -> dict[str, Any]:
+    def _observation_policy(self, state: MissionState) -> dict[str, Any]:
         return {
             "mode": "automatic",
-            "modalities": ["rgb", "depth", "pose"],
+            "modalities": list(state.observation_modalities),
             "sample_timing": "after_each_phase_window",
             "note": "Do not output observe steps. The runtime samples observations automatically.",
         }

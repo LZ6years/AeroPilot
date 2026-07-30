@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
+import math
 from typing import Any
 
 
 @dataclass(frozen=True)
 class PortPolicy:
-    server_port: int = 30000
-    airsim_port_start: int = 30001
+    control_port_start: int = 30001
     max_scene_num: int = 8
 
 
@@ -23,7 +23,8 @@ class MapPackage:
     airsim: dict[str, Any]
     control: dict[str, Any] = field(default_factory=dict)
     unrealcv: dict[str, Any] = field(default_factory=dict)
-    resources: dict[str, Any] = field(default_factory=dict)
+    connection: dict[str, Any] = field(default_factory=dict)
+    ssh: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "MapPackage":
@@ -33,24 +34,165 @@ class MapPackage:
             raise ValueError(f"MapPackage missing required fields: {', '.join(missing)}")
         provider = str(data["provider"])
         airsim = data.get("airsim", {})
-        unrealcv = data.get("unrealcv", {})
+        unrealcv = dict(data.get("unrealcv", {}))
         control = dict(data.get("control", {}))
-        control.setdefault("protocol", _legacy_protocol_for_provider(provider))
-        protocol = str(control["protocol"])
+        if not control.get("protocol"):
+            raise ValueError(
+                f"MapPackage {data['map_id']} missing control.protocol"
+            )
+        protocol = str(control["protocol"]).lower()
+        control["protocol"] = protocol
         if protocol == "airsim":
             for key in ("vehicle_name", "camera_name"):
                 if key not in airsim:
                     raise ValueError(f"MapPackage {data['map_id']} missing airsim.{key}")
+            source = str(airsim.get("settings_template_source", "local"))
+            if source not in {"local", "remote"}:
+                raise ValueError(
+                    f"MapPackage {data['map_id']} has unsupported "
+                    f"airsim.settings_template_source: {source}"
+                )
         if protocol == "unrealcv":
-            for key in ("host", "port", "camera_id"):
+            required = ("port", "camera_id")
+            for key in required:
                 if key not in unrealcv:
                     raise ValueError(f"MapPackage {data['map_id']} missing unrealcv.{key}")
+            control_target = str(
+                unrealcv.get("control_target", "camera")
+            ).strip().lower()
+            if control_target not in {"camera", "actor"}:
+                raise ValueError(
+                    f"MapPackage {data['map_id']} has unsupported "
+                    f"unrealcv.control_target: {control_target}"
+                )
+            unrealcv["control_target"] = control_target
+            if control_target == "actor":
+                actor = unrealcv.get("actor")
+                if not isinstance(actor, dict):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires unrealcv.actor "
+                        "when control_target=actor"
+                    )
+                actor = dict(actor)
+                name = str(actor.get("name", "")).strip()
+                if not name:
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} missing unrealcv.actor.name"
+                    )
+                actor["name"] = name
+                units_per_meter = float(actor.get("units_per_meter", 100.0))
+                if not math.isfinite(units_per_meter) or units_per_meter <= 0.0:
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires a positive finite "
+                        "unrealcv.actor.units_per_meter"
+                    )
+                actor["units_per_meter"] = units_per_meter
+                yaw_offset_deg = float(actor.get("yaw_offset_deg", 0.0))
+                if not math.isfinite(yaw_offset_deg):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires a finite "
+                        "unrealcv.actor.yaw_offset_deg"
+                    )
+                actor["yaw_offset_deg"] = yaw_offset_deg
+                rotation_method = str(
+                    actor.get("rotation_method", "standard_pose")
+                ).strip().lower()
+                if rotation_method not in {"standard_pose", "blueprint_yaw"}:
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} has unsupported "
+                        "unrealcv.actor.rotation_method: "
+                        f"{rotation_method}"
+                    )
+                actor["rotation_method"] = rotation_method
+                camera_follow = str(
+                    actor.get("camera_follow", "none")
+                ).strip().lower()
+                if camera_follow not in {
+                    "none",
+                    "standard_pose",
+                    "blueprint_pose",
+                }:
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} has unsupported "
+                        "unrealcv.actor.camera_follow: "
+                        f"{camera_follow}"
+                    )
+                actor["camera_follow"] = camera_follow
+                disable_physics = actor.get("disable_physics", False)
+                if not isinstance(disable_physics, bool):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires "
+                        "unrealcv.actor.disable_physics to be boolean"
+                    )
+                actor["disable_physics"] = disable_physics
+                for key, default in (
+                    ("yaw_settle_timeout_sec", 5.0),
+                    ("yaw_tolerance_deg", 1.0),
+                    ("yaw_poll_interval_sec", 0.05),
+                ):
+                    value = float(actor.get(key, default))
+                    if not math.isfinite(value) or value <= 0.0:
+                        raise ValueError(
+                            f"MapPackage {data['map_id']} requires a positive "
+                            f"finite unrealcv.actor.{key}"
+                        )
+                    actor[key] = value
+                unrealcv["actor"] = actor
         launch = data.get("launch", {})
+        connection = dict(data.get("connection", {}))
+        if not connection.get("mode"):
+            raise ValueError(
+                f"MapPackage {data['map_id']} missing connection.mode"
+            )
+        connection_mode = str(connection["mode"]).lower()
+        connection["mode"] = connection_mode
+        if connection_mode not in {"local", "remote"}:
+            raise ValueError(
+                f"MapPackage {data['map_id']} has unsupported connection.mode: "
+                f"{connection_mode}"
+            )
+        connection.setdefault(
+            "data_transport",
+            "ssh_tunnel" if connection_mode == "remote" else "direct",
+        )
+        ssh = dict(data.get("ssh", {}))
+        if connection_mode == "remote":
+            for key in ("host", "user", "key_path"):
+                if not ssh.get(key):
+                    raise ValueError(f"MapPackage {data['map_id']} missing ssh.{key}")
+            if connection.get("data_transport") != "ssh_tunnel":
+                raise ValueError(
+                    f"MapPackage {data['map_id']} remote connection requires "
+                    "connection.data_transport=ssh_tunnel"
+                )
+            managed_launch = bool(launch.get("linux_executable")) and not bool(
+                launch.get("manual", False)
+            )
+            if (
+                managed_launch
+                and protocol == "airsim"
+                and not airsim.get("settings_template")
+            ):
+                raise ValueError(
+                    f"MapPackage {data['map_id']} missing airsim.settings_template"
+                )
+        elif (
+            protocol == "airsim"
+            and airsim.get("settings_template_source") == "remote"
+        ):
+            raise ValueError(
+                f"MapPackage {data['map_id']} local connection cannot use "
+                "airsim.settings_template_source=remote"
+            )
         root = data.get("root")
-        if provider in {"airvln", "local_ue", "unrealcv", "packaged_unreal"}:
-            remote_or_manual = launch.get("manual", False) or launch.get("method") == "existing_process"
-            if not root and not remote_or_manual:
-                raise ValueError(f"MapPackage {data['map_id']} requires root unless launch.manual=true")
+        if (
+            connection_mode == "local"
+            and not launch.get("manual", False)
+            and not root
+        ):
+            raise ValueError(
+                f"MapPackage {data['map_id']} requires root unless launch.manual=true"
+            )
         if protocol not in {"airsim", "unrealcv"}:
             raise ValueError(f"MapPackage {data['map_id']} has unsupported control.protocol: {protocol}")
         return cls(
@@ -62,7 +204,8 @@ class MapPackage:
             airsim=dict(airsim),
             control=control,
             unrealcv=dict(unrealcv),
-            resources=dict(data.get("resources", {})),
+            connection=connection,
+            ssh=ssh,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -72,14 +215,30 @@ class MapPackage:
     @property
     def control_protocol(self) -> str:
         # Return the runtime control protocol used by the simulation backend.
-        return str(self.control.get("protocol", _legacy_protocol_for_provider(self.provider)))
+        return str(self.control["protocol"])
+
+    @property
+    def connection_mode(self) -> str:
+        """Return how the scene process is reached and managed."""
+
+        return str(self.connection["mode"])
 
 
-def _legacy_protocol_for_provider(provider: str) -> str:
-    # Keep old provider-based map configs working while the config model migrates.
-    if provider == "unrealcv":
-        return "unrealcv"
-    return "airsim"
+@dataclass(frozen=True)
+class SceneCapabilities:
+    """Describe simulator behavior that Runtime may safely rely on."""
+
+    protocol: str
+    control_mode: str
+    supported_actions: tuple[str, ...]
+    observation_modalities: tuple[str, ...]
+    requires_takeoff: bool
+    supports_soft_reset: bool
+
+    def supports(self, action: str) -> bool:
+        """Return whether the backend advertises one primitive action."""
+
+        return action in self.supported_actions
 
 
 @dataclass
@@ -88,12 +247,15 @@ class SceneInstance:
     map_id: str
     scene_id: str
     machine_id: str
-    host: str
-    server_port: int
-    airsim_port: int
-    settings_path: str
+    control_host: str
+    control_port: int
+    settings_path: str | None
     process_id: int | None
     status: str
+    process_ownership: str = "local"
+    remote_process_id: int | None = None
+    settings_sha256: str | None = None
+    capabilities: SceneCapabilities | None = None
 
     def to_dict(self) -> dict[str, Any]:
         # Convert the scene instance into JSON-serializable data.

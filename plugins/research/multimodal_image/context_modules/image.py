@@ -100,6 +100,9 @@ class PluginContextModule(DefaultImageContextModule):
 
     def describe_output(self) -> dict[str, Any]:
         description = dict(super().describe_output())
+        description["semantic_evidence"] = [
+            "Current image-derived text: visual facts from the latest RGB when processing succeeds; not raw image evidence."
+        ]
         content_fields = dict(description.get("content_fields", {}))
         content_fields["visual_processing"] = (
             "Custom image processing status. When this module is configured, it may call "

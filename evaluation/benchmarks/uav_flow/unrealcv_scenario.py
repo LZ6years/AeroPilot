@@ -18,7 +18,7 @@ from PIL import Image, ImageDraw
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.trajectory import world_pose_to_model_pose
-from src.env_client.schemas import ActionResult, Observation, SceneInstance
+from src.env_client import ActionResult, Observation, SceneInstance
 from src.runtime.configs.action_config import UavActionConfig
 from src.uav import UNREALCV_VERTICAL_SIGN, body_velocity_to_world_delta, move_body_velocity_from_args
 
@@ -39,6 +39,7 @@ class UavFlowBenchmarkEnvClient:
         seed: int = 0,
         action_config: UavActionConfig | None = None,
         save_artifacts: bool = True,
+        enable_depth_capture: bool = False,
         enable_research_frame_capture: bool = False,
     ) -> None:
         self.case = case
@@ -51,6 +52,7 @@ class UavFlowBenchmarkEnvClient:
         self.seed = int(seed)
         self.action_config = action_config or UavActionConfig()
         self.save_artifacts = save_artifacts
+        self.enable_depth_capture = bool(enable_depth_capture)
         self.enable_research_frame_capture = bool(enable_research_frame_capture)
         self.env: Any | None = None
         self.scene: SceneInstance | None = None
@@ -66,9 +68,8 @@ class UavFlowBenchmarkEnvClient:
             map_id=map_id,
             scene_id=scene_id or self.case.case_id,
             machine_id="local",
-            host="127.0.0.1",
-            server_port=0,
-            airsim_port=0,
+            control_host="127.0.0.1",
+            control_port=0,
             settings_path="",
             process_id=None,
             status="running",
@@ -132,10 +133,16 @@ class UavFlowBenchmarkEnvClient:
 
     def get_observation(self, scene_instance_id: str, agent_id: str, modalities: list[str]) -> Observation:
         frames: dict[str, Any] = {}
-        if "rgb" in modalities:
-            frames["rgb"] = self._rgb_frame()
-        if "depth" in modalities:
-            frames["depth"] = self._depth_frame()
+        wants_rgb = "rgb" in modalities
+        wants_depth = "depth" in modalities
+        can_capture_depth = self.enable_depth_capture or self.enable_research_frame_capture
+        if wants_rgb and wants_depth and self.real_unrealcv and self.env is not None and can_capture_depth:
+            frames.update(self._rgb_depth_frames())
+        else:
+            if wants_rgb:
+                frames["rgb"] = self._rgb_frame()
+            if wants_depth:
+                frames["depth"] = self._depth_frame()
         if "mask" in modalities:
             frames["mask"] = self._mask_frame()
         data: dict[str, Any] = {}
@@ -317,8 +324,65 @@ class UavFlowBenchmarkEnvClient:
             "case_id": self.case.case_id,
         }
 
+    def _rgb_depth_frames(self) -> dict[str, dict[str, Any]]:
+        """Capture aligned RGB and depth from camera 0 in one UnrealCV batch.
+
+        Animated objects can move between independent image requests. A
+        pixel-wise RGB-depth overlay is therefore valid only when both arrays
+        come from the same batch and camera pose.
+        """
+
+        if self.env is None or not self.real_unrealcv:
+            raise RuntimeError("Synchronized RGB-depth capture requires a real UnrealCV environment")
+        self._sync_camera_to_player()
+        self._frame_index += 1
+        rgb_path = self.run_dir / "artifacts" / "rgb" / f"frame_{self._frame_index:06d}.png"
+        depth_path = self._next_research_frame_path("depth", "npy")
+        rgb_path.parent.mkdir(parents=True, exist_ok=True)
+        depth_path.parent.mkdir(parents=True, exist_ok=True)
+
+        unrealcv = self.env.unwrapped.unrealcv
+        commands = [
+            "vget /camera/0/lit png",
+            "vget /camera/0/depth npy",
+        ]
+        decoders = [
+            unrealcv.decoder.decode_map[unrealcv.decoder.cmd2key(command)]
+            for command in commands
+        ]
+        rgb, depth = unrealcv.batch_cmd(commands, decoders)
+        Image.fromarray(rgb).save(rgb_path)
+        self._write_depth_array_meters(depth_path, depth)
+        width, height = self.resolution
+        return {
+            "rgb": {
+                "path": str(rgb_path),
+                "width": width,
+                "height": height,
+                "mock": False,
+                "source": "uav_flow_benchmark",
+                "case_id": self.case.case_id,
+                "capture_group": f"rgb_depth_{self._frame_index:06d}",
+                "synchronized_with": "depth",
+            },
+            "depth": {
+                "path": str(depth_path),
+                "width": width,
+                "height": height,
+                "mock": False,
+                "source": "uav_flow_unrealcv_research_capture",
+                "case_id": self.case.case_id,
+                "fov_degrees": 90,
+                "depth_unit": "meter",
+                "raw_depth_unit": "centimeter",
+                "command": commands[1],
+                "capture_group": f"rgb_depth_{self._frame_index:06d}",
+                "synchronized_with": "rgb",
+            },
+        }
+
     def _depth_frame(self) -> dict[str, Any]:
-        if not self.enable_research_frame_capture:
+        if not (self.enable_depth_capture or self.enable_research_frame_capture):
             return {"mock": True, "reason": "uav_flow_v1_rgb_pose_only"}
         if not self.real_unrealcv or self.env is None:
             return {

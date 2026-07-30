@@ -96,7 +96,6 @@ def validate_phase_criteria(
         raise TaskParserContractError("phase criteria metrics must be a list of objects")
     metrics = [_validate_phase_metric(item) for item in metrics]
     if instruction is not None:
-        _validate_visual_alignment_precision(instruction, done_when)
         _validate_numeric_provenance(
             instruction,
             done_when=done_when,
@@ -324,24 +323,6 @@ def _phase_metric_schema_error(metric: dict[str, Any]) -> str | None:
     if not isinstance(metric.get("correction_allowed"), bool):
         return f"phase criteria metric {name} correction_allowed must be boolean"
     return None
-
-
-def _validate_visual_alignment_precision(instruction: str, done_when: list[str]) -> None:
-    instruction_lower = instruction.lower()
-    explicit_precision_terms = ("center", "centre", "middle", "exact", "precise", "optical axis")
-    if any(term in instruction_lower for term in explicit_precision_terms):
-        return
-    acceptable_qualifiers = ("roughly centered", "approximately centered", "near the center", "near center")
-    for condition in done_when:
-        lowered = condition.lower()
-        if "centered" in lowered and not any(qualifier in lowered for qualifier in acceptable_qualifiers):
-            raise TaskParserContractError(
-                "visual alignment criteria require bare centering precision that the user did not request"
-            )
-        if "exact optical-axis" in lowered or "exact optical axis" in lowered:
-            raise TaskParserContractError(
-                "visual alignment criteria require exact optical-axis precision that the user did not request"
-            )
 
 
 def _numbers(text: str) -> list[float]:

@@ -460,9 +460,15 @@ def test_model_action_request_does_not_retry_unrelated_http_400(monkeypatch):
 
 def test_model_user_content_strips_legacy_move_direction_shorthand():
     context = make_context()
-    context["allowed_action_constraints"]["action_schemas"]["uav.move_body"]["args_one_of"].append(
+    move_schema = context["allowed_action_constraints"]["action_schemas"]["uav.move_body"]
+    move_schema["args_one_of"].append(
         {"direction": "legacy", "duration": "number"}
     )
+    move_schema["argument_semantics"] = {
+        "vx": "Positive moves forward; negative moves backward.",
+        "vy": "Positive moves right; negative moves left.",
+        "vz": "Positive moves up; negative moves down.",
+    }
     context["phase_execution_summary"] = {
         "tool_facts": {
             "move_duration_by_direction_success": {"forward": 1.0},
@@ -500,6 +506,11 @@ def test_model_user_content_strips_legacy_move_direction_shorthand():
     assert text_context["allowed_action_constraints"]["action_schemas"]["uav.move_body"]["args_one_of"] == [
         {"vx": "number", "vy": "number", "vz": "number", "duration": "number"}
     ]
+    assert text_context["allowed_action_constraints"]["action_schemas"]["uav.move_body"]["argument_semantics"] == {
+        "vx": "Positive moves forward; negative moves backward.",
+        "vy": "Positive moves right; negative moves left.",
+        "vz": "Positive moves up; negative moves down.",
+    }
     assert "phase_execution_summary" not in text_context
     assert "recent_actions" not in text_context["fragments"][0]["content"]
     assert "action_trend" not in text_context["fragments"][0]["content"]
@@ -726,14 +737,7 @@ def test_model_user_content_slims_fragments_and_observation_debug_fields():
     assert "phase_completion_evaluation" not in text_context
     assert "phase_execution_summary" not in text_context
     assert "phase_progress_evidence" not in text_context
-    assert text_context["latest_observation_summary"] == {
-        "source": "automatic_phase_window",
-        "timestamp": "t1",
-        "modalities": ["rgb", "pose"],
-        "pose": {"x": 1.0},
-        "has_rgb": True,
-        "has_depth": False,
-    }
+    assert "latest_observation_summary" not in text_context
     assert "fragments" not in text_context
     for forbidden in ["artifact_refs", "budget", "confidence", "source_path", "runs/example", "case-debug"]:
         assert forbidden not in text

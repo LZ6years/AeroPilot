@@ -40,28 +40,27 @@ flowchart TD
 
 ## 2. 地图与控制协议
 
-地图资源、启动方式和控制协议分开描述：
+地图来源、部署位置和控制协议是三个独立维度。上层 Agent 只依赖 `EnvClient`，不直接依赖 AirSim、UnrealCV、SSH 或具体 UE 启动方式。
 
-```text
-provider: packaged_unreal / remote_airsim / manual
-launch.method: direct / wsl_bash / existing_process / manual
-control.protocol: airsim / unrealcv
-```
+当前 Backend 多态、Local/Remote 生命周期、配置与验收步骤统一维护在：
 
-上层 agent 只依赖 `EnvClient`，不直接依赖具体 SDK。这样同一套 runtime 可以连接本地 UE、远程 AirSim 或后续 UnrealCV 后端。
+[Simulator Control Documentation](simulator_control/README.md)
+
+该文档包当前标记为 `Status: Implemented`；远程实机验收状态在其中单独记录。
 
 ## 3. 核心对象
 
 `MapPackage` 描述静态地图资源：
 
 ```text
-map_id, provider, scene_id, root, launch, control, resources
+map_id, provider, scene_id, root, connection, launch, control, airsim/unrealcv
 ```
 
 `SceneInstance` 描述一次运行中的场景实例：
 
 ```text
-scene_instance_id, map_id, scene_id, host, server_port, airsim_port, settings_path, process_id, status
+scene_instance_id, map_id, scene_id, control_host, control_port,
+process_ownership, remote_process_id, settings_sha256, capabilities, status
 ```
 
 动作配置分两类：

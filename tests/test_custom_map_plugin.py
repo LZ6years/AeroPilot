@@ -29,6 +29,14 @@ from src.plugins.core.discovery import PluginDiscovery
 from src.plugins.core.registry import PluginRegistry
 
 
+def test_custom_map_declares_semantic_evidence_boundary():
+    evidence = PluginContextModule().describe_output()["semantic_evidence"]
+
+    assert len(evidence) == 1
+    assert "semantic cells and trajectory" in evidence[0]
+    assert "not current visual truth or verified free space" in evidence[0]
+
+
 def _memory(tmp_path: Path) -> FlightMemory:
     reader = MemoryRecordReader(tmp_path)
     return FlightMemory(

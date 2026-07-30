@@ -6,6 +6,7 @@ import base64
 from io import BytesIO
 import json
 
+import numpy as np
 import pytest
 from PIL import Image
 
@@ -15,7 +16,15 @@ from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
 from plugins.research.multimodal_image.context_modules import MultimodalImageContextModule
 from src.memory.context.registry import ContextModuleRegistry
-from src.memory.context.modules.image import _image_banner
+from src.memory.context.modules.image import (
+    DefaultImageContextModule,
+    _banner_height,
+    _image_banner,
+    _rgb_depth_overlay_data_url,
+)
+from src.memory.context.modules.action import DefaultActionContextModule
+from src.memory.context.modules.map import DefaultMapContextModule
+from src.memory.context.modules.pose import DefaultPoseContextModule
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
@@ -81,6 +90,72 @@ def make_memory(tmp_path, state: MissionState, actions=None, observations=None) 
     return memory
 
 
+def test_semantic_evidence_capabilities_follow_module_order_and_depth_config():
+    registry = ContextModuleRegistry(
+        {
+            "image": DefaultImageContextModule(include_current_depth=True),
+            "pose": DefaultPoseContextModule(),
+            "action": DefaultActionContextModule(),
+            "map": DefaultMapContextModule(),
+        },
+        module_order=["image", "pose", "action", "map"],
+    )
+
+    capabilities = registry.semantic_evidence_capabilities()
+
+    assert capabilities[:3] == [
+        "NOW RGB: current visible appearance and image-space relations.",
+        "PAST RGB when distinct: phase-start comparison only; not current visibility.",
+        "NOW metric depth overlay: approximate camera distance at visible pixels.",
+    ]
+    assert capabilities[3].startswith("UAV pose:")
+    assert capabilities[4].startswith("Action history:")
+    assert capabilities[5].startswith("Map memory:")
+    assert ObservationContextBuilder(registry=registry).semantic_evidence_capabilities() == capabilities
+
+
+def test_semantic_evidence_capabilities_filter_disabled_invalid_duplicate_and_over_budget():
+    class DescriptionOnlyModule:
+        def __init__(self, evidence):
+            self.evidence = evidence
+
+        def describe_output(self):
+            return {"semantic_evidence": self.evidence}
+
+    long_item = "long capability " + ("x" * 240)
+    modules = {
+        "disabled": DescriptionOnlyModule(["disabled capability"]),
+        "first": DescriptionOnlyModule([" first   capability ", 7, "", long_item]),
+        "second": DescriptionOnlyModule(
+            ["first capability", *[f"capability {index}" for index in range(10)]]
+        ),
+        "broken": DescriptionOnlyModule("not a list"),
+    }
+    registry = ContextModuleRegistry(
+        modules,
+        disabled=["disabled"],
+        module_order=["disabled", "first", "second", "broken"],
+    )
+
+    capabilities = registry.semantic_evidence_capabilities()
+
+    assert capabilities[0] == "first capability"
+    assert capabilities.count("first capability") == 1
+    assert len(capabilities) == ContextModuleRegistry.MAX_SEMANTIC_EVIDENCE_ITEMS
+    assert max(map(len, capabilities)) <= ContextModuleRegistry.MAX_SEMANTIC_EVIDENCE_CHARS
+    assert "disabled capability" not in capabilities
+
+
+def test_image_semantic_evidence_omits_depth_when_depth_input_is_disabled():
+    capabilities = ContextModuleRegistry(
+        {"image": DefaultImageContextModule(include_current_depth=False)},
+        module_order=["image"],
+    ).semantic_evidence_capabilities()
+
+    assert any(item.startswith("NOW RGB:") for item in capabilities)
+    assert not any("depth" in item.lower() for item in capabilities)
+
+
 def test_context_builder_includes_mission_phase_observation_actions_and_safety(tmp_path):
     state = make_state()
     state.record_action("uav.hover", {}, {"ok": True})
@@ -107,9 +182,10 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert context["current_phase"]["index"] == 1
     assert context["safety_constraints"] == {
         "hover_required": False,
-        "yaw_scan_accum_deg": 0.0,
+        "yaw_scan_offset_deg": 0.0,
+        "yaw_scan_extent_deg": 0.0,
         "yaw_scan_remaining_deg": 480.0,
-        "max_yaw_scan_accum_deg": 480.0,
+        "max_yaw_scan_extent_deg": 480.0,
         "yaw_scan_budget_exceeded": False,
     }
     action_constraints = context["allowed_action_constraints"]
@@ -168,6 +244,18 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert "motion_history_summary" in context["context_schema"]["module_content_fields"]["action"]
     recent_execution = fragments["action"]["content"]["motion_history_summary"]["recent_execution"]
     assert recent_execution[-1] == {"tool": "uav.hover", "args": {}}
+
+
+def test_context_builder_reports_runtime_resolved_observation_modalities(tmp_path):
+    state = make_state()
+    state.observation_modalities = ("rgb", "pose")
+
+    context = ObservationContextBuilder().build(
+        state,
+        make_memory(tmp_path, state),
+    )
+
+    assert context["observation_policy"]["modalities"] == ["rgb", "pose"]
 
 
 def test_context_builder_handles_missing_observation(tmp_path):
@@ -280,6 +368,130 @@ def test_context_builder_default_image_attaches_key_rgb_frames(tmp_path):
     assert "visual_evidence" not in context_text
     assert "selected_frames" not in context_text
     assert temporal_rule.endswith("An object visible only in PAST is not currently visible.")
+
+
+def test_context_builder_optionally_attaches_aligned_current_rgb_depth_overlay(tmp_path):
+    state = make_state()
+    observations = []
+    for index in range(2):
+        rgb_path = tmp_path / f"rgb_{index}.png"
+        depth_path = tmp_path / f"depth_{index}.npy"
+        write_test_png(rgb_path, color=(20 + index, 40 + index, 60 + index), size=(6, 4))
+        np.save(depth_path, np.full((4, 6), 3.5 + index, dtype=np.float32))
+        observations.append(
+            {
+                "scene_instance_id": "scene_1",
+                "agent_id": "uav_1",
+                "modalities": ["rgb", "depth"],
+                "frames": {
+                    "rgb": {"path": str(rgb_path), "mock": False},
+                    "depth": {
+                        "path": str(depth_path),
+                        "mock": False,
+                        "depth_unit": "meter",
+                    },
+                },
+                "source": f"phase_window_{index}",
+            }
+        )
+    default_registry = ContextModuleRegistry.default()
+    modules = dict(default_registry.modules)
+    modules["image"] = DefaultImageContextModule(include_current_depth=True)
+    registry = ContextModuleRegistry(
+        modules,
+        disabled=default_registry.disabled,
+        module_order=default_registry.module_order,
+    )
+
+    context = ObservationContextBuilder(registry=registry).build(
+        state,
+        make_memory(tmp_path, state, observations=observations),
+    )
+
+    image = {fragment["name"]: fragment for fragment in context["fragments"]}["image"]
+    assert [item["role"] for item in image["model_inputs"]] == [
+        "phase_start_reference",
+        "current_observation",
+        "current_rgb_depth_overlay",
+        "temporal_evidence_rule",
+    ]
+    assert image["content"]["visual_evidence"]["has_depth"] is True
+    assert image["content"]["selected_frames"][-1]["role"] == "current_depth"
+    assert image["metadata"]["current_depth_metadata"]["path"] == str(tmp_path / "depth_1.npy")
+    overlay_image = decode_data_url_image(image["model_inputs"][2]["data"])
+    assert overlay_image.width == 6
+    assert overlay_image.height > 4
+    overlay_scene_pixel = overlay_image.getpixel((3, _banner_height(6, 4) + 2))
+    assert overlay_scene_pixel != (21, 41, 61)
+
+    model_content = build_model_user_content(context)
+    assert isinstance(model_content, list)
+    assert [part["type"] for part in model_content] == [
+        "text",
+        "image_url",
+        "text",
+        "image_url",
+        "text",
+        "image_url",
+        "text",
+    ]
+    assert model_content[4]["text"].startswith("NOW | RGB + METRIC DEPTH OVERLAY.")
+    recovery_content = build_model_user_content(context, image_mode="current_only")
+    assert isinstance(recovery_content, list)
+    assert [part["type"] for part in recovery_content] == ["text", "image_url", "text"]
+    assert recovery_content[0]["text"].startswith("NOW | CURRENT OBSERVATION.")
+    assert "METRIC DEPTH" not in recovery_content[-1]["text"]
+
+
+def test_rgb_depth_overlay_uses_fixed_scale_not_per_frame_normalization(tmp_path):
+    rgb_path = tmp_path / "rgb.png"
+    first_path = tmp_path / "first.npy"
+    second_path = tmp_path / "second.npy"
+    write_test_png(rgb_path, color=(40, 80, 120), size=(6, 4))
+    first = np.full((4, 6), 3.5, dtype=np.float32)
+    second = np.full((4, 6), 3.5, dtype=np.float32)
+    first[0, 0] = 5.0
+    second[0, 0] = 9.5
+    np.save(first_path, first)
+    np.save(second_path, second)
+
+    first_url = _rgb_depth_overlay_data_url(
+        rgb_path,
+        first_path,
+        metadata={},
+        depth_display_max_m=10.0,
+    )
+    second_url = _rgb_depth_overlay_data_url(
+        rgb_path,
+        second_path,
+        metadata={},
+        depth_display_max_m=10.0,
+    )
+
+    assert first_url is not None
+    assert second_url is not None
+    first_image = decode_data_url_image(first_url)
+    second_image = decode_data_url_image(second_url)
+    scene_top = _banner_height(6, 4)
+    assert first_image.getpixel((3, scene_top + 2)) == second_image.getpixel((3, scene_top + 2))
+    assert first_image.getpixel((0, scene_top)) != second_image.getpixel((0, scene_top))
+
+
+def test_rgb_depth_overlay_rejects_misaligned_shapes(tmp_path):
+    rgb_path = tmp_path / "rgb.png"
+    depth_path = tmp_path / "depth.npy"
+    write_test_png(rgb_path, color=(40, 80, 120), size=(6, 4))
+    np.save(depth_path, np.full((3, 6), 3.5, dtype=np.float32))
+
+    assert (
+        _rgb_depth_overlay_data_url(
+            rgb_path,
+            depth_path,
+            metadata={},
+            depth_display_max_m=10.0,
+        )
+        is None
+    )
 
 
 def test_model_user_content_current_only_omits_past_and_temporal_rule(tmp_path):
@@ -597,6 +809,9 @@ def test_context_builder_runs_custom_multimodal_image_only_when_configured(tmp_p
     assert image["model_inputs"][0]["type"] == "text"
     assert image["model_inputs"][0]["role"] == "visual_caption"
     assert "data:image/png;base64," not in image["model_inputs"][0]["text"]
+    assert registry.semantic_evidence_capabilities() == [
+        "Current image-derived text: visual facts from the latest RGB when processing succeeds; not raw image evidence."
+    ]
 
 
 def test_context_builder_includes_phase_execution_summary(tmp_path):
@@ -644,7 +859,7 @@ def test_context_builder_action_limits_come_from_safety_config(tmp_path):
         max_linear_velocity_mps=6.0,
         max_vertical_velocity_mps=3.0,
         max_move_duration_sec=8.0,
-        max_yaw_scan_accum_deg=480.0,
+        max_yaw_scan_extent_deg=480.0,
     )
 
     context = ObservationContextBuilder(action_config=action_config, safety_config=safety_config).build(
@@ -653,13 +868,24 @@ def test_context_builder_action_limits_come_from_safety_config(tmp_path):
     )
 
     constraints = context["allowed_action_constraints"]
-    turn_limits = constraints["action_schemas"]["uav.turn_relative"]["limits"]
-    move_limits = constraints["action_schemas"]["uav.move_body"]["limits"]
+    turn_schema = constraints["action_schemas"]["uav.turn_relative"]
+    move_schema = constraints["action_schemas"]["uav.move_body"]
+    turn_limits = turn_schema["limits"]
+    move_limits = move_schema["limits"]
     assert turn_limits == {"yaw_deg_min": -25.0, "yaw_deg_max": 25.0}
+    assert turn_schema["argument_semantics"] == {
+        "yaw_deg": "Signed relative yaw in degrees: negative turns left; positive turns right."
+    }
     assert move_limits == {
         "abs_vx_vy_max": 6.0,
         "abs_vz_max": 3.0,
         "duration_max": 8.0,
+    }
+    assert move_schema["argument_semantics"] == {
+        "vx": "Positive moves forward; negative moves backward.",
+        "vy": "Positive moves right; negative moves left.",
+        "vz": "Positive moves up; negative moves down.",
+        "duration": "Positive duration in seconds.",
     }
     assert "yaw_step_deg" not in constraints
     assert "linear_velocity_mps" not in constraints
@@ -674,15 +900,17 @@ def test_context_builder_action_limits_come_from_safety_config(tmp_path):
 
 def test_context_builder_exposes_yaw_scan_budget(tmp_path):
     state = make_state()
-    state.yaw_scan_accum_deg = 450.0
-    safety_config = UavSafetyConfig(max_yaw_scan_accum_deg=480.0)
+    state.yaw_scan_offset_deg = 120.0
+    state.yaw_scan_extent_deg = 450.0
+    safety_config = UavSafetyConfig(max_yaw_scan_extent_deg=480.0)
 
     context = ObservationContextBuilder(safety_config=safety_config).build(state, make_memory(tmp_path, state))
 
     safety_constraints = context["safety_constraints"]
-    assert safety_constraints["yaw_scan_accum_deg"] == 450.0
+    assert safety_constraints["yaw_scan_offset_deg"] == 120.0
+    assert safety_constraints["yaw_scan_extent_deg"] == 450.0
     assert safety_constraints["yaw_scan_remaining_deg"] == 30.0
-    assert safety_constraints["max_yaw_scan_accum_deg"] == 480.0
+    assert safety_constraints["max_yaw_scan_extent_deg"] == 480.0
     assert safety_constraints["yaw_scan_budget_exceeded"] is False
 
 

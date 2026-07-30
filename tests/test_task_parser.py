@@ -167,12 +167,14 @@ def test_model_parser_prompts_split_structure_from_phase_criteria():
     assert "Metric provenance" in criteria_prompt
     assert "target-relative" in criteria_prompt
     assert "not phase-start planar_distance" in criteria_prompt
-    assert "Modest lateral offset, incidental scene occlusion" in criteria_prompt
-    assert "Do not require exact centering, full-body or full-object visibility" in criteria_prompt
-    assert "minimum sufficient completed state" in criteria_prompt
-    assert "inside the same item" in criteria_prompt
-    assert "route reference being absent is not sufficient continuation evidence" in criteria_prompt
-    assert "never write bare reference absence" in criteria_prompt
+    assert "Modest lateral offset, incidental scene occlusion" not in criteria_prompt
+    assert "support-independence question" in criteria_prompt
+    assert "another obligation only when it is independently required" in criteria_prompt
+    assert "Do not require exact centering, full-body or full-object visibility" not in criteria_prompt
+    assert "observable minimum completed result" in criteria_prompt
+    assert "inside the same item" not in criteria_prompt
+    assert "route reference being absent is not sufficient continuation evidence" not in criteria_prompt
+    assert "never write bare reference absence" not in criteria_prompt
     assert "Do not output or modify intent, task_goal, total, goal" in criteria_prompt
 
 
@@ -199,6 +201,63 @@ def test_model_parser_builds_skill_free_structure_messages():
     assert "semantic task-structure parser" in messages[1]["content"]
     assert "skill_text" not in messages[1]["content"]
     assert "a UAV that can understand natural-language user instructions" not in messages[1]["content"]
+
+
+def test_model_parser_injects_configured_evidence_only_into_phase_criteria():
+    parser = TaskParser(
+        mode="model",
+        model_config=ModelConfig(
+            task_parser_mode="model",
+            model_name="test-model",
+            api_key="test-key",
+        ),
+    )
+    parser.configure_evidence_capabilities(
+        [
+            "NOW RGB: current visible appearance and image-space relations.",
+            "NOW metric depth overlay: approximate camera distance at visible pixels.",
+        ]
+    )
+    structure = SemanticPlanStructure.from_dict(
+        {
+            "intent": "move_relative_to_target",
+            "task_goal": {
+                "target": "person",
+                "target_attributes": {},
+                "final_state": "near_person",
+            },
+            "phases": [
+                {
+                    "index": 1,
+                    "total": 1,
+                    "name": "approach_person",
+                    "goal": "Move to the requested distance from the person",
+                }
+            ],
+        }
+    )
+
+    structure_messages = parser._build_structure_messages("Move near the person")
+    criteria_messages = parser._build_phase_criteria_messages(
+        "Move near the person",
+        structure,
+        structure.phases[0],
+        [{"name": "approach", "skill_text": "Use approximate target-distance cues."}],
+    )
+
+    assert "configured_evidence" not in str(structure_messages)
+    assert [message["role"] for message in criteria_messages] == [
+        "system",
+        "system",
+        "system",
+        "system",
+        "system",
+        "user",
+    ]
+    assert "Use approximate target-distance cues." in criteria_messages[2]["content"]
+    assert '"configured_evidence"' in criteria_messages[3]["content"]
+    assert "not facts observed in the current scene" in criteria_messages[3]["content"]
+    assert criteria_messages[4]["content"] == parser.criteria_prompt
 
 
 def test_model_parser_custom_contracts_keep_default_flyagent_rules(tmp_path):
@@ -320,6 +379,9 @@ def test_model_parser_runs_structure_then_independent_phase_criteria(monkeypatch
         ),
         phase_skill_resolver=resolver,
     )
+    parser.configure_evidence_capabilities(
+        ["NOW RGB: current visible appearance and image-space relations."]
+    )
     responses = iter(
         [
             '{"intent":"face_target","task_goal":{"target":"person","target_attributes":{},'
@@ -357,6 +419,9 @@ def test_model_parser_runs_structure_then_independent_phase_criteria(monkeypatch
     assert [item["selected_skills"] for item in parser.last_parse_trace["phases"]] == [
         ["skill_for_locate_person"],
         ["skill_for_align_to_person"],
+    ]
+    assert parser.last_parse_trace["configured_evidence"] == [
+        "NOW RGB: current visible appearance and image-space relations."
     ]
 
 
@@ -433,6 +498,26 @@ def test_model_parser_repairs_invalid_phase_criteria_once(monkeypatch):
     assert result.plan.phases[0].goal == "Face the person"
     assert len(requests) == 3
     assert "violated the phase criteria" in requests[-1][-1]["content"]
+
+
+def test_phase_criteria_validator_does_not_infer_logic_from_connective_words():
+    phase = {"index": 1, "total": 1, "name": "complete_relation", "goal": "Complete the relation"}
+
+    result = validate_phase_criteria(
+        {
+            "index": 1,
+            "name": "complete_relation",
+            "done_when": [
+                "or the current observation supports the completed relation",
+                "alternatively the motion evidence supports the other required obligation",
+            ],
+            "continue_when": ["the terminal relation lacks support"],
+            "metrics": [],
+        },
+        phase,
+    )
+
+    assert len(result["done_when"]) == 2
 
 
 def test_model_parser_drops_unsupported_metric_without_contract_repair(monkeypatch):
@@ -655,7 +740,7 @@ def test_phase_criteria_numeric_provenance_allows_metric_tolerance_and_bearing_d
     assert len(result["metrics"]) == 2
 
 
-def test_phase_criteria_repairs_unrequested_visual_centering_precision():
+def test_phase_criteria_does_not_apply_natural_language_precision_validation():
     phase = {"index": 1, "total": 1, "name": "orient_to_target", "goal": "Face the target"}
     criteria = {
         "index": 1,
@@ -665,11 +750,8 @@ def test_phase_criteria_repairs_unrequested_visual_centering_precision():
         "metrics": [],
     }
 
-    with pytest.raises(TaskParserContractError, match="centering precision"):
-        validate_phase_criteria(criteria, phase, instruction="Turn toward the target", task_goal={})
-
-    repaired = validate_phase_criteria(
-        {**criteria, "done_when": ["the target is clearly visible and roughly centered"]},
+    implicit = validate_phase_criteria(
+        criteria,
         phase,
         instruction="Turn toward the target",
         task_goal={},
@@ -681,7 +763,7 @@ def test_phase_criteria_repairs_unrequested_visual_centering_precision():
         task_goal={},
     )
 
-    assert "roughly centered" in repaired["done_when"][0]
+    assert "centered" in implicit["done_when"][0]
     assert "centered" in explicit["done_when"][0]
 
 

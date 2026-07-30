@@ -14,7 +14,12 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from src.agent.semantic.task_parser import _loads_json_object
+from src.agent.semantic.task_parser import (
+    DEFAULT_AGENT_RULES_PATH,
+    _configured_evidence_message,
+    _loads_json_object,
+    _normalize_configured_evidence,
+)
 from src.agent.semantic.validator import SemanticPlanValidationError, validate_semantic_plan_patch
 from src.runtime.configs.model_config import ModelConfig, load_model_config
 
@@ -26,8 +31,14 @@ class SemanticPlanUpdaterConfigError(RuntimeError):
 class SemanticPlanUpdater:
     """Generate a constrained semantic patch with the configured model."""
 
-    def __init__(self, model_config: ModelConfig | None = None, prompt_path: str | None = None) -> None:
+    def __init__(
+        self,
+        model_config: ModelConfig | None = None,
+        prompt_path: str | None = None,
+        agent_rules_path: str | None = None,
+    ) -> None:
         self.model_config = model_config or load_model_config()
+        self.agent_rules = self._load_agent_rules(agent_rules_path)
         self.system_prompt = self._load_system_prompt(prompt_path)
 
     def update(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -47,10 +58,7 @@ class SemanticPlanUpdater:
         endpoint = self.model_config.chat_completions_url()
         payload = {
             "model": self.model_config.model_name,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
-            ],
+            "messages": self._build_messages(context),
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
@@ -76,9 +84,52 @@ class SemanticPlanUpdater:
         content = data["choices"][0]["message"]["content"]
         return _loads_json_object(content)
 
+    def _build_messages(self, context: dict[str, Any]) -> list[dict[str, str]]:
+        update_context = dict(context)
+        selected_guidance = update_context.pop("selected_skill_guidance", [])
+        configured_evidence = _normalize_configured_evidence(
+            update_context.pop("configured_evidence", [])
+        )
+        messages = [{"role": "system", "content": self.agent_rules}]
+        if isinstance(selected_guidance, list) and selected_guidance:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "Selected knowledge from the triggering planning window follows. "
+                        "Treat it as domain guidance, not observation, tools, or output schema.\n\n"
+                        + json.dumps(selected_guidance, ensure_ascii=False)
+                    ),
+                }
+            )
+        if configured_evidence:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": _configured_evidence_message(configured_evidence),
+                }
+            )
+        messages.extend(
+            [
+                {"role": "system", "content": self.system_prompt},
+                {"role": "user", "content": json.dumps(update_context, ensure_ascii=False)},
+            ]
+        )
+        return messages
+
     def _load_system_prompt(self, prompt_path: str | None) -> str:
         path = Path(prompt_path) if prompt_path else Path(__file__).resolve().parent / "prompts" / "semantic_plan_update_system.txt"
         return path.read_text(encoding="utf-8").strip()
+
+    @staticmethod
+    def _load_agent_rules(agent_rules_path: str | None) -> str:
+        path = Path(agent_rules_path) if agent_rules_path else DEFAULT_AGENT_RULES_PATH
+        if not path.exists():
+            raise SemanticPlanUpdaterConfigError(f"FlyAgent rules file not found: {path}")
+        text = path.read_text(encoding="utf-8-sig").strip()
+        if not text:
+            raise SemanticPlanUpdaterConfigError(f"FlyAgent rules file is empty: {path}")
+        return text
 
 
 _NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d+)?|\.\d+)")

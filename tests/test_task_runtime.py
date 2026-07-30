@@ -1,4 +1,4 @@
-﻿"""Test M4 task runtime dry-run behavior."""
+"""Test M4 task runtime dry-run behavior."""
 
 from __future__ import annotations
 
@@ -17,13 +17,14 @@ from src.agent.planning.schemas import CoupledActionPhasePlan, PlannedStep, Shor
 from src.agent.safety import SafetyDecision, SafetySupervisor
 from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal, TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
-from src.adapters.uav_primitives import NullUavPrimitiveAdapter
-from src.env_client.local_client import LocalEnvClient
-from src.env_client.schemas import MapPackage
+from src.adapters.uav_primitives import NullUavPrimitiveAdapter, PrimitiveResult
+from src.env_client.simulator_client import SimulatorEnvClient
+from src.env_client.schemas import MapPackage, SceneCapabilities
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.runtime_control_config import RuntimeControlActionConfig, RuntimeControlConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
+from src.runtime.configs.task_execution_options import InitialPose, TaskExecutionOptions
 from src.runtime.context import PhaseWindowContextBuilder
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.configs.model_config import ModelConfig
@@ -31,12 +32,25 @@ from src.uav import pose_measurements
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
-from src.sim_server.backends.airvln_backend import AirVlnBackend
-from src.sim_server.server import LocalSimulationServer
+from src.sim_server.backends.airsim_backend import AirSimBackend
+from src.sim_server.backends.registry import BackendRegistry
+from src.sim_server.server import SimulationServer
+from tests.simulator_fakes import in_memory_backend_registry
 
 
 LAMP_TASK = "前面右转会有一个黑色的路灯，右转面向路灯后停下"
 ENTRANCE_TASK = "左转寻找建筑入口，并停在入口前"
+
+
+@pytest.fixture(autouse=True)
+def _use_explicit_in_memory_simulator_backends(monkeypatch):
+    """Keep Runtime tests independent from real AirSim and UE processes."""
+
+    monkeypatch.setattr(
+        BackendRegistry,
+        "defaults",
+        classmethod(lambda cls: in_memory_backend_registry()),
+    )
 
 
 def test_task_runtime_default_loop_guard_is_40():
@@ -52,6 +66,7 @@ def make_package() -> MapPackage:
             "provider": "packaged_unreal",
             "scene_id": "1",
             "root": None,
+            "connection": {"mode": "local"},
             "launch": {"manual": True},
             "control": {"protocol": "airsim"},
             "airsim": {"vehicle_name": "Drone_1", "camera_name": "front_0"},
@@ -428,8 +443,8 @@ class CompleteAfterSemanticUpdatePlanner:
 def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     run_dir = tmp_path / "task_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
+    server = SimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(SimulatorEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
 
     state = runtime.run_task("m1", LAMP_TASK)
     recorder.close()
@@ -511,10 +526,10 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
 def test_task_runtime_validates_runtime_control_request_without_executing_it(tmp_path):
     run_dir = tmp_path / "runtime_control_request_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = RuntimeControlRequestPlanner()
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -564,11 +579,11 @@ def test_task_runtime_uses_injected_context_builder(tmp_path):
             return {"active_instruction": state.user_instruction, "fragments": []}
 
     recorder = AsyncRunLogger(tmp_path / "injected_context")
-    server = LocalSimulationServer([make_package()], run_dir=tmp_path / "injected_context")
+    server = SimulationServer([make_package()], run_dir=tmp_path / "injected_context")
     injected = InjectedContextBuilder()
 
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=HoverOnlyPlanner(),
@@ -585,10 +600,10 @@ def test_task_runtime_loads_runtime_control_config_from_env(tmp_path, monkeypatc
     monkeypatch.setenv("FLYAGENT_RUNTIME_CONTROL_SEMANTIC_PLAN_UPDATE_EXPOSED", "true")
     run_dir = tmp_path / "runtime_control_env_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = CoupledPlannerStub([CONTINUE_CURRENT_PHASE, COMPLETE_TASK])
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -612,10 +627,10 @@ def test_task_runtime_loads_runtime_control_config_from_env(tmp_path, monkeypatc
 def test_task_runtime_recommends_semantic_contract_review_after_multiple_action_windows(tmp_path):
     run_dir = tmp_path / "runtime_control_recommendation_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = AlwaysHoverPlanner()
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -646,9 +661,50 @@ def test_task_runtime_recommends_semantic_contract_review_after_multiple_action_
 
 
 def test_task_runtime_applies_semantic_plan_update_on_later_boundary(tmp_path):
+    class SkillContextBuilder:
+        def __init__(self):
+            self.capability_calls = 0
+
+        def semantic_evidence_capabilities(self):
+            self.capability_calls += 1
+            return [
+                "NOW RGB: current visible appearance and image-space relations.",
+                "Action history: phase-relative UAV self-motion; not target distance.",
+            ]
+
+        def build(self, state, memory):
+            return {
+                "active_instruction": state.user_instruction,
+                "current_phase": state.semantic_plan.phases[state.current_phase_index].to_dict(),
+                "fragments": [
+                    {
+                        "name": "skills",
+                        "content": {
+                            "selected_skills": [
+                                {
+                                    "name": "route_traversal_and_passage",
+                                    "skill_text": "Use route progress evidence.",
+                                    "requested_references": [
+                                        {
+                                            "path": "references/route_progress_examples.md",
+                                            "text": "must not reach updater",
+                                        }
+                                    ],
+                                    "source_path": "must/not/reach/updater",
+                                },
+                                {
+                                    "name": "route_traversal_and_passage",
+                                    "skill_text": "duplicate must be ignored",
+                                },
+                            ]
+                        },
+                    }
+                ],
+            }
+
     run_dir = tmp_path / "semantic_plan_update_apply_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = CompleteAfterSemanticUpdatePlanner()
     updater = FakeSemanticPlanUpdater(
         {
@@ -658,8 +714,9 @@ def test_task_runtime_applies_semantic_plan_update_on_later_boundary(tmp_path):
             }
         }
     )
+    context_builder = SkillContextBuilder()
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -670,6 +727,7 @@ def test_task_runtime_applies_semantic_plan_update_on_later_boundary(tmp_path):
             actions={"semantic_plan_update": RuntimeControlActionConfig(enabled=True, exposed=True)},
         ),
         semantic_plan_updater=updater,
+        context_builder=context_builder,
     )
 
     state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
@@ -681,8 +739,25 @@ def test_task_runtime_applies_semantic_plan_update_on_later_boundary(tmp_path):
     assert state.completed
     assert state.semantic_plan_version == 1
     assert state.semantic_plan.phases[0].done_when == ["updated completion evidence is available"]
+    assert context_builder.capability_calls == 1
+    assert runtime.task_parser.configured_evidence == [
+        "NOW RGB: current visible appearance and image-space relations.",
+        "Action history: phase-relative UAV self-motion; not target distance.",
+    ]
     assert updater.contexts
     assert updater.contexts[0]["phase_execution_summary"]["phase_key"] == "1:final_phase"
+    assert updater.contexts[0]["selected_skill_guidance"] == [
+        {
+            "name": "route_traversal_and_passage",
+            "skill_text": "Use route progress evidence.",
+        }
+    ]
+    assert updater.contexts[0]["configured_evidence"] == [
+        "NOW RGB: current visible appearance and image-space relations.",
+        "Action history: phase-relative UAV self-motion; not target distance.",
+    ]
+    assert "requested_references" not in str(updater.contexts[0]["selected_skill_guidance"])
+    assert "source_path" not in str(updater.contexts[0]["selected_skill_guidance"])
     assert any(
         context.get("runtime_control", {}).get("status", {}).get("semantic_plan_update") == "pending"
         for context in planner.contexts
@@ -700,7 +775,7 @@ def test_task_runtime_applies_semantic_plan_update_on_later_boundary(tmp_path):
 def test_task_runtime_discards_semantic_update_with_invented_numeric_threshold(tmp_path):
     run_dir = tmp_path / "semantic_plan_update_numeric_rejection_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = CompleteAfterSemanticUpdatePlanner()
     updater = FakeSemanticPlanUpdater(
         {
@@ -710,7 +785,7 @@ def test_task_runtime_discards_semantic_update_with_invented_numeric_threshold(t
         }
     )
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -741,9 +816,9 @@ def test_task_runtime_discards_semantic_update_with_invented_numeric_threshold(t
 def test_task_runtime_can_land_on_shutdown(tmp_path):
     run_dir = tmp_path / "task_run_land"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=HoverOnlyPlanner(),
@@ -775,8 +850,8 @@ def test_task_runtime_can_reuse_existing_parse_result(tmp_path):
     parse_result = TaskParser(mode="rule_based").parse(ENTRANCE_TASK)
     run_dir = tmp_path / "parsed_task_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(LocalEnvClient(server), recorder, ExplodingParser(), planner=HoverOnlyPlanner())
+    server = SimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(SimulatorEnvClient(server), recorder, ExplodingParser(), planner=HoverOnlyPlanner())
 
     state = runtime.run_parsed_task("m1", parse_result)
     recorder.close()
@@ -790,10 +865,10 @@ def test_task_runtime_can_reuse_existing_parse_result(tmp_path):
 def test_task_runtime_coupled_advance_skips_tool_and_phase_judge(tmp_path):
     run_dir = tmp_path / "coupled_advance_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = CoupledPlannerStub([ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK])
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -821,10 +896,10 @@ def test_task_runtime_coupled_advance_skips_tool_and_phase_judge(tmp_path):
 def test_task_runtime_coupled_complete_final_phase(tmp_path):
     run_dir = tmp_path / "coupled_complete_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = CoupledPlannerStub([COMPLETE_TASK])
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -846,10 +921,10 @@ def test_task_runtime_coupled_complete_final_phase(tmp_path):
 def test_task_runtime_coupled_complete_before_final_downgrades_to_advance(tmp_path):
     run_dir = tmp_path / "coupled_downgrade_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = CoupledPlannerStub([COMPLETE_TASK, COMPLETE_TASK])
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -871,10 +946,10 @@ def test_task_runtime_coupled_complete_before_final_downgrades_to_advance(tmp_pa
 def test_task_runtime_coupled_continue_executes_tool_and_observes(tmp_path):
     run_dir = tmp_path / "coupled_continue_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = CoupledPlannerStub([CONTINUE_CURRENT_PHASE, COMPLETE_TASK])
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -974,10 +1049,10 @@ def test_task_runtime_phase_progress_evidence_marks_translation_progress():
 def test_task_runtime_coupled_records_contract_repair_events(tmp_path):
     run_dir = tmp_path / "coupled_repair_event_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = CoupledPlannerWithRepairEvent()
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -999,10 +1074,10 @@ def test_task_runtime_coupled_records_contract_repair_events(tmp_path):
 def test_task_runtime_default_mode_uses_coupled_planner_decision(tmp_path):
     run_dir = tmp_path / "default_judge_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = HoverOnlyPlanner()
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -1041,10 +1116,10 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
 
     run_dir = tmp_path / "model_planner_task_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = FakeModelPlanner()
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -1133,9 +1208,9 @@ def test_task_runtime_action_planner_debug_writes_redacted_context(tmp_path):
 
     run_dir = tmp_path / "planner_debug_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=OneTurnPlanner(),
@@ -1197,10 +1272,10 @@ def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path
 
     run_dir = tmp_path / "agent_message_events"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     live_events = []
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=MessagePlanner(),
@@ -1294,9 +1369,9 @@ def test_task_runtime_agent_message_cache_resets_between_instructions(tmp_path):
 
     run_dir = tmp_path / "agent_message_cache_reset"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=InstructionMessagePlanner(),
@@ -1331,11 +1406,11 @@ def test_task_runtime_passes_action_config_to_planner_context(tmp_path):
 
     run_dir = tmp_path / "action_config_context"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = ContextCapturePlanner()
     action_config = UavActionConfig(linear_velocity_mps=3.5, vertical_velocity_mps=1.25, move_duration_sec=1.75)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -1354,9 +1429,9 @@ def test_task_runtime_passes_action_config_to_planner_context(tmp_path):
 def test_task_runtime_reuse_running_scene_does_not_repeat_preflight(tmp_path):
     run_dir = tmp_path / "continuous_task_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=HoverOnlyPlanner(),
@@ -1406,9 +1481,9 @@ def test_task_runtime_reuse_running_scene_does_not_repeat_preflight(tmp_path):
 def test_task_runtime_can_leave_reused_scene_running(tmp_path):
     run_dir = tmp_path / "leave_scene_running"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=HoverOnlyPlanner(),
@@ -1482,10 +1557,10 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     ]
     run_dir = tmp_path / "many_instruction_model_run"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     planner = ContextEchoModelPlanner()
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=planner,
@@ -1530,8 +1605,8 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
 
 def test_task_runtime_normalizes_yaw_wraparound_delta(tmp_path):
     recorder = AsyncRunLogger(tmp_path / "yaw_wrap")
-    server = LocalSimulationServer([make_package()], run_dir=tmp_path / "yaw_wrap")
-    runtime = TaskRuntime(LocalEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
+    server = SimulationServer([make_package()], run_dir=tmp_path / "yaw_wrap")
+    runtime = TaskRuntime(SimulatorEnvClient(server), recorder, TaskParser(mode="rule_based"), planner=HoverOnlyPlanner())
 
     measurements = pose_measurements(
         {"euler_rad": {"yaw": 159.0 * 3.141592653589793 / 180.0}},
@@ -1555,9 +1630,9 @@ def test_task_runtime_continue_transition_window_limit_stops_without_advancing_p
 
     run_dir = tmp_path / "continue_loop_guard"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=AlwaysContinuePlanner(),
@@ -1627,9 +1702,9 @@ def test_task_runtime_logs_contract_repair_success_and_continues_to_safety(tmp_p
 
     run_dir = tmp_path / "repair_success"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=RepairSuccessPlanner(),
@@ -1674,9 +1749,9 @@ def test_task_runtime_stabilizes_after_each_motion_step_before_observation(tmp_p
 
     run_dir = tmp_path / "stabilizes_between_steps"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=MultiMotionPlanner(),
@@ -1731,9 +1806,9 @@ def test_task_runtime_logs_contract_repair_failure_then_best_effort_hover(tmp_pa
 
     run_dir = tmp_path / "repair_failure"
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer([make_package()], run_dir=run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=RepairFailPlanner(),
@@ -1748,4 +1823,246 @@ def test_task_runtime_logs_contract_repair_failure_then_best_effort_hover(tmp_pa
     assert "model_action_contract_repair_requested" in event_names
     assert "model_action_contract_repair_failed" in event_names
     assert "task_failed" in event_names
+    assert "safety_hover_completed" in event_names
+
+
+def test_task_runtime_applies_initial_pose_before_first_configured_observation(tmp_path):
+    run_dir = tmp_path / "task_execution_options"
+    recorder = AsyncRunLogger(run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=HoverOnlyPlanner(),
+        shutdown_policy="none",
+    )
+    options = TaskExecutionOptions(
+        observation_modalities=("rgb", "pose"),
+        initial_pose=InitialPose(4.0, 5.0, 12.0, yaw_deg=35.0),
+    )
+
+    state = runtime.run_task("m1", LAMP_TASK, execution_options=options)
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+    initial_observation = next(
+        record["payload"]
+        for record in events
+        if record["event"] == "initial_observation_updated"
+    )
+    actions_text = (run_dir / "memory/actions.jsonl").read_text(encoding="utf-8")
+    latest_context = json.loads(
+        (run_dir / "contexts/latest_context.json").read_text(encoding="utf-8")
+    )
+    flight_memory = json.loads(
+        (run_dir / "state/flight_memory.json").read_text(encoding="utf-8")
+    )
+
+    assert event_names.index("preflight_hover_completed") < event_names.index(
+        "episode_initial_pose_completed"
+    )
+    assert event_names.index("episode_initial_pose_completed") < event_names.index(
+        "initial_observation_updated"
+    )
+    assert initial_observation["pose"]["x"] == 4.0
+    assert initial_observation["pose"]["z"] == 12.0
+    assert initial_observation["modalities"] == ["rgb", "pose"]
+    assert state.observation_modalities == ("rgb", "pose")
+    assert state.latest_observation["modalities"] == ["rgb", "pose"]
+    assert "depth" not in state.latest_observation.get("frames", {})
+    assert latest_context["observation_policy"]["modalities"] == ["rgb", "pose"]
+    assert "uav.set_pose" not in actions_text
+    assert flight_memory["reset_epoch"] == 1
+
+
+def test_task_runtime_reapplies_initial_pose_when_scene_is_reused(tmp_path):
+    run_dir = tmp_path / "reused_episode_initial_pose"
+    recorder = AsyncRunLogger(run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=HoverOnlyPlanner(),
+        shutdown_policy="none",
+    )
+
+    first_state = runtime.run_task(
+        "m1",
+        LAMP_TASK,
+        scene_policy="reuse_running",
+        stop_scene_on_finish=False,
+        execution_options=TaskExecutionOptions(
+            initial_pose=InitialPose(1.0, 2.0, 3.0)
+        ),
+    )
+    second_state = runtime.run_task(
+        "m1",
+        ENTRANCE_TASK,
+        scene_policy="reuse_running",
+        stop_scene_on_finish=False,
+        execution_options=TaskExecutionOptions(
+            initial_pose=InitialPose(10.0, 20.0, 30.0)
+        ),
+    )
+    runtime.finish_reused_scene("m1", second_state)
+    recorder.close()
+
+    events = load_event_records(run_dir)
+    event_names = [record["event"] for record in events]
+    flight_memory = json.loads(
+        (run_dir / "state/flight_memory.json").read_text(encoding="utf-8")
+    )
+
+    assert first_state.completed and second_state.completed
+    assert event_names.count("control_connected") == 1
+    assert event_names.count("episode_initial_pose_completed") == 2
+    assert "episode_initialization_stabilization_completed" in event_names
+    assert second_state.latest_observation["pose"]["x"] == 10.0
+    assert second_state.latest_observation["pose"]["z"] == 30.0
+    assert flight_memory["reset_epoch"] == 2
+
+
+def test_task_runtime_rejects_unsupported_observation_modalities_before_planning(
+    tmp_path,
+):
+    run_dir = tmp_path / "unsupported_modalities"
+    recorder = AsyncRunLogger(run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
+    planner = HoverOnlyPlanner()
+    runtime = TaskRuntime(
+        SimulatorEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    with pytest.raises(RuntimeError, match="does not support.*mask"):
+        runtime.run_task(
+            "m1",
+            LAMP_TASK,
+            execution_options=TaskExecutionOptions(
+                observation_modalities=("mask", "pose")
+            ),
+        )
+    recorder.close()
+
+    assert planner._phase_calls == {}
+    assert not (run_dir / "memory/observations.jsonl").exists()
+
+
+class _NoSetPoseBackend(AirSimBackend):
+    def describe_capabilities(self, package):
+        capabilities = super().describe_capabilities(package)
+        return SceneCapabilities(
+            protocol=capabilities.protocol,
+            control_mode=capabilities.control_mode,
+            supported_actions=tuple(
+                action
+                for action in capabilities.supported_actions
+                if action != "set_pose"
+            ),
+            observation_modalities=capabilities.observation_modalities,
+            requires_takeoff=capabilities.requires_takeoff,
+            supports_soft_reset=capabilities.supports_soft_reset,
+        )
+
+
+def test_task_runtime_rejects_initial_pose_without_backend_capability(tmp_path):
+    run_dir = tmp_path / "unsupported_initial_pose"
+    recorder = AsyncRunLogger(run_dir)
+    registry = BackendRegistry()
+    registry.register(
+        "airsim",
+        lambda context: _NoSetPoseBackend(
+            use_real_uav=False,
+            action_config=context.action_config,
+        ),
+    )
+    server = SimulationServer(
+        [make_package()],
+        run_dir=run_dir,
+        backend_registry=registry,
+    )
+    planner = HoverOnlyPlanner()
+    runtime = TaskRuntime(
+        SimulatorEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    with pytest.raises(RuntimeError, match="does not support set_pose"):
+        runtime.run_task(
+            "m1",
+            LAMP_TASK,
+            execution_options=TaskExecutionOptions(
+                initial_pose=InitialPose(1.0, 2.0, 3.0)
+            ),
+        )
+    recorder.close()
+
+    assert planner._phase_calls == {}
+    assert "episode_initial_pose_started" not in [
+        record["event"] for record in load_event_records(run_dir)
+    ]
+
+
+class _FailingSetPoseAdapter(NullUavPrimitiveAdapter):
+    def set_pose(
+        self,
+        x,
+        y,
+        z,
+        yaw_deg=0.0,
+        pitch_deg=0.0,
+        roll_deg=0.0,
+        ignore_collision=True,
+    ):
+        return PrimitiveResult(False, "injected set_pose failure")
+
+
+def test_task_runtime_reports_initial_pose_action_failure_before_planning(tmp_path):
+    run_dir = tmp_path / "failed_initial_pose"
+    recorder = AsyncRunLogger(run_dir)
+    registry = BackendRegistry()
+    registry.register(
+        "airsim",
+        lambda context: AirSimBackend(
+            uav=_FailingSetPoseAdapter(),
+            use_real_uav=False,
+            action_config=context.action_config,
+        ),
+    )
+    server = SimulationServer(
+        [make_package()],
+        run_dir=run_dir,
+        backend_registry=registry,
+    )
+    planner = HoverOnlyPlanner()
+    runtime = TaskRuntime(
+        SimulatorEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    with pytest.raises(RuntimeError, match="Episode initial pose failed"):
+        runtime.run_task(
+            "m1",
+            LAMP_TASK,
+            execution_options=TaskExecutionOptions(
+                initial_pose=InitialPose(1.0, 2.0, 3.0)
+            ),
+        )
+    recorder.close()
+
+    event_names = [record["event"] for record in load_event_records(run_dir)]
+    assert planner._phase_calls == {}
+    assert "episode_initial_pose_failed" in event_names
     assert "safety_hover_completed" in event_names

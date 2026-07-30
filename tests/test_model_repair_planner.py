@@ -17,7 +17,7 @@ def make_planner_context() -> dict:
             "forbidden_tools": ["env.observe"],
         },
         "observation_policy": {"mode": "automatic", "modalities": ["rgb", "depth", "pose"]},
-        "safety_constraints": {"max_yaw_scan_accum_deg": 480.0},
+        "safety_constraints": {"max_yaw_scan_extent_deg": 480.0},
     }
 
 

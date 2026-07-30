@@ -93,6 +93,8 @@ def test_uav_knowledge_skills_follow_compact_five_section_contract():
         ]
         assert headings == KNOWLEDGE_SKILL_SECTIONS, skill.name
         assert len(skill.body.strip()) <= DEFAULT_MAX_SKILL_CHARS, skill.name
+        for internal_term in ("done_when", "continue_when", "SemanticPlan", "output schema", "list item"):
+            assert internal_term not in skill.body, f"{skill.name}:{internal_term}"
         for index, heading in enumerate(KNOWLEDGE_SKILL_SECTIONS):
             marker = f"## {heading}"
             start = skill.body.index(marker) + len(marker)
@@ -134,11 +136,16 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
     assert "directional target cue" in normalized_summary
     assert "inspection-ready" in normalized_summary
     assert "usable image bearing" in normalized_summary
-    assert "Modest offset, incidental occlusion" in normalized_summary
+    assert "usable current image bearing is operational evidence of facing" in normalized_summary
+    assert "a separate geometric heading measurement is not required" in normalized_summary
+    assert "Moderate left or right offset is explicitly acceptable" in normalized_summary
+    assert "exact centering is not required unless explicitly requested" in normalized_summary
+    assert "Do not correct merely for lateral offset" in normalized_summary
+    assert "correct only when the cue is near the frame boundary" not in normalized_summary
     assert "broad usable forward region" not in normalized_summary
-    assert "only when explicitly requested" in normalized_summary
-    assert "Do not restart broad search" in normalized_summary
-    assert "stop alternating or unhelpful corrections" in normalized_summary
+    assert "unless explicitly requested" in normalized_summary
+    assert "Do not restart or reverse broad search" in normalized_summary
+    assert "alternate around an already usable bearing" in normalized_summary
     assert "left/negative yaw" not in normalized_summary
     assert "right/positive yaw" not in normalized_summary
     assert "current phase decision" not in summary["skill_text"]
@@ -256,9 +263,13 @@ def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmati
     assert "current phase decision" not in normalized_skill_text
     assert "artifact paths" not in normalized_skill_text
     assert "hidden benchmark" not in normalized_skill_text
+    assert "sweep consistently into new views" in normalized_skill_text
+    assert "Absence alone does not justify reversal" in normalized_skill_text
+    assert "stop broad search" in normalized_skill_text
     assert "30-45 degrees is broad search, not a small/local confirmation turn" in normalized_reference_text
     assert "switch from broad sweep to hover or a small 5-15 degree yaw" in normalized_reference_text
     assert "continue a 30-45 degree broad sweep as if it were confirmation" in normalized_reference_text
+    assert "Reverse a broad sweep only when" in normalized_reference_text
 
 
 def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_reference():
@@ -326,12 +337,16 @@ def test_route_traversal_skill_keeps_completion_core_and_optional_examples():
     assert "first useful route view with the latest view" in normalized
     assert "cue as a destination" in normalized
     assert "exact geometric boundary" in normalized
-    assert "Yaw can inspect a route but cannot place the UAV" in normalized
+    assert "Yaw can inspect a route or change image bearing" in normalized
     assert "Cue absence alone is ambiguous" in normalized
-    assert "Either path is independently sufficient" in normalized
-    assert "cue moving from ahead to the side, rear" in normalized
+    assert "Passage completion is a terminal route relation" in normalized
+    assert "cue moves from ahead toward a side, rearward" in normalized
     assert "cue leaves the forward view" in normalized
-    assert "Do not require both paths, reacquisition, continued visibility" in normalized
+    assert "Do not demand every evidence form, reacquisition, continued visibility" in normalized
+    assert "done_when" not in normalized
+    assert "continue_when" not in normalized
+    assert "schema" not in normalized
+    assert "list item" not in normalized
     assert "Passing A Landmark On One Side" in normalized_reference
     assert "Crossing A Gap Or Opening" in normalized_reference
     assert "camera reorientation rather than traversal" in normalized_reference
@@ -355,18 +370,28 @@ def test_approach_skill_stops_before_overshoot_and_excludes_route_references():
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill_text.split())
 
-    assert "not when the endpoint is through, past, beyond, across, or around a route reference" in normalized
+    assert "Exclude routes ending through, past, beyond, across, or around a reference" in normalized
     assert "final held front/back/side position" in normalized
-    assert "A side relation belongs here only when the final task state is to stop" in normalized
-    assert "even if the route also names a side" in normalized
-    assert "Stop when current evidence supports the requested relation" in normalized
-    assert "Do not keep approaching until the target fills the view" in normalized
-    assert "Yaw cannot reach a distance or requested side" in normalized
-    assert "Combine these cues for a rough range estimate" in normalized
-    assert "familiar target scale, ground contact, nearby scene geometry" in normalized
-    assert "do not move closer merely to improve ranging" in normalized
-    assert "no clear evidence of being substantially nearer or farther" in normalized
-    assert "do not demand decimal-level certainty" in normalized
+    assert "A side relation belongs here only when the UAV must stop or hold there" in normalized
+    assert "target visibility can conflict with traversal" in normalized
+    assert "Target identity and target-relative range are independently assessable facts" in normalized
+    assert "Treat the estimate as a range, not an exact point" in normalized
+    assert "Assess identity and range separately" in normalized
+    assert "representative target region and overall scene relation" in normalized
+    assert "instead of requiring all target pixels to agree" in normalized
+    assert "Yaw cannot reach a distance or side relation" in normalized
+    assert "apparent size, familiar scale, ground contact, geometry" in normalized
+    assert "clearly place the UAV too far" in normalized
+    assert "clearly place it too near" in normalized
+    assert "without moving along an unknown near/far direction" in normalized
+    assert "Completion requires credible target identity. Separately" in normalized
+    assert "broadly near the requested distance" in normalized
+    assert "Minor distance differences and normal depth spread" in normalized
+    assert "exact equality, point containment, or one uniform target depth is not required" in normalized
+    assert "clearly show a substantial near/far mismatch" in normalized
+    assert "Instrument-level or decimal certainty is not required" in normalized
+    assert "Reverse only when new evidence clearly places the relation on the opposite side" in normalized
+    assert "contains the requested value" not in normalized
     forbidden_terms = [
         "UAV-Flow",
         "UnrealCV",

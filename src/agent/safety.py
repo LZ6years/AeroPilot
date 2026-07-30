@@ -48,12 +48,15 @@ class SafetySupervisor:
     def review(self, plan: ShortHorizonPlan, state: Any | None = None) -> SafetyDecision:
         safe_steps: list[PlannedStep] = []
         interventions: list[dict] = []
-        yaw_scan_accum = float(getattr(state, "yaw_scan_accum_deg", 0.0) or 0.0)
+        yaw_scan_offset = float(getattr(state, "yaw_scan_offset_deg", 0.0) or 0.0)
+        yaw_scan_extent = float(getattr(state, "yaw_scan_extent_deg", 0.0) or 0.0)
         for step in plan.steps:
             if step.kind == "tool" and step.tool == "uav.turn_relative":
                 safe_step, intervention = self._review_step(step)
-                safe_yaw = abs(float(safe_step.args.get("yaw_deg", 0.0)))
-                if yaw_scan_accum + safe_yaw > self.safety_config.max_yaw_scan_accum_deg:
+                safe_yaw = float(safe_step.args.get("yaw_deg", 0.0))
+                projected_offset = yaw_scan_offset + safe_yaw
+                projected_extent = max(yaw_scan_extent, abs(projected_offset))
+                if projected_extent > self.safety_config.max_yaw_scan_extent_deg:
                     safe_step = PlannedStep.tool_step(
                         "uav.hover",
                         {},
@@ -65,14 +68,19 @@ class SafetySupervisor:
                             "tool": step.tool,
                             "replacement": "uav.hover",
                             "reason": "yaw_scan_budget_exceeded",
-                            "yaw_scan_accum_deg": yaw_scan_accum,
-                            "requested_yaw_deg": abs(float(step.args.get("yaw_deg", self.safety_config.max_yaw_step_deg))),
+                            "yaw_scan_offset_deg": yaw_scan_offset,
+                            "yaw_scan_extent_deg": yaw_scan_extent,
+                            "requested_yaw_deg": float(
+                                step.args.get("yaw_deg", self.safety_config.max_yaw_step_deg)
+                            ),
                             "safe_yaw_deg": safe_yaw,
-                            "max_yaw_scan_accum_deg": self.safety_config.max_yaw_scan_accum_deg,
+                            "projected_yaw_scan_extent_deg": projected_extent,
+                            "max_yaw_scan_extent_deg": self.safety_config.max_yaw_scan_extent_deg,
                         }
                     )
                     continue
-                yaw_scan_accum += abs(float(safe_step.args.get("yaw_deg", 0.0)))
+                yaw_scan_offset = projected_offset
+                yaw_scan_extent = projected_extent
                 safe_steps.append(safe_step)
                 if intervention:
                     interventions.append(intervention)

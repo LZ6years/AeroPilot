@@ -1,0 +1,239 @@
+# Backend 与 Adapter 契约
+
+> Status: Implemented  
+> Previous: [05_local_and_remote_deployment.md](05_local_and_remote_deployment.md)  
+> Next: [07_configuration_reference.md](07_configuration_reference.md)
+
+## 三层多态
+
+```text
+SimulationBackend
+    AirSimBackend
+    UnrealCvBackend
+
+UavPrimitiveAdapter
+    AirSimUavAdapter
+    NullUavPrimitiveAdapter
+
+AirSimControlStrategy
+    ComputerVisionControlStrategy
+    MultirotorControlStrategy
+
+UnrealCvPoseControl
+    CameraPoseControl
+    ActorPoseControl
+
+UnrealCvCapture
+    scene
+    depth_perspective
+    segmentation
+```
+
+```mermaid
+classDiagram
+    class SimulationBackend {
+        <<Protocol>>
+        start()
+        stop()
+        reset()
+        execute_action()
+        get_observation()
+        describe_capabilities()
+    }
+
+    class AirSimBackend
+    class UnrealCvBackend
+
+    SimulationBackend <|.. AirSimBackend
+    SimulationBackend <|.. UnrealCvBackend
+
+    class AirSimControlStrategy {
+        <<Protocol>>
+        connect()
+        move_body()
+        turn_relative()
+        hover()
+    }
+
+    class ComputerVisionControlStrategy
+    class MultirotorControlStrategy
+
+    AirSimControlStrategy <|.. ComputerVisionControlStrategy
+    AirSimControlStrategy <|.. MultirotorControlStrategy
+
+    class UnrealCvPoseControl {
+        <<Protocol>>
+        prepare()
+        get_pose()
+        set_pose()
+        sync_camera()
+    }
+
+    class CameraPoseControl
+    class ActorPoseControl
+
+    UnrealCvPoseControl <|.. CameraPoseControl
+    UnrealCvPoseControl <|.. ActorPoseControl
+```
+
+虚线实现关系表示 Protocol 结构化多态，不要求共享实现基类。
+
+## SimulationBackend
+
+Backend 负责：
+
+- 描述 scene capability；
+- 创建/关闭协议 Adapter；
+- 将统一 action 分派到 primitive；
+- 将 primitive result 包装成 ActionResult；
+- 获取 Observation；
+- 执行协议级软 reset。
+
+Backend 不负责：
+
+- 启动或杀死 UE；
+- SSH/SCP；
+- Benchmark case、goal 或 reference path；
+- 模型规划和安全策略。
+
+## AirSimBackend
+
+AirSimBackend 适用于所有 AirSim-compatible UE：
+
+```text
+本地 UE
+远程 UE
+AerialVLN 地图
+TravelUAV 地图
+未来 AirSim 地图
+```
+
+它不能再叫 `AirVlnBackend`。地图来源可以留在 MapPackage.provider 作为元数据，但不能参与 Backend 路由。
+
+AirSimBackend 必须使用 SceneInstance 中已解析的：
+
+```text
+control_host
+control_port
+```
+
+否则 SSH Tunnel 会被绕过。
+
+## AirSimControlStrategy
+
+动作映射：
+
+| 动作 | ComputerVision | Multirotor | UnrealCV |
+|---|---|---|---|
+| connect | VehicleClient | MultirotorClient | UnrealCV Client |
+| move_body | simSetVehiclePose | velocity API | configured camera/actor pose |
+| turn_relative | pose yaw | yaw API | configured camera/actor yaw |
+| hover | keep pose | hoverAsync | reapply configured target pose |
+| takeoff | unsupported | takeoffAsync | unsupported |
+| land | unsupported | landAsync | unsupported |
+| get pose | simGetVehiclePose | getMultirotorState | configured camera/actor pose |
+| RGB/depth | simGetImages | simGetImages | vget camera |
+
+ComputerVision body-frame 位移：
+
+```text
+dx = (cos(yaw) * vx - sin(yaw) * vy) * duration
+dy = (sin(yaw) * vx + cos(yaw) * vy) * duration
+dz_ned = -vz * duration
+```
+
+计算后通过 `simSetVehiclePose`更新位置，同时保留未修改的姿态分量。
+
+## UnrealCV camera 与 actor 控制
+
+UnrealCV 的协议和受控目标是两个不同概念：
+
+```text
+control.protocol=unrealcv
+    ├── control_target=camera → CameraPoseControl
+    └── control_target=actor  → ActorPoseControl
+```
+
+`camera`模式保留适用于自由相机地图的原生坐标行为。`actor`模式用于地图已经暴露
+主无人机、车辆或机器人 Actor 的情况：
+
+- Object location 在 Backend 内按 `units_per_meter`转换成米；
+- Object rotation 的 `[roll, yaw, pitch]`顺序在策略边界转换；
+- `yaw_offset_deg`描述 canonical yaw 与 Actor native yaw 的固定偏移；
+- 标准 Actor 使用 `standard_pose`；
+- 只提供 Blueprint yaw 的打包地图使用 `blueprint_yaw`；
+- 采图前可用标准 `standard_pose`或地图扩展 `blueprint_pose`把相机同步到 Actor。
+
+`blueprint_yaw`只能改变 yaw。如果调用者请求改变 pitch/roll，策略明确失败，不能
+返回伪成功。该 Blueprint 命令接收 canonical yaw，并在 UE 内部插值；Backend
+轮询 Actor readback，达到 tolerance 后才返回成功。Actor 不存在、超时或 Blueprint
+命令失败时都不会回退到 camera 模式。
+
+## UnrealCV 观测批次
+
+`UnrealCvCapture`按 ObservationProfile 将通用 capture source 转为命令：
+
+| Capture source | 命令 | Artifact |
+|---|---|---|
+| `scene` | `vget /camera/<id>/lit png` | RGB PNG |
+| `depth_perspective` | `vget /camera/<id>/depth npy` | 米制 NPY + preview |
+| `segmentation` | `vget /camera/<id>/object_mask png` | PNG |
+
+同一次 observation 中的图像命令通过一个 `request_batch()`发送。Actor 模式先同步
+相机，再批量采集。严格的“画面是否纯色”判断只属于 Demo/manual probe，Backend
+只验证协议载荷是否可解码。
+
+## 场景编辑不属于 EnvClient
+
+控制主 UAV Actor 与摆放 Benchmark 目标是两个责任：
+
+```text
+UnrealCvBackend → 主 UAV/camera、pose、frames
+Benchmark Scenario → 人物/车辆创建、隐藏、外观、目标位置
+```
+
+冻结的 EnvClient 不增加 `spawn_object`、`set_appearance`或目标放置方法。未来若
+多个 Benchmark 需要共享场景编辑能力，应建立独立的特权 `ScenarioAdmin`，而不是
+扩展飞行控制接口。
+
+## 坐标契约
+
+FlyAgent primitive 使用 canonical convention：
+
+```text
++X: forward
++Y: right
++Z: up
+positive yaw: canonical relative turn
+```
+
+Simulator-specific NED、UE 坐标或 camera rotation 必须在 Adapter 边界转换。Benchmark 原始坐标先由其 evaluation adapter 转成 canonical pose，再调用 EnvClient。
+
+## Unsupported 行为
+
+不支持的动作返回：
+
+```json
+{
+  "ok": false,
+  "message": "uav.takeoff is not supported by AirSim ComputerVision",
+  "data": {
+    "error_code": "unsupported_action",
+    "control_mode": "ComputerVision"
+  }
+}
+```
+
+Runtime 应通过 capability 避免正常流程调用 unsupported action；Backend 的错误仍是最后一道契约保护。
+
+## Contract tests
+
+每个注册 Backend 必须共享一组 contract tests：
+
+- start 后 status=running；
+- stop 可重复清理；
+- reset 返回可用 SceneInstance；
+- unknown action 明确失败；
+- observation shape 一致；
+- capability 与实际动作一致；
+- 两个 scene 的 Backend/Adapter 状态隔离。

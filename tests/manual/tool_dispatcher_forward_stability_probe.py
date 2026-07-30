@@ -37,14 +37,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.env_client.local_client import LocalEnvClient
+from src.env_client.simulator_client import SimulatorEnvClient
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
 from src.runtime.configs.stabilization_config import load_uav_stabilization_config
 from src.runtime.control import UavStabilizer
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
-from src.sim_server.server import LocalSimulationServer
+from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
 from src.uav import pose_from_observation, pose_measurements, velocity_norm_mps, yaw_deg
 from src.agent.planning.schemas import PlannedStep
@@ -84,8 +84,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="2.0,1.5,1.0,0.75,0.5",
         help="Comma-separated forward body-frame speeds for --speed-sweep.",
     )
-    parser.add_argument("--connect-existing", action="store_true")
-    parser.add_argument("--no-launch", action="store_true")
+    parser.add_argument(
+        "--execution",
+        choices=["attach", "managed"],
+        required=True,
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--save-artifacts", action="store_true")
     return parser
@@ -99,17 +102,16 @@ def main() -> None:
     selected_map = next(pkg for pkg in maps if pkg.map_id == args.map_id)
     run_dir = RunStore(args.run_root).create_run_dir("tool_dispatcher_forward_stability")
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer(
+    server = SimulationServer(
         maps,
         port_policy,
         run_dir=run_dir,
-        launch_processes=not args.no_launch and not args.connect_existing,
-        real_control=(not args.no_launch and not args.connect_existing) or args.connect_existing,
+        execution_mode=args.execution,
         show_display=not args.headless,
         action_config=action_config,
         save_artifacts=args.save_artifacts,
     )
-    client = LocalEnvClient(server)
+    client = SimulatorEnvClient(server)
     tools = ToolDispatcher(client)
     stabilizer = UavStabilizer(tools, recorder, stabilization_config)
     scene = client.start_scene(args.map_id)

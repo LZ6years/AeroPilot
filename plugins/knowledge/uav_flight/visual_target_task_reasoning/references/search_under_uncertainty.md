@@ -4,8 +4,9 @@ Useful search patterns should be selected by scene context:
   turn. Small confirmation means hover or about 5-15 degrees.
 - No-candidate broad sweep: when the current view has no target-like cue, use a
   larger safe yaw increment within planner limits to inspect genuinely new view
-  area. A practical broad sweep is about 30-45 degrees when the tool and safety
-  limits allow it.
+  area. Continue the chosen sweep direction while it reveals new area. A
+  practical broad sweep is about 30-45 degrees when the tool and safety limits
+  allow it.
 - Local sweep: when the target may be near the current view boundary, use small
   yaw steps so a possible target is not swept past.
 - Peek safely: when an obstacle or corner may hide the target, prefer yaw or
@@ -23,5 +24,7 @@ Useful search patterns should be selected by scene context:
   target evidence for the current objective instead of continuing a search
   sweep.
 
-Avoid repetitive left-right oscillation unless the last observation clearly
-showed that a small corrective turn is needed.
+Reverse a broad sweep only when a candidate was plausibly swept past a frame
+edge, a scene or flight boundary blocks the current direction, or continuing
+would revisit rather than reveal view area. Use a small same-side correction,
+not a broad reversal, when the last observation contains a candidate.

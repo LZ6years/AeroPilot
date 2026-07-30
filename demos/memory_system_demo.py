@@ -1,4 +1,4 @@
-﻿"""Run a local memory-system demo with two continuous instructions."""
+"""Run a local memory-system demo with two continuous instructions."""
 
 from __future__ import annotations
 
@@ -15,11 +15,13 @@ if str(REPO_ROOT) not in sys.path:
 from src.agent.semantic.task_parser import TaskParser
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.schemas import ActionWindow, CoupledActionPhasePlan, PlannedStep
-from src.env_client.local_client import LocalEnvClient
+from src.env_client import SimulatorEnvClient
 from src.env_client.schemas import MapPackage
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.runners.task_runtime import TaskRuntime
-from src.sim_server.server import LocalSimulationServer
+from src.sim_server.backends.airsim_backend import AirSimBackend
+from src.sim_server.backends.registry import BackendRegistry
+from src.sim_server.server import SimulationServer
 
 
 # This demo is the lightest readable entry point for the memory/context layer.
@@ -83,14 +85,20 @@ def main() -> None:
     # engine demo.
     recorder = AsyncRunLogger(run_dir)
 
-    # LocalSimulationServer with a manual package does not launch UE here, but
-    # it still gives TaskRuntime a normal LocalEnvClient interface.
-    server = LocalSimulationServer([_map_package()], run_dir=run_dir)
+    # This educational demo deliberately injects an in-memory Backend. The
+    # production SimulationServer defaults to managed real-engine execution;
+    # keeping the fake explicit prevents a learning demo from silently changing
+    # the production process-ownership contract.
+    server = SimulationServer(
+        [_map_package()],
+        run_dir=run_dir,
+        backend_registry=_memory_demo_backend_registry(),
+    )
 
     # This is the real orchestration class. Only the parser/planner are swapped
     # for deterministic demo components.
     runtime = TaskRuntime(
-        LocalEnvClient(server),
+        SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
         planner=DemoHoverPlanner(),
@@ -154,11 +162,26 @@ def _map_package() -> MapPackage:
             "provider": "packaged_unreal",
             "scene_id": "1",
             "root": None,
+            "connection": {"mode": "local"},
             "launch": {"manual": True},
             "control": {"protocol": "airsim"},
             "airsim": {"vehicle_name": "Drone_1", "camera_name": "front_0"},
         }
     )
+
+
+def _memory_demo_backend_registry() -> BackendRegistry:
+    """Build the explicit in-memory Backend used only by this learning demo."""
+
+    registry = BackendRegistry()
+    registry.register(
+        "airsim",
+        lambda context: AirSimBackend(
+            use_real_uav=False,
+            action_config=context.action_config,
+        ),
+    )
+    return registry
 
 
 def _read_json(path: Path) -> dict:

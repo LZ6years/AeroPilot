@@ -20,6 +20,8 @@ class ContextModuleConfigError(ValueError):
 
 class ContextModuleRegistry:
     DEFAULT_MODULE_ORDER = ("instruction", "skills", "image", "pose", "action", "map")
+    MAX_SEMANTIC_EVIDENCE_ITEMS = 8
+    MAX_SEMANTIC_EVIDENCE_CHARS = 160
 
     def __init__(
         self,
@@ -122,6 +124,47 @@ class ContextModuleRegistry:
                 continue
             descriptions[key] = module.describe_output()
         return descriptions
+
+    def semantic_evidence_capabilities(self) -> list[str]:
+        """Return bounded evidence capabilities declared by enabled modules.
+
+        These strings describe configured evidence sources, not facts observed
+        in the current scene. Invalid plugin declarations are ignored so a
+        documentation-only capability cannot break task parsing.
+        """
+
+        capabilities: list[str] = []
+        seen: set[str] = set()
+        for key in self.module_order:
+            if key in self.disabled:
+                continue
+            module = self.modules.get(key)
+            if module is None:
+                continue
+            try:
+                description = module.describe_output()
+            except Exception:
+                continue
+            if not isinstance(description, dict):
+                continue
+            declared = description.get("semantic_evidence")
+            if not isinstance(declared, list):
+                continue
+            for item in declared:
+                if not isinstance(item, str):
+                    continue
+                normalized = " ".join(item.split())
+                if not normalized:
+                    continue
+                if len(normalized) > self.MAX_SEMANTIC_EVIDENCE_CHARS:
+                    normalized = normalized[: self.MAX_SEMANTIC_EVIDENCE_CHARS - 3].rstrip() + "..."
+                if normalized in seen:
+                    continue
+                seen.add(normalized)
+                capabilities.append(normalized)
+                if len(capabilities) >= self.MAX_SEMANTIC_EVIDENCE_ITEMS:
+                    return capabilities
+        return capabilities
 
 
 def _default_modules(plugin_registry: PluginRegistry, enable_model_skill_selection: bool) -> dict[str, ContextModule]:

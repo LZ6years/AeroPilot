@@ -9,7 +9,7 @@ import pytest
 from src.runtime.configs.action_config import UavActionConfig, load_uav_action_config
 from src.runtime.configs.safety_config import UavSafetyConfig, load_uav_safety_config
 from src.runtime.configs.stabilization_config import UavStabilizationConfig, load_uav_stabilization_config
-from src.runtime.configs.map_config import build_remote_airsim_config, load_map_config
+from src.runtime.configs.map_config import load_map_config
 
 
 def test_load_map_config_valid(tmp_path):
@@ -24,11 +24,13 @@ def test_load_map_config_valid(tmp_path):
                         "provider": "airvln",
                         "scene_id": 1,
                         "root": None,
+                        "connection": {"mode": "local"},
                         "launch": {"manual": True},
+                        "control": {"protocol": "airsim"},
                         "airsim": {"vehicle_name": "Drone_1", "camera_name": "front_0"},
                     }
                 ],
-                "port_policy": {"server_port": 1, "airsim_port_start": 2, "max_scene_num": 1},
+                "port_policy": {"control_port_start": 2, "max_scene_num": 1},
             }
         ),
         encoding="utf-8",
@@ -37,7 +39,7 @@ def test_load_map_config_valid(tmp_path):
     maps, policy = load_map_config(config)
 
     assert maps[0].map_id == "m1"
-    assert policy.airsim_port_start == 2
+    assert policy.control_port_start == 2
 
 
 def test_load_map_config_requires_vehicle_and_camera(tmp_path):
@@ -51,7 +53,9 @@ def test_load_map_config_requires_vehicle_and_camera(tmp_path):
                         "map_id": "m1",
                         "provider": "airvln",
                         "scene_id": 1,
+                        "connection": {"mode": "local"},
                         "launch": {"manual": True},
+                        "control": {"protocol": "airsim"},
                         "airsim": {},
                     }
                 ]
@@ -76,6 +80,7 @@ def test_load_map_config_accepts_unrealcv_package(tmp_path):
                         "provider": "packaged_unreal",
                         "scene_id": "collection",
                         "root": "G:/UnrealZoo-UE4/Collection_WinNoEditor_0424_25",
+                        "connection": {"mode": "local"},
                         "launch": {"method": "direct", "windows": "Collection.exe"},
                         "control": {"protocol": "unrealcv"},
                         "unrealcv": {"host": "127.0.0.1", "port": 9010, "camera_id": 0},
@@ -105,9 +110,23 @@ def test_load_map_config_accepts_existing_remote_process(tmp_path):
                         "provider": "packaged_unreal",
                         "scene_id": "collection",
                         "root": None,
-                        "launch": {"method": "existing_process"},
+                        "connection": {
+                            "mode": "remote",
+                            "data_transport": "ssh_tunnel",
+                        },
+                        "ssh": {
+                            "host": "192.168.1.20",
+                            "user": "uav",
+                            "key_path": "key",
+                        },
+                        "launch": {"manual": True},
                         "control": {"protocol": "unrealcv"},
-                        "unrealcv": {"host": "192.168.1.20", "port": 9010, "camera_id": 0},
+                        "unrealcv": {
+                            "remote_host": "127.0.0.1",
+                            "host": "127.0.0.1",
+                            "port": 9010,
+                            "camera_id": 0,
+                        },
                     }
                 ]
             }
@@ -118,30 +137,8 @@ def test_load_map_config_accepts_existing_remote_process(tmp_path):
     maps, _ = load_map_config(config)
 
     assert maps[0].root is None
-    assert maps[0].unrealcv["host"] == "192.168.1.20"
-
-
-def test_build_remote_airsim_config_defaults():
-    # Verify the temporary remote Linux AirSim config matches the planned smoke test.
-    maps, policy = build_remote_airsim_config("192.168.1.30")
-
-    package = maps[0]
-    assert package.map_id == "remote_linux_airsim"
-    assert package.launch["method"] == "existing_process"
-    assert package.control_protocol == "airsim"
-    assert package.airsim["host"] == "192.168.1.30"
-    assert package.airsim["port"] == 41451
-    assert package.airsim["vehicle_name"] == "Drone_1"
-    assert package.airsim["camera_name"] == "front_0"
-    assert policy.server_port == 30000
-
-
-def test_build_remote_airsim_config_allows_computer_vision_mode():
-    # Verify remote AirVLN observation tests can target ComputerVision scenes.
-    maps, _ = build_remote_airsim_config("127.0.0.1", port=30001, mode="ComputerVision")
-
-    assert maps[0].airsim["port"] == 30001
-    assert maps[0].airsim["mode"] == "ComputerVision"
+    assert maps[0].connection_mode == "remote"
+    assert maps[0].unrealcv["remote_host"] == "127.0.0.1"
 
 
 def test_load_uav_action_config_defaults_when_file_missing(tmp_path):
@@ -205,7 +202,26 @@ def test_load_uav_safety_config_reads_hard_limits(tmp_path):
     assert config.max_linear_velocity_mps == 7.0
     assert config.max_vertical_velocity_mps == 4.0
     assert config.max_move_duration_sec == 9.0
-    assert config.max_yaw_scan_accum_deg == 500.0
+    assert config.max_yaw_scan_extent_deg == 500.0
+
+
+def test_load_uav_safety_config_prefers_canonical_yaw_scan_extent(tmp_path):
+    config_path = tmp_path / "uav_safety_config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "max_yaw_scan_extent_deg": 420.0,
+                "max_yaw_scan_accum_deg": 500.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    config = load_uav_safety_config(config_path)
+
+    assert config.max_yaw_scan_extent_deg == 420.0
+    assert config.to_dict()["max_yaw_scan_extent_deg"] == 420.0
+    assert "max_yaw_scan_accum_deg" not in config.to_dict()
 
 
 def test_load_uav_stabilization_config_defaults_when_file_missing(tmp_path):
@@ -252,4 +268,3 @@ def test_load_uav_stabilization_config_reads_legacy_hover_key(tmp_path):
     config = load_uav_stabilization_config(config_path)
 
     assert config.hover_after_brake is True
-

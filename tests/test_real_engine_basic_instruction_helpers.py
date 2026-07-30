@@ -190,6 +190,7 @@ def test_real_engine_demo_config_summary_redacts_model_api_key():
             "provider": "packaged_unreal",
             "scene_id": "1",
             "root": None,
+            "connection": {"mode": "local"},
             "launch": {"manual": True},
             "control": {"protocol": "airsim"},
             "airsim": {"vehicle_name": "Drone_1", "camera_name": "front_0"},

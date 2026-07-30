@@ -24,6 +24,10 @@ Allowed JSON Shape
 
 Rules
 - Omit fields that do not need to change.
+- The preceding selected-skill guidance is domain knowledge from the triggering planning window. Use it as guidance, not as observation, output schema, or permission to change user intent.
+- A preceding configured_evidence message, when present, lists evidence the configured runtime may provide. It is capability metadata, not current observation fact.
+- Keep every revised terminal obligation judgeable from configured evidence. Without a shared-frame target-relative measurement, express the relation through observable cues supported by selected skill guidance rather than hidden geometry or calibration.
+- Do not split RGB, depth, pose, map, or action history into terminal obligations or mechanically copy capability names into done_when.
 - Treat planner_request as a hypothesis, not authority. Verify its reason and optional focus against the user instruction, current phase, observations, and progress evidence.
 - Inspect planner_request.payload.focus first when present, but change only fields whose mismatch is supported by the evidence.
 - The patch must be general UAV task semantics, not a repair for one evaluation sample.
@@ -33,17 +37,17 @@ Rules
 - Metrics remain semantic completion evidence only. Do not invent a numeric metric unless it is directly supported by the user instruction and current semantic contract.
 - Do not introduce numeric thresholds anywhere in goal, done_when, continue_when, metrics, or an appended recovery phase. A number may only repeat a value already present in the user instruction or current phase contract.
 - Prefer relaxing impossible or unobservable completion evidence into observable, conservative conditions rather than changing the task meaning.
-- Every done_when list item is a required core condition. Put alternative sufficient evidence paths inside the same item with explicit either/or wording; do not split alternatives into separate required items.
-- Put independently assessable required facts in separate done_when items. Do not combine target confirmation, a requested spatial relation, and stabilization into one item merely because all are required.
-- Never begin a done_when list item with "or" or "alternatively"; keep that alternative inside the preceding item.
-- Write the minimum sufficient completed state, not an ideal view, preferred proof, or extra confirmation. Preserve the user's requested precision without silently strengthening it.
-- Do not strengthen an approximate target-distance condition into calibrated exact proof, or add hover, hold, or stabilization unless the user requested that terminal behavior.
-- For a numeric target-relative standoff, keep target confirmation separate from a directly judgeable qualitative distance condition with no clear evidence of being substantially nearer or farther.
+- Build revised done_when with the same support-independence test used by criteria generation: if one required result could be supported while another is unknown or contradicted, keep them as separate AND items.
+- Preserve separate items whenever selected skill guidance calls facts independently assessable or says to assess them separately. Merge target identity or availability into a relation only when identifying the cue inherently supplies that usable relation and their support cannot differ.
+- Evidence sources do not define obligations. RGB, depth, pose, motion, and history may jointly support one terminal result.
+- Selected skill guidance defines observable sufficiency, reasonable precision, and accepted variation, but cannot remove a result required by the user or current phase goal.
+- State observable minimum terminal results directly, without hidden self pose, heading, absolute geometry, calibration, evidence recipes, preferred proof, or circular confirmation.
+- Preserve every explicit terminal result in the current phase goal as a state that has already been achieved; never replace it with proximity, feasibility, preparation, or ability to perform it next.
+- Preserve approximation and accepted variation explicitly; do not strengthen them into equality, exact verification, ideal framing, point containment, or an invented tolerance.
 - Treat done_when as the complete operational test for the phase goal. Do not leave a hidden part of the goal for the planner to add after every condition is supported.
-- For visual facing or orientation without an explicit precision request, an identifiable cue clearly inside the forward view with a usable bearing can support broad facing. Do not require exact centering, full visibility, an unobstructed appearance, or a confirmation hover.
-- Express the terminal relation without requiring one exact camera manifestation when consistent observation change and phase-relative motion can jointly support completion.
 - Treat continue_when as non-exhaustive clarification, not as a completion gate or extra positive completion requirements.
 - Do not make a state that is allowed by a valid done_when path sufficient continuation evidence by itself. Add the concrete missing, contradictory, reversal, blockage, or wrong-relation evidence that distinguishes non-completion.
-- For route-reference passage, preserve either of two independently sufficient paths in one core condition: observation and motion can show the reference moving from ahead into a side, rearward, or non-blocking relation; or an established route relation plus sustained consistent translation can carry the UAV beyond a cue that leaves the forward view without reversal, blockage, or conflicting evidence. Do not require both paths, reacquisition, or continued visibility.
-- Never use bare route-reference absence as continue_when. If absence is relevant, couple it in the same condition with an unestablished route relation, absent or insufficient meaningful translation, or concrete conflicting evidence.
-- Before returning, check whether the phase goal could already be achieved while a proposed done_when item remains false only because a preferred visual manifestation or extra confirmation is missing. If so, broaden that item to the minimum sufficient condition or preserve the valid alternative path.
+- Before returning, re-run the support-independence test for every revised item, preserve every boundary explicitly taught by selected skill guidance, and ensure every explicit terminal result in the current phase goal appears as achieved.
+- Remove any standalone item that only states that conflicting or contrary evidence is absent. Use contradiction to interpret a positive terminal obligation or describe continuation, not as an independent terminal result.
+- Remove hover, stable flight, clearance, safety, or other operating-state obligations unless the user or current phase goal explicitly requires that terminal state.
+- State terminal outcomes directly rather than adding parenthetical recipes that list configured evidence sources.

@@ -1,0 +1,52 @@
+{
+  "maps": [
+    {
+      "map_id": "airsim_remote_env_1",
+      "provider": "packaged_unreal",
+      "scene_id": "1",
+      "root": null,
+      "connection": {
+        "mode": "remote",
+        "data_transport": "ssh_tunnel",
+        "machine_id": "airvln_linux"
+      },
+      "ssh": {
+        "host": "10.68.240.49",
+        "port": 10182,
+        "user": "wzq",
+        "key_path": "${FLYAGENT_SSH_KEY}",
+        "connect_timeout_sec": 10
+      },
+      "launch": {
+        "method": "linux_bash",
+        "linux_executable": "/home/Newdisk/wzq/data/airvln/ENVs/env_1/env_1/LinuxNoEditor/AirVLN.sh",
+        "args": [
+          "-RenderOffscreen",
+          "-NoSound",
+          "-NoVSync",
+          "-GraphicsAdapter=0"
+        ],
+        "settings_arg_style": "double_dash",
+        "remote_run_root": ".flyagent/scenes",
+        "ready_timeout_sec": 120,
+        "post_launch_wait_sec": 5
+      },
+      "control": {
+        "protocol": "airsim"
+      },
+      "airsim": {
+        "remote_host": "127.0.0.1",
+        "port": 30001,
+        "mode": "ComputerVision",
+        "settings_template_source": "remote",
+        "settings_template": "/home/Newdisk/wzq/data/airvln/AirVLN/airsim_plugin/settings/1/settings.json",
+        "vehicle_name": "Drone_1",
+        "camera_name": "front_0"
+      }
+    }
+  ],
+  "port_policy": {
+    "control_port_start": 35001,
+    "max_scene_num": 8
+  }
+}

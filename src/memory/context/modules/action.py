@@ -52,6 +52,9 @@ class DefaultActionContextModule(ContextModule):
     def describe_output(self) -> dict[str, Any]:
         return {
             "summary": "Current-phase UAV motion and recent successful actions in execution order.",
+            "semantic_evidence": [
+                "Action history: phase-relative UAV self-motion and recent actions; not target distance."
+            ],
             "content_fields": {
                 "motion_history_summary": (
                     "Current-phase UAV displacement plus up to five recent successful actions, "

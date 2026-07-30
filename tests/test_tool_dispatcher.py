@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from src.env_client.local_client import LocalEnvClient
+from src.env_client.simulator_client import SimulatorEnvClient
 from src.env_client.schemas import MapPackage
-from src.sim_server.server import LocalSimulationServer
+from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
+from tests.simulator_fakes import in_memory_backend_registry
 
 
 def test_tool_dispatcher_routes_uav_actions_through_env_client(tmp_path):
@@ -16,11 +17,19 @@ def test_tool_dispatcher_routes_uav_actions_through_env_client(tmp_path):
             "provider": "airvln",
             "scene_id": 1,
             "root": None,
+            "connection": {"mode": "local"},
             "launch": {"manual": True},
+            "control": {"protocol": "airsim"},
             "airsim": {"vehicle_name": "Drone_1", "camera_name": "front_0"},
         }
     )
-    client = LocalEnvClient(LocalSimulationServer([package], run_dir=tmp_path))
+    client = SimulatorEnvClient(
+        SimulationServer(
+            [package],
+            run_dir=tmp_path,
+            backend_registry=in_memory_backend_registry(),
+        )
+    )
     scene = client.start_scene("m1")
     dispatcher = ToolDispatcher(client)
 

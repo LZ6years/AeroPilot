@@ -77,7 +77,11 @@ class UavPrimitiveAdapter(Protocol):
         # Return raw pose and motion state.
         ...
 
-    def get_frames(self, modalities: list[str]) -> PrimitiveResult:
+    def get_frames(
+        self,
+        modalities: list[str],
+        capture_sources: dict[str, str] | None = None,
+    ) -> PrimitiveResult:
         # Return raw image/depth frame references or data.
         ...
 
@@ -182,7 +186,11 @@ class NullUavPrimitiveAdapter:
             return PrimitiveResult(False, "UAV is not connected")
         return PrimitiveResult(True, "null UAV pose", {"pose": self._pose()})
 
-    def get_frames(self, modalities: list[str]) -> PrimitiveResult:
+    def get_frames(
+        self,
+        modalities: list[str],
+        capture_sources: dict[str, str] | None = None,
+    ) -> PrimitiveResult:
         # Return mock frame metadata for requested modalities.
         if not self.connected:
             return PrimitiveResult(False, "UAV is not connected")

@@ -26,6 +26,7 @@ from plugins.research.stmr_map.perception import StmrPerceptionSession
 from src.agent.safety import SafetySupervisor
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.semantic.task_parser import TaskParser
+from src.memory.context.modules import DefaultImageContextModule
 from src.memory.context.registry import ContextModuleRegistry
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
@@ -257,23 +258,29 @@ class UavFlowBenchmarkRunner:
         self,
         planner: Any,
     ) -> tuple[ObservationContextBuilder | None, StmrMapContextModule | None]:
-        """Build a case-local experimental map provider without global config changes."""
+        """Build case-local optional perception inputs without global config changes."""
 
-        if self.config.stmr_mode == "off":
+        include_depth = self.config.planner_depth_input == "now"
+        include_stmr = self.config.stmr_mode != "off"
+        if not include_depth and not include_stmr:
             return None, None
-        stmr_module = StmrMapContextModule(
-            mode=self.config.stmr_mode,
-            session=self._shared_stmr_session(),
-            prior=self.config.stmr_prior,
-            max_queries=self.config.stmr_max_queries,
-            device=self.config.stmr_device,
-        )
         default_registry = ContextModuleRegistry.default(
             plugin_registry=self.plugin_registry,
             enable_model_skill_selection=getattr(planner, "planner_mode", "") == "model",
         )
         modules = dict(default_registry.modules)
-        modules["map"] = stmr_module
+        if include_depth:
+            modules["image"] = DefaultImageContextModule(include_current_depth=True)
+        stmr_module: StmrMapContextModule | None = None
+        if include_stmr:
+            stmr_module = StmrMapContextModule(
+                mode=self.config.stmr_mode,
+                session=self._shared_stmr_session(),
+                prior=self.config.stmr_prior,
+                max_queries=self.config.stmr_max_queries,
+                device=self.config.stmr_device,
+            )
+            modules["map"] = stmr_module
         registry = ContextModuleRegistry(
             modules,
             disabled=default_registry.disabled,
@@ -317,9 +324,7 @@ class UavFlowBenchmarkRunner:
             resolution=self.config.resolution,
             seed=self.config.seed,
             action_config=self.action_config,
-            # The default UAV-Flow adapter intentionally captures RGB/pose
-            # only.  STMR explicitly opts into its existing raw UnrealCV depth
-            # path without changing baseline benchmark behavior.
+            enable_depth_capture=self.config.planner_depth_input == "now",
             enable_research_frame_capture=self.config.stmr_mode != "off",
         )
 

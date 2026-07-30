@@ -6,12 +6,13 @@ import pytest
 
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
 from src.agent.planning.tool_contract_validator import ToolContractValidationError, ToolContractValidator
-from src.env_client.local_client import LocalEnvClient
+from src.env_client.simulator_client import SimulatorEnvClient
 from src.env_client.schemas import MapPackage
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
-from src.sim_server.server import LocalSimulationServer
+from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
+from tests.simulator_fakes import in_memory_backend_registry
 
 
 def _capability_registry() -> PluginRegistry:
@@ -92,11 +93,19 @@ def test_skill_tool_dispatcher_runs_mock_handler(tmp_path):
             "provider": "airvln",
             "scene_id": 1,
             "root": None,
+            "connection": {"mode": "local"},
             "launch": {"manual": True},
+            "control": {"protocol": "airsim"},
             "airsim": {"vehicle_name": "Drone_1", "camera_name": "front_0"},
         }
     )
-    client = LocalEnvClient(LocalSimulationServer([package], run_dir=tmp_path))
+    client = SimulatorEnvClient(
+        SimulationServer(
+            [package],
+            run_dir=tmp_path,
+            backend_registry=in_memory_backend_registry(),
+        )
+    )
     scene = client.start_scene("m1")
     dispatcher = ToolDispatcher(client, plugin_registry=_capability_registry())
 

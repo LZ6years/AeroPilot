@@ -7,6 +7,8 @@ import os
 import sys
 from pathlib import Path
 
+import pytest
+
 from src.cli import display as cli_display
 from src.cli.display import CliNarrativePanel, print_summary
 from src.cli.main import build_parser, default_chat_map_id, handle_slash_command
@@ -279,6 +281,26 @@ def test_cli_defaults_to_chat_model_artifacts():
     assert args.env_path == ".env"
     assert args.parser_mode is None
     assert args.save_artifacts is True
+    assert args.execution == "managed"
+    assert args.defer_scene_start is False
+
+
+def test_cli_rejects_removed_simulator_dry_run_mode():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--execution", "dry-run"])
+
+
+@pytest.mark.parametrize(
+    "removed_flag",
+    [
+        "--" + "launch",
+        "--connect-" + "existing",
+        "--no-" + "launch",
+    ],
+)
+def test_cli_rejects_removed_simulator_boolean_flags(removed_flag):
+    with pytest.raises(SystemExit):
+        build_parser().parse_args([removed_flag])
 
 
 def test_cli_start_alias_enters_chat():

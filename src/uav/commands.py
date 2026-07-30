@@ -17,6 +17,15 @@ AIRSIM_NED_VERTICAL_SIGN = -1.0
 CANONICAL_VERTICAL_SIGN = 1.0
 UNREALCV_VERTICAL_SIGN = 1.0
 
+# Compact model-facing meanings for FlyAgent's canonical body-frame arguments.
+# Execution adapters and planner context must share these conventions.
+MOVE_BODY_ARGUMENT_SEMANTICS = {
+    "vx": "Positive moves forward; negative moves backward.",
+    "vy": "Positive moves right; negative moves left.",
+    "vz": "Positive moves up; negative moves down.",
+    "duration": "Positive duration in seconds.",
+}
+
 
 def move_body_velocity_from_args(
     args: dict[str, Any],

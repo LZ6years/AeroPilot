@@ -1,4 +1,4 @@
-﻿r"""Manual headed real-engine regression demo for basic language instructions.
+r"""Manual headed real-engine regression demo for basic language instructions.
 
 By default this launches one visible UE/AirSim scene, then sends all
 natural-language instructions continuously through TaskRuntime.run_task(...)
@@ -38,7 +38,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.agent.semantic.task_parser import TaskParser
-from src.env_client.local_client import LocalEnvClient
+from src.env_client import SimulatorEnvClient
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
 from src.runtime.configs.model_config import load_model_config
@@ -46,7 +46,7 @@ from src.runtime.configs.safety_config import load_uav_safety_config
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.runtime.runners.task_runtime import TaskRuntime
-from src.sim_server.server import LocalSimulationServer
+from src.sim_server.server import SimulationServer
 from src.uav import pose_delta, pose_from_observation
 
 
@@ -73,8 +73,15 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--parser-mode", choices=["model", "rule_based"], default="model")
     parser.add_argument("--shutdown-policy", choices=["hover", "land", "none"], default="hover")
-    parser.add_argument("--connect-existing", action="store_true", help="Use an already-running scene instead of launch")
-    parser.add_argument("--no-launch", action="store_true", help="Do not launch the configured scene process")
+    parser.add_argument(
+        "--execution",
+        choices=["attach", "managed"],
+        default="managed",
+        help=(
+            "Simulator execution policy; this real-engine demo defaults to "
+            "managed, while attach never starts or stops an external UE"
+        ),
+    )
     parser.add_argument("--save-artifacts", action="store_true", help="Save real RGB/depth frame artifacts under the run directory")
     parser.add_argument("--headless", action="store_true", help="Keep the engine display hidden if the map supports it")
     parser.add_argument(
@@ -112,24 +119,21 @@ def main() -> None:
     safety_config = load_uav_safety_config(args.safety_config)
 
     selected_map = next(pkg for pkg in maps if pkg.map_id == args.map_id)
-    launch_processes = not args.no_launch and not args.connect_existing
-    real_control = launch_processes or args.connect_existing
-
     # A continuous session keeps one UE scene alive for multiple instructions.
     # Separate-scene mode is better for regression tests that need isolation.
     run_prefix = "real_engine_basic_instruction" if args.separate_scenes else "real_engine_basic_instruction_session"
     run_dir = RunStore(args.run_root).create_run_dir(run_prefix)
     recorder = AsyncRunLogger(run_dir)
 
-    # LocalSimulationServer owns scene lifecycle and the concrete UAV backend.
-    # TaskRuntime talks to it only through LocalEnvClient/ToolDispatcher, which
+    # SimulationServer owns scene lifecycle and the concrete UAV backend.
+    # TaskRuntime talks to it only through SimulatorEnvClient/ToolDispatcher,
+    # which
     # keeps high-level planning independent from AirSim/UE details.
-    server = LocalSimulationServer(
+    server = SimulationServer(
         maps,
         port_policy,
         run_dir=run_dir,
-        launch_processes=launch_processes,
-        real_control=real_control,
+        execution_mode=args.execution,
         show_display=not args.headless,
         action_config=action_config,
         save_artifacts=args.save_artifacts,
@@ -139,7 +143,7 @@ def main() -> None:
     # TaskParser(model) -> context builder -> ModelActionPlanner(model) ->
     # coupled phase decision -> ToolContractValidator -> SafetySupervisor ->
     # ToolDispatcher/UAV -> automatic observation when the phase continues.
-    runtime = make_runtime(args, LocalEnvClient(server), recorder, model_config, action_config, safety_config)
+    runtime = make_runtime(args, SimulatorEnvClient(server), recorder, model_config, action_config, safety_config)
     summaries: list[dict[str, Any]] = []
     last_state = None
 
@@ -147,7 +151,7 @@ def main() -> None:
     print(f"map_id={args.map_id}")
     print(f"parser_mode={args.parser_mode}, planner=ModelActionPlanner")
     print(f"shutdown_policy={args.shutdown_policy}")
-    print(f"launch_processes={launch_processes}, headed={not args.headless}")
+    print(f"execution={args.execution}, headed={not args.headless}")
     print(f"continuous_scene={not args.separate_scenes}")
     print(f"run_dir={run_dir}")
     print()

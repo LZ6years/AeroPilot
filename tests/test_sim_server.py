@@ -1,15 +1,34 @@
-"""Test LocalSimulationServer scene and primitive action behavior."""
+"""Test SimulationServer scene and primitive action behavior."""
 
 from __future__ import annotations
 
 import json
 
+import pytest
+
 import src.sim_server.server as server_module
 from src.env_client.schemas import MapPackage, PortPolicy, SceneInstance
 from src.adapters.airsim_uav import AirSimUavAdapter
 from src.runtime.configs.action_config import UavActionConfig
+from src.sim_server.backends.airsim_backend import AirSimBackend
+from src.sim_server.backends.registry import BackendContext, BackendRegistry
 from src.sim_server.process_manager import ProcessManager, windows_path_to_wsl
-from src.sim_server.server import LocalSimulationServer
+from src.sim_server.server import SimulationServer
+from tests.simulator_fakes import in_memory_backend_registry
+
+
+_PRODUCTION_REGISTRY_DEFAULTS = BackendRegistry.defaults.__func__
+
+
+@pytest.fixture(autouse=True)
+def _use_explicit_in_memory_simulator_backends(monkeypatch):
+    """Keep server unit tests independent from an installed simulator SDK."""
+
+    monkeypatch.setattr(
+        BackendRegistry,
+        "defaults",
+        classmethod(lambda cls: in_memory_backend_registry()),
+    )
 
 
 def make_package() -> MapPackage:
@@ -20,6 +39,7 @@ def make_package() -> MapPackage:
             "provider": "packaged_unreal",
             "scene_id": 1,
             "root": None,
+            "connection": {"mode": "local"},
             "launch": {"manual": True},
             "control": {"protocol": "airsim"},
             "airsim": {"vehicle_name": "Drone_1", "camera_name": "front_0"},
@@ -38,6 +58,7 @@ def make_launch_package(tmp_path) -> MapPackage:
             "provider": "packaged_unreal",
             "scene_id": 1,
             "root": str(tmp_path / "env_1"),
+            "connection": {"mode": "local"},
             "launch": {"method": "wsl_bash", "linux": "LinuxNoEditor/AirVLN.sh"},
             "control": {"protocol": "airsim"},
             "airsim": {"vehicle_name": "Drone_1", "camera_name": "front_0"},
@@ -56,7 +77,12 @@ def make_windows_airsim_package(tmp_path) -> MapPackage:
             "provider": "packaged_unreal",
             "scene_id": "city",
             "root": str(tmp_path / "CityRoot"),
-            "launch": {"method": "direct", "windows": str(exe)},
+            "connection": {"mode": "local"},
+            "launch": {
+                "method": "direct",
+                "manual": True,
+                "windows": str(exe),
+            },
             "control": {"protocol": "airsim"},
             "airsim": {
                 "vehicle_name": "Drone1",
@@ -76,19 +102,27 @@ def make_windows_airsim_package(tmp_path) -> MapPackage:
 
 def test_start_scene_creates_scene_instance_and_settings(tmp_path):
     # Verify scene startup records ports, status, and settings artifacts.
-    server = LocalSimulationServer([make_package()], PortPolicy(30000, 30001, 2), tmp_path)
+    server = SimulationServer(
+        [make_package()],
+        PortPolicy(control_port_start=30001, max_scene_num=2),
+        tmp_path,
+    )
 
     scene = server.start_scene("m1")
 
     assert scene.map_id == "m1"
-    assert scene.airsim_port == 30001
+    assert scene.control_port == 41451
     assert scene.status == "running"
     assert scene.process_id is None
     assert (tmp_path / "scenes" / scene.scene_instance_id / "settings.json").exists()
 
 
 def test_get_or_start_scene_reuses_running_scene(tmp_path):
-    server = LocalSimulationServer([make_package()], PortPolicy(30000, 30001, 2), tmp_path)
+    server = SimulationServer(
+        [make_package()],
+        PortPolicy(control_port_start=30001, max_scene_num=2),
+        tmp_path,
+    )
 
     first = server.get_or_start_scene("m1")
     second = server.get_or_start_scene("m1")
@@ -99,7 +133,11 @@ def test_get_or_start_scene_reuses_running_scene(tmp_path):
 
 
 def test_get_or_start_scene_does_not_reuse_stopped_scene(tmp_path):
-    server = LocalSimulationServer([make_package()], PortPolicy(30000, 30001, 2), tmp_path)
+    server = SimulationServer(
+        [make_package()],
+        PortPolicy(control_port_start=30001, max_scene_num=2),
+        tmp_path,
+    )
 
     first = server.get_or_start_scene("m1")
     server.stop_scene(first.scene_instance_id)
@@ -110,12 +148,16 @@ def test_get_or_start_scene_does_not_reuse_stopped_scene(tmp_path):
 
 def test_camera_defaults_settings_profile_avoids_vehicle_camera_block(tmp_path):
     # Verify Windows AirSim maps can use CameraDefaults instead of per-vehicle Cameras.
-    server = LocalSimulationServer([make_windows_airsim_package(tmp_path)], PortPolicy(30000, 30001, 2), tmp_path)
+    server = SimulationServer(
+        [make_windows_airsim_package(tmp_path)],
+        PortPolicy(control_port_start=30001, max_scene_num=2),
+        tmp_path,
+    )
 
     scene = server.start_scene("city")
     settings = json.loads((tmp_path / "scenes" / scene.scene_instance_id / "settings.json").read_text())
 
-    assert settings["ApiServerPort"] == 30001
+    assert settings["ApiServerPort"] == 41451
     assert "CameraDefaults" in settings
     assert settings["Vehicles"]["Drone1"]["Y"] == -5
     assert "Cameras" not in settings["Vehicles"]["Drone1"]
@@ -123,9 +165,9 @@ def test_camera_defaults_settings_profile_avoids_vehicle_camera_block(tmp_path):
 
 def test_show_display_overrides_airsim_view_mode(tmp_path):
     # Verify the backend can force visible AirSim FPV mode at runtime.
-    server = LocalSimulationServer(
+    server = SimulationServer(
         [make_windows_airsim_package(tmp_path)],
-        PortPolicy(30000, 30001, 2),
+        PortPolicy(control_port_start=30001, max_scene_num=2),
         tmp_path,
         show_display=True,
     )
@@ -140,7 +182,12 @@ def test_hide_display_overrides_airsim_view_mode(tmp_path):
     # Verify the backend can force AirSim NoDisplay mode at runtime.
     package = make_windows_airsim_package(tmp_path)
     package.airsim["view_mode"] = "Fpv"
-    server = LocalSimulationServer([package], PortPolicy(30000, 30001, 2), tmp_path, show_display=False)
+    server = SimulationServer(
+        [package],
+        PortPolicy(control_port_start=30001, max_scene_num=2),
+        tmp_path,
+        show_display=False,
+    )
 
     scene = server.start_scene("city")
     settings = json.loads((tmp_path / "scenes" / scene.scene_instance_id / "settings.json").read_text())
@@ -150,7 +197,7 @@ def test_hide_display_overrides_airsim_view_mode(tmp_path):
 
 def test_airsim_wait_reports_rpc_timeout(tmp_path):
     # Verify AirSim readiness checks wait for RPC ping instead of only TCP.
-    server = LocalSimulationServer([make_package()], run_dir=tmp_path)
+    server = SimulationServer([make_package()], run_dir=tmp_path)
 
     try:
         server._wait_for_airsim_rpc("127.0.0.1", 9, 0.01, "settings.json")
@@ -164,7 +211,7 @@ def test_post_launch_wait_uses_package_stabilization_delay(tmp_path, monkeypatch
     monkeypatch.setattr(server_module.time, "sleep", lambda seconds: sleeps.append(seconds))
     package = make_package()
     package.launch["post_launch_wait_sec"] = 2.5
-    server = LocalSimulationServer([package], run_dir=tmp_path)
+    server = SimulationServer([package], run_dir=tmp_path)
 
     server._post_launch_wait(package)
 
@@ -176,7 +223,7 @@ def test_post_launch_wait_defaults_to_five_seconds(tmp_path, monkeypatch):
     sleeps = []
     monkeypatch.setattr(server_module.time, "sleep", lambda seconds: sleeps.append(seconds))
     package = make_package()
-    server = LocalSimulationServer([package], run_dir=tmp_path)
+    server = SimulationServer([package], run_dir=tmp_path)
 
     server._post_launch_wait(package)
 
@@ -184,8 +231,8 @@ def test_post_launch_wait_defaults_to_five_seconds(tmp_path, monkeypatch):
 
 
 def test_execute_smoke_actions_and_observation(tmp_path):
-    # Verify dry-run primitive actions and raw observations work together.
-    server = LocalSimulationServer([make_package()], run_dir=tmp_path)
+    # Verify explicitly injected in-memory primitives and observations.
+    server = SimulationServer([make_package()], run_dir=tmp_path)
     scene = server.start_scene("m1")
 
     assert server.execute_action(scene.scene_instance_id, "uav_1", "connect", {}).ok
@@ -217,7 +264,7 @@ def test_action_config_provides_default_move_turn_and_vertical_steps(tmp_path):
         vertical_step_m=1.5,
         yaw_step_deg=20.0,
     )
-    server = LocalSimulationServer([make_package()], run_dir=tmp_path, action_config=action_config)
+    server = SimulationServer([make_package()], run_dir=tmp_path, action_config=action_config)
     scene = server.start_scene("m1")
 
     assert server.execute_action(scene.scene_instance_id, "uav_1", "connect", {}).ok
@@ -235,7 +282,7 @@ def test_action_config_provides_default_move_turn_and_vertical_steps(tmp_path):
 def test_action_config_direction_supports_backward_and_lateral_moves(tmp_path):
     # Verify semantic movement directions resolve to the same configured body-frame scale.
     action_config = UavActionConfig(linear_velocity_mps=1.0, move_duration_sec=2.0)
-    server = LocalSimulationServer([make_package()], run_dir=tmp_path, action_config=action_config)
+    server = SimulationServer([make_package()], run_dir=tmp_path, action_config=action_config)
     scene = server.start_scene("m1")
 
     assert server.execute_action(scene.scene_instance_id, "uav_1", "connect", {}).ok
@@ -251,7 +298,7 @@ def test_action_config_direction_supports_backward_and_lateral_moves(tmp_path):
 def test_vertical_actions_support_duration_speed_and_meters(tmp_path):
     # Verify ascend/descend resolve duration, speed, and meters into speed-duration motion.
     action_config = UavActionConfig(vertical_velocity_mps=1.0, vertical_duration_sec=1.0)
-    server = LocalSimulationServer([make_package()], run_dir=tmp_path, action_config=action_config)
+    server = SimulationServer([make_package()], run_dir=tmp_path, action_config=action_config)
     scene = server.start_scene("m1")
 
     assert server.execute_action(scene.scene_instance_id, "uav_1", "connect", {}).ok
@@ -310,18 +357,36 @@ def test_show_display_removes_render_offscreen_arg(tmp_path):
     # Verify visible launches do not keep the offscreen rendering flag.
     package = make_windows_airsim_package(tmp_path)
     package.launch["args"] = ["-windowed", "-RenderOffscreen", "-NoSound"]
-    server = LocalSimulationServer([package], run_dir=tmp_path, show_display=True)
+    server = SimulationServer([package], run_dir=tmp_path, show_display=True)
 
     assert server._launch_args(package) == ["-windowed", "-NoSound"]
 
 
 def test_launch_backend_uses_real_airsim_adapter(tmp_path):
-    # Verify launch-mode servers construct a real AirSim adapter for the backend.
-    server = LocalSimulationServer([make_launch_package(tmp_path)], run_dir=tmp_path, launch_processes=True)
-    package = server._get_package("m_launch")
-    backend = server._backend_for(package)
-    scene = SceneInstance("scene_test", "m_launch", "1", "local", "127.0.0.1", 30000, 30001, "settings.json", 123, "created")
+    # Verify the production Registry constructs a real AirSim adapter.
+    package = make_launch_package(tmp_path)
+    registry = _PRODUCTION_REGISTRY_DEFAULTS(BackendRegistry)
+    backend = registry.create(
+        "airsim",
+        BackendContext(
+            action_config=UavActionConfig(),
+            artifact_dir=tmp_path / "artifacts",
+            save_artifacts=False,
+        ),
+    )
+    scene = SceneInstance(
+        scene_instance_id="scene_test",
+        map_id="m_launch",
+        scene_id="1",
+        machine_id="local",
+        control_host="127.0.0.1",
+        control_port=30001,
+        settings_path="settings.json",
+        process_id=123,
+        status="created",
+    )
     backend.start(package, scene)
 
     assert backend.use_real_uav
+    assert isinstance(backend, AirSimBackend)
     assert isinstance(backend.uav, AirSimUavAdapter)

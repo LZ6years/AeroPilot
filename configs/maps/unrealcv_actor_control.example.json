@@ -1,0 +1,46 @@
+{
+  "maps": [
+    {
+      "map_id": "downtownwest_local_unrealcv",
+      "provider": "packaged_unreal",
+      "scene_id": "DowntownWest",
+      "root": "G:/replace/with/UnrealZoo/Collection_WinNoEditor",
+      "connection": {
+        "mode": "local",
+        "data_transport": "direct"
+      },
+      "launch": {
+        "method": "direct",
+        "windows": "Collection/Binaries/Win64/Collection.exe",
+        "args": ["DowntownWest", "-windowed"]
+      },
+      "control": {
+        "protocol": "unrealcv"
+      },
+      "unrealcv": {
+        "host": "127.0.0.1",
+        "port": 9068,
+        "camera_id": 0,
+        "width": 256,
+        "height": 256,
+        "fov": 90,
+        "control_target": "actor",
+        "actor": {
+          "name": "BP_Drone01_2",
+          "units_per_meter": 100.0,
+          "yaw_offset_deg": -180.0,
+          "rotation_method": "blueprint_yaw",
+          "camera_follow": "standard_pose",
+          "disable_physics": true,
+          "yaw_settle_timeout_sec": 5.0,
+          "yaw_tolerance_deg": 1.0,
+          "yaw_poll_interval_sec": 0.05
+        }
+      }
+    }
+  ],
+  "port_policy": {
+    "control_port_start": 9068,
+    "max_scene_num": 1
+  }
+}

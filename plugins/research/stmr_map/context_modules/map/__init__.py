@@ -77,6 +77,9 @@ class PluginContextModule(ContextModule):
     def describe_output(self) -> dict[str, Any]:
         return {
             "summary": "Default recalled map clues plus one compact online STMR semantic-history snapshot.",
+            "semantic_evidence": [
+                "STMR semantic history: accumulated semantics and UAV trajectory; not verified free space or exact target pose."
+            ],
             "content_fields": {
                 "recalled_map_memories": "Existing map-memory clues preserved from the default map provider.",
                 "recall_filter": "Existing map/scene recall filter.",

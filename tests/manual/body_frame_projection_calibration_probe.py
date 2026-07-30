@@ -29,13 +29,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.uav import pose_measurements
-from src.env_client.local_client import LocalEnvClient
+from src.env_client.simulator_client import SimulatorEnvClient
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
 from src.runtime.configs.model_config import load_model_config
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
-from src.sim_server.server import LocalSimulationServer
+from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
 
 
@@ -52,8 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--duration", type=float, default=1.0)
     parser.add_argument("--z", type=float, default=-2.0)
-    parser.add_argument("--connect-existing", action="store_true")
-    parser.add_argument("--no-launch", action="store_true")
+    parser.add_argument(
+        "--execution",
+        choices=["attach", "managed"],
+        required=True,
+    )
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--save-artifacts", action="store_true")
     return parser
@@ -65,21 +68,18 @@ def main() -> None:
     load_model_config(args.env_path)  # Load .env consistently with the other real-engine demos.
     action_config = load_uav_action_config(args.action_config)
     selected_map = next(pkg for pkg in maps if pkg.map_id == args.map_id)
-    launch_processes = not args.no_launch and not args.connect_existing
-    real_control = launch_processes or args.connect_existing
     run_dir = RunStore(args.run_root).create_run_dir("body_frame_calibration")
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer(
+    server = SimulationServer(
         maps,
         port_policy,
         run_dir=run_dir,
-        launch_processes=launch_processes,
-        real_control=real_control,
+        execution_mode=args.execution,
         show_display=not args.headless,
         action_config=action_config,
         save_artifacts=args.save_artifacts,
     )
-    client = LocalEnvClient(server)
+    client = SimulatorEnvClient(server)
     tools = ToolDispatcher(client)
     scene = client.start_scene(args.map_id)
     agent_id = "uav_1"

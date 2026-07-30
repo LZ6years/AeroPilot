@@ -30,6 +30,10 @@ Action Window Rules
 
 Action Choice
 - Choose an action that addresses concrete missing or contradictory evidence from completion_assessment.
+- Read allowed_action_constraints.action_schemas[*].argument_semantics before choosing signed arguments.
+- Before returning a step, verify that its args, action_window.expected_effect, and reason describe the same physical effect under that tool contract.
+- An information-gathering action must not knowingly move the state away from the phase goal under your own current assessment.
+- If the required physical direction cannot be determined from current evidence, hover for the next automatic observation instead of guessing a signed movement.
 - If a route cue is visible but route progress is weak, prefer bounded translation that advances the route or preserves the requested relation.
 - Avoid repeating the same yaw pattern unless the cue is lost, unsafe, or genuinely ambiguous.
 - Keep each action window short enough that the next automatic observation can verify progress.

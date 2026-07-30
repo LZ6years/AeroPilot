@@ -100,6 +100,9 @@ class PluginContextModule(ContextModule):
     def describe_output(self) -> dict[str, Any]:
         return {
             "summary": "Rendered UAV-centered spatial map plus compact semantic matrix and trajectory summary.",
+            "semantic_evidence": [
+                "Local semantic map: UAV-centered semantic cells and trajectory; not current visual truth or verified free space."
+            ],
             "content_fields": {
                 "semantic_matrix": "Local grid centered on the UAV. -1 is visited path, 0 is free, -2 is unknown, positive values refer to semantic_legend ids.",
                 "semantic_legend": "Semantic id to label mapping. Unknown mask colors collapse to -2 unknown.",

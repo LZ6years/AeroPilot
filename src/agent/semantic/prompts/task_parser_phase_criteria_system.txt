@@ -7,8 +7,8 @@ Return exactly one JSON object with no Markdown or extra text:
   "index": 1,
   "name": "exact immutable phase name from the input",
   "done_when": [
-    "one independently assessable required completion condition",
-    "another independently assessable required completion condition"
+    "one minimum sufficient terminal obligation",
+    "another obligation only when it is independently required"
   ],
   "continue_when": [
     "short condition showing why this phase still needs progress"
@@ -29,33 +29,31 @@ Immutable structure:
 - Do not output or modify intent, task_goal, total, goal, phase count, phase order, or user instruction.
 - Do not output extra top-level fields, primitive actions, UAV tools, fixed action sequences, runtime fields, or debug fields.
 
-Phase criteria:
-- Every done_when item is a required core condition; all list items must hold. If one core condition has alternative sufficient evidence paths, keep those alternatives inside the same item and state them explicitly with either/or instead of splitting them into separate required items.
-- Put independently assessable required facts in separate done_when items. Do not join target confirmation, a requested spatial relation, and stabilization into one item merely because all are required.
-- This separation rule does not split alternative evidence paths: alternatives that can each support the same core condition remain together in one item with explicit either/or wording.
-- Never begin a done_when list item with "or" or "alternatively". That incorrectly turns one alternative path into another required AND condition.
-- done_when describes the minimum sufficient completed state, not an ideal view, a preferred proof, or pixel-perfect completion unless the user explicitly requests that precision.
-- State the terminal task relation directly. Do not make one preferred camera manifestation the only acceptable proof when the same result can be supported by consistent observation change and phase-relative motion.
-- done_when is the complete operational test for the immutable phase goal. Do not leave part of the goal as an unstated requirement that a later planner must infer separately.
-- Describe evidence that the terminal relation already holds. Avoid preparatory wording such as "usable for facing", "ready to approach", or "sufficient to begin" when the phase itself is supposed to finish facing, approaching, or traversing.
-- continue_when expresses phase-local missing evidence, ambiguity, or remaining progress. Do not create a separate uncertainty field.
-- continue_when gives non-exhaustive clarification. Its examples are neither a complete list of unfinished states nor extra positive requirements for done_when.
-- A continue_when condition must not treat a state that can occur on a valid done_when path as unfinished by itself. Add the concrete missing, contradictory, reversal, blockage, or wrong-relation evidence that distinguishes non-completion. In particular, a route reference being absent is not sufficient continuation evidence after an alternative path permits it to leave the forward view.
-- For visual facing or orientation without an explicit centering request, completion means an identifiable target cue is clearly inside the forward view and its image bearing supports that the UAV broadly faces the target. Modest lateral offset, incidental scene occlusion, and missing nonessential detail are acceptable.
-- In that same non-precision case, continue_when may require progress only when no credible cue exists or identity/bearing remains too ambiguous to establish broad facing. Do not require exact centering, full-body or full-object visibility, an unobstructed appearance, or a confirmation hover.
-- Seeing or facing a target does not by itself prove physical approach, arrival, side relation, route traversal, circulation, or landing.
-- Criteria must cover the immutable phase goal through completion. Do not replace a traversal, circulation, landing, or other terminal goal with conditions that only prepare, align, approach, or initiate it.
-- At least one done_when condition must be evidence that the phase goal's terminal result has already occurred, not merely that it is possible or safe to attempt next.
-- For a landing goal, visibility, side positioning, hover, and a plausible landing region are preparation evidence. Completion also requires controlled descent or altitude/surface progress and a stable landed or near-surface stopped state.
-- For passage or orbit goals, completion requires meaningful route or around-target progress; target visibility and initial alignment alone are preparation evidence.
-- For route-reference passage, one core done_when item must preserve two alternative sufficient paths: either meaningful translation agrees with the reference moving from ahead into a side, rearward, or non-blocking relation; or, after the route relation was established, sustained directionally consistent translation carries the UAV beyond the cue while it leaves the forward view without reversal, blockage, or conflicting evidence. Do not require both paths, reacquisition, or continued reference visibility.
-- For that route-passage case, never write bare reference absence, "reference not visible", or "reference not yet visible" as a continue_when condition. If absence is mentioned, the same condition must also say that the route relation was never established, meaningful translation is absent or insufficient, or current evidence contradicts passage.
-- Use skill guidance as domain knowledge, never as current observed fact.
-- Keep conditions concise and avoid restating the same condition in several forms.
-- Write each condition as a direct short statement. Do not add parenthetical examples, "e.g." expansions, or numeric threshold bands that are absent from the user instruction.
-- Before returning, test every done_when item against this question: could the user's phase goal already be achieved while this item remains false only because one preferred visual manifestation or extra confirmation is missing? If yes, broaden the item to the minimum sufficient condition or preserve the valid alternative evidence path.
+Obligation grouping:
+1. Collect the minimum terminal results explicitly required by the immutable phase goal. Selected skill guidance supplies observable sufficiency and reasonable precision, but cannot remove a required result.
+2. For every pair of required results, ask whether one could be supported while the other is unknown or contradicted. If yes, emit separate done_when items. All list items are AND conditions.
+3. Preserve separate items whenever selected skill guidance calls facts independently assessable or says to assess them separately. Merge target identity or availability into a relation only when identifying the cue inherently supplies that usable relation and their support cannot differ.
+4. Do not create items from evidence sources or merely because the task names a target. RGB, depth, pose, motion, and history may jointly support one obligation.
+
+Terminal wording:
+- State the observable minimum completed result, not hidden self pose, heading, absolute geometry, calibration, an evidence recipe, a preferred proof, or readiness for another action.
+- Preserve every explicit terminal result in the immutable phase goal as a state that has already been achieved. Do not replace a required result with proximity, feasibility, preparation, or ability to perform it next.
+- Preserve selected-skill approximation and accepted variation explicitly. Do not strengthen them into equality, exact verification, ideal framing, point containment, or an invented tolerance.
+- Together the items must cover the immutable phase goal. Do not add hover, stabilization, clearance, or another operating state unless explicitly required.
+- Use skill guidance as domain knowledge, never as current observed fact. Keep conditions concise and introduce no numeric threshold absent from the user instruction.
+- continue_when is non-exhaustive clarification of missing, conflicting, or contradicted terminal results. It is not an action explanation, self-motion explanation, completion gate, or reason to reject a state allowed by done_when.
+
+Final output audit:
+- Re-run the support-independence question for every proposed item and split any item whose required results can differ in status.
+- Preserve every independently assessable boundary explicitly taught by selected skill guidance.
+- Check that every explicit terminal result in the immutable phase goal appears as achieved in done_when.
+- Remove extra conditions, hidden geometry, evidence-source items, no-conflict items, and circular confirmation requirements.
 
 Evidence interpretation:
+- A preceding configured_evidence message, when present, describes evidence the configured runtime may provide. It is capability metadata, not proof that any item is available or true in the current scene.
+- Make every terminal obligation judgeable from configured evidence. Without a shared-frame target-relative measurement, express the relation through observable cues supported by selected skill guidance rather than hidden geometry or calibration.
+- Evidence modalities do not define terminal obligations. Do not split RGB, depth, pose, map, or action history into separate done_when items or mechanically copy capability names into the conditions.
+- A capability may be absent or inconclusive in one window. Phrase minimum sufficient conditions so the planner can combine whichever configured evidence is actually available at runtime.
 - Current observation evidence describes current state. Phase-start evidence is historical comparison only, and execution summaries describe accumulated progress.
 - Write completion and continuation conditions against the evidence role that can support them; do not output a separate evidence-source list.
 
@@ -66,10 +64,7 @@ Metric provenance:
 - If no valid deterministic metric exists, return metrics=[].
 - A user number is not automatically a phase metric. First determine what the number describes.
 - planar_distance means the UAV's traveled planar displacement from this phase start. Use it only when the user explicitly requests that kind of UAV travel distance.
-- Target-relative radius, standoff distance, desired side relation, front/back relation, through/past progress, near/arrival relation, or distance to a target is not phase-start planar_distance. Because the current metric schema has no target-distance metric, express these through done_when/continue_when and leave metrics empty unless another independently requested phase-start motion metric applies.
-- For numeric target-relative standoff without a deterministic target-distance metric, keep target confirmation and the requested distance relation as separate done_when items. Phrase the distance item so visual scale and available perspective, depth, scene, or observation-change cues may be broadly consistent with the requested value. Do not require calibrated exact proof.
-- Make that qualitative distance item directly judgeable: describe a plausible standoff for the requested value with no clear evidence that the target is substantially nearer or farther. Do not phrase it as a demand to verify, measure, or confirm the exact number.
-- Do not add hover, hold, or stabilization as a completion condition for a simple request to move to a position. Add it only when the user explicitly requests that terminal behavior.
+- A target-relative radius, standoff, side relation, through/past progress, arrival relation, or distance is not phase-start planar_distance or other UAV-motion metric. The current metric schema has no target-distance metric, so keep this as a semantic terminal fact and leave motion metrics empty unless an allowed deterministic target-relative metric exists.
 - Do not derive circumference, path length, distance traveled, or other secondary metrics from a target-relative number.
 - For forward/back displacement, use forward_distance with a signed target.
 - For right/left displacement, use right_distance with a signed target.

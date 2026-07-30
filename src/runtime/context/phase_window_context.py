@@ -15,9 +15,6 @@ from typing import Any
 from src.agent.mission_state import MissionState
 from src.agent.phase import evaluate_phase_completion
 from src.agent.planning.model_inputs import sanitize_context_for_model_text
-from src.uav import clean_pose_for_model
-
-
 @dataclass(frozen=True)
 class PhaseWindowContext:
     """Model/debug payloads prepared for a single phase window."""
@@ -27,7 +24,6 @@ class PhaseWindowContext:
     phase_metrics: list[dict[str, Any]]
     phase_completion_evaluation: dict[str, Any]
     phase_progress_evidence: dict[str, Any]
-    latest_observation_summary: dict[str, Any]
 
 
 class PhaseWindowContextBuilder:
@@ -45,7 +41,6 @@ class PhaseWindowContextBuilder:
         metrics = self.current_phase_metrics(state)
         completion = evaluate_phase_completion(metrics, state.current_phase_execution_summary)
         progress = self.phase_progress_evidence(state)
-        observation_summary = self.clean_observation_for_model(observation_before)
         planner_payload = dict(base_planner_context)
         runtime_control = self.compact_runtime_control_context(runtime_control_context)
         if runtime_control:
@@ -55,7 +50,6 @@ class PhaseWindowContextBuilder:
                 "phase_metrics": metrics,
                 "phase_completion_evaluation": completion,
                 "phase_progress_evidence": progress,
-                "latest_observation_summary": observation_summary,
             }
         )
         return PhaseWindowContext(
@@ -64,7 +58,6 @@ class PhaseWindowContextBuilder:
             phase_metrics=metrics,
             phase_completion_evaluation=completion,
             phase_progress_evidence=progress,
-            latest_observation_summary=observation_summary,
         )
 
     @staticmethod
@@ -122,16 +115,6 @@ class PhaseWindowContextBuilder:
                 "yaw_only_so_far": yaw_only,
             },
         }
-
-    @staticmethod
-    def clean_observation_for_model(observation: dict[str, Any]) -> dict[str, Any]:
-        """Return a model-facing observation summary with normalized pose fields."""
-
-        data = dict(observation) if isinstance(observation, dict) else {}
-        pose = data.get("pose")
-        if isinstance(pose, dict):
-            data["pose"] = clean_pose_for_model(pose)
-        return data
 
     @staticmethod
     def compact_runtime_control_context(runtime_control_context: dict[str, Any] | None) -> dict[str, Any]:

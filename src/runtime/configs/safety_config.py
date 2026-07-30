@@ -13,7 +13,7 @@ class UavSafetyConfig:
     max_linear_velocity_mps: float = 6.0
     max_vertical_velocity_mps: float = 3.0
     max_move_duration_sec: float = 8.0
-    max_yaw_scan_accum_deg: float = 480.0
+    max_yaw_scan_extent_deg: float = 480.0
 
     @classmethod
     def from_dict(cls, data: dict) -> "UavSafetyConfig":
@@ -22,7 +22,12 @@ class UavSafetyConfig:
             max_linear_velocity_mps=float(data.get("max_linear_velocity_mps", cls.max_linear_velocity_mps)),
             max_vertical_velocity_mps=float(data.get("max_vertical_velocity_mps", cls.max_vertical_velocity_mps)),
             max_move_duration_sec=float(data.get("max_move_duration_sec", cls.max_move_duration_sec)),
-            max_yaw_scan_accum_deg=float(data.get("max_yaw_scan_accum_deg", cls.max_yaw_scan_accum_deg)),
+            max_yaw_scan_extent_deg=float(
+                data.get(
+                    "max_yaw_scan_extent_deg",
+                    data.get("max_yaw_scan_accum_deg", cls.max_yaw_scan_extent_deg),
+                )
+            ),
         )
 
     def to_dict(self) -> dict[str, float]:
@@ -31,7 +36,7 @@ class UavSafetyConfig:
             "max_linear_velocity_mps": self.max_linear_velocity_mps,
             "max_vertical_velocity_mps": self.max_vertical_velocity_mps,
             "max_move_duration_sec": self.max_move_duration_sec,
-            "max_yaw_scan_accum_deg": self.max_yaw_scan_accum_deg,
+            "max_yaw_scan_extent_deg": self.max_yaw_scan_extent_deg,
         }
 
 

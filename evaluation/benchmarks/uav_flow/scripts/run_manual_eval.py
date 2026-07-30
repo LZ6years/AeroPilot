@@ -136,6 +136,12 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-loop-guard-windows", type=int, default=40, help="Runtime loop guard window count.")
     parser.add_argument("--parser-mode", default="model", help="Task parser mode.")
     parser.add_argument("--env-path", default=None, help="Optional .env path for model config.")
+    parser.add_argument(
+        "--planner-depth-input",
+        choices=["off", "now"],
+        default=None,
+        help="Optional pixel-aligned NOW RGB + metric-depth overlay for the planner.",
+    )
     parser.add_argument("--stmr-mode", choices=["off", "shadow", "planner"], default=None, help="Optional online STMR experiment mode.")
     parser.add_argument("--stmr-prior", default=None, help="Named STMR detector-query prior.")
     parser.add_argument("--stmr-max-queries", type=int, default=None, help="Maximum task-plus-prior detector queries.")
@@ -164,6 +170,8 @@ def _config_from_args(args: argparse.Namespace) -> UavFlowEvalConfig:
         data["max_cases"] = args.max_cases
     if args.env_path:
         data["env_path"] = args.env_path
+    if args.planner_depth_input:
+        data["planner_depth_input"] = args.planner_depth_input
     if args.stmr_mode:
         data["stmr_mode"] = args.stmr_mode
     if args.stmr_prior:
@@ -197,6 +205,7 @@ def _config_summary(config: UavFlowEvalConfig, eval_id: str | None) -> dict[str,
         "runtime_loop_guard_windows": config.runtime_loop_guard_windows,
         "parser_mode": config.parser_mode,
         "env_path": config.env_path,
+        "planner_depth_input": config.planner_depth_input,
         "stmr_mode": config.stmr_mode,
         "stmr_prior": config.stmr_prior,
         "stmr_max_queries": config.stmr_max_queries,

@@ -43,6 +43,7 @@ class UavFlowEvalConfig:
     enable_visual_diagnostics: bool = False
     visual_diagnostics_max_frames: int = 12
     enable_action_planner_debug: bool = False
+    planner_depth_input: str = "off"
     stmr_mode: str = "off"
     stmr_prior: str = "default_uav_prior"
     stmr_max_queries: int = 16
@@ -83,6 +84,11 @@ class UavFlowEvalConfig:
             enable_visual_diagnostics=bool(data.get("enable_visual_diagnostics", False)),
             visual_diagnostics_max_frames=int(data.get("visual_diagnostics_max_frames", cls.visual_diagnostics_max_frames)),
             enable_action_planner_debug=bool(data.get("enable_action_planner_debug", False)),
+            planner_depth_input=_choice(
+                data.get("planner_depth_input", "off"),
+                {"off", "now"},
+                "planner_depth_input",
+            ),
             stmr_mode=_choice(data.get("stmr_mode", "off"), {"off", "shadow", "planner"}, "stmr_mode"),
             stmr_prior=str(data.get("stmr_prior", "default_uav_prior")),
             stmr_max_queries=max(1, int(data.get("stmr_max_queries", 16))),

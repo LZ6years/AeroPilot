@@ -42,6 +42,9 @@ class DefaultPoseContextModule(ContextModule):
     def describe_output(self) -> dict[str, Any]:
         return {
             "summary": "Latest UAV pose and recent pose delta.",
+            "semantic_evidence": [
+                "UAV pose: self position and orientation plus recent pose change; not target-relative geometry."
+            ],
             "content_fields": {
                 "latest_pose": "Most recent model-facing pose from pose refs; raw velocity is intentionally removed.",
                 "recent_pose_delta": "Difference between the last two poses as dx, dy, dz, and normalized dyaw_deg when available.",

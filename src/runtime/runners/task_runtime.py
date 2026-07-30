@@ -18,8 +18,7 @@ from src.agent.semantic.plan_updater import validate_semantic_plan_patch_numeric
 from src.agent.semantic.schemas import TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.agent.semantic.validator import apply_semantic_plan_patch
-from src.env_client.base import EnvClient
-from src.env_client.schemas import SceneInstance
+from src.env_client import EnvClient, SceneInstance
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
@@ -30,10 +29,11 @@ from src.runtime.control.actions import SemanticPlanUpdateJob
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.runtime_control_config import RuntimeControlConfig, load_runtime_control_config
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
+from src.runtime.configs.task_execution_options import InitialPose, TaskExecutionOptions
 from src.runtime.context import PhaseWindowContextBuilder
 from src.tools.dispatcher import ToolDispatcher
 from src.runtime.middleware import ToolTelemetryMiddleware
-from src.uav import pose_measurements
+from src.uav import clean_pose_for_model, pose_measurements
 
 
 class TaskRuntime:
@@ -88,6 +88,10 @@ class TaskRuntime:
             plugin_registry=self.plugin_registry,
             enable_model_skill_selection=getattr(self.planner, "planner_mode", "") == "model",
         )
+        self.semantic_evidence_capabilities = self._configured_semantic_evidence_capabilities()
+        configure_evidence = getattr(self.task_parser, "configure_evidence_capabilities", None)
+        if callable(configure_evidence):
+            configure_evidence(self.semantic_evidence_capabilities)
         self.phase_window_context_builder = PhaseWindowContextBuilder()
         self.tool_telemetry = ToolTelemetryMiddleware(self.tools, self._debug_event)
         self.memory_writer = MemoryEventWriter(self.recorder.run_dir)
@@ -109,8 +113,10 @@ class TaskRuntime:
         scene_policy: str = "isolated",
         stop_scene_on_finish: bool = True,
         scene_id: str | None = None,
+        execution_options: TaskExecutionOptions | None = None,
     ) -> MissionState:
         # Execute one short-horizon window per semantic phase.
+        options = self._resolve_execution_options(execution_options)
         self._current_turn_agent_messages = []
         parse_result = self.task_parser.parse(instruction)
         parse_trace = getattr(self.task_parser, "last_parse_trace", {})
@@ -123,6 +129,7 @@ class TaskRuntime:
             scene_policy=scene_policy,
             stop_scene_on_finish=stop_scene_on_finish,
             scene_id=scene_id,
+            execution_options=options,
         )
 
     def run_parsed_task(
@@ -133,11 +140,14 @@ class TaskRuntime:
         scene_policy: str = "isolated",
         stop_scene_on_finish: bool = True,
         scene_id: str | None = None,
+        execution_options: TaskExecutionOptions | None = None,
     ) -> MissionState:
         # Execute a task from an already-created semantic plan.
         if scene_policy not in self.SCENE_POLICIES:
             raise ValueError(f"Unsupported scene policy: {scene_policy}")
+        options = self._resolve_execution_options(execution_options)
         self._current_turn_agent_messages = []
+        self._debug_event("task_execution_options_resolved", options.to_dict())
         self.recorder.write_json("state/semantic_plan.json", parse_result.to_dict())
         self._debug_event("task_parsed", parse_result.to_dict())
         self._event(
@@ -154,13 +164,21 @@ class TaskRuntime:
             user_instruction=parse_result.instruction,
             semantic_plan=parse_result.plan,
             connected=scene.scene_instance_id in self._preflight_scene_ids,
-            airborne=scene.scene_instance_id in self._preflight_scene_ids,
+            airborne=(
+                scene.scene_instance_id in self._preflight_scene_ids
+                and bool(
+                    scene.capabilities
+                    and scene.capabilities.requires_takeoff
+                )
+            ),
+            observation_modalities=options.observation_modalities,
             max_phase_window_count=self.runtime_loop_guard_windows,
         )
         flight_memory = self._resolve_flight_memory(map_id, scene, agent_id, scene_policy, parse_result, state)
         self._state_flight_memories[state.run_id] = flight_memory
         try:
-            self._prepare_scene_for_task(scene, agent_id, state)
+            self._validate_execution_options(scene, options)
+            self._prepare_scene_for_task(scene, agent_id, state, options)
             self._execute_phase_loop(scene, agent_id, state)
             if stop_scene_on_finish:
                 self._run_shutdown(scene, agent_id, state)
@@ -252,21 +270,105 @@ class TaskRuntime:
         self._debug_event("scene_started", scene.to_dict())
         return scene
 
-    def _prepare_scene_for_task(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
-        if scene.scene_instance_id not in self._preflight_scene_ids:
+    @staticmethod
+    def _resolve_execution_options(
+        execution_options: TaskExecutionOptions | None,
+    ) -> TaskExecutionOptions:
+        if execution_options is None:
+            return TaskExecutionOptions()
+        if not isinstance(execution_options, TaskExecutionOptions):
+            raise ValueError(
+                "execution_options must be a TaskExecutionOptions or None"
+            )
+        return execution_options
+
+    @staticmethod
+    def _validate_execution_options(
+        scene: SceneInstance,
+        options: TaskExecutionOptions,
+    ) -> None:
+        """Fail before planning when a scene cannot satisfy the task contract."""
+
+        capabilities = scene.capabilities
+        if capabilities is None:
+            # EnvClient v1 permits compatible replay/test clients without a
+            # capability snapshot. Preserve that structural compatibility and
+            # let the concrete observation/action call report unsupported work.
+            return
+        supported_modalities = {
+            str(value).strip().lower()
+            for value in capabilities.observation_modalities
+        }
+        unsupported = [
+            value
+            for value in options.observation_modalities
+            if value not in supported_modalities
+        ]
+        if unsupported:
+            raise RuntimeError(
+                "Scene does not support requested observation modalities: "
+                + ", ".join(unsupported)
+            )
+        if (
+            options.initial_pose is not None
+            and not capabilities.supports("set_pose")
+        ):
+            raise RuntimeError(
+                "Scene does not support set_pose required by initial_pose"
+            )
+
+    def _prepare_scene_for_task(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+        options: TaskExecutionOptions,
+    ) -> None:
+        first_scene_use = scene.scene_instance_id not in self._preflight_scene_ids
+        if first_scene_use:
             self._run_preflight(scene, agent_id, state)
             self._preflight_scene_ids.add(scene.scene_instance_id)
-            return
+        if options.initial_pose is not None:
+            self._apply_initial_pose(scene, agent_id, state, options.initial_pose)
 
+        stabilization = None
+        if first_scene_use or options.initial_pose is not None:
+            stabilization = self.stabilizer.wait_after_preflight(
+                scene.scene_instance_id, agent_id
+            )
+            stabilization_event = (
+                "preflight_stabilization_completed"
+                if first_scene_use
+                else "episode_initialization_stabilization_completed"
+            )
+            self._debug_event(stabilization_event, stabilization)
+        if first_scene_use:
+            self._event(
+                "preflight_completed",
+                {
+                    "scene_instance_id": scene.scene_instance_id,
+                    "stabilization": self._stabilization_summary(stabilization),
+                },
+            )
+        source = "preflight" if first_scene_use else "instruction_start"
         observation_data = self._record_observation(
             scene,
             agent_id,
             state,
-            ["rgb", "depth", "pose"],
-            source="instruction_start",
+            list(state.observation_modalities),
+            source=source,
+            overwrite_task_initial=options.initial_pose is not None,
         )
-        self._debug_event("instruction_start_observation_updated", observation_data)
-        self._event("observation_updated", self._observation_summary_event(observation_data, source="instruction_start"))
+        if first_scene_use:
+            self._debug_event("initial_observation_updated", observation_data)
+        else:
+            self._debug_event(
+                "instruction_start_observation_updated", observation_data
+            )
+        self._event(
+            "observation_updated",
+            self._observation_summary_event(observation_data, source=source),
+        )
         self._write_state(state)
 
     def _execute_phase_loop(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
@@ -285,37 +387,87 @@ class TaskRuntime:
         if not connect_result.ok:
             raise RuntimeError(f"Preflight connect failed: {connect_result.message}")
 
-        self._debug_event("preflight_takeoff_started", {"scene_instance_id": scene.scene_instance_id})
-        takeoff_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.takeoff", {})
-        takeoff_data = takeoff_result.to_dict()
-        self._record_action(state, "uav.takeoff", {}, takeoff_data)
-        self._debug_event("preflight_takeoff_completed", takeoff_data)
-        if not takeoff_result.ok:
-            raise RuntimeError(f"Preflight takeoff failed: {takeoff_result.message}")
+        capabilities = scene.capabilities
+        if capabilities is None or capabilities.requires_takeoff:
+            self._debug_event("preflight_takeoff_started", {"scene_instance_id": scene.scene_instance_id})
+            takeoff_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.takeoff", {})
+            takeoff_data = takeoff_result.to_dict()
+            self._record_action(state, "uav.takeoff", {}, takeoff_data)
+            self._debug_event("preflight_takeoff_completed", takeoff_data)
+            if not takeoff_result.ok:
+                raise RuntimeError(f"Preflight takeoff failed: {takeoff_result.message}")
+        else:
+            self._debug_event(
+                "preflight_takeoff_skipped",
+                {
+                    "protocol": capabilities.protocol,
+                    "control_mode": capabilities.control_mode,
+                },
+            )
 
-        hover_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
-        hover_data = hover_result.to_dict()
-        self._record_action(state, "uav.hover", {}, hover_data)
-        self._debug_event("preflight_hover_completed", hover_data)
-        if not hover_result.ok:
-            raise RuntimeError(f"Preflight hover failed: {hover_result.message}")
+        if capabilities is None or capabilities.supports("hover"):
+            hover_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
+            hover_data = hover_result.to_dict()
+            self._record_action(state, "uav.hover", {}, hover_data)
+            self._debug_event("preflight_hover_completed", hover_data)
+            if not hover_result.ok:
+                raise RuntimeError(f"Preflight hover failed: {hover_result.message}")
 
-        stabilization = self.stabilizer.wait_after_preflight(scene.scene_instance_id, agent_id)
+    def _apply_initial_pose(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+        initial_pose: InitialPose,
+    ) -> None:
+        """Place the UAV before the first episode observation, outside planning."""
+
+        args = initial_pose.to_action_args()
+        payload = {
+            "scene_instance_id": scene.scene_instance_id,
+            "agent_id": agent_id,
+            "pose": initial_pose.to_dict(),
+        }
+        self._debug_event("episode_initial_pose_started", payload)
+        try:
+            result = self.tools.call(
+                scene.scene_instance_id,
+                agent_id,
+                "uav.set_pose",
+                args,
+            )
+        except Exception as exc:
+            self._debug_event(
+                "episode_initial_pose_failed",
+                {
+                    **payload,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                },
+            )
+            raise
+        result_data = result.to_dict()
+        if not result.ok:
+            self._debug_event(
+                "episode_initial_pose_failed",
+                {**payload, "result": result_data},
+            )
+            raise RuntimeError(
+                f"Episode initial pose failed: {result.message}"
+            )
+        # The placement is initialization, not Agent flight. Reset only recent
+        # flight references so the planner starts from the post-placement
+        # observation while append-only audit records remain intact.
+        memory = self._memory_for_state(state)
+        memory.reset_pose_epoch(active_instruction=state.user_instruction)
         self._debug_event(
-            "preflight_stabilization_completed",
-            stabilization,
+            "episode_initial_pose_completed",
+            {
+                **payload,
+                "result": result_data,
+                "memory_reset_epoch": memory.reset_epoch,
+            },
         )
-        self._event("preflight_completed", {"scene_instance_id": scene.scene_instance_id, "stabilization": self._stabilization_summary(stabilization)})
-        observation_data = self._record_observation(
-            scene,
-            agent_id,
-            state,
-            ["rgb", "depth", "pose"],
-            source="preflight",
-        )
-        self._debug_event("initial_observation_updated", observation_data)
-        self._event("observation_updated", self._observation_summary_event(observation_data, source="preflight"))
-        self._write_state(state)
 
     def _run_phase_window(
         self,
@@ -541,6 +693,7 @@ class TaskRuntime:
             semantic_plan_version=semantic_plan_version,
             observation_before=observation_before,
             observation_after=observation_after,
+            selected_skill_guidance=self._selected_semantic_update_guidance(coupled_context),
         )
         return plan, safety_decision, PhaseTransition.continue_current_phase(transition.reason)
 
@@ -706,7 +859,8 @@ class TaskRuntime:
             "hover_replacement_count": hover_replacement_count,
             "all_replacements_hover": bool(replacements) and hover_replacement_count == len(replacements),
             "yaw_scan_budget_exhausted": "yaw_scan_budget_exceeded" in reasons,
-            "yaw_scan_accum_deg": float(getattr(state, "yaw_scan_accum_deg", 0.0) or 0.0),
+            "yaw_scan_offset_deg": float(getattr(state, "yaw_scan_offset_deg", 0.0) or 0.0),
+            "yaw_scan_extent_deg": float(getattr(state, "yaw_scan_extent_deg", 0.0) or 0.0),
             "yaw_scan_remaining_deg": self._yaw_scan_remaining_deg(state),
             "executed_tools": self._executed_tool_names(executed_steps or []),
         }
@@ -719,9 +873,9 @@ class TaskRuntime:
         ]
 
     def _yaw_scan_remaining_deg(self, state: MissionState) -> float:
-        max_yaw_scan = float(self.safety.safety_config.max_yaw_scan_accum_deg)
-        yaw_scan_accum = float(getattr(state, "yaw_scan_accum_deg", 0.0) or 0.0)
-        return max(0.0, max_yaw_scan - yaw_scan_accum)
+        max_yaw_scan = float(self.safety.safety_config.max_yaw_scan_extent_deg)
+        yaw_scan_extent = float(getattr(state, "yaw_scan_extent_deg", 0.0) or 0.0)
+        return max(0.0, max_yaw_scan - yaw_scan_extent)
 
     def _executed_tool_names(self, executed_steps: list[dict]) -> list[str]:
         names = []
@@ -781,7 +935,7 @@ class TaskRuntime:
         state: MissionState,
         phase: str,
     ) -> dict:
-        modalities = ["rgb", "depth", "pose"]
+        modalities = list(state.observation_modalities)
         policy = {
             "mode": "automatic",
             "modalities": modalities,
@@ -815,6 +969,7 @@ class TaskRuntime:
         state: MissionState,
         modalities: list[str],
         source: str,
+        overwrite_task_initial: bool = False,
     ) -> dict:
         observation = self.tools.observe(scene.scene_instance_id, agent_id, modalities)
         raw = RawObservation.from_env_observation(observation, source=source)
@@ -826,7 +981,11 @@ class TaskRuntime:
         memory.append_pose_ref(write_result.get("pose_ref"))
         memory.append_frame_refs(write_result.get("frame_refs"))
         if source in {"preflight", "instruction_start"}:
-            memory.set_observation_anchor("task_initial", write_result["observation_ref"], overwrite=False)
+            memory.set_observation_anchor(
+                "task_initial",
+                write_result["observation_ref"],
+                overwrite=overwrite_task_initial,
+            )
             memory.set_observation_anchor("phase_start", write_result["observation_ref"], overwrite=True)
         self.recorder.write_json("debug/latest_observation.json", data)
         self.recorder.write_json("contexts/latest_context.json", self.context_builder.build(state, self._memory_for_state(state)))
@@ -841,6 +1000,12 @@ class TaskRuntime:
         memory.set_observation_anchor("phase_start", memory.recent_observation_refs[-1], overwrite=True)
 
     def _try_hover(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
+        if scene.capabilities and not scene.capabilities.supports("hover"):
+            self._debug_event(
+                "safety_hover_skipped",
+                {"reason": "backend_capability"},
+            )
+            return
         try:
             result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
             self._record_action(state, "uav.hover", {}, result.to_dict())
@@ -854,14 +1019,19 @@ class TaskRuntime:
             return
 
         self._debug_event("shutdown_started", {"policy": self.shutdown_policy})
-        hover_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
-        hover_data = hover_result.to_dict()
-        self._record_action(state, "uav.hover", {}, hover_data)
-        self._debug_event("shutdown_hover_completed", hover_data)
-        if not hover_result.ok:
-            raise RuntimeError(f"Shutdown hover failed: {hover_result.message}")
+        capabilities = scene.capabilities
+        if capabilities is None or capabilities.supports("hover"):
+            hover_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
+            hover_data = hover_result.to_dict()
+            self._record_action(state, "uav.hover", {}, hover_data)
+            self._debug_event("shutdown_hover_completed", hover_data)
+            if not hover_result.ok:
+                raise RuntimeError(f"Shutdown hover failed: {hover_result.message}")
 
-        if self.shutdown_policy == "land":
+        if (
+            self.shutdown_policy == "land"
+            and (capabilities is None or capabilities.supports("land"))
+        ):
             self._debug_event("shutdown_land_started", {"scene_instance_id": scene.scene_instance_id})
             land_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.land", {})
             land_data = land_result.to_dict()
@@ -950,6 +1120,7 @@ class TaskRuntime:
         semantic_plan_version: int,
         observation_before: dict[str, Any],
         observation_after: dict[str, Any],
+        selected_skill_guidance: list[dict[str, str]],
     ) -> None:
         for action, result in zip(actions, results):
             if action.name != "semantic_plan_update" or result.status != "accepted":
@@ -966,6 +1137,7 @@ class TaskRuntime:
                     semantic_plan_version=semantic_plan_version,
                     observation_before=observation_before,
                     observation_after=observation_after,
+                    selected_skill_guidance=selected_skill_guidance,
                 ),
             )
             submit_result = self.runtime_control.submit_semantic_plan_update(job)
@@ -989,11 +1161,12 @@ class TaskRuntime:
         semantic_plan_version: int,
         observation_before: dict[str, Any],
         observation_after: dict[str, Any],
+        selected_skill_guidance: list[dict[str, str]],
     ) -> dict[str, Any]:
         current_phase = {}
         if state.current_phase_index < len(state.semantic_plan.phases):
             current_phase = state.semantic_plan.phases[state.current_phase_index].to_dict()
-        return {
+        context = {
             "run_id": state.run_id,
             "user_instruction": state.user_instruction,
             "semantic_plan": state.semantic_plan.to_dict(),
@@ -1007,9 +1180,53 @@ class TaskRuntime:
             },
             "phase_execution_summary": state.current_phase_execution_summary,
             "phase_progress_evidence": self._phase_progress_evidence(state),
-            "observation_before": self.phase_window_context_builder.clean_observation_for_model(observation_before),
-            "observation_after": self.phase_window_context_builder.clean_observation_for_model(observation_after),
+            "observation_before": _clean_observation_for_semantic_update(observation_before),
+            "observation_after": _clean_observation_for_semantic_update(observation_after),
         }
+        if selected_skill_guidance:
+            context["selected_skill_guidance"] = selected_skill_guidance
+        if self.semantic_evidence_capabilities:
+            context["configured_evidence"] = list(self.semantic_evidence_capabilities)
+        return context
+
+    def _configured_semantic_evidence_capabilities(self) -> list[str]:
+        """Read configured context capabilities without requiring an observation."""
+
+        provider = getattr(self.context_builder, "semantic_evidence_capabilities", None)
+        if not callable(provider):
+            return []
+        try:
+            capabilities = provider()
+        except Exception:
+            return []
+        if not isinstance(capabilities, list):
+            return []
+        return [item for item in capabilities if isinstance(item, str) and item.strip()]
+
+    @staticmethod
+    def _selected_semantic_update_guidance(planner_context: dict[str, Any]) -> list[dict[str, str]]:
+        fragments = planner_context.get("fragments", []) if isinstance(planner_context, dict) else []
+        if not isinstance(fragments, list):
+            return []
+        selected: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for fragment in fragments:
+            if not isinstance(fragment, dict) or fragment.get("name") != "skills":
+                continue
+            content = fragment.get("content", {})
+            skills = content.get("selected_skills", []) if isinstance(content, dict) else []
+            if not isinstance(skills, list):
+                continue
+            for skill in skills:
+                if not isinstance(skill, dict):
+                    continue
+                name = str(skill.get("name", "")).strip()
+                skill_text = str(skill.get("skill_text", "")).strip()
+                if not name or not skill_text or name in seen:
+                    continue
+                selected.append({"name": name, "skill_text": skill_text})
+                seen.add(name)
+        return selected
 
     def _record_runtime_control_results(self, actions, results) -> None:
         for action, result in zip(actions, results):
@@ -1262,6 +1479,16 @@ class TaskRuntime:
         memory = self._memory_for_state(state)
         memory.append_action_ref(write_result["action_ref"])
         memory.append_pose_ref(write_result.get("pose_ref"))
+
+
+def _clean_observation_for_semantic_update(observation: dict[str, Any]) -> dict[str, Any]:
+    """Return a compact observation copy for the asynchronous semantic updater."""
+
+    data = dict(observation) if isinstance(observation, dict) else {}
+    pose = data.get("pose")
+    if isinstance(pose, dict):
+        data["pose"] = clean_pose_for_model(pose)
+    return data
 
 
 def _redact_model_input_data(value: Any) -> Any:

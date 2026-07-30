@@ -7,13 +7,14 @@ import time
 import pytest
 
 from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal
-from src.agent.semantic.plan_updater import validate_semantic_plan_patch_numeric_provenance
+from src.agent.semantic.plan_updater import SemanticPlanUpdater, validate_semantic_plan_patch_numeric_provenance
 from src.agent.semantic.validator import (
     SemanticPlanValidationError,
     apply_semantic_plan_patch,
     validate_semantic_plan_patch,
 )
 from src.runtime.control.actions import SemanticPlanUpdateJob, SemanticPlanUpdateManager
+from src.runtime.configs.model_config import ModelConfig
 
 
 def make_plan() -> SemanticPlan:
@@ -133,6 +134,51 @@ def test_semantic_plan_update_can_reuse_instruction_and_current_contract_numbers
     )
 
     assert result == patch
+
+
+def test_semantic_plan_updater_messages_reuse_selected_core_skill_guidance():
+    updater = SemanticPlanUpdater(
+        ModelConfig(
+            task_parser_mode="model",
+            provider="openai_compatible",
+            model_name="test-model",
+            api_key="test-key",
+            base_url="https://example.test/v1",
+        )
+    )
+    context = {
+        "user_instruction": "Pass the landmark",
+        "current_phase": {"name": "traverse_route"},
+        "selected_skill_guidance": [
+            {
+                "name": "route_traversal_and_passage",
+                "skill_text": "Use route progress evidence.",
+            }
+        ],
+        "configured_evidence": [
+            "NOW RGB: current visible appearance and image-space relations.",
+            "Action history: phase-relative UAV self-motion; not target distance.",
+        ],
+    }
+
+    messages = updater._build_messages(context)
+
+    assert [message["role"] for message in messages] == [
+        "system",
+        "system",
+        "system",
+        "system",
+        "user",
+    ]
+    assert messages[0]["content"] == updater.agent_rules
+    assert "route_traversal_and_passage" in messages[1]["content"]
+    assert "Use route progress evidence." in messages[1]["content"]
+    assert '"configured_evidence"' in messages[2]["content"]
+    assert "NOW RGB:" in messages[2]["content"]
+    assert messages[3]["content"] == updater.system_prompt
+    assert "selected_skill_guidance" not in messages[4]["content"]
+    assert "configured_evidence" not in messages[4]["content"]
+    assert "Pass the landmark" in messages[4]["content"]
 
 
 class FakeUpdater:

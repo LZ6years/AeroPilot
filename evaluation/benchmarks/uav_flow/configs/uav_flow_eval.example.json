@@ -19,6 +19,7 @@
   "enable_visual_diagnostics": false,
   "visual_diagnostics_max_frames": 12,
   "enable_action_planner_debug": false,
+  "planner_depth_input": "off",
   "stmr_mode": "off",
   "stmr_prior": "default_uav_prior",
   "stmr_max_queries": 16,
@@ -32,6 +33,6 @@
     "max_yaw_step_deg": 90.0,
     "max_linear_velocity_mps": 3,
     "max_move_duration_sec": 3,
-    "max_yaw_scan_accum_deg": 540.0
+    "max_yaw_scan_extent_deg": 540.0
   }
 }

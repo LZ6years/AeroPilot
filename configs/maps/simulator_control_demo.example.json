@@ -1,0 +1,135 @@
+{
+  "maps": [
+    {
+      "map_id": "demo_local_airsim_cv",
+      "provider": "packaged_unreal",
+      "scene_id": "local_airsim_cv",
+      "root": "C:/replace/with/local/airsim/environment",
+      "connection": {
+        "mode": "local",
+        "data_transport": "direct",
+        "machine_id": "local_demo"
+      },
+      "launch": {
+        "method": "direct",
+        "windows": "Environment/Binaries/Win64/Environment.exe",
+        "args": ["-windowed", "-NoSound", "-NoVSync"]
+      },
+      "control": {
+        "protocol": "airsim"
+      },
+      "airsim": {
+        "host": "127.0.0.1",
+        "port": 41451,
+        "mode": "ComputerVision",
+        "settings_template_source": "local",
+        "settings_template": "configs/airsim/aerialvln_env_1.settings.example.json",
+        "vehicle_name": "Drone_1",
+        "camera_name": "front_0"
+      }
+    },
+    {
+      "map_id": "demo_remote_airsim_cv",
+      "provider": "packaged_unreal",
+      "scene_id": "remote_airsim_cv",
+      "root": null,
+      "connection": {
+        "mode": "remote",
+        "data_transport": "ssh_tunnel",
+        "machine_id": "remote_demo"
+      },
+      "ssh": {
+        "host": "192.0.2.10",
+        "port": 22,
+        "user": "uav",
+        "key_path": "${FLYAGENT_SSH_KEY}",
+        "connect_timeout_sec": 10
+      },
+      "launch": {
+        "method": "linux_bash",
+        "linux_executable": "/replace/with/LinuxNoEditor/Environment.sh",
+        "args": ["-RenderOffscreen", "-NoSound", "-NoVSync"],
+        "settings_arg_style": "double_dash",
+        "remote_run_root": ".flyagent/scenes"
+      },
+      "control": {
+        "protocol": "airsim"
+      },
+      "airsim": {
+        "remote_host": "127.0.0.1",
+        "port": 41451,
+        "mode": "ComputerVision",
+        "settings_template_source": "local",
+        "settings_template": "configs/airsim/aerialvln_env_1.settings.example.json",
+        "vehicle_name": "Drone_1",
+        "camera_name": "front_0"
+      }
+    },
+    {
+      "map_id": "demo_local_unrealcv",
+      "provider": "packaged_unreal",
+      "scene_id": "local_unrealcv",
+      "root": "C:/replace/with/local/unrealcv/environment",
+      "connection": {
+        "mode": "local",
+        "data_transport": "direct",
+        "machine_id": "local_demo"
+      },
+      "launch": {
+        "method": "direct",
+        "windows": "Environment/Binaries/Win64/Environment.exe",
+        "args": ["-windowed"]
+      },
+      "control": {
+        "protocol": "unrealcv"
+      },
+      "unrealcv": {
+        "host": "127.0.0.1",
+        "port": 9010,
+        "camera_id": 0,
+        "width": 256,
+        "height": 256,
+        "fov": 90
+      }
+    },
+    {
+      "map_id": "demo_remote_unrealcv",
+      "provider": "packaged_unreal",
+      "scene_id": "remote_unrealcv",
+      "root": null,
+      "connection": {
+        "mode": "remote",
+        "data_transport": "ssh_tunnel",
+        "machine_id": "remote_demo"
+      },
+      "ssh": {
+        "host": "192.0.2.10",
+        "port": 22,
+        "user": "uav",
+        "key_path": "${FLYAGENT_SSH_KEY}",
+        "connect_timeout_sec": 10
+      },
+      "launch": {
+        "method": "direct",
+        "linux_executable": "/replace/with/LinuxNoEditor/Environment.sh",
+        "args": ["-RenderOffscreen"],
+        "remote_run_root": ".flyagent/scenes"
+      },
+      "control": {
+        "protocol": "unrealcv"
+      },
+      "unrealcv": {
+        "remote_host": "127.0.0.1",
+        "port": 9010,
+        "camera_id": 0,
+        "width": 256,
+        "height": 256,
+        "fov": 90
+      }
+    }
+  ],
+  "port_policy": {
+    "control_port_start": 36001,
+    "max_scene_num": 8
+  }
+}

@@ -11,7 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from src.env_client.schemas import ActionResult
+from src.env_client import ActionResult
 from src.tools.dispatcher import ToolDispatcher
 
 

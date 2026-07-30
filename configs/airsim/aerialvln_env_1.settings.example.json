@@ -1,0 +1,37 @@
+{
+  "SeeDocsAt": "https://github.com/Microsoft/AirSim/blob/master/docs/settings.md",
+  "SettingsVersion": 1.2,
+  "SimMode": "ComputerVision",
+  "ViewMode": "NoDisplay",
+  "ApiServerPort": 41451,
+  "Vehicles": {
+    "Drone_1": {
+      "VehicleType": "ComputerVision",
+      "AutoCreate": true,
+      "Cameras": {
+        "front_0": {
+          "CaptureSettings": [
+            {
+              "ImageType": 0,
+              "Width": 224,
+              "Height": 224,
+              "FOV_Degrees": 90
+            },
+            {
+              "ImageType": 2,
+              "Width": 256,
+              "Height": 256,
+              "FOV_Degrees": 90
+            },
+            {
+              "ImageType": 3,
+              "Width": 256,
+              "Height": 256,
+              "FOV_Degrees": 90
+            }
+          ]
+        }
+      }
+    }
+  }
+}

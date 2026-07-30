@@ -233,7 +233,6 @@ def _order_model_text_context(context: dict[str, Any]) -> dict[str, Any]:
         "allowed_action_constraints",
         "user_preferences",
         "phase_completion_evaluation",
-        "latest_observation_summary",
     )
     ordered: dict[str, Any] = {}
     for key in preferred_order:
@@ -262,6 +261,7 @@ def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
     context.pop("disabled_fragments", None)
     context.pop("phase_progress_evidence", None)
     context.pop("phase_execution_summary", None)
+    context.pop("latest_observation_summary", None)
 
 
 def _remove_phase_judge_debug_fields(context: dict[str, Any]) -> None:
@@ -349,26 +349,9 @@ def _remove_empty_and_debug_top_level_fields(context: dict[str, Any]) -> None:
         value = context.get(key)
         if value in (None, "", [], {}):
             context.pop(key, None)
-    observation = context.get("latest_observation_summary")
-    if isinstance(observation, dict):
-        context["latest_observation_summary"] = _compact_latest_observation_summary(observation)
     for key in list(context):
         if context.get(key) in (None, "", [], {}):
             context.pop(key, None)
-
-
-def _compact_latest_observation_summary(observation: dict[str, Any]) -> dict[str, Any]:
-    compact = {
-        "source": observation.get("source"),
-        "timestamp": observation.get("timestamp"),
-        "modalities": observation.get("modalities"),
-        "pose": observation.get("pose"),
-    }
-    frames = observation.get("frames")
-    if isinstance(frames, dict):
-        compact["has_rgb"] = "rgb" in frames
-        compact["has_depth"] = "depth" in frames
-    return _drop_empty_values(compact)
 
 
 def _sanitize_action_fragment(fragment: dict[str, Any]) -> None:

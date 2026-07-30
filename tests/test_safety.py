@@ -72,9 +72,10 @@ def test_safety_clips_long_or_fast_move_body():
 
 def test_safety_allows_consecutive_yaw_scan_under_budget():
     class State:
-        yaw_scan_accum_deg = 30.0
+        yaw_scan_offset_deg = 30.0
+        yaw_scan_extent_deg = 30.0
 
-    supervisor = SafetySupervisor(UavSafetyConfig(max_yaw_step_deg=30.0, max_yaw_scan_accum_deg=480.0))
+    supervisor = SafetySupervisor(UavSafetyConfig(max_yaw_step_deg=30.0, max_yaw_scan_extent_deg=480.0))
     plan = ShortHorizonPlan(
         "scan_again",
         [
@@ -92,28 +93,50 @@ def test_safety_allows_consecutive_yaw_scan_under_budget():
 
 def test_safety_replaces_yaw_scan_after_budget_exceeded():
     class State:
-        yaw_scan_accum_deg = 470.0
+        yaw_scan_offset_deg = 470.0
+        yaw_scan_extent_deg = 470.0
 
-    supervisor = SafetySupervisor(UavSafetyConfig(max_yaw_step_deg=30.0, max_yaw_scan_accum_deg=480.0))
+    supervisor = SafetySupervisor(UavSafetyConfig(max_yaw_step_deg=30.0, max_yaw_scan_extent_deg=480.0))
     plan = ShortHorizonPlan("scan", [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 15.0})])
 
     decision = supervisor.review(plan, State())
 
     assert decision.plan.steps[0].tool == "uav.hover"
     assert decision.interventions[0]["reason"] == "yaw_scan_budget_exceeded"
-    assert decision.interventions[0]["yaw_scan_accum_deg"] == 470.0
+    assert decision.interventions[0]["yaw_scan_offset_deg"] == 470.0
+    assert decision.interventions[0]["yaw_scan_extent_deg"] == 470.0
+    assert decision.interventions[0]["projected_yaw_scan_extent_deg"] == 485.0
 
 
-def test_safety_counts_yaw_budget_inside_same_plan():
+def test_safety_allows_return_toward_phase_start_without_consuming_new_extent():
     class State:
-        yaw_scan_accum_deg = 450.0
+        yaw_scan_offset_deg = 470.0
+        yaw_scan_extent_deg = 470.0
 
-    supervisor = SafetySupervisor(UavSafetyConfig(max_yaw_step_deg=30.0, max_yaw_scan_accum_deg=480.0))
+    supervisor = SafetySupervisor(UavSafetyConfig(max_yaw_step_deg=30.0, max_yaw_scan_extent_deg=480.0))
+    plan = ShortHorizonPlan(
+        "scan_back",
+        [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": -30.0})],
+    )
+
+    decision = supervisor.review(plan, State())
+
+    assert decision.plan.steps[0].tool == "uav.turn_relative"
+    assert decision.plan.steps[0].args["yaw_deg"] == -30.0
+    assert decision.interventions == []
+
+
+def test_safety_projects_yaw_extent_inside_same_plan():
+    class State:
+        yaw_scan_offset_deg = 450.0
+        yaw_scan_extent_deg = 450.0
+
+    supervisor = SafetySupervisor(UavSafetyConfig(max_yaw_step_deg=30.0, max_yaw_scan_extent_deg=480.0))
     plan = ShortHorizonPlan(
         "scan_twice",
         [
             PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 20.0}),
-            PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": -20.0}),
+            PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 20.0}),
             PlannedStep.observe_step(),
         ],
     )

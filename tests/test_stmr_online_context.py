@@ -20,6 +20,14 @@ from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MapMemoryStore, MemoryRecordReader
 
 
+def test_stmr_context_declares_semantic_evidence_boundary():
+    evidence = PluginContextModule(mode="planner").describe_output()["semantic_evidence"]
+
+    assert len(evidence) == 1
+    assert "semantic history" in evidence[0]
+    assert "not verified free space or exact target pose" in evidence[0]
+
+
 def test_online_builder_processes_completed_observation_once(tmp_path):
     _write_complete_memory(tmp_path, include_pose=True)
     grounding = _FakeGrounding()

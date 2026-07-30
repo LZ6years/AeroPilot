@@ -60,6 +60,33 @@ class ContextModule:
 
 禁用 module 不进入 `context_schema.module_content_fields`。这样模型不会看到不存在字段的说明。
 
+### 4.1 Semantic Evidence 能力声明
+
+启用的 module 可以在 `describe_output()` 中额外声明一组很短的
+`semantic_evidence`：
+
+```python
+def describe_output(self) -> dict:
+    return {
+        "summary": "Latest UAV pose and recent pose delta.",
+        "semantic_evidence": [
+            "UAV pose: self position and orientation; not target-relative geometry."
+        ],
+    }
+```
+
+该字段描述配置上可能提供的证据，不代表当前场景已经采集到数据，也不代表
+其中的事实已经成立。`ContextModuleRegistry` 只汇总启用 module 的声明，并按
+module 顺序去重和限制长度；它不会调用 `build()` 或启动场景。
+
+汇总结果只用于生成每个 phase 的 semantic criteria，以及后续异步 semantic
+update。Structure parser 不接收它，因为证据能力不能改变用户要求的 phase
+数量、顺序、名称或 goal。该清单也不会写入 `SemanticPlan`，不会成为普通
+planner context 字段，Validator 不解析其中的模态名称。
+
+声明应采用“一项能力 + 一条关键限制”的形式。不要写当前 observation 的事实、
+动作策略、benchmark 经验、内部 debug 字段或冗长使用教程。
+
 ## 5. 自定义 Image Module 示例
 
 研究用户可以替换 image module：

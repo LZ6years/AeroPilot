@@ -1,4 +1,4 @@
-"""Compact RGB context module."""
+"""Compact RGB and aligned metric-depth context module."""
 
 from __future__ import annotations
 
@@ -15,6 +15,10 @@ from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySource
 
 CURRENT_IMAGE_USAGE = "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
 PHASE_START_IMAGE_USAGE = "PAST | PHASE START. Comparison only."
+CURRENT_RGB_DEPTH_OVERLAY_USAGE = (
+    "NOW | RGB + METRIC DEPTH OVERLAY. Same scene and pixels as NOW RGB; "
+    "false colors encode camera distance in meters using the fixed legend."
+)
 TEMPORAL_EVIDENCE_RULE = (
     "Current-state claims must use NOW only. PAST is only for comparing change. "
     "An object visible only in PAST is not currently visible."
@@ -22,14 +26,37 @@ TEMPORAL_EVIDENCE_RULE = (
 
 _CURRENT_IMAGE_BANNER = "NOW | CURRENT OBSERVATION"
 _PHASE_START_IMAGE_BANNER = "PAST | PHASE START"
+_CURRENT_RGB_DEPTH_OVERLAY_BANNER = "NOW | RGB + METRIC DEPTH"
 _CURRENT_IMAGE_BANNER_COLOR = (28, 122, 72)
 _PHASE_START_IMAGE_BANNER_COLOR = (190, 117, 20)
+_CURRENT_RGB_DEPTH_OVERLAY_BANNER_COLOR = (30, 78, 138)
+_DEFAULT_DEPTH_DISPLAY_MAX_M = 10.0
+_DEPTH_OVERLAY_ALPHA = 0.42
+_DEPTH_COLOR_STOPS = (
+    (180, 0, 0),
+    (255, 110, 0),
+    (255, 230, 0),
+    (50, 190, 80),
+    (0, 170, 220),
+    (50, 60, 180),
+)
 
 
 class DefaultImageContextModule(ContextModule):
     name = "image"
     priority = 80
     max_items = 3
+
+    def __init__(
+        self,
+        *,
+        include_current_depth: bool = False,
+        depth_display_max_m: float = _DEFAULT_DEPTH_DISPLAY_MAX_M,
+    ) -> None:
+        self.include_current_depth = bool(include_current_depth)
+        self.depth_display_max_m = float(depth_display_max_m)
+        if self.depth_display_max_m <= 0.0:
+            raise ValueError("depth_display_max_m must be positive")
 
     def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
         memory = sources.flight_memory
@@ -47,7 +74,22 @@ class DefaultImageContextModule(ContextModule):
             else []
         )
         latest_rgb = rgb_frames[-1] if rgb_frames else None
+        current_rgb = next(
+            (
+                frame
+                for frame in selected_rgb_frames
+                if frame.get("selection_role") == "current_observation"
+            ),
+            None,
+        )
+        current_depth = (
+            _depth_frame_for_current_rgb(reader, all_observations, current_rgb)
+            if reader and bool(getattr(self, "include_current_depth", False))
+            else None
+        )
         artifact_refs = [item["artifact_ref"] for item in rgb_frames if item.get("artifact_ref")]
+        if current_depth and current_depth.get("artifact_ref"):
+            artifact_refs.append(current_depth["artifact_ref"])
         warnings = []
         risks = []
         if not rgb_frames:
@@ -63,17 +105,32 @@ class DefaultImageContextModule(ContextModule):
                         "source": self.__class__.__name__,
                     }
                 )
+        model_inputs = rgb_model_inputs_from_frames(selected_rgb_frames)
+        depth_overlay_input = (
+            current_rgb_depth_overlay_model_input(
+                current_depth,
+                current_rgb=current_rgb,
+                depth_display_max_m=float(
+                    getattr(self, "depth_display_max_m", _DEFAULT_DEPTH_DISPLAY_MAX_M)
+                ),
+            )
+            if current_depth
+            else None
+        )
+        if depth_overlay_input is not None:
+            model_inputs = _insert_current_depth_overlay_input(model_inputs, depth_overlay_input)
+        selected_frames = selected_frame_summaries(selected_rgb_frames)
+        if current_depth is not None:
+            selected_frames.extend(selected_frame_summaries([current_depth]))
         visual_evidence = {
             "has_rgb": bool(rgb_frames),
-            "has_depth": False,
+            "has_depth": depth_overlay_input is not None,
             "has_mock_frames": any(
                 isinstance(frame, dict) and frame.get("mock") is True
                 for frame in rgb_frames
             ),
             "latest_observation_source": latest_rgb.get("observation_source") if latest_rgb else None,
         }
-        model_inputs = rgb_model_inputs_from_frames(selected_rgb_frames)
-        selected_frames = selected_frame_summaries(selected_rgb_frames)
         visual_evidence["interpretation_status"] = (
             "image_attached_not_interpreted" if model_inputs else "metadata_only_not_interpreted"
         )
@@ -94,12 +151,26 @@ class DefaultImageContextModule(ContextModule):
             confidence="medium" if latest_rgb else "low",
             budget=BudgetSpec(priority=self.priority, tokens_estimate=300, max_items=self.max_items),
             warnings=warnings,
-            metadata=frame_context_metadata(observations, selected_rgb_frames, rgb_frames),
+            metadata=frame_context_metadata(
+                observations,
+                selected_rgb_frames,
+                rgb_frames,
+                current_depth=current_depth,
+            ),
         )
 
     def describe_output(self) -> dict[str, Any]:
+        semantic_evidence = [
+            "NOW RGB: current visible appearance and image-space relations.",
+            "PAST RGB when distinct: phase-start comparison only; not current visibility.",
+        ]
+        if bool(getattr(self, "include_current_depth", False)):
+            semantic_evidence.append(
+                "NOW metric depth overlay: approximate camera distance at visible pixels."
+            )
         return {
             "summary": "Selected RGB frame roles, attached image count, and visual evidence availability.",
+            "semantic_evidence": semantic_evidence,
             "content_fields": {
                 "selected_frames": (
                     "Key RGB frames selected for multimodal input, including roles such as "
@@ -108,8 +179,9 @@ class DefaultImageContextModule(ContextModule):
                 "visual_evidence": "Boolean availability summary such as has_rgb, has_depth, has_mock_frames, latest_observation_source, and interpretation_status.",
             },
             "model_inputs": (
-                "Up to two encoded real RGB images for planner multimodal input, ordered as "
-                "a distinct phase_start_reference followed by current_observation. "
+                "Up to two encoded real RGB images and an optional pixel-aligned current "
+                "RGB-depth overlay for planner multimodal input, ordered as a distinct "
+                "phase_start_reference, current_observation, then current_rgb_depth_overlay. "
                 "When both are attached, a concise trailing temporal evidence rule is included. "
                 "Mock, missing, unreadable, or duplicate images are not attached."
             ),
@@ -202,11 +274,15 @@ def frame_context_metadata(
     observations: list[dict[str, Any]],
     selected_frames: list[dict[str, Any]],
     recent_frames: list[dict[str, Any]],
+    *,
+    current_depth: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     metadata: dict[str, Any] = {
         "observation_count": len(observations),
         "selected_frame_metadata": frame_debug_metadata(selected_frames),
     }
+    if current_depth is not None:
+        metadata["current_depth_metadata"] = frame_debug_metadata([current_depth])[0]
     if not _same_frame_identity_set(selected_frames, recent_frames):
         metadata["recent_rgb_frame_metadata"] = frame_debug_metadata(recent_frames)
     return metadata
@@ -269,6 +345,19 @@ def rgb_model_inputs_from_frames(frames: list[dict[str, Any]]) -> list[dict[str,
     ]
 
 
+def _insert_current_depth_overlay_input(
+    model_inputs: list[dict[str, Any]],
+    depth_overlay_input: dict[str, Any],
+) -> list[dict[str, Any]]:
+    result = list(model_inputs)
+    for index, item in enumerate(result):
+        if item.get("role") == "temporal_evidence_rule":
+            result.insert(index, depth_overlay_input)
+            return result
+    result.append(depth_overlay_input)
+    return result
+
+
 def _image_input_id(index: int, role: str) -> str:
     safe_role = "".join(char if char.isalnum() or char == "_" else "_" for char in role.strip().lower())
     return f"image_{index}_{safe_role or 'rgb'}"
@@ -316,6 +405,58 @@ def _rgb_frames_from_observation(reader: Any, observation: dict[str, Any] | None
     return frames
 
 
+def _depth_frame_for_current_rgb(
+    reader: Any,
+    observations: list[dict[str, Any]],
+    current_rgb: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if not isinstance(current_rgb, dict):
+        return None
+    current_observation_id = current_rgb.get("observation_id")
+    if not isinstance(current_observation_id, str) or not current_observation_id:
+        return None
+    for observation in reversed(observations):
+        for frame in _depth_frames_from_observation(reader, observation):
+            if frame.get("observation_id") != current_observation_id:
+                continue
+            if frame.get("mock") is True:
+                return None
+            frame["selection_role"] = "current_depth"
+            frame["selection_reason"] = CURRENT_RGB_DEPTH_OVERLAY_USAGE
+            frame["input_id"] = "image_current_depth"
+            frame["usage"] = CURRENT_RGB_DEPTH_OVERLAY_USAGE
+            return frame
+    return None
+
+
+def _depth_frames_from_observation(
+    reader: Any,
+    observation: dict[str, Any] | None,
+) -> list[dict[str, Any]]:
+    if not isinstance(observation, dict):
+        return []
+    frame_refs = observation.get("frame_refs", [])
+    frame_records = reader.read_refs(frame_refs)
+    frames: list[dict[str, Any]] = []
+    for index, record in enumerate(frame_records):
+        if record.get("modality") != "depth":
+            continue
+        frames.append(
+            {
+                "id": record.get("id"),
+                "path": record.get("path"),
+                "observation_id": record.get("observation_id"),
+                "observation_source": observation.get("source"),
+                "artifact_ref": _artifact_ref(
+                    record,
+                    frame_refs[index] if index < len(frame_refs) else None,
+                ),
+                **dict(record.get("metadata", {})),
+            }
+        )
+    return frames
+
+
 def _artifact_ref(record: dict[str, Any], frame_ref: dict[str, Any] | None) -> str | None:
     path = record.get("path")
     if isinstance(path, str) and path:
@@ -355,6 +496,42 @@ def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> lis
     ]
 
 
+def current_rgb_depth_overlay_model_input(
+    current_depth: dict[str, Any] | None,
+    *,
+    current_rgb: dict[str, Any] | None,
+    depth_display_max_m: float,
+) -> dict[str, Any] | None:
+    if (
+        not current_depth
+        or current_depth.get("mock") is True
+        or not current_rgb
+        or current_rgb.get("mock") is True
+    ):
+        return None
+    depth_path = _frame_path(current_depth)
+    rgb_path = _frame_path(current_rgb)
+    if depth_path is None or rgb_path is None:
+        return None
+    data_url = _rgb_depth_overlay_data_url(
+        rgb_path,
+        depth_path,
+        metadata=current_depth,
+        depth_display_max_m=depth_display_max_m,
+    )
+    if data_url is None:
+        return None
+    return {
+        "type": "image",
+        "input_id": "image_current_rgb_depth_overlay",
+        "role": "current_rgb_depth_overlay",
+        "usage": CURRENT_RGB_DEPTH_OVERLAY_USAGE,
+        "mime_type": "image/png",
+        "encoding": "data_url",
+        "data": data_url,
+    }
+
+
 def _frame_path(frame: dict[str, Any]) -> Path | None:
     raw_path = frame.get("path") or frame.get("artifact_path") or frame.get("artifact_ref")
     if not isinstance(raw_path, str) or not raw_path.strip():
@@ -366,6 +543,165 @@ def _frame_path(frame: dict[str, Any]) -> Path | None:
     if cwd_path.exists():
         return cwd_path
     return None
+
+
+def _rgb_depth_overlay_data_url(
+    rgb_path: Path,
+    depth_path: Path,
+    *,
+    metadata: dict[str, Any],
+    depth_display_max_m: float,
+) -> str | None:
+    """Blend pixel-aligned RGB and metric depth into one model-only PNG.
+
+    Keeping the RGB structure under a translucent, fixed-scale depth color map
+    removes the need for the model to establish object correspondence across
+    two separate images. A size mismatch is rejected instead of resized because
+    an apparently aligned but geometrically false overlay would be misleading.
+    """
+
+    try:
+        import numpy as np
+
+        with Image.open(rgb_path) as source:
+            rgb = source.convert("RGB")
+        depth = np.asarray(np.load(depth_path, allow_pickle=False), dtype=np.float32)
+        depth = np.squeeze(depth)
+        if depth.ndim == 1:
+            width = _positive_int(metadata.get("width"))
+            height = _positive_int(metadata.get("height"))
+            if width is None or height is None or depth.size != width * height:
+                return None
+            depth = depth.reshape((height, width))
+        if depth.ndim != 2 or depth.size == 0:
+            return None
+        if rgb.size != (int(depth.shape[1]), int(depth.shape[0])):
+            return None
+        valid = np.isfinite(depth) & (depth > 0.0)
+        if not bool(valid.any()):
+            return None
+        colored = _colorize_metric_depth(depth, valid, depth_display_max_m)
+        rgb_array = np.asarray(rgb, dtype=np.float32)
+        overlay = (
+            (1.0 - _DEPTH_OVERLAY_ALPHA) * rgb_array
+            + _DEPTH_OVERLAY_ALPHA * colored.astype(np.float32)
+        )
+        overlay[~valid] = rgb_array[~valid]
+        scene = Image.fromarray(np.clip(overlay, 0, 255).astype(np.uint8), mode="RGB")
+        annotated = _annotated_rgb_depth_overlay_image(scene, depth_display_max_m)
+        output = BytesIO()
+        annotated.save(output, format="PNG")
+    except (OSError, EOFError, UnidentifiedImageError, ValueError, TypeError):
+        return None
+    encoded = base64.b64encode(output.getvalue()).decode("ascii")
+    return f"data:image/png;base64,{encoded}"
+
+
+def _colorize_metric_depth(depth: Any, valid: Any, depth_display_max_m: float) -> Any:
+    import numpy as np
+
+    normalized = np.clip(depth / float(depth_display_max_m), 0.0, 1.0)
+    stop_positions = np.linspace(0.0, 1.0, len(_DEPTH_COLOR_STOPS), dtype=np.float32)
+    colors = np.asarray(_DEPTH_COLOR_STOPS, dtype=np.float32)
+    output = np.zeros((*depth.shape, 3), dtype=np.uint8)
+    for channel in range(3):
+        output[..., channel] = np.interp(
+            normalized,
+            stop_positions,
+            colors[:, channel],
+        ).astype(np.uint8)
+    output[~valid] = 0
+    return output
+
+
+def _annotated_rgb_depth_overlay_image(
+    scene: Image.Image,
+    depth_display_max_m: float,
+) -> Image.Image:
+    banner_height = _banner_height(scene.width, scene.height)
+    legend_height = max(42, min(68, round(scene.height * 0.18)))
+    annotated = Image.new(
+        "RGB",
+        (scene.width, scene.height + banner_height + legend_height),
+        (20, 24, 30),
+    )
+    annotated.paste(scene, (0, banner_height))
+    banner = Image.new(
+        "RGB",
+        (scene.width, banner_height),
+        _CURRENT_RGB_DEPTH_OVERLAY_BANNER_COLOR,
+    )
+    annotated.paste(banner, (0, 0))
+    _draw_banner_text(annotated, _CURRENT_RGB_DEPTH_OVERLAY_BANNER, banner_height)
+    _draw_depth_legend(
+        annotated,
+        top=banner_height + scene.height,
+        height=legend_height,
+        depth_display_max_m=depth_display_max_m,
+    )
+    return annotated
+
+
+def _draw_depth_legend(
+    image: Image.Image,
+    *,
+    top: int,
+    height: int,
+    depth_display_max_m: float,
+) -> None:
+    import numpy as np
+
+    draw = ImageDraw.Draw(image)
+    left = max(1, min(round(image.width * 0.04), max(1, image.width // 4)))
+    right = max(left + 1, image.width - left)
+    bar_top = top + 7
+    bar_height = max(9, min(16, height // 3))
+    gradient_depth = np.linspace(
+        0.0,
+        depth_display_max_m,
+        max(1, right - left),
+        dtype=np.float32,
+    )[None, :]
+    gradient = _colorize_metric_depth(
+        gradient_depth,
+        np.ones_like(gradient_depth, dtype=bool),
+        depth_display_max_m,
+    )
+    gradient_image = Image.fromarray(gradient, mode="RGB").resize(
+        (right - left, bar_height),
+        resample=Image.Resampling.NEAREST,
+    )
+    image.paste(gradient_image, (left, bar_top))
+    draw.rectangle(
+        (left, bar_top, right - 1, bar_top + bar_height - 1),
+        outline=(235, 235, 235),
+        width=1,
+    )
+    label_top = bar_top + bar_height + 3
+    font = _default_font(max(10, min(16, height // 4)))
+    labels = (
+        (left, "0 m"),
+        ((left + right) // 2, f"{depth_display_max_m / 2:g} m"),
+        (right, f"{depth_display_max_m:g}+ m"),
+    )
+    for x, label in labels:
+        box = draw.textbbox((0, 0), label, font=font)
+        text_width = box[2] - box[0]
+        if x == left:
+            text_x = x
+        elif x == right:
+            text_x = x - text_width
+        else:
+            text_x = x - text_width // 2
+        draw.text((text_x, label_top), label, fill=(255, 255, 255), font=font)
+
+
+def _positive_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
 
 
 def _annotated_image_data_url(path: Path, role: str) -> str | None:
@@ -418,3 +754,10 @@ def _fitted_banner_font(draw: ImageDraw.ImageDraw, text: str, max_width: int, ma
         if text_box[2] - text_box[0] <= max_width:
             return font
     return ImageFont.load_default()
+
+
+def _default_font(size: int) -> ImageFont.ImageFont:
+    try:
+        return ImageFont.load_default(size=size)
+    except TypeError:
+        return ImageFont.load_default()

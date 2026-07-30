@@ -8,45 +8,47 @@ summary: Select only when target-relative proximity, separation, following, or a
 
 ## Application Boundary
 
-Use this guidance when the destination is a target and the active concern is
-closeness, separation, following, or stopping at a requested front/back/side
-relation. A side relation belongs here only when the final task state is to stop
-or hold near the target on that side. Do not use it when the endpoint is to pass
-through, past, beyond, across, or around a route reference, even if the route
-also names a side; preserving target visibility can conflict with traversal.
+Use for closeness, separation, following, or a final target-relative stop. A
+side relation belongs here only when the UAV must stop or hold there. Exclude
+routes ending through, past, beyond, across, or around a reference; preserving
+target visibility can conflict with traversal.
 
 ## Evidence Model
 
-Approach is target-relative. Use target confirmation, apparent size, familiar
-target scale, ground contact, nearby scene geometry, perspective or depth cues,
-free space, and change after translation. Combine these cues for a rough range
-estimate when calibrated sensing is absent. UAV displacement from a local
-origin is not target distance. Yaw cannot reach a distance or requested side.
+Approach is target-relative. Target identity and target-relative range are
+independently assessable facts. Estimate a credible rough range from apparent
+size, familiar scale, ground contact, geometry, perspective, depth, and change
+after translation. Treat the estimate as a range, not an exact
+point. Assess identity and range separately; uncertainty in one does not erase
+the other. A visible target normally spans several depth values; use the
+representative target region and overall scene relation instead of requiring
+all target pixels to agree. UAV displacement from a local origin is not target
+distance. Yaw cannot reach a distance or side relation.
 
 ## Decision Procedure
 
-1. Confirm or refresh the target relation before meaningful translation.
-2. Decide whether closing, retreating, holding, or lateral repositioning best
-   serves the requested relation.
-3. Treat a target that already appears very large, clipped, or near the camera
-   as clear near-range evidence; do not move closer merely to improve ranging.
-4. Use bounded, verifiable movement when distance or clearance is uncertain.
-5. Re-observe and check whether the relation changed in the intended direction
-   before continuing or correcting.
+1. Confirm the target identity and form a credible rough range before
+   correcting distance.
+2. Apply the stop condition below before choosing another correction.
+3. Approach only when available cues clearly place the UAV too far; retreat
+   only when they clearly place it too near.
+4. If cues cannot form a coherent range, improve observation without moving
+   along an unknown near/far direction.
+5. After one bounded correction, re-estimate. Reverse only when new evidence
+   clearly places the relation on the opposite side of the request.
 
 ## Completion And Stop
 
-Stop when current evidence supports the requested relation with reasonable task
-precision. For numeric standoff, broadly consistent visual or depth cues with
-no clear evidence of being substantially nearer or farther are enough; do not
-demand decimal-level certainty. Do not keep approaching until the target fills
-the view, becomes occluded, or leaves too little stopping margin merely to
-obtain exact proof. Facing the target is not the same as reaching the requested
-relation.
+Completion requires credible target identity. Separately, a requested standoff
+is sufficiently reached when usable visual or depth cues place the UAV broadly
+near the requested distance. Minor distance differences and normal depth spread
+across the visible target are acceptable; exact equality, point containment,
+or one uniform target depth is not required. Stop correcting unless cues
+clearly show a substantial near/far mismatch. Instrument-level or decimal
+certainty is not required. Facing is not the requested distance relation.
 
 ## Recovery
 
-If the target is absent or identity is uncertain, stabilize or search instead
-of moving toward an assumed location. If motion changes the relation in the
-wrong direction, stop and reassess before correcting. Near people, vehicles, or
-limited free space, use smaller changes and preserve stopping margin.
+If the target is absent or uncertain, search before translating. If the
+relation changes wrongly, stop and reassess. Repeated reversals mean the range
+is uncertain; reacquire it. Near people or tight clearance, use smaller changes.

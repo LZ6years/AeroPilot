@@ -7,11 +7,11 @@ move, records before/after observations, then hovers/lands.
 Recommended PowerShell:
 
     conda activate flyagent
-    python tests/manual/real_uav_primitive_probe.py --map-id cityenviron_win64 --launch --up-meters 5
+    python tests/manual/real_uav_primitive_probe.py --map-id cityenviron_win64 --execution managed --up-meters 5
 
 Equivalent without persistent shell activation:
 
-    conda run -n flyagent python tests/manual/real_uav_primitive_probe.py --map-id cityenviron_win64 --launch --up-meters 5
+    conda run -n flyagent python tests/manual/real_uav_primitive_probe.py --map-id cityenviron_win64 --execution managed --up-meters 5
 """
 
 from __future__ import annotations
@@ -26,12 +26,12 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.env_client.local_client import LocalEnvClient
+from src.env_client.simulator_client import SimulatorEnvClient
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
-from src.sim_server.server import LocalSimulationServer
+from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
 
 
@@ -42,8 +42,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--map-id", default="cityenviron_win64")
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--up-meters", type=float, default=5.0)
-    parser.add_argument("--launch", action="store_true", help="Launch the configured scene process")
-    parser.add_argument("--connect-existing", action="store_true", help="Connect to an already-running AirSim scene")
+    parser.add_argument(
+        "--execution",
+        choices=["attach", "managed"],
+        required=True,
+        help="Attach to an existing UE or manage an owned UE process",
+    )
     parser.add_argument("--no-land", action="store_true", help="Skip landing before scene shutdown")
     return parser
 
@@ -55,15 +59,14 @@ def main() -> None:
     selected_map = next(pkg for pkg in maps if pkg.map_id == args.map_id)
     run_dir = RunStore(args.run_root).create_run_dir("real_uav_up")
     recorder = AsyncRunLogger(run_dir)
-    server = LocalSimulationServer(
+    server = SimulationServer(
         maps,
         port_policy,
         Path(run_dir),
-        launch_processes=args.launch,
-        real_control=args.launch or args.connect_existing,
+        execution_mode=args.execution,
         action_config=action_config,
     )
-    client = LocalEnvClient(server)
+    client = SimulatorEnvClient(server)
     tools = ToolDispatcher(client)
     scene = None
     agent_id = "uav_1"

@@ -39,9 +39,7 @@ Your task is to observe, turn, move, and hover safely in the current environment
 
 - Left, right, and center in the camera image; left, right, front, and back in the world; and the side from which the user asks the UAV to pass are different relations.
 - Image-side position can change from yaw alone and cannot by itself prove that the UAV has reached a physical side of a target. Spatial relations require movement, target-relative position, traversable space, and the latest observation.
-- "Pass the target on its right" means the UAV route lies on the target's right; it does not mean the target should appear on the right side of the image. When the UAV heading roughly follows the route, the target will usually appear on the left and move toward the side or rear as passage progresses. The opposite relation applies when passing on the left.
-- A semantic plan must not translate "the target is on the left or right of the image" into "the UAV is on the target's right or left." A search phase only confirms the target and a plausible route. A side-passage phase must rely on translation or route progress. Yaw alone can support search or observation but cannot prove reaching a target side or completing passage.
-- Once a target or passage is visible, advance the feasible route through suitable translation, forward movement, distance holding, or hovering. Do not replace route progress with repeated centering.
+- A camera-side change alone is observation evidence, not proof of physical route progress.
 
 ## Using Memory
 

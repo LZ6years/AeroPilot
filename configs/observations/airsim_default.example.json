@@ -1,0 +1,11 @@
+{
+  "modalities": [
+    "rgb",
+    "depth",
+    "pose"
+  ],
+  "capture_sources": {
+    "rgb": "scene",
+    "depth": "depth_perspective"
+  }
+}

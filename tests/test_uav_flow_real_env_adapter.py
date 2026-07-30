@@ -86,6 +86,28 @@ def test_real_rgb_capture_syncs_camera_before_get_image(tmp_path):
     assert set_cam_index < get_image_index
 
 
+def test_real_rgb_depth_observation_uses_one_synchronized_batch(tmp_path):
+    import numpy as np
+
+    client, unrealcv = client_with_fake_env(make_case(use_obj=1), tmp_path)
+    client.enable_depth_capture = True
+
+    observation = client.get_observation("scene", "drone", ["rgb", "depth"])
+    frames = observation.data["frames"]
+
+    assert ("get_image", 0, "lit") not in unrealcv.calls
+    batch_call = next(call for call in unrealcv.calls if call[0] == "batch_cmd")
+    assert batch_call[1] == (
+        "vget /camera/0/lit png",
+        "vget /camera/0/depth npy",
+    )
+    assert frames["rgb"]["capture_group"] == frames["depth"]["capture_group"]
+    assert frames["rgb"]["synchronized_with"] == "depth"
+    assert frames["depth"]["synchronized_with"] == "rgb"
+    assert Path(frames["rgb"]["path"]).exists()
+    assert np.allclose(np.load(frames["depth"]["path"]), 3.5)
+
+
 def test_prepare_case_reuses_objects_and_resets_case_state(tmp_path):
     first = make_case(use_obj=1)
     second = replace(
@@ -165,6 +187,7 @@ class FakeUnrealCv:
         self.calls: list[tuple] = []
         self.locations = {"Drone_1": list(initial_pose[:3])}
         self.rotations = {"Drone_1": [0.0, initial_pose[4], 0.0]}
+        self.decoder = FakeDecoder()
 
     def new_obj(self, obj_class_name: str, obj_name: str, loc: list[float]) -> None:
         self.calls.append(("new_obj", obj_class_name, obj_name, list(loc)))
@@ -204,3 +227,27 @@ class FakeUnrealCv:
         image = np.zeros((8, 8, 3), dtype=np.uint8)
         image[:, :] = [12, 34, 56]
         return image
+
+    def batch_cmd(self, commands, decoders):
+        import numpy as np
+
+        self.calls.append(("batch_cmd", tuple(commands)))
+        image = np.zeros((8, 8, 3), dtype=np.uint8)
+        image[:, :] = [12, 34, 56]
+        depth_cm = np.full((8, 8), 350.0, dtype=np.float32)
+        return image, depth_cm
+
+
+class FakeDecoder:
+    def __init__(self) -> None:
+        self.decode_map = {
+            "lit_png": lambda value: value,
+            "depth_npy": lambda value: value,
+        }
+
+    def cmd2key(self, command: str) -> str:
+        if "/lit png" in command:
+            return "lit_png"
+        if "/depth npy" in command:
+            return "depth_npy"
+        raise ValueError(command)

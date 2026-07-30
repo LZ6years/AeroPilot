@@ -22,6 +22,8 @@ from src.uav.frames import SIGNED_YAW_SEMANTICS
 
 
 DEFAULT_AGENT_RULES_PATH = Path(__file__).resolve().parents[3] / "memory" / "FLYAGENT.md"
+MAX_CONFIGURED_EVIDENCE_ITEMS = 8
+MAX_CONFIGURED_EVIDENCE_CHARS = 160
 
 
 class TaskParserConfigError(RuntimeError):
@@ -40,6 +42,7 @@ class TaskParser:
         self.mode = mode or self.model_config.task_parser_mode
         self.config_warnings: list[str] = []
         self.last_parse_trace: dict[str, Any] = {}
+        self.configured_evidence: list[str] = []
         if self.mode == "model":
             self.agent_rules = self._load_agent_rules()
             self.structure_prompt = self._load_structure_prompt()
@@ -50,6 +53,11 @@ class TaskParser:
             self.structure_prompt = ""
             self.criteria_prompt = ""
             self.phase_skill_resolver = None
+
+    def configure_evidence_capabilities(self, capabilities: list[str] | None) -> None:
+        """Configure potential runtime evidence used only by criteria generation."""
+
+        self.configured_evidence = _normalize_configured_evidence(capabilities)
 
     def parse(self, instruction: str) -> TaskParseResult:
         clean_instruction = instruction.strip()
@@ -262,6 +270,7 @@ class TaskParser:
             phase_traces.append(phase_trace)
         self.last_parse_trace = {
             "strategy": "structure_then_phase_skill_criteria",
+            "configured_evidence": list(self.configured_evidence),
             "phases": phase_traces,
             "warnings": [*self.config_warnings, *normalization_warnings],
         }
@@ -357,6 +366,13 @@ class TaskParser:
                         "Treat it as domain guidance, not observation, tools, or output schema.\n\n"
                         + json.dumps(guidance, ensure_ascii=False)
                     ),
+                }
+            )
+        if self.configured_evidence:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": _configured_evidence_message(self.configured_evidence),
                 }
             )
         messages.extend(
@@ -461,6 +477,34 @@ def _phase(
         "continue_when": continue_when,
         "metrics": metrics or [],
     }
+
+
+def _normalize_configured_evidence(capabilities: list[str] | None) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in capabilities or []:
+        if not isinstance(item, str):
+            continue
+        value = " ".join(item.split())
+        if not value:
+            continue
+        if len(value) > MAX_CONFIGURED_EVIDENCE_CHARS:
+            value = value[: MAX_CONFIGURED_EVIDENCE_CHARS - 3].rstrip() + "..."
+        if value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+        if len(normalized) >= MAX_CONFIGURED_EVIDENCE_ITEMS:
+            break
+    return normalized
+
+
+def _configured_evidence_message(capabilities: list[str]) -> str:
+    return (
+        "Configured semantic evidence capabilities follow. They describe potential "
+        "runtime evidence, not facts observed in the current scene.\n\n"
+        + json.dumps({"configured_evidence": capabilities}, ensure_ascii=False)
+    )
 
 
 def _loads_json_object(content: str) -> dict[str, Any]:

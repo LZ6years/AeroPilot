@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.env_client.base import EnvClient
+from src.env_client import EnvClient
 from src.tools.dispatcher import ToolDispatcher
 
 
@@ -22,12 +22,13 @@ class AgentRuntime:
             self.recorder.write_json("state/scene_instance.json", scene.to_dict())
             self.recorder.event("scene_started", scene.to_dict())
 
-            for action, args in [
-                ("connect", {}),
-                ("takeoff", {}),
-                ("hover", {}),
-                ("turn_relative", {"yaw_deg": 5}),
-            ]:
+            actions = [("connect", {})]
+            if scene.capabilities is None or scene.capabilities.requires_takeoff:
+                actions.append(("takeoff", {}))
+            if scene.capabilities is None or scene.capabilities.supports("hover"):
+                actions.append(("hover", {}))
+            actions.append(("turn_relative", {"yaw_deg": 5}))
+            for action, args in actions:
                 self.recorder.event("action_started", {"action": action, "args": args})
                 result = self.tools.call(scene.scene_instance_id, agent_id, f"uav.{action}", args)
                 self.recorder.event("action_completed", result.to_dict())
@@ -40,9 +41,10 @@ class AgentRuntime:
             self.recorder.write_json("artifacts/observations/observation.json", observation.to_dict())
             self.recorder.event("observation_updated", observation.to_dict())
 
-            self.recorder.event("action_started", {"action": "hover", "args": {}})
-            result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
-            self.recorder.event("action_completed", result.to_dict())
+            if scene.capabilities is None or scene.capabilities.supports("hover"):
+                self.recorder.event("action_started", {"action": "hover", "args": {}})
+                result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
+                self.recorder.event("action_completed", result.to_dict())
         finally:
             self.env_client.stop_scene(scene.scene_instance_id)
             self.recorder.event("scene_stopped", scene.to_dict())

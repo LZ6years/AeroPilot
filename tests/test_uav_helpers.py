@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from src.runtime.configs.action_config import UavActionConfig
+from src.uav.commands import MOVE_BODY_ARGUMENT_SEMANTICS
+from src.uav.frames import SIGNED_YAW_SEMANTICS
 from src.uav import (
     AIRSIM_NED_VERTICAL_SIGN,
     CANONICAL_VERTICAL_SIGN,
@@ -15,6 +17,23 @@ from src.uav import (
     velocity_norm_mps,
     yaw_deg,
 )
+
+
+def test_model_facing_argument_semantics_match_canonical_motion_conventions():
+    config = UavActionConfig(linear_velocity_mps=2.0, vertical_velocity_mps=1.5)
+
+    assert "positive moves forward" in MOVE_BODY_ARGUMENT_SEMANTICS["vx"].lower()
+    assert "negative moves backward" in MOVE_BODY_ARGUMENT_SEMANTICS["vx"].lower()
+    assert "positive moves right" in MOVE_BODY_ARGUMENT_SEMANTICS["vy"].lower()
+    assert "negative moves left" in MOVE_BODY_ARGUMENT_SEMANTICS["vy"].lower()
+    assert "positive moves up" in MOVE_BODY_ARGUMENT_SEMANTICS["vz"].lower()
+    assert "negative moves down" in MOVE_BODY_ARGUMENT_SEMANTICS["vz"].lower()
+    assert move_body_velocity_from_args({"direction": "forward"}, config)[0] > 0
+    assert move_body_velocity_from_args({"direction": "backward"}, config)[0] < 0
+    assert move_body_velocity_from_args({"direction": "right"}, config)[1] > 0
+    assert move_body_velocity_from_args({"direction": "left"}, config)[1] < 0
+    assert "negative turns left" in SIGNED_YAW_SEMANTICS.lower()
+    assert "positive turns right" in SIGNED_YAW_SEMANTICS.lower()
 
 
 def test_pose_helpers_support_flat_nested_orientation_and_euler_shapes():

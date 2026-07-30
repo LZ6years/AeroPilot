@@ -27,8 +27,10 @@ class MissionState:
     errors: list[dict[str, str]] = field(default_factory=list)
     connected: bool = False
     airborne: bool = False
+    observation_modalities: tuple[str, ...] = ("rgb", "depth", "pose")
     hover_required: bool = False
-    yaw_scan_accum_deg: float = 0.0
+    yaw_scan_offset_deg: float = 0.0
+    yaw_scan_extent_deg: float = 0.0
     current_phase_window_count_value: int = 0
     max_phase_window_count: int = 40
     current_phase_origin_pose: dict[str, Any] = field(default_factory=dict)
@@ -74,6 +76,8 @@ class MissionState:
         self.current_phase_window_count_value = 0
         self.current_phase_progress = {}
         self.current_phase_origin_pose = {}
+        self.yaw_scan_offset_deg = 0.0
+        self.yaw_scan_extent_deg = 0.0
 
     @property
     def current_phase_window_count(self) -> int:
@@ -157,7 +161,11 @@ class MissionState:
             if tool == "uav.land":
                 self.airborne = False
             if tool == "uav.turn_relative":
-                self.yaw_scan_accum_deg += abs(float(args.get("yaw_deg", 0.0)))
+                self.yaw_scan_offset_deg += float(args.get("yaw_deg", 0.0))
+                self.yaw_scan_extent_deg = max(
+                    self.yaw_scan_extent_deg,
+                    abs(self.yaw_scan_offset_deg),
+                )
 
     def record_observation(self, observation: dict[str, Any]) -> None:
         # Keep only the latest observation snapshot; history is written to memory/observations.jsonl.
@@ -170,7 +178,8 @@ class MissionState:
 
     def to_dict(self) -> dict[str, Any]:
         yaw_scan = {
-            "accum_deg": self.yaw_scan_accum_deg,
+            "offset_deg": self.yaw_scan_offset_deg,
+            "extent_deg": self.yaw_scan_extent_deg,
         }
         return {
             "run_id": self.run_id,
@@ -188,6 +197,7 @@ class MissionState:
             "max_phase_window_count": self.max_phase_window_count,
             "connected": self.connected,
             "airborne": self.airborne,
+            "observation_modalities": list(self.observation_modalities),
             "completed": self.completed,
             "stopped": self.stopped,
             "stopped_reason": self.stopped_reason,

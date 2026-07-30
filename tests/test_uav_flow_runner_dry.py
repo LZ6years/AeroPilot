@@ -183,6 +183,7 @@ def test_config_roundtrip_includes_reuse_real_unrealcv_env():
     assert config.limit_per_class == 3
     assert UavFlowEvalConfig.from_dict({}).reuse_real_unrealcv_env is True
     assert UavFlowEvalConfig.from_dict({}).runtime_loop_guard_windows == 40
+    assert UavFlowEvalConfig.from_dict({}).planner_depth_input == "off"
     assert config.to_dict()["reuse_real_unrealcv_env"] is False
 
 
@@ -228,19 +229,58 @@ def test_runner_builds_case_local_stmr_context_without_global_config():
     assert context_builder.composer.registry.modules["map"] is stmr_module
 
 
-def test_runner_enables_research_depth_capture_only_for_stmr(tmp_path):
+def test_runner_configures_planner_depth_capture_independently_from_stmr(tmp_path):
     case = make_case()
     baseline = UavFlowBenchmarkRunner(UavFlowEvalConfig.from_dict({"stmr_mode": "off"}))
+    depth = UavFlowBenchmarkRunner(
+        UavFlowEvalConfig.from_dict(
+            {
+                "stmr_mode": "off",
+                "planner_depth_input": "now",
+            }
+        )
+    )
     stmr = UavFlowBenchmarkRunner(
         UavFlowEvalConfig.from_dict({"stmr_mode": "shadow"}),
         stmr_session=object(),
     )
 
     baseline_client = baseline._make_env_client(case, tmp_path / "baseline")
+    depth_client = depth._make_env_client(case, tmp_path / "depth")
     stmr_client = stmr._make_env_client(case, tmp_path / "stmr")
 
+    assert baseline_client.enable_depth_capture is False
     assert baseline_client.enable_research_frame_capture is False
+    assert depth_client.enable_depth_capture is True
+    assert depth_client.enable_research_frame_capture is False
+    assert stmr_client.enable_depth_capture is False
     assert stmr_client.enable_research_frame_capture is True
+
+
+def test_runner_builds_depth_image_context_without_stmr():
+    class Planner:
+        planner_mode = "model"
+
+    runner = UavFlowBenchmarkRunner(
+        UavFlowEvalConfig.from_dict(
+            {
+                "stmr_mode": "off",
+                "planner_depth_input": "now",
+            }
+        )
+    )
+
+    context_builder, stmr_module = runner._context_builder(Planner())
+
+    assert context_builder is not None
+    assert stmr_module is None
+    image_module = context_builder.composer.registry.modules["image"]
+    assert image_module.include_current_depth is True
+    assert context_builder.composer.registry.modules["map"].name == "map"
+    assert any(
+        capability.startswith("NOW metric depth overlay:")
+        for capability in context_builder.semantic_evidence_capabilities()
+    )
 
 
 def test_runner_warms_shared_stmr_session_once_before_cases():

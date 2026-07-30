@@ -59,6 +59,9 @@ class DefaultMapContextModule(ContextModule):
     def describe_output(self) -> dict[str, Any]:
         return {
             "summary": "Map or scene memory clues recalled for the current map and scene.",
+            "semantic_evidence": [
+                "Map memory: recalled scene clues requiring current confirmation; not current observation facts."
+            ],
             "content_fields": {
                 "recalled_map_memories": "Map memory entries matching the current map/scene filter; use as clues, not current visual facts.",
                 "recall_filter": "The map_id, scene_instance_id, and limit used for map memory recall.",

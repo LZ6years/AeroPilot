@@ -35,7 +35,7 @@ Boundaries:
 - A goal phrased only as "prepare for X", "position for X", "approach for X", or "initiate X" does not cover an instruction that requires completing X.
 - For a passage task, include actual progress through/past/beyond the route reference. For an orbit task, include making the requested around-target path progress. For a landing task, include controlled descent and a landed/stable result, not only locating or approaching the landing region.
 - Preserve spatial, route, orientation, movement, altitude, and target relations stated by the user.
-- Do not raise precision beyond the instruction. Never add exact or exactly unless the user requests exactness. Words such as face, look toward, near, around, or pass do not imply exact pixel alignment, exact paths, or invented distances.
+- A number by itself requests its stated relation, not exact measurement. Words such as face, look toward, near, around, or pass do not imply exact pixel alignment, exact paths, or invented distances.
 - Do not add hover, hold, stabilize, or stability to a terminal state or phase goal when the user only asks to move to or reach a position. Preserve those behaviors only when the user explicitly requests them.
 - Preserve face, turn toward, look toward, and orient toward as qualitative orientation goals. Do not rewrite them as centered in the image or camera unless the user explicitly requests centering or tighter visual precision.
 - Every numeric quantity in task_goal or phase text must come directly from the user instruction. Do not derive secondary numbers.
@@ -45,3 +45,4 @@ Boundaries:
 - If the instruction is ambiguous, keep the phase goal qualitative and avoid inventing details.
 - Ambiguity may keep details qualitative, but it must not replace the user's explicit terminal verb with preparation for that verb.
 - Before returning, check every requested outcome verb against the phase names and goals. If an outcome appears only in task_goal.final_state or as "for X" preparation, repair the phase structure so the outcome itself is represented.
+- Before returning, remove exact, exactly, precise, or precisely from a phase goal when that precision language is absent from the user instruction, including before numeric relations.

@@ -17,6 +17,13 @@ def test_mission_state_default_phase_window_limit_is_40():
     assert make_state().max_phase_window_count == 40
 
 
+def test_mission_state_serializes_resolved_observation_modalities():
+    state = make_state()
+    state.observation_modalities = ("rgb", "pose")
+
+    assert state.to_dict()["observation_modalities"] == ["rgb", "pose"]
+
+
 def movement_phase(index: int, total: int, name: str, goal: str) -> SemanticPhase:
     return SemanticPhase(
         index=index,
@@ -94,7 +101,10 @@ def test_mission_state_tracks_phase_execution_facts():
     assert "current_phase_execution_summary" not in data
     assert "latest_pose" not in data
     assert "yaw_scan_accum_deg" not in data
-    assert data["safety"]["yaw_scan"]["accum_deg"] == 0.0
+    assert data["safety"]["yaw_scan"] == {
+        "offset_deg": 0.0,
+        "extent_deg": 0.0,
+    }
     assert "world_pose" not in data["current_phase_progress"]
     assert "start_pose" not in data["current_phase_progress"]
     assert "latest_pose" not in data["current_phase_progress"]
@@ -106,6 +116,26 @@ def test_mission_state_tracks_phase_execution_facts():
     assert data["current_phase_progress"]["measurements"]["forward_m"] == 1.0
     assert "coordinate_frames" not in data["current_phase_progress"]
     assert data["current_phase_key"] == "1:orient_right"
+
+
+def test_mission_state_tracks_one_sided_yaw_scan_extent_and_resets_per_phase():
+    state = make_state()
+
+    state.record_action("uav.turn_relative", {"yaw_deg": 30.0}, {"ok": True})
+    state.record_action("uav.turn_relative", {"yaw_deg": -20.0}, {"ok": True})
+
+    assert state.yaw_scan_offset_deg == 10.0
+    assert state.yaw_scan_extent_deg == 30.0
+
+    state.record_action("uav.turn_relative", {"yaw_deg": -40.0}, {"ok": True})
+
+    assert state.yaw_scan_offset_deg == -30.0
+    assert state.yaw_scan_extent_deg == 30.0
+
+    state.advance_phase()
+
+    assert state.yaw_scan_offset_deg == 0.0
+    assert state.yaw_scan_extent_deg == 0.0
 
 
 def test_mission_state_uses_phase_index_to_separate_duplicate_phase_names():

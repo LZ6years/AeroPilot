@@ -6,6 +6,10 @@
       "provider": "packaged_unreal",
       "scene_id": "demo",
       "root": null,
+      "connection": {
+        "mode": "local",
+        "data_transport": "direct"
+      },
       "launch": {
         "manual": true,
         "args": []
@@ -21,10 +25,6 @@
         "image_height": 224,
         "depth_width": 256,
         "depth_height": 256
-      },
-      "resources": {
-        "supports_object_edit": false,
-        "supports_weather": false
       }
     },
     {
@@ -32,6 +32,10 @@
       "provider": "packaged_unreal",
       "scene_id": "1",
       "root": "G:/airvln-envs/envs/env_1/env_1",
+      "connection": {
+        "mode": "local",
+        "data_transport": "direct"
+      },
       "launch": {
         "method": "wsl_bash",
         "linux": "LinuxNoEditor/AirVLN.sh",
@@ -50,10 +54,6 @@
         "image_height": 224,
         "depth_width": 256,
         "depth_height": 256
-      },
-      "resources": {
-        "supports_object_edit": false,
-        "supports_weather": false
       }
     },
     {
@@ -61,6 +61,10 @@
       "provider": "packaged_unreal",
       "scene_id": "cityenviron",
       "root": "G:/ue-envs/airsim-win64/CityEnviron/WindowsNoEditor",
+      "connection": {
+        "mode": "local",
+        "data_transport": "direct"
+      },
       "launch": {
         "method": "direct",
         "windows": "CityEnviron/Binaries/Win64/CityEnviron.exe",
@@ -83,10 +87,6 @@
         "x": 0,
         "y": -5,
         "z": 0
-      },
-      "resources": {
-        "supports_object_edit": false,
-        "supports_weather": false
       }
     },
     {
@@ -94,6 +94,10 @@
       "provider": "packaged_unreal",
       "scene_id": "collection",
       "root": "G:/UnrealZoo-UE4/Collection_WinNoEditor_0424_25",
+      "connection": {
+        "mode": "local",
+        "data_transport": "direct"
+      },
       "launch": {
         "method": "direct",
         "windows": "Collection/Binaries/Win64/Collection.exe",
@@ -111,16 +115,11 @@
         "width": 256,
         "height": 256,
         "fov": 90
-      },
-      "resources": {
-        "supports_object_edit": true,
-        "supports_weather": false
       }
     }
   ],
   "port_policy": {
-    "server_port": 30000,
-    "airsim_port_start": 30001,
+    "control_port_start": 30001,
     "max_scene_num": 8
   }
 }
