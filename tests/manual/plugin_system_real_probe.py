@@ -228,8 +228,7 @@ def _run_research_image_plugin(run_dir: Path, rgb_path: Path) -> dict[str, Any]:
 
 def _run_uav_flow_smoke(eval_id: str) -> dict[str, Any]:
     config = UavFlowEvalConfig(
-        real_unrealcv=True,
-        reuse_real_unrealcv_env=True,
+        execution_mode="attach",
         classes=["Turn", "Approach"],
         limit_per_class=2,
         enable_sr_judge=True,

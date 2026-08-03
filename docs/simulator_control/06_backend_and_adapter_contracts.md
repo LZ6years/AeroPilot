@@ -159,15 +159,19 @@ control.protocol=unrealcv
 
 - Object location 在 Backend 内按 `units_per_meter`转换成米；
 - Object rotation 的 `[roll, yaw, pitch]`顺序在策略边界转换；
-- `yaw_offset_deg`描述 canonical yaw 与 Actor native yaw 的固定偏移；
+- 标准 Object rotation 使用 `yaw_offset_deg`在 canonical yaw 与 Actor native
+  yaw 之间换算；
+- `unrealcv.startup.hide_objects`可声明连接时需要隐藏 mesh 的打包地图 Actor；
+- `scale`可恢复打包地图要求的主 Actor 启动比例，不由 Benchmark 修改；
 - 标准 Actor 使用 `standard_pose`；
 - 只提供 Blueprint yaw 的打包地图使用 `blueprint_yaw`；
 - 采图前可用标准 `standard_pose`或地图扩展 `blueprint_pose`把相机同步到 Actor。
 
 `blueprint_yaw`只能改变 yaw。如果调用者请求改变 pitch/roll，策略明确失败，不能
-返回伪成功。该 Blueprint 命令接收 canonical yaw，并在 UE 内部插值；Backend
-轮询 Actor readback，达到 tolerance 后才返回成功。Actor 不存在、超时或 Blueprint
-命令失败时都不会回退到 camera 模式。
+返回伪成功。Backend 在发送 Blueprint 命令前应用 `yaw_offset_deg`；Blueprint
+完成内部 mesh 朝向修正后，Actor readback 就是相机物理 yaw，并作为 canonical yaw
+返回。Backend 轮询 readback，达到 tolerance 后才返回成功。Actor 不存在、超时或
+Blueprint 命令失败时都不会回退到 camera 模式。
 
 ## UnrealCV 观测批次
 

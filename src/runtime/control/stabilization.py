@@ -128,17 +128,115 @@ class UavStabilizer:
         scene_instance_id: str,
         agent_id: str,
         capabilities: SceneCapabilities | None = None,
+        warmup_modalities: list[str] | tuple[str, ...] | None = None,
     ) -> dict[str, Any]:
-        """Wait before the initial preflight observation."""
+        """Wait before the initial preflight observation.
 
+        Velocity stability can be reported before a simulator's render target
+        has produced a usable frame after ``set_pose``. The optional minimum
+        settle time therefore applies only here, after scene/episode
+        initialization and before the first Agent-visible observation. It does
+        not delay stabilization after ordinary Planner actions.
+        """
+
+        started = time.monotonic()
         step = PlannedStep.tool_step("uav.move_body", {}, "preflight stabilization")
-        return self.wait_after_step(
+        result = self.wait_after_step(
             scene_instance_id,
             agent_id,
             "preflight",
             step,
             capabilities=capabilities,
         )
+        minimum_settle_sec = max(
+            0.0, float(self.config.initialization_min_settle_sec)
+        )
+        normalized_modalities = tuple(
+            str(value).strip().lower()
+            for value in (warmup_modalities or ())
+            if str(value).strip()
+        )
+        settle_started = time.monotonic()
+        warmup_summary: dict[str, Any] | None = None
+        if minimum_settle_sec > 0.0:
+            self._event(
+                "uav_initialization_settle_started",
+                {
+                    "minimum_settle_sec": minimum_settle_sec,
+                    "warmup_modalities": list(normalized_modalities),
+                },
+            )
+        if minimum_settle_sec > 0.0 and normalized_modalities:
+            self._event(
+                "uav_initialization_observation_warmup_started",
+                {
+                    "modalities": list(normalized_modalities),
+                    "minimum_settle_sec": minimum_settle_sec,
+                },
+            )
+            warmup_count = 0
+            while (
+                max(0.0, time.monotonic() - settle_started)
+                < minimum_settle_sec
+            ):
+                # These observations deliberately bypass FlightMemory. Some
+                # simulators advance lazy render targets only while image
+                # requests are active, so a bounded polling loop is required
+                # instead of one request followed by a passive sleep.
+                self.tools.observe(
+                    scene_instance_id,
+                    agent_id,
+                    list(normalized_modalities),
+                )
+                warmup_count += 1
+                elapsed = max(0.0, time.monotonic() - settle_started)
+                remaining = max(0.0, minimum_settle_sec - elapsed)
+                if remaining > 0.0:
+                    time.sleep(
+                        min(
+                            max(
+                                0.001,
+                                float(self.config.poll_interval_sec),
+                            ),
+                            remaining,
+                        )
+                    )
+            warmup_summary = {
+                "modalities": list(normalized_modalities),
+                "poll_count": warmup_count,
+                "elapsed_sec": round(
+                    max(0.0, time.monotonic() - settle_started), 3
+                ),
+            }
+            self._event(
+                "uav_initialization_observation_warmup_completed",
+                warmup_summary,
+            )
+        elif minimum_settle_sec > 0.0:
+            time.sleep(minimum_settle_sec)
+        if minimum_settle_sec > 0.0:
+            payload = {
+                "minimum_settle_sec": minimum_settle_sec,
+                "warmup": warmup_summary,
+            }
+            self._event(
+                "uav_initialization_settle_completed",
+                {
+                    **payload,
+                    "settle_elapsed_sec": round(
+                        max(0.0, time.monotonic() - settle_started), 3
+                    ),
+                },
+            )
+        return {
+            **result,
+            "initialization_min_settle_sec": minimum_settle_sec,
+            "initialization_wait_sec": minimum_settle_sec,
+            "initialization_observation_warmup": warmup_summary,
+            "elapsed_sec": round(
+                max(0.0, time.monotonic() - started), 3
+            ),
+        }
 
     def _skip(self, payload: dict[str, Any]) -> dict[str, Any]:
         result = {**payload, "status": "skipped"}

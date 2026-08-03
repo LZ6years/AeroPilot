@@ -172,3 +172,57 @@ def test_stabilizer_skips_polling_without_pose_observation():
     assert result["reason"] == "pose_observation_unsupported"
     assert tools.observations == 0
     assert tools.calls == []
+
+
+def test_preflight_honors_initialization_minimum_without_delaying_steps(
+    monkeypatch,
+):
+    import src.runtime.control.stabilization as stabilization_module
+
+    clock = {"now": 10.0}
+
+    def fake_sleep(duration):
+        clock["now"] += duration
+
+    monkeypatch.setattr(
+        stabilization_module.time, "monotonic", lambda: clock["now"]
+    )
+    monkeypatch.setattr(stabilization_module.time, "sleep", fake_sleep)
+    tools = StubTools(
+        [
+            {"x": 0.0, "y": 0.0, "z": 0.0},
+            {"x": 0.0, "y": 0.0, "z": 0.0},
+            {"x": 0.0, "y": 0.0, "z": 0.0},
+            {"x": 0.0, "y": 0.0, "z": 0.0},
+        ]
+    )
+    config = UavStabilizationConfig(
+        initialization_min_settle_sec=5.0,
+        poll_interval_sec=2.5,
+        zero_velocity_brake_duration_sec=0.0,
+    )
+    stabilizer = UavStabilizer(tools, Recorder(), config)
+
+    preflight = stabilizer.wait_after_preflight(
+        "scene",
+        "uav_1",
+        warmup_modalities=["rgb", "depth", "pose"],
+    )
+    step = stabilizer.wait_after_step(
+        "scene",
+        "uav_1",
+        "phase",
+        PlannedStep.tool_step("uav.move_body", {}, "move"),
+    )
+
+    assert preflight["status"] == "completed"
+    assert preflight["initialization_wait_sec"] == 5.0
+    assert preflight["initialization_observation_warmup"] == {
+        "modalities": ["rgb", "depth", "pose"],
+        "poll_count": 2,
+        "elapsed_sec": 5.0,
+    }
+    assert preflight["elapsed_sec"] == 5.0
+    assert step["status"] == "completed"
+    assert tools.observations == 4
+    assert clock["now"] == 15.0

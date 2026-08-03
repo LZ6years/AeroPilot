@@ -25,12 +25,28 @@
         "height": 256,
         "fov": 90,
         "control_target": "actor",
+        "startup": {
+          "hide_objects": [
+            "BP_Character_2",
+            "BP_animal_2",
+            "BP_BaseCar_2",
+            "Sport_2"
+          ]
+        },
         "actor": {
           "name": "BP_Drone01_2",
+          "scale": [0.1, 0.1, 0.1],
           "units_per_meter": 100.0,
           "yaw_offset_deg": -180.0,
           "rotation_method": "blueprint_yaw",
           "camera_follow": "standard_pose",
+          "camera_validation": {
+            "enabled": true,
+            "position_mode": "max_distance",
+            "max_distance_m": 1.5,
+            "position_tolerance_m": 0.05,
+            "yaw_tolerance_deg": 1.0
+          },
           "disable_physics": true,
           "yaw_settle_timeout_sec": 5.0,
           "yaw_tolerance_deg": 1.0,

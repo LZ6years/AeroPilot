@@ -80,6 +80,58 @@ class MapPackage:
                         f"MapPackage {data['map_id']} missing unrealcv.actor.name"
                     )
                 actor["name"] = name
+                startup = unrealcv.get("startup", {})
+                if not isinstance(startup, dict):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires "
+                        "unrealcv.startup to be an object"
+                    )
+                startup = dict(startup)
+                hide_objects = startup.get("hide_objects", [])
+                if not isinstance(hide_objects, (list, tuple)):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires "
+                        "unrealcv.startup.hide_objects to be a list"
+                    )
+                normalized_hide_objects = [
+                    str(value).strip() for value in hide_objects
+                ]
+                if any(not value for value in normalized_hide_objects):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires non-empty "
+                        "unrealcv.startup.hide_objects names"
+                    )
+                if len(set(normalized_hide_objects)) != len(
+                    normalized_hide_objects
+                ):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires unique "
+                        "unrealcv.startup.hide_objects names"
+                    )
+                if name in normalized_hide_objects:
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} cannot hide controlled "
+                        f"unrealcv.actor.name {name!r} during startup"
+                    )
+                startup["hide_objects"] = normalized_hide_objects
+                unrealcv["startup"] = startup
+                scale = actor.get("scale")
+                if scale is not None:
+                    if not isinstance(scale, (list, tuple)) or len(scale) != 3:
+                        raise ValueError(
+                            f"MapPackage {data['map_id']} requires "
+                            "unrealcv.actor.scale to contain three values"
+                        )
+                    normalized_scale = [float(value) for value in scale]
+                    if any(
+                        not math.isfinite(value) or value <= 0.0
+                        for value in normalized_scale
+                    ):
+                        raise ValueError(
+                            f"MapPackage {data['map_id']} requires positive "
+                            "finite unrealcv.actor.scale values"
+                        )
+                    actor["scale"] = normalized_scale
                 units_per_meter = float(actor.get("units_per_meter", 100.0))
                 if not math.isfinite(units_per_meter) or units_per_meter <= 0.0:
                     raise ValueError(
@@ -118,6 +170,78 @@ class MapPackage:
                         f"{camera_follow}"
                     )
                 actor["camera_follow"] = camera_follow
+                camera_validation = actor.get("camera_validation", {})
+                if not isinstance(camera_validation, dict):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires "
+                        "unrealcv.actor.camera_validation to be an object"
+                    )
+                camera_validation = dict(camera_validation)
+                validation_enabled = camera_validation.get("enabled", False)
+                if not isinstance(validation_enabled, bool):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires "
+                        "unrealcv.actor.camera_validation.enabled to be boolean"
+                    )
+                camera_validation["enabled"] = validation_enabled
+                position_mode = str(
+                    camera_validation.get(
+                        "position_mode",
+                        "expected_body_offset",
+                    )
+                ).strip().lower()
+                if position_mode not in {
+                    "expected_body_offset",
+                    "max_distance",
+                }:
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} has unsupported "
+                        "unrealcv.actor.camera_validation.position_mode: "
+                        f"{position_mode}"
+                    )
+                camera_validation["position_mode"] = position_mode
+                expected_offset = camera_validation.get(
+                    "expected_body_offset_m",
+                    [0.0, 0.0, 0.0],
+                )
+                if (
+                    not isinstance(expected_offset, (list, tuple))
+                    or len(expected_offset) != 3
+                ):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires "
+                        "unrealcv.actor.camera_validation."
+                        "expected_body_offset_m to contain three values"
+                    )
+                normalized_offset = [
+                    float(value) for value in expected_offset
+                ]
+                if any(
+                    not math.isfinite(value)
+                    for value in normalized_offset
+                ):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires finite "
+                        "unrealcv.actor.camera_validation."
+                        "expected_body_offset_m values"
+                    )
+                camera_validation[
+                    "expected_body_offset_m"
+                ] = normalized_offset
+                for key, default in (
+                    ("position_tolerance_m", 0.05),
+                    ("max_distance_m", 1.5),
+                    ("yaw_tolerance_deg", 1.0),
+                ):
+                    value = float(camera_validation.get(key, default))
+                    if not math.isfinite(value) or value <= 0.0:
+                        raise ValueError(
+                            f"MapPackage {data['map_id']} requires a positive "
+                            "finite unrealcv.actor.camera_validation."
+                            f"{key}"
+                        )
+                    camera_validation[key] = value
+                actor["camera_validation"] = camera_validation
                 disable_physics = actor.get("disable_physics", False)
                 if not isinstance(disable_physics, bool):
                     raise ValueError(

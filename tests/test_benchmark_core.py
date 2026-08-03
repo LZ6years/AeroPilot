@@ -1,0 +1,940 @@
+"""Contract tests for simulator-neutral benchmark execution."""
+
+from __future__ import annotations
+
+import json
+import base64
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from evaluation.benchmarks.core import (
+    BenchmarkAuditLog,
+    BenchmarkAuditReader,
+    BenchmarkCaseReview,
+    BenchmarkEpisodeExecutor,
+    BenchmarkReviewRenderer,
+    BenchmarkSummaryReview,
+    EpisodeAuditCursor,
+    FrameAssetResolver,
+    EpisodeTraceReader,
+    PreparedBenchmarkEpisode,
+    ResolvedFrameAsset,
+    ReviewSection,
+    TraceCursor,
+    write_audit_json,
+)
+from src.env_client import ObservationProfile, SceneCapabilities, SceneInstance
+from src.runtime.configs import TaskExecutionOptions
+
+
+def test_prepared_episode_requires_profile_options_alignment():
+    with pytest.raises(ValueError, match="modalities must match"):
+        make_episode(
+            profile=ObservationProfile.from_dict(
+                {"modalities": ["rgb", "pose"]}
+            ),
+            options=TaskExecutionOptions(),
+        )
+
+
+def test_trace_reader_excludes_preflight_and_shutdown_and_keeps_stationary_action(
+    tmp_path,
+):
+    write_trace_fixture(tmp_path)
+    cursor = TraceCursor.freeze(tmp_path)
+    append_jsonl(
+        tmp_path / "memory" / "actions.jsonl",
+        {
+            "id": "act_0003",
+            "timestamp": "2026-01-01T00:00:05+00:00",
+            "tool": "uav.land",
+            "result": {"ok": True},
+        },
+    )
+
+    trace = EpisodeTraceReader().read(cursor)
+
+    assert trace.action_count == 1
+    assert [sample.source for sample in trace.samples] == [
+        "task_initial",
+        "action_result",
+    ]
+    assert trace.samples[1].tool == "uav.turn_relative"
+    assert trace.samples[1].pose["x"] == 1.0
+    assert trace.samples[1].action_args == {"yaw_deg": 15.0}
+    assert trace.samples[1].post_action_observation_pose["yaw_deg"] == (
+        15.25
+    )
+    assert trace.require_single_coordinate_frame("unrealcv_world_m") == (
+        "unrealcv_world_m"
+    )
+
+
+def test_trace_reader_falls_back_to_observation_pose(tmp_path):
+    write_trace_fixture(tmp_path, action_pose=False)
+
+    trace = EpisodeTraceReader().read(TraceCursor.freeze(tmp_path))
+
+    assert trace.action_count == 1
+    assert trace.samples[-1].source == "observation_fallback"
+    assert trace.samples[-1].pose["yaw_deg"] == 15.0
+
+
+def test_trace_reader_keeps_initial_pose_when_no_formal_actions(tmp_path):
+    write_trace_fixture(tmp_path, include_action=False)
+
+    trace = EpisodeTraceReader().read(TraceCursor.freeze(tmp_path))
+
+    assert trace.action_count == 0
+    assert len(trace.samples) == 1
+    assert trace.samples[0].source == "task_initial"
+
+
+def test_trace_reader_excludes_runtime_error_hover_after_last_observation(
+    tmp_path,
+):
+    write_trace_fixture(tmp_path)
+    append_jsonl(
+        tmp_path / "memory" / "actions.jsonl",
+        {
+            "id": "act_error_hover",
+            "timestamp": "2026-01-01T00:00:04+00:00",
+            "tool": "uav.hover",
+            "result": {"ok": True},
+        },
+    )
+
+    trace = EpisodeTraceReader().read(TraceCursor.freeze(tmp_path))
+
+    assert trace.action_count == 1
+    assert [sample.tool for sample in trace.samples[1:]] == [
+        "uav.turn_relative"
+    ]
+
+
+def test_trace_reader_rejects_mixed_coordinate_frames(tmp_path):
+    write_trace_fixture(tmp_path)
+    poses_path = tmp_path / "memory" / "poses.jsonl"
+    poses = [
+        json.loads(line)
+        for line in poses_path.read_text(encoding="utf-8").splitlines()
+    ]
+    poses[-1]["coordinate_frame"] = "airsim_ned_canonical_m"
+    poses_path.write_text(
+        "\n".join(json.dumps(item) for item in poses) + "\n",
+        encoding="utf-8",
+    )
+
+    trace = EpisodeTraceReader().read(TraceCursor.freeze(tmp_path))
+
+    with pytest.raises(ValueError, match="requires one explicit"):
+        trace.require_single_coordinate_frame()
+
+
+def test_executor_orders_prepare_runtime_freeze_shutdown_cleanup_then_metrics(
+    tmp_path,
+):
+    calls: list[str] = []
+    runtime = FakeRuntime(tmp_path, calls)
+    scenario = FakeScenario(calls)
+    metrics = FakeMetrics(calls)
+
+    result = BenchmarkEpisodeExecutor().execute(
+        make_episode(),
+        runtime=runtime,
+        scenario_controller=scenario,
+        metric_suite=metrics,
+        run_dir=tmp_path,
+    )
+
+    assert calls == [
+        "ensure",
+        "scenario_prepare",
+        "run",
+        "finish",
+        "scenario_cleanup",
+        "metrics",
+    ]
+    assert result.outcome.completed is True
+    assert result.trace.action_count == 1
+    assert result.metrics == {"sample_count": 2}
+    manifest = json.loads(
+        (tmp_path / "benchmark" / "episode_planner_safe.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert manifest["metadata"] == {"weather": "clear"}
+    assert "evaluation_payload" not in manifest
+    assert "scenario_payload" not in manifest
+
+
+def test_executor_stops_scene_without_state_when_scenario_prepare_fails(tmp_path):
+    calls: list[str] = []
+    runtime = FakeRuntime(tmp_path, calls)
+    scenario = FakeScenario(calls, fail_prepare=True)
+
+    result = BenchmarkEpisodeExecutor().execute(
+        make_episode(),
+        runtime=runtime,
+        scenario_controller=scenario,
+        metric_suite=FakeMetrics(calls),
+        run_dir=tmp_path,
+    )
+
+    assert calls == [
+        "ensure",
+        "scenario_prepare",
+        "finish",
+        "scenario_cleanup",
+        "metrics",
+    ]
+    assert runtime.finished_state is None
+    assert result.outcome.error == {
+        "error_type": "RuntimeError",
+        "error": "prepare failed",
+    }
+
+
+def test_metric_failure_happens_after_scene_cleanup(tmp_path):
+    calls: list[str] = []
+    runtime = FakeRuntime(tmp_path, calls)
+
+    result = BenchmarkEpisodeExecutor().execute(
+        make_episode(),
+        runtime=runtime,
+        scenario_controller=FakeScenario(calls),
+        metric_suite=FakeMetrics(calls, fail=True),
+        run_dir=tmp_path,
+    )
+
+    assert calls.index("scenario_cleanup") < calls.index("metrics")
+    assert result.metric_error == {
+        "error_type": "ValueError",
+        "error": "metric failed",
+    }
+
+
+def test_audit_cursor_bounds_frames_actions_messages_and_shutdown(tmp_path):
+    write_audit_fixture(tmp_path)
+    cursor = EpisodeAuditCursor.freeze(tmp_path)
+    append_jsonl(
+        tmp_path / "memory" / "actions.jsonl",
+        {
+            "id": "act_shutdown",
+            "timestamp": "2026-01-01T00:00:09+00:00",
+            "tool": "uav.land",
+            "result": {"ok": True},
+        },
+    )
+    append_jsonl(
+        tmp_path / "memory" / "frames.jsonl",
+        {
+            "id": "frame_shutdown",
+            "timestamp": "2026-01-01T00:00:09+00:00",
+            "observation_id": "obs_shutdown",
+            "modality": "rgb",
+            "metadata": {},
+        },
+    )
+
+    audit = BenchmarkAuditReader().read(cursor)
+
+    assert [item["tool"] for item in audit.actions] == [
+        "uav.turn_relative"
+    ]
+    assert [item["id"] for item in audit.frames] == ["frame_0001"]
+    assert [item["id"] for item in audit.agent_messages] == ["msg_0001"]
+    assert audit.observation_anchors["task_initial"]["id"] == "obs_0001"
+
+
+def test_frame_asset_resolver_supports_artifact_path_path_and_base64(
+    tmp_path,
+):
+    run_dir = tmp_path / "run"
+    case_dir = tmp_path / "case"
+    png = _png_bytes()
+    artifact = run_dir / "artifacts" / "rgb" / "artifact.png"
+    top_path = run_dir / "artifacts" / "rgb" / "top.png"
+    artifact.parent.mkdir(parents=True)
+    artifact.write_bytes(png)
+    top_path.write_bytes(png)
+    audit = BenchmarkAuditLog(
+        run_dir=str(run_dir),
+        started_at=None,
+        ended_at="2026-01-01T00:00:00+00:00",
+        task_initial_observation_ref=None,
+        observations=(),
+        frames=(
+            {
+                "id": "frame_artifact",
+                "observation_id": "obs_1",
+                "modality": "rgb",
+                "metadata": {"artifact_path": str(artifact)},
+            },
+            {
+                "id": "frame_path",
+                "observation_id": "obs_2",
+                "modality": "rgb",
+                "path": str(top_path),
+                "metadata": {},
+            },
+            {
+                "id": "frame_base64",
+                "observation_id": "obs_3",
+                "modality": "rgb",
+                "metadata": {
+                    "base64": base64.b64encode(png).decode("ascii")
+                },
+            },
+            {
+                "id": "frame_broken",
+                "observation_id": "obs_4",
+                "modality": "rgb",
+                "metadata": {"base64": "not-base64"},
+            },
+        ),
+        poses=(),
+        actions=(),
+        agent_messages=(),
+        events=(),
+        debug_events=(),
+        planner_debug=(),
+    )
+
+    assets = FrameAssetResolver().materialize(audit, case_dir)
+
+    assert [item.source for item in assets[:3]] == [
+        "artifact_path",
+        "path",
+        "base64",
+    ]
+    assert all(
+        Path(item.display_path).is_file() for item in assets[:3]
+    )
+    assert assets[3].unavailable_reason == "invalid_base64"
+
+
+def test_core_review_writes_portable_case_index_and_audit(tmp_path):
+    audit = BenchmarkAuditLog(
+        run_dir=str(tmp_path / "run"),
+        started_at=None,
+        ended_at="2026-01-01T00:00:00+00:00",
+        task_initial_observation_ref=None,
+        observations=(),
+        frames=(),
+        poses=(),
+        actions=(
+            {
+                "timestamp": "2026-01-01T00:00:00+00:00",
+                "tool": "uav.hover",
+                "args": {},
+                "result": {"ok": True},
+            },
+        ),
+        agent_messages=(),
+        events=(),
+        debug_events=(),
+        planner_debug=(),
+    )
+    case_dir = tmp_path / "eval" / "cases" / "case_1"
+    image_path = case_dir / "review_assets" / "frames" / "frame.png"
+    image_path.parent.mkdir(parents=True)
+    image_path.write_bytes(_png_bytes())
+    depth_path = case_dir / "review_assets" / "frames" / "depth.npy"
+    depth_path.write_bytes(b"\x93NUMPY")
+    frame_asset = ResolvedFrameAsset(
+        frame_id="frame_1",
+        observation_id="obs_1",
+        modality="rgb",
+        timestamp="2026-01-01T00:00:00+00:00",
+        display_path=str(image_path),
+        raw_path=str(image_path),
+        source="artifact_path",
+        unavailable_reason=None,
+    )
+    depth_asset = ResolvedFrameAsset(
+        frame_id="frame_depth",
+        observation_id="obs_1",
+        modality="depth",
+        timestamp="2026-01-01T00:00:00+00:00",
+        display_path=None,
+        raw_path=str(depth_path),
+        source="base64",
+        unavailable_reason="no_visual_payload",
+    )
+    audit_path = write_audit_json(
+        case_dir / "audit.json", audit, (frame_asset, depth_asset)
+    )
+    summary = BenchmarkSummaryReview(
+        benchmark_name="Test",
+        protocol_variant="test.v1",
+        metrics={"success": 1.0},
+        cases=(
+            {
+                "case_id": "case_1",
+                "status": "ok",
+                "metrics": {"success": True},
+            },
+        ),
+    )
+    case_review = BenchmarkCaseReview(
+        case_id="case_1",
+        benchmark_name="Test",
+        protocol_variant="test.v1",
+        instruction="Hold",
+        outcome={"status": "ok"},
+        metrics={"success": True},
+        audit=audit,
+        frame_assets=(frame_asset, depth_asset),
+        sections=(
+            ReviewSection("Notes", "text", "portable review"),
+        ),
+    )
+    paths = BenchmarkReviewRenderer().write(
+        tmp_path / "eval",
+        summary,
+        (case_review,),
+    )
+
+    assert Path(audit_path).exists()
+    assert Path(paths["html_review"]).exists()
+    case_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    audit_text = Path(audit_path).read_text(encoding="utf-8")
+    assert "../../review_assets/benchmark_review.css" in case_html
+    assert "review_assets/frames/frame.png" in case_html
+    assert "review_assets/frames/depth.npy" not in case_html
+    assert "download raw asset" not in case_html
+    assert "frame_depth" in audit_text
+    assert "depth.npy" in audit_text
+    assert "portable review" in case_html
+    assert "uav.hover" in case_html
+    assert "No agent messages were emitted for this episode." in case_html
+    assert "No audit diagnostics were recorded." in case_html
+
+    BenchmarkReviewRenderer().write(
+        tmp_path / "eval",
+        summary,
+        (
+            BenchmarkCaseReview(
+                **{
+                    **case_review.__dict__,
+                    "gallery_modalities": ("rgb", "depth"),
+                }
+            ),
+        ),
+    )
+    opted_in_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    assert "review_assets/frames/depth.npy" in opted_in_html
+    assert "download raw asset" in opted_in_html
+
+
+def test_core_review_correlates_completion_and_renders_planner_window(
+    tmp_path,
+):
+    run_dir = tmp_path / "run"
+    write_audit_fixture(run_dir)
+    debug_dir = run_dir / "debug" / "action_planner"
+    debug_dir.mkdir(parents=True)
+    (debug_dir / "phase_window_001.json").write_text(
+        json.dumps(
+            {
+                "phase": "align",
+                "phase_key": "1:align",
+                "window_index": 1,
+                "model_context": {
+                    "active_instruction": "Turn to the person",
+                    "current_phase": {
+                        "name": "align",
+                        "done_when": ["the person is visible"],
+                    },
+                    "phase_progress_evidence": {
+                        "motion_progress": {
+                            "yaw_only_so_far": True,
+                            "has_translation": False,
+                        }
+                    },
+                    "fragments": [],
+                },
+                "raw_plan": {
+                    "steps": [
+                        {
+                            "tool": "uav.turn_relative",
+                            "args": {"yaw_deg": 15.0},
+                        }
+                    ]
+                },
+                "safe_plan": {
+                    "steps": [
+                        {
+                            "tool": "uav.turn_relative",
+                            "args": {"yaw_deg": 15.0},
+                        }
+                    ]
+                },
+                "coupled_phase_decision": {
+                    "decision": "continue_current_phase",
+                    "reason": "target not visible",
+                },
+                "coupled_plan": {
+                    "completion_assessment": {
+                        "done_when": [
+                            {
+                                "index": 0,
+                                "status": "unknown",
+                                "evidence": "person not visible in NOW",
+                            }
+                        ]
+                    }
+                },
+                "safety_decision": {
+                    "plan_changed": False,
+                    "image_url": "data:image/png;base64,secret",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    append_jsonl(
+        run_dir / "events.jsonl",
+        {
+            "timestamp": "2026-01-01T00:00:03+00:00",
+            "event": "phase_completion_assessed",
+            "payload": {
+                "phase": "align",
+                "phase_key": "1:align",
+                "window_index": 1,
+                "assessment": {
+                    "done_when": [
+                        {
+                            "index": 0,
+                            "status": "unknown",
+                            "evidence": "person not visible in NOW",
+                        }
+                    ]
+                },
+                "semantic_complete": False,
+                "metric_complete": True,
+                "derived_decision": "continue_current_phase",
+                "fallback": False,
+            },
+        },
+    )
+    append_jsonl(
+        run_dir / "events.jsonl",
+        {
+            "timestamp": "2026-01-01T00:00:03+00:00",
+            "event": "phase_transition_continued",
+            "payload": {
+                "phase": "align",
+                "decision": "continue_current_phase",
+                "transition_source": "coupled_planner",
+                "reason": "target not visible",
+            },
+        },
+    )
+
+    audit = BenchmarkAuditReader().read(EpisodeAuditCursor.freeze(run_dir))
+    assert audit.planner_debug[0]["_phase_completion_result"][
+        "semantic_complete"
+    ] is False
+
+    eval_dir = tmp_path / "eval"
+    BenchmarkReviewRenderer().write(
+        eval_dir,
+        BenchmarkSummaryReview(
+            benchmark_name="Test",
+            protocol_variant="test.v1",
+            metrics={},
+            cases=(
+                {
+                    "case_id": "planner",
+                    "status": "ok",
+                    "metrics": {},
+                },
+            ),
+        ),
+        (
+            BenchmarkCaseReview(
+                case_id="planner",
+                benchmark_name="Test",
+                protocol_variant="test.v1",
+                instruction="Turn to the person",
+                outcome={"status": "ok"},
+                metrics={},
+                audit=audit,
+                frame_assets=(),
+            ),
+        ),
+    )
+
+    case_html = (
+        eval_dir / "cases" / "planner" / "review.html"
+    ).read_text(encoding="utf-8")
+    assert "No RGB frame assets available." in case_html
+    assert "Completion Assessment" in case_html
+    assert "the person is visible" in case_html
+    assert "person not visible in NOW" in case_html
+    assert "continue_current_phase" in case_html
+    assert "Runtime Applied Phase State" in case_html
+    assert "coupled_planner" in case_html
+    assert "Model-Facing Context" in case_html
+    assert "yaw-only so far" in case_html
+    assert "data:image/png;base64" not in case_html
+    assert "&lt;binary payload omitted&gt;" in case_html
+
+
+def make_episode(
+    *,
+    profile: ObservationProfile | None = None,
+    options: TaskExecutionOptions | None = None,
+) -> PreparedBenchmarkEpisode[dict, dict]:
+    selected_profile = profile or ObservationProfile()
+    return PreparedBenchmarkEpisode(
+        benchmark_name="test",
+        case_id="case_1",
+        protocol_variant="test.native.v1",
+        instruction="Move forward",
+        map_id="map",
+        scene_id="scene",
+        agent_id="drone",
+        observation_profile=selected_profile,
+        execution_options=options
+        or TaskExecutionOptions.from_observation_profile(selected_profile),
+        planner_safe_metadata={"weather": "clear"},
+        scenario_payload={"object": "person"},
+        evaluation_payload={"goal": [100, 200]},
+    )
+
+
+class FakeRuntime:
+    def __init__(self, run_dir: Path, calls: list[str]) -> None:
+        self.run_dir = run_dir
+        self.calls = calls
+        self.finished_state = "unset"
+        self.scene = SceneInstance(
+            "scene_instance",
+            "map",
+            "scene",
+            "local",
+            "127.0.0.1",
+            9000,
+            None,
+            None,
+            "running",
+            capabilities=SceneCapabilities(
+                "unrealcv",
+                "actor_pose",
+                ("connect", "hover", "set_pose", "move_body"),
+                ("rgb", "depth", "pose"),
+                False,
+                False,
+            ),
+        )
+
+    def ensure_reused_scene(self, map_id, scene_id):
+        self.calls.append("ensure")
+        return self.scene
+
+    def run_task(self, *args, **kwargs):
+        self.calls.append("run")
+        write_trace_fixture(self.run_dir)
+        return SimpleNamespace(
+            completed=True,
+            stopped=False,
+            stopped_reason=None,
+            stop_source=None,
+        )
+
+    def finish_reused_scene(self, map_id, state, **kwargs):
+        self.calls.append("finish")
+        self.finished_state = state
+        append_jsonl(
+            self.run_dir / "memory" / "actions.jsonl",
+            {
+                "id": "act_shutdown",
+                "timestamp": "2026-01-01T00:00:09+00:00",
+                "tool": "uav.land",
+                "result": {"ok": True},
+            },
+        )
+
+
+class FakeScenario:
+    def __init__(self, calls: list[str], fail_prepare: bool = False) -> None:
+        self.calls = calls
+        self.fail_prepare = fail_prepare
+
+    def prepare_episode(self, scene, payload):
+        self.calls.append("scenario_prepare")
+        if self.fail_prepare:
+            raise RuntimeError("prepare failed")
+
+    def cleanup_episode(self, scene, payload):
+        self.calls.append("scenario_cleanup")
+
+
+class FakeMetrics:
+    def __init__(self, calls: list[str], fail: bool = False) -> None:
+        self.calls = calls
+        self.fail = fail
+
+    def evaluate(self, payload, trace, outcome):
+        self.calls.append("metrics")
+        if self.fail:
+            raise ValueError("metric failed")
+        return {"sample_count": len(trace.samples)}
+
+
+def write_trace_fixture(
+    run_dir: Path,
+    *,
+    include_action: bool = True,
+    action_pose: bool = True,
+) -> None:
+    memory_dir = run_dir / "memory"
+    state_dir = run_dir / "state"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    append_jsonl(
+        memory_dir / "actions.jsonl",
+        {
+            "id": "act_0001",
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "tool": "uav.connect",
+            "result": {"ok": True},
+        },
+    )
+    append_jsonl(
+        memory_dir / "poses.jsonl",
+        {
+            "id": "pose_0001",
+            "timestamp": "2026-01-01T00:00:01+00:00",
+            "pose": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 3.0,
+                "yaw_deg": 0.0,
+                "coordinate_frame": "unrealcv_world_m",
+            },
+            "coordinate_frame": "unrealcv_world_m",
+            "source": "observation",
+            "observation_id": "obs_0001",
+        },
+    )
+    append_jsonl(
+        memory_dir / "observations.jsonl",
+        {
+            "id": "obs_0001",
+            "timestamp": "2026-01-01T00:00:01+00:00",
+            "source": "preflight",
+            "pose_ref": {"ref": "memory/poses.jsonl#1"},
+        },
+    )
+    if include_action:
+        append_jsonl(
+            memory_dir / "actions.jsonl",
+            {
+                "id": "act_0002",
+                "timestamp": "2026-01-01T00:00:02+00:00",
+                "tool": "uav.turn_relative",
+                "args": {"yaw_deg": 15.0},
+                "result": {"ok": True},
+            },
+        )
+        if action_pose:
+            append_jsonl(
+                memory_dir / "poses.jsonl",
+                {
+                    "id": "pose_0002",
+                    "timestamp": "2026-01-01T00:00:02+00:00",
+                    "pose": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 3.0,
+                        "yaw_deg": 15.0,
+                        "coordinate_frame": "unrealcv_world_m",
+                    },
+                    "coordinate_frame": "unrealcv_world_m",
+                    "source": "action_result",
+                    "action_id": "act_0002",
+                },
+            )
+            append_jsonl(
+                memory_dir / "poses.jsonl",
+                {
+                    "id": "pose_0003",
+                    "timestamp": "2026-01-01T00:00:03+00:00",
+                    "pose": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 3.0,
+                        "yaw_deg": 15.25,
+                        "coordinate_frame": "unrealcv_world_m",
+                    },
+                    "coordinate_frame": "unrealcv_world_m",
+                    "source": "observation",
+                    "observation_id": "obs_0002",
+                },
+            )
+            append_jsonl(
+                memory_dir / "observations.jsonl",
+                {
+                    "id": "obs_0002",
+                    "timestamp": "2026-01-01T00:00:03+00:00",
+                    "source": "phase_window",
+                    "pose_ref": {"ref": "memory/poses.jsonl#3"},
+                },
+            )
+            pose_line = 3
+        else:
+            append_jsonl(
+                memory_dir / "poses.jsonl",
+                {
+                    "id": "pose_0002",
+                    "timestamp": "2026-01-01T00:00:03+00:00",
+                    "pose": {
+                        "x": 1.0,
+                        "y": 0.0,
+                        "z": 3.0,
+                        "yaw_deg": 15.0,
+                        "coordinate_frame": "unrealcv_world_m",
+                    },
+                    "coordinate_frame": "unrealcv_world_m",
+                    "source": "observation",
+                    "observation_id": "obs_0002",
+                },
+            )
+            append_jsonl(
+                memory_dir / "observations.jsonl",
+                {
+                    "id": "obs_0002",
+                    "timestamp": "2026-01-01T00:00:03+00:00",
+                    "source": "phase_window",
+                    "pose_ref": {"ref": "memory/poses.jsonl#2"},
+                },
+            )
+            pose_line = 2
+    else:
+        pose_line = 1
+    (state_dir / "flight_memory.json").write_text(
+        json.dumps(
+            {
+                "observation_anchors": {
+                    "task_initial": {"ref": "memory/observations.jsonl#1"}
+                },
+                "latest_pose_line": pose_line,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def append_jsonl(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(payload) + "\n")
+
+
+def write_audit_fixture(run_dir: Path) -> None:
+    """Write one initial observation plus one formal action audit window."""
+
+    memory = run_dir / "memory"
+    state = run_dir / "state"
+    memory.mkdir(parents=True, exist_ok=True)
+    state.mkdir(parents=True, exist_ok=True)
+    append_jsonl(
+        memory / "frames.jsonl",
+        {
+            "id": "frame_0001",
+            "timestamp": "2026-01-01T00:00:01+00:00",
+            "observation_id": "obs_0001",
+            "modality": "rgb",
+            "path": None,
+            "metadata": {},
+        },
+    )
+    append_jsonl(
+        memory / "poses.jsonl",
+        {
+            "id": "pose_0001",
+            "timestamp": "2026-01-01T00:00:01+00:00",
+            "observation_id": "obs_0001",
+            "source": "observation",
+            "pose": {"x": 0.0, "y": 0.0, "z": 2.0},
+        },
+    )
+    append_jsonl(
+        memory / "observations.jsonl",
+        {
+            "id": "obs_0001",
+            "timestamp": "2026-01-01T00:00:01+00:00",
+            "pose_ref": {"ref": "memory/poses.jsonl#1"},
+            "frame_refs": [{"ref": "memory/frames.jsonl#1"}],
+        },
+    )
+    append_jsonl(
+        memory / "actions.jsonl",
+        {
+            "id": "act_0001",
+            "timestamp": "2026-01-01T00:00:02+00:00",
+            "tool": "uav.turn_relative",
+            "args": {"yaw_deg": 15.0},
+            "result": {"ok": True},
+        },
+    )
+    append_jsonl(
+        run_dir / "events.jsonl",
+        {
+            "timestamp": "2026-01-01T00:00:02.100000+00:00",
+            "event": "tool_step_completed",
+            "payload": {
+                "phase": "align",
+                "step_index": 0,
+                "tool": "uav.turn_relative",
+                "ok": True,
+            },
+        },
+    )
+    append_jsonl(
+        memory / "actions.jsonl",
+        {
+            "id": "act_safety_hover",
+            "timestamp": "2026-01-01T00:00:02.500000+00:00",
+            "tool": "uav.hover",
+            "args": {},
+            "result": {"ok": True},
+        },
+    )
+    append_jsonl(
+        memory / "agent_messages.jsonl",
+        {
+            "id": "msg_0001",
+            "timestamp": "2026-01-01T00:00:03+00:00",
+            "source": "planner",
+            "message": {"content": "turning"},
+        },
+    )
+    (state / "flight_memory.json").write_text(
+        json.dumps(
+            {
+                "observation_anchors": {
+                    "task_initial": {
+                        "ref": "memory/observations.jsonl#1"
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _png_bytes() -> bytes:
+    """Return a valid one-pixel PNG without requiring image libraries."""
+
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4n"
+        "GNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+    )

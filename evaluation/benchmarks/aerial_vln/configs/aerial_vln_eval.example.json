@@ -1,0 +1,25 @@
+{
+  "dataset_root": "G:/replace/with/AirVLN/data/datasets",
+  "split": "val_seen",
+  "output_dir": "evaluation/benchmarks/aerial_vln/outputs",
+  "run_root": "runs",
+  "max_cases": 1,
+  "scene_filter": ["1"],
+  "map_config_path": "configs/maps/airvln_maps.json",
+  "scene_map": {
+    "1": "airvln_env_1"
+  },
+  "observation_profile_path": null,
+  "execution_mode": "dry",
+  "headless": true,
+  "save_artifacts": false,
+  "generate_html_review": true,
+  "enable_action_planner_debug": false,
+  "env_path": ".env",
+  "parser_mode": "model",
+  "shutdown_policy": "land",
+  "runtime_loop_guard_windows": 40,
+  "initialization_min_settle_sec": 0.0,
+  "upstream_reference_commit": "local_airvln_reference",
+  "dataset_version": "unspecified"
+}

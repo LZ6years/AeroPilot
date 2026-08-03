@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -15,9 +16,18 @@ class UavStabilizationConfig:
     velocity_threshold_mps: float = 0.15
     timeout_sec: float = 8.0
     poll_interval_sec: float = 0.25
+    initialization_min_settle_sec: float = 0.0
     zero_velocity_brake_duration_sec: float = 2.0
     hover_after_brake: bool = False
     motion_tools: set[str] = field(default_factory=lambda: {"uav.move_body", "uav.turn_relative"})
+
+    def __post_init__(self) -> None:
+        value = float(self.initialization_min_settle_sec)
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(
+                "initialization_min_settle_sec must be a finite "
+                "non-negative number"
+            )
 
     @classmethod
     def from_dict(cls, data: dict) -> "UavStabilizationConfig":
@@ -27,6 +37,12 @@ class UavStabilizationConfig:
             velocity_threshold_mps=float(data.get("velocity_threshold_mps", cls.velocity_threshold_mps)),
             timeout_sec=float(data.get("timeout_sec", cls.timeout_sec)),
             poll_interval_sec=float(data.get("poll_interval_sec", cls.poll_interval_sec)),
+            initialization_min_settle_sec=float(
+                data.get(
+                    "initialization_min_settle_sec",
+                    cls.initialization_min_settle_sec,
+                )
+            ),
             zero_velocity_brake_duration_sec=float(
                 data.get("zero_velocity_brake_duration_sec", cls.zero_velocity_brake_duration_sec)
             ),
@@ -46,6 +62,9 @@ class UavStabilizationConfig:
             "velocity_threshold_mps": self.velocity_threshold_mps,
             "timeout_sec": self.timeout_sec,
             "poll_interval_sec": self.poll_interval_sec,
+            "initialization_min_settle_sec": (
+                self.initialization_min_settle_sec
+            ),
             "zero_velocity_brake_duration_sec": self.zero_velocity_brake_duration_sec,
             "hover_after_brake": self.hover_after_brake,
             "motion_tools": sorted(self.motion_tools),

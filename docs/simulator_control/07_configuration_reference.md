@@ -201,12 +201,28 @@ Remote 规则：
     "height": 256,
     "fov": 90,
     "control_target": "actor",
+    "startup": {
+      "hide_objects": [
+      "BP_Character_2",
+      "BP_animal_2",
+      "BP_BaseCar_2",
+      "Sport_2"
+      ]
+    },
     "actor": {
       "name": "BP_Drone01_2",
+      "scale": [0.1, 0.1, 0.1],
       "units_per_meter": 100.0,
       "yaw_offset_deg": -180.0,
       "rotation_method": "blueprint_yaw",
       "camera_follow": "standard_pose",
+      "camera_validation": {
+        "enabled": true,
+        "position_mode": "max_distance",
+        "max_distance_m": 1.5,
+        "position_tolerance_m": 0.05,
+        "yaw_tolerance_deg": 1.0
+      },
       "disable_physics": true,
       "yaw_settle_timeout_sec": 5.0,
       "yaw_tolerance_deg": 1.0,
@@ -224,11 +240,19 @@ UnrealCV 不生成 AirSim settings，`settings_path`保持 null。完整便携�
 | 字段 | 默认值 | 说明 |
 |---|---|---|
 | `control_target` | `camera` | 选择自由相机或主 Actor 控制 |
+| `startup.hide_objects` | `[]` | Actor 模式连接时隐藏 mesh、但保留控制与 camera component 的对象 |
 | `actor.name` | 无 | Actor 模式必填，不由 Backend 猜测 |
+| `actor.scale` | 无 | 可选的三轴正数缩放；连接时设置一次 |
 | `actor.units_per_meter` | `100.0` | 正数；UE native location 到米的比例 |
-| `actor.yaw_offset_deg` | `0.0` | canonical 与 native Actor readback/标准 rotation 的偏移 |
+| `actor.yaw_offset_deg` | `0.0` | 标准 rotation 的 canonical/native 偏移；Blueprint yaw 的命令偏移 |
 | `actor.rotation_method` | `standard_pose` | `standard_pose`或`blueprint_yaw` |
 | `actor.camera_follow` | `none` | `none`、`standard_pose`或`blueprint_pose` |
+| `actor.camera_validation.enabled` | `false` | 同步后读取 camera pose，拒绝只返回 `ok` 但未生效的命令 |
+| `actor.camera_validation.position_mode` | `expected_body_offset` | `expected_body_offset` 用于固定安装相机；`max_distance` 用于带碰撞避让的相机 |
+| `actor.camera_validation.expected_body_offset_m` | `[0,0,0]` | camera 相对 Actor 的 `[forward,right,up]` 安装偏移 |
+| `actor.camera_validation.position_tolerance_m` | `0.05` | 实际与预期安装偏移的最大误差 |
+| `actor.camera_validation.max_distance_m` | `1.5` | `max_distance` 模式下 camera 与 Actor 的最大距离 |
+| `actor.camera_validation.yaw_tolerance_deg` | `1.0` | camera 与 Actor 的最大 wrapped-yaw 误差 |
 | `actor.disable_physics` | `false` | 是否在连接后显式冻结主 Actor 物理 |
 | `actor.yaw_settle_timeout_sec` | `5.0` | Blueprint yaw 插值的最长等待 |
 | `actor.yaw_tolerance_deg` | `1.0` | readback 与目标 yaw 的允许误差 |
@@ -238,8 +262,27 @@ UnrealCV 不生成 AirSim settings，`settings_path`保持 null。完整便携�
 `units_per_meter`、未知 rotation/follow 策略和非布尔 `disable_physics`均在
 `load_map_config()`阶段失败。
 
-`blueprint_yaw`扩展接收 canonical 目标 yaw，不再二次应用 native mesh offset；
-`yaw_offset_deg`仍用于把 Actor rotation readback 转回 canonical yaw。
+`blueprint_yaw`扩展在命令发送前应用 `yaw_offset_deg`。该 Blueprint 完成内部
+mesh 朝向修正后，Actor rotation readback 已经是相机物理 yaw，因此直接作为
+canonical yaw；标准 `standard_pose`仍在读写两侧使用 offset 换算。
+
+`actor.scale`是地图级主控制目标初始化，不是 episode 或 Benchmark 场景布置。
+例如 DowntownWest 的历史 UAV-Flow 初始化会把`BP_Drone01_2`从打包地图默认比例
+调整为`[0.1, 0.1, 0.1]`，否则贴近 Actor 的主相机可能拍到机身部件。
+
+`startup.hide_objects`同样属于显式地图归一化。Backend 只隐藏 MapPackage 中
+列出的 mesh；对象的 pose、Blueprint 控制和 camera component 仍然保留，对象已
+不存在时按已归一化处理。DowntownWest 使用该字段隐藏默认人物、动物和车辆 Pawn。
+camera-owning `BP_Drone01_2` 不能整 Actor 隐藏，否则 Blueprint viewport/camera
+跟随会失效；Schema 会直接拒绝将 controlled actor 写入该列表。Benchmark 创建的目标人物和
+车辆不写入此列表。
+
+相机验证是地图级契约，不是 episode 配置。scene prepare 和 Actor pose write
+只负责同步，因为 Runtime preflight takeoff 也会经过 pose write；严格 readback
+发生在 episode initial pose 后的首帧以及每次正式动作后的 capture sync。Backend
+根据 `position_mode` 比较固定 body-frame 安装偏移，或检查碰撞相机仍处于 Actor
+附近；两种模式都严格比较 yaw。因此 UnrealCV
+命令静默无效时会在错误画面进入 Planner 前失败。
 
 MapPackage 只描述主 Actor 如何控制。人物、车辆、目标位置、外观和 reference path
 不能写入这些字段。

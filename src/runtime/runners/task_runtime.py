@@ -370,6 +370,7 @@ class TaskRuntime:
                 scene.scene_instance_id,
                 agent_id,
                 capabilities=scene.capabilities,
+                warmup_modalities=list(state.observation_modalities),
             )
             stabilization_event = (
                 "preflight_stabilization_completed"

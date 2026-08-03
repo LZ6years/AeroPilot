@@ -8,10 +8,8 @@ from pathlib import Path
 from typing import Any
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
-from evaluation.benchmarks.uav_flow.metrics import metric_interpretation_for_class, summarize_metrics
+from evaluation.benchmarks.uav_flow.metrics import summarize_metrics
 from evaluation.benchmarks.uav_flow.trajectory import target_local_from_case
-from src.runtime.configs.action_config import UavActionConfig, load_uav_action_config
-from src.uav import body_velocity_to_world_delta, move_body_velocity_from_args, pose_delta
 
 
 def create_eval_dir(output_root: str | Path, eval_id: str | None = None) -> Path:
@@ -31,98 +29,6 @@ def write_case_outputs(case_dir: str | Path, payloads: dict[str, Any]) -> dict[s
         file_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
         written[name] = str(file_path)
     return written
-
-
-def run_artifact_summary(run_dir: str | Path, action_config: UavActionConfig | None = None) -> dict[str, Any]:
-    """Collect lightweight run details for human review reports."""
-
-    run_path = Path(run_dir)
-    rgb_frames = sorted((run_path / "artifacts" / "rgb").glob("*.png"))
-    action_config = action_config or load_uav_action_config()
-    return {
-        "first_rgb": str(rgb_frames[0]) if rgb_frames else None,
-        "last_rgb": str(rgb_frames[-1]) if rgb_frames else None,
-        "rgb_count": len(rgb_frames),
-        "actions": _actions_from_run(run_path, action_config),
-        "agent_messages": _agent_messages_from_events(run_path / "events.jsonl"),
-    }
-
-
-def write_case_review(case_dir: str | Path, case_payload: dict[str, Any]) -> str:
-    """Write a compact human-readable per-case review file."""
-
-    path = Path(case_dir) / "review.md"
-    case = case_payload.get("case", {})
-    artifacts = case_payload.get("run_artifacts", {})
-    visual = case_payload.get("visual_diagnostics", {})
-    ndtw = case_payload.get("ndtw", {})
-    metric_interpretation = ndtw.get("metric_interpretation") or metric_interpretation_for_class(case.get("class_name"))
-    sr = case_payload.get("sr_judge", {})
-    stmr = case_payload.get("stmr", {}) if isinstance(case_payload.get("stmr"), dict) else {}
-    lines = [
-        f"# UAV-Flow Case Review: {case.get('case_id')}",
-        "",
-        f"- Instruction: {case.get('selected_instruction')}",
-        f"- Class: {case.get('class_name')}",
-        f"- Status: {case_payload.get('status')}",
-        f"- Completed: {case_payload.get('completed')}",
-        f"- Stopped: {case_payload.get('stopped')}",
-        f"- Stopped reason: {case_payload.get('stopped_reason')}",
-        f"- Stop source: {case_payload.get('stop_source')}",
-        f"- Run dir: `{case_payload.get('run_dir')}`",
-        f"- First RGB: `{artifacts.get('first_rgb')}`",
-        f"- Last RGB: `{artifacts.get('last_rgb')}`",
-        f"- RGB count: {artifacts.get('rgb_count', 0)}",
-        f"- Visual diagnostics: {visual.get('status')} enabled={visual.get('enabled')} judged={visual.get('judged_count', 0)}/{visual.get('frame_count', 0)} visible={visual.get('person_visible_count', 0)}",
-        f"- Visual diagnostics file: `{visual.get('path')}`",
-        f"- nDTW: {ndtw.get('ndtw')} ({ndtw.get('status')})",
-        f"- Metric mode: {metric_interpretation.get('mode')} position_zeroed={metric_interpretation.get('position_zeroed')} sample_step={metric_interpretation.get('sample_step')}",
-        f"- Metric interpretation: {metric_interpretation.get('summary')}",
-        f"- SR judge: {sr.get('status')}",
-        f"- STMR: mode={stmr.get('mode')} status={stmr.get('status')} processed={stmr.get('processed_observation_count', 0)} stale={stmr.get('stale')}",
-        f"- STMR map: `{stmr.get('png_path')}`",
-        f"- STMR batch parity: {(stmr.get('batch_incremental_parity') or {}).get('equivalent')}",
-        "",
-        "## Actions",
-        "",
-    ]
-    if artifacts.get("actions"):
-        lines.extend(
-            [
-                "| # | Tool | Phase | Args | Move? | Expected delta m | Actual delta m | Planar m | OK |",
-                "|---:|---|---|---|---|---|---|---:|---|",
-            ]
-        )
-    for action in artifacts.get("actions", []):
-        lines.append(
-            "| {index} | `{tool}` | {phase} | `{args}` | {is_move} | `{expected}` | `{actual}` | {planar} | {ok} |".format(
-                index=action.get("step_index"),
-                tool=action.get("tool"),
-                phase=action.get("phase"),
-                args=action.get("args"),
-                is_move=action.get("is_move"),
-                expected=action.get("expected_delta_m"),
-                actual=action.get("actual_delta_m"),
-                planar=action.get("actual_planar_m"),
-                ok=action.get("ok"),
-            )
-        )
-    if not artifacts.get("actions"):
-        lines.append("- No tool step events recorded.")
-    lines.extend(["", "## Visual Diagnostics", ""])
-    lines.append(
-        f"- status={visual.get('status')} enabled={visual.get('enabled')} "
-        f"truth_leak={visual.get('truth_leak_check', {}).get('status')}"
-    )
-    lines.append(f"- path: `{visual.get('path')}`")
-    lines.extend(["", "## Agent Messages", ""])
-    for message in artifacts.get("agent_messages", []):
-        body = message.get("message", {})
-        lines.append(f"- {body.get('type')}: {body.get('content')}")
-    if not artifacts.get("agent_messages"):
-        lines.append("- No AgentMessage events recorded.")
-    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    return str(path)
 
 
 def write_trajectory_plots(case_dir: str | Path, trajectory_path: str | Path, case: UavFlowCase) -> dict[str, Any]:
@@ -166,6 +72,9 @@ def write_eval_summary(eval_dir: str | Path, results: list[dict[str, Any]], cons
     summary = {
         "metrics": summarize_metrics(results),
         "failure_counts": failure_counts(results),
+        "backend_action_tracking": _summarize_backend_action_tracking(
+            results
+        ),
         "cases": results,
     }
     summary_json = path / "summary.json"
@@ -180,12 +89,19 @@ def write_eval_summary(eval_dir: str | Path, results: list[dict[str, Any]], cons
 def _summary_markdown(summary: dict[str, Any]) -> str:
     metrics = summary.get("metrics", {})
     failure_counts_data = summary.get("failure_counts", {})
+    action_tracking = summary.get("backend_action_tracking", {})
     lines = [
         "# UAV-Flow Benchmark Summary",
         "",
         f"- Cases: {metrics.get('case_count', 0)}",
         f"- Evaluated nDTW: {metrics.get('evaluated_count', 0)}",
         f"- Overall mean nDTW: {metrics.get('overall_mean_ndtw')}",
+        f"- Zero-action completions: "
+        f"{action_tracking.get('zero_action_completion_count', 0)}",
+        f"- Max translation tracking error (m): "
+        f"{action_tracking.get('max_position_error_m')}",
+        f"- Max yaw tracking error (deg): "
+        f"{action_tracking.get('max_abs_yaw_error_deg')}",
         "",
         "## Failure Counts",
         "",
@@ -211,9 +127,19 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
     lines.extend(["", "## Cases", ""])
     for result in summary.get("cases", []):
         ndtw = result.get("ndtw", {})
+        turn = result.get("turn_diagnostics") or {}
+        tracking = result.get("backend_action_tracking") or {}
         lines.append(
             f"- `{result.get('case_id')}` ({result.get('class_name')}) "
-            f"status={result.get('status')} ndtw={ndtw.get('ndtw')}"
+            f"status={result.get('status')} ndtw={ndtw.get('ndtw')} "
+            f"reference_yaw_delta={turn.get('reference_yaw_delta_deg')} "
+            f"actual_yaw_delta={turn.get('actual_yaw_delta_deg')} "
+            f"final_yaw_error={turn.get('final_yaw_error_deg')} "
+            f"translation_drift_m={turn.get('translation_drift_m')} "
+            f"translation_tracking_max_error_m="
+            f"{tracking.get('max_position_error_m')} "
+            f"zero_action_completion="
+            f"{tracking.get('zero_action_completion')}"
         )
     return "\n".join(lines) + "\n"
 
@@ -246,151 +172,31 @@ def failure_counts(results: list[dict[str, Any]]) -> dict[str, int]:
     return counts
 
 
-def _actions_from_run(run_path: Path, action_config: UavActionConfig) -> list[dict[str, Any]]:
-    step_events = _tool_step_events(run_path / "events.jsonl")
-    action_records = _read_jsonl(run_path / "memory" / "actions.jsonl")
-    pose_records = _read_jsonl(run_path / "memory" / "poses.jsonl")
-    if not action_records:
-        return [
-            {
-                "phase": step.get("phase"),
-                "step_index": step.get("step_index"),
-                "tool": step.get("tool"),
-                "ok": step.get("ok"),
-                "args": {},
-                "is_move": step.get("tool") == "uav.move_body",
-                "actual_delta_m": None,
-                "expected_delta_m": None,
-                "actual_planar_m": None,
-            }
-            for step in step_events
-        ]
-    matched = _match_action_records(step_events, action_records)
-    summaries = []
-    for step, record in matched:
-        before_pose, after_pose = _poses_around_action(record, pose_records)
-        actual = pose_delta(before_pose or {}, after_pose or {}) if before_pose and after_pose else {}
-        expected = _expected_delta(record.get("tool"), record.get("args", {}), before_pose or {}, action_config)
-        planar = _planar_distance(actual)
-        summaries.append(
-            {
-                "phase": step.get("phase"),
-                "step_index": step.get("step_index"),
-                "tool": step.get("tool"),
-                "ok": step.get("ok"),
-                "action_id": record.get("id"),
-                "args": record.get("args", {}),
-                "is_move": step.get("tool") == "uav.move_body",
-                "actual_delta_m": actual or None,
-                "expected_delta_m": expected,
-                "actual_planar_m": planar,
-            }
-        )
-    return summaries
-
-
-def _tool_step_events(path: Path) -> list[dict[str, Any]]:
-    actions = []
-    for event in _read_jsonl(path):
-        if event.get("event") != "tool_step_completed":
-            continue
-        payload = event.get("payload", {})
-        if isinstance(payload, dict):
-            actions.append(dict(payload))
-    return actions
-
-
-def _match_action_records(
-    step_events: list[dict[str, Any]],
-    action_records: list[dict[str, Any]],
-) -> list[tuple[dict[str, Any], dict[str, Any]]]:
-    matches = []
-    cursor = 0
-    for step in step_events:
-        tool = step.get("tool")
-        for index in range(cursor, len(action_records)):
-            record = action_records[index]
-            if record.get("tool") == tool:
-                matches.append((step, record))
-                cursor = index + 1
-                break
-    return matches
-
-
-def _poses_around_action(
-    action_record: dict[str, Any],
-    pose_records: list[dict[str, Any]],
-) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
-    action_id = action_record.get("id")
-    after_index = next(
-        (
-            index
-            for index, pose in enumerate(pose_records)
-            if pose.get("source") == "action_result" and pose.get("action_id") == action_id
-        ),
-        None,
-    )
-    if after_index is None:
-        return None, None
-    before = pose_records[after_index - 1].get("pose") if after_index > 0 else None
-    after = pose_records[after_index].get("pose")
-    return (
-        dict(before) if isinstance(before, dict) else None,
-        dict(after) if isinstance(after, dict) else None,
-    )
-
-
-def _expected_delta(
-    tool: Any,
-    args: dict[str, Any],
-    before_pose: dict[str, Any],
-    action_config: UavActionConfig,
-) -> dict[str, float | None]:
-    if tool == "uav.turn_relative":
-        return {"dx": 0.0, "dy": 0.0, "dz": 0.0, "dyaw_deg": round(float(args.get("yaw_deg", 0.0) or 0.0), 3)}
-    if tool != "uav.move_body":
-        return {"dx": 0.0, "dy": 0.0, "dz": 0.0, "dyaw_deg": 0.0}
-    vx, vy, vz, duration = move_body_velocity_from_args(args, action_config, vertical_sign=1.0)
-    delta = body_velocity_to_world_delta(vx, vy, vz, duration, float(before_pose.get("yaw_deg", 0.0) or 0.0))
+def _summarize_backend_action_tracking(
+    results: list[dict[str, Any]],
+) -> dict[str, Any]:
+    position_errors = []
+    yaw_errors = []
+    zero_action_count = 0
+    for result in results:
+        tracking = result.get("backend_action_tracking") or {}
+        if tracking.get("zero_action_completion") is True:
+            zero_action_count += 1
+        position_error = tracking.get("max_position_error_m")
+        yaw_error = tracking.get("max_abs_yaw_error_deg")
+        if isinstance(position_error, (int, float)):
+            position_errors.append(float(position_error))
+        if isinstance(yaw_error, (int, float)):
+            yaw_errors.append(float(yaw_error))
     return {
-        "dx": round(delta["dx"], 3),
-        "dy": round(delta["dy"], 3),
-        "dz": round(delta["dz"], 3),
-        "dyaw_deg": 0.0,
+        "zero_action_completion_count": zero_action_count,
+        "max_position_error_m": (
+            max(position_errors) if position_errors else None
+        ),
+        "max_abs_yaw_error_deg": (
+            max(yaw_errors) if yaw_errors else None
+        ),
     }
-
-
-def _planar_distance(delta: dict[str, Any]) -> float | None:
-    try:
-        dx = float(delta.get("dx") or 0.0)
-        dy = float(delta.get("dy") or 0.0)
-    except (TypeError, ValueError):
-        return None
-    return round((dx * dx + dy * dy) ** 0.5, 3)
-
-
-def _agent_messages_from_events(path: Path) -> list[dict[str, Any]]:
-    messages = []
-    for event in _read_jsonl(path):
-        if event.get("event") == "agent_message":
-            payload = event.get("payload", {})
-            if isinstance(payload, dict):
-                messages.append(payload)
-    return messages
-
-
-def _read_jsonl(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    records = []
-    for line in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            value = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            records.append(value)
-    return records
 
 
 def _reference_points_from_case(case: UavFlowCase) -> list[list[float]]:

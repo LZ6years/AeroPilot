@@ -1,47 +1,86 @@
-"""Run UAV-Agent native runtime against UAV-Flow benchmark cases."""
+"""Run UAV-Flow cases through SimulationServer and the shared executor."""
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
+from evaluation.benchmarks.core import (
+    BenchmarkAuditLog,
+    BenchmarkAuditReader,
+    BenchmarkCaseReview,
+    BenchmarkEpisodeExecutor,
+    BenchmarkReviewRenderer,
+    BenchmarkSummaryReview,
+    EpisodeAuditCursor,
+    FrameAssetResolver,
+    ResolvedFrameAsset,
+    write_audit_json,
+)
+from evaluation.benchmarks.uav_flow.adapter import (
+    UAV_FLOW_PROTOCOL,
+    UavFlowCaseAdapter,
+    validate_uav_flow_profile,
+)
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase, load_cases
 from evaluation.benchmarks.uav_flow.config import UavFlowEvalConfig
-from evaluation.benchmarks.uav_flow.html_review import write_html_review
-from evaluation.benchmarks.uav_flow.metrics import evaluate_case_ndtw
+from evaluation.benchmarks.uav_flow.metric_suite import UavFlowMetricSuite
 from evaluation.benchmarks.uav_flow.reports import (
     create_eval_dir,
-    run_artifact_summary,
     write_case_outputs,
-    write_case_review,
     write_eval_summary,
     write_trajectory_plots,
 )
+from evaluation.benchmarks.uav_flow.scenario import (
+    UavFlowScenarioController,
+)
+from evaluation.benchmarks.uav_flow.review import (
+    build_uav_flow_review_sections,
+)
 from evaluation.benchmarks.uav_flow.sr_judge import judge_success
-from evaluation.benchmarks.uav_flow.trajectory import export_trajectory, target_local_from_case
-from evaluation.benchmarks.uav_flow.unrealcv_scenario import UavFlowBenchmarkEnvClient
-from evaluation.benchmarks.uav_flow.visual_diagnostics import write_visual_diagnostics
-from plugins.research.stmr_map.context_modules.map import PluginContextModule as StmrMapContextModule
+from evaluation.benchmarks.uav_flow.trajectory import target_local_from_case
+from evaluation.benchmarks.uav_flow.visual_diagnostics import (
+    write_visual_diagnostics,
+)
+from plugins.research.stmr_map.context_modules.map import (
+    PluginContextModule as StmrMapContextModule,
+)
 from plugins.research.stmr_map.perception import StmrPerceptionSession
-from src.agent.safety import SafetySupervisor
 from src.agent.planning.model_action_planner import ModelActionPlanner
+from src.agent.safety import SafetySupervisor
 from src.agent.semantic.task_parser import TaskParser
+from src.env_client import (
+    ObservationProfile,
+    SimulatorEnvClient,
+    load_observation_profile,
+)
 from src.memory.context.modules import DefaultImageContextModule
 from src.memory.context.registry import ContextModuleRegistry
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
+from src.runtime.configs import load_map_config
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.model_config import load_model_config
 from src.runtime.configs.safety_config import load_uav_safety_config
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.runtime.runners.task_runtime import TaskRuntime
+from src.sim_server.backends.registry import BackendRegistry
+from src.sim_server.backends.unrealcv_backend import UnrealCvBackend
+from src.sim_server.execution import SimulationExecutionMode
+from src.sim_server.server import SimulationServer
 
 
 class UavFlowBenchmarkRunner:
     """Outer benchmark harness; TaskRuntime remains the owner of task logic."""
 
-    def __init__(self, config: UavFlowEvalConfig, *, stmr_session: Any | None = None) -> None:
+    def __init__(
+        self,
+        config: UavFlowEvalConfig,
+        *,
+        stmr_session: Any | None = None,
+    ) -> None:
         self.config = config
         self.model_config = load_model_config(config.env_path)
         self.action_config = _benchmark_action_config(config)
@@ -49,17 +88,45 @@ class UavFlowBenchmarkRunner:
         self.plugin_registry = PluginRegistry.from_config()
         self._stmr_session = stmr_session
         self._stmr_warmed = False
+        self._case_reviews: dict[str, BenchmarkCaseReview] = {}
+        self._validate_review_config()
+        self.map_packages, self.port_policy = load_map_config(
+            config.map_config_path
+        )
+        self.map_package = next(
+            (
+                package
+                for package in self.map_packages
+                if package.map_id == config.map_id
+            ),
+            None,
+        )
+        if self.map_package is None:
+            raise ValueError(
+                f"UAV-Flow map_id {config.map_id!r} is not present in "
+                f"{config.map_config_path}"
+            )
+        if self.map_package.control_protocol != "unrealcv":
+            raise ValueError("UAV-Flow requires an UnrealCV MapPackage")
+        self.observation_profile = self._load_profile()
+        validate_uav_flow_profile(
+            self.observation_profile, stmr_mode=config.stmr_mode
+        )
 
     def load_cases(self) -> list[UavFlowCase]:
         cases = load_cases(
             self.config.uav_flow_repo_path,
+            case_ids=self.config.case_ids,
             classes=self.config.classes,
             limit_per_class=self.config.limit_per_class,
             instruction_field=self.config.instruction_field,
             test_jsons_path=self.config.test_jsons_path,
             classified_instr_path=self.config.classified_instr_path,
         )
-        if self.config.max_cases is not None:
+        if (
+            self.config.case_ids is None
+            and self.config.max_cases is not None
+        ):
             cases = cases[: max(0, int(self.config.max_cases))]
         return cases
 
@@ -68,120 +135,289 @@ class UavFlowBenchmarkRunner:
         eval_dir = create_eval_dir(self.config.output_dir, eval_id)
         console_lines = [f"uav_flow_eval: output={eval_dir}"]
         results = []
-        cases = self.load_cases()
-        shared_env_client: UavFlowBenchmarkEnvClient | None = None
-        reuse_real_env = bool(self.config.real_unrealcv and self.config.reuse_real_unrealcv_env)
-        try:
-            for case in cases:
-                result, shared_env_client = self._run_case(
-                    case,
-                    eval_dir,
-                    env_client=shared_env_client if reuse_real_env else None,
-                    reuse_scene=reuse_real_env,
-                )
-                results.append(result)
-                console_lines.append(
-                    f"{case.case_id}: status={result.get('status')} ndtw={result.get('ndtw', {}).get('ndtw')}"
-                )
-                if reuse_real_env and _shared_env_failure(result):
-                    console_lines.append(f"{case.case_id}: stopping batch after shared UnrealCV env failure")
-                    break
-        finally:
-            if shared_env_client is not None:
-                shared_env_client.close_real_env()
+        for case in self.load_cases():
+            result = self.run_case(case, eval_dir)
+            results.append(result)
+            turn = result.get("turn_diagnostics") or {}
+            tracking = turn.get("backend_turn_tracking") or {}
+            action_tracking = result.get("backend_action_tracking") or {}
+            console_lines.append(
+                f"{case.case_id}: status={result.get('status')} "
+                f"ndtw={result.get('ndtw', {}).get('ndtw')} "
+                f"reference_yaw_delta_deg="
+                f"{turn.get('reference_yaw_delta_deg')} "
+                f"actual_yaw_delta_deg="
+                f"{turn.get('actual_yaw_delta_deg')} "
+                f"final_yaw_error_deg="
+                f"{turn.get('final_yaw_error_deg')} "
+                f"translation_drift_m="
+                f"{turn.get('translation_drift_m')} "
+                f"turn_tracking_max_abs_error_deg="
+                f"{tracking.get('max_abs_error_deg')} "
+                f"translation_tracking_max_error_m="
+                f"{action_tracking.get('max_position_error_m')} "
+                f"zero_action_completion="
+                f"{action_tracking.get('zero_action_completion')}"
+            )
         summary_paths = write_eval_summary(eval_dir, results, console_lines)
-        html_paths = _write_html_review_from_summary(eval_dir, summary_paths)
-        summary_paths.update(html_paths)
-        return {"eval_dir": str(eval_dir), "summary_paths": summary_paths, "results": results}
+        if self.config.generate_html_review:
+            summary_payload = json.loads(
+                Path(summary_paths["summary_json"]).read_text(
+                    encoding="utf-8"
+                )
+            )
+            review_paths = BenchmarkReviewRenderer().write(
+                eval_dir,
+                BenchmarkSummaryReview(
+                    benchmark_name="UAV-Flow",
+                    protocol_variant=UAV_FLOW_PROTOCOL,
+                    metrics=dict(summary_payload.get("metrics") or {}),
+                    failure_counts=dict(
+                        summary_payload.get("failure_counts") or {}
+                    ),
+                    cases=tuple(
+                        {
+                            "case_id": item.get("case_id"),
+                            "status": item.get("status"),
+                            "metrics": {
+                                "ndtw": (item.get("ndtw") or {}).get(
+                                    "ndtw"
+                                ),
+                                "reference_yaw_delta_deg": (
+                                    item.get("turn_diagnostics") or {}
+                                ).get("reference_yaw_delta_deg"),
+                                "actual_yaw_delta_deg": (
+                                    item.get("turn_diagnostics") or {}
+                                ).get("actual_yaw_delta_deg"),
+                                "final_yaw_error_deg": (
+                                    item.get("turn_diagnostics") or {}
+                                ).get("final_yaw_error_deg"),
+                                "translation_drift_m": (
+                                    item.get("turn_diagnostics") or {}
+                                ).get("translation_drift_m"),
+                                "turn_tracking_max_abs_error_deg": (
+                                    (
+                                        item.get("turn_diagnostics") or {}
+                                    ).get("backend_turn_tracking")
+                                    or {}
+                                ).get("max_abs_error_deg"),
+                                "translation_tracking_max_error_m": (
+                                    item.get("backend_action_tracking") or {}
+                                ).get("max_position_error_m"),
+                                "zero_action_completion": (
+                                    item.get("backend_action_tracking") or {}
+                                ).get("zero_action_completion"),
+                            },
+                        }
+                        for item in results
+                    ),
+                ),
+                tuple(
+                    self._case_reviews[item["case_id"]]
+                    for item in results
+                    if item.get("case_id") in self._case_reviews
+                ),
+            )
+            summary_paths.update(review_paths)
+            _append_html_review_links(summary_paths, review_paths)
+        return {
+            "eval_dir": str(eval_dir),
+            "summary_paths": summary_paths,
+            "results": results,
+        }
 
-    def run_case(self, case: UavFlowCase, eval_dir: str | Path) -> dict[str, Any]:
+    def run_case(
+        self, case: UavFlowCase, eval_dir: str | Path
+    ) -> dict[str, Any]:
         self._prepare_stmr()
-        result, _ = self._run_case(case, eval_dir)
-        return result
-
-    def _run_case(
-        self,
-        case: UavFlowCase,
-        eval_dir: str | Path,
-        *,
-        env_client: UavFlowBenchmarkEnvClient | None = None,
-        reuse_scene: bool = False,
-    ) -> tuple[dict[str, Any], UavFlowBenchmarkEnvClient]:
         case_dir = Path(eval_dir) / "cases" / case.case_id
-        run_dir = RunStore(self.config.run_root).create_run_dir(f"uav_flow_{case.case_id}")
+        case_dir.mkdir(parents=True, exist_ok=True)
+        _write_evaluation_truth(case_dir, case)
+        run_dir = RunStore(self.config.run_root).create_run_dir(
+            f"uav_flow_{case.case_id}"
+        )
         recorder = AsyncRunLogger(run_dir)
-        needs_prepare = env_client is not None
-        if env_client is None:
-            env_client = self._make_env_client(case, run_dir)
-        status = "ok"
-        error: dict[str, Any] | None = None
         stmr_module: StmrMapContextModule | None = None
+        scenario = UavFlowScenarioController(
+            enabled=self.config.execution_mode != "dry"
+        )
+        metric_suite = UavFlowMetricSuite(
+            case,
+            case_dir,
+            action_config=self.action_config,
+        )
         try:
-            if needs_prepare:
-                env_client.prepare_case(case, run_dir, scene_id=case.case_id)
-            recorder.write_json(
-                "benchmark/uav_flow_case_planner_safe.json",
-                case.planner_safe_metadata(),
-            )
-            recorder.write_json(
-                "benchmark/uav_flow_case_evaluation_truth.json",
-                case.evaluation_truth(),
-            )
             planner = ModelActionPlanner(self.model_config)
             context_builder, stmr_module = self._context_builder(planner)
-            runtime = TaskRuntime(
-                env_client,
+            runtime = self._make_runtime(
+                run_dir,
                 recorder,
-                TaskParser(mode=self.config.parser_mode, model_config=self.model_config),
                 planner=planner,
-                safety=SafetySupervisor(self.safety_config),
-                shutdown_policy=self.config.shutdown_policy,
-                action_config=self.action_config,
-                runtime_loop_guard_windows=self.config.runtime_loop_guard_windows,
-                enable_action_planner_debug=self.config.enable_action_planner_debug,
                 context_builder=context_builder,
             )
-            state = runtime.run_task(
-                "uav_flow_downtownwest",
-                case.selected_instruction,
+            episode = UavFlowCaseAdapter(
+                map_id=self.config.map_id,
+                scene_id=self.map_package.scene_id,
                 agent_id="uav_flow_drone",
-                scene_policy="reuse_running" if reuse_scene else "isolated",
-                stop_scene_on_finish=not reuse_scene,
-                scene_id=case.case_id,
+                observation_profile=self.observation_profile,
+            ).prepare_case(case)
+            execution = BenchmarkEpisodeExecutor().execute(
+                episode,
+                runtime=runtime,
+                scenario_controller=scenario,
+                metric_suite=metric_suite,
+                run_dir=run_dir,
             )
-            if reuse_scene and self.config.shutdown_policy != "none":
-                runtime.safe_hover_reused_scene(
-                    "uav_flow_downtownwest",
-                    agent_id="uav_flow_drone",
-                    scene_id=case.case_id,
-                )
-            completed = state.completed
-            stopped = state.stopped
-            stopped_reason = state.stopped_reason
-            stop_source = state.stop_source
-            if stopped and status == "ok":
-                status = "stopped"
         except Exception as exc:
-            status = "error"
-            completed = False
-            stopped = False
-            stopped_reason = None
-            stop_source = None
-            error = {"error_type": type(exc).__name__, "error": str(exc)}
-            recorder.event("uav_flow_case_failed", error)
+            recorder.event(
+                "uav_flow_case_failed",
+                {"error_type": type(exc).__name__, "error": str(exc)},
+            )
+            execution = None
+            setup_error = {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
         finally:
             recorder.close()
 
+        audit_cursor = (
+            execution.audit_cursor
+            if execution is not None
+            else EpisodeAuditCursor.freeze(run_dir)
+        )
+        audit = BenchmarkAuditReader().read(audit_cursor)
+        frame_assets = FrameAssetResolver().materialize(audit, case_dir)
+        audit_path = write_audit_json(
+            case_dir / "audit.json", audit, frame_assets
+        )
+
+        if execution is None:
+            outcome = {
+                "status": "error",
+                "completed": False,
+                "stopped": False,
+                "stopped_reason": None,
+                "stop_source": None,
+                "error": setup_error,
+                "cleanup_errors": [],
+            }
+            trace_payload: dict[str, Any] = {
+                "samples": [],
+                "action_count": 0,
+                "coordinate_frames": [],
+            }
+            ndtw_result = {
+                "status": "skipped",
+                "reason": "episode_setup_failed",
+                "ndtw": None,
+            }
+            trajectory_meta = {
+                "path": str(case_dir / "uav_agent_trajectory.json"),
+                "point_count": 0,
+                "unit": "cm",
+            }
+            turn_diagnostics = None
+            backend_action_tracking = {
+                "formal_action_count": 0,
+                "tracked_action_count": 0,
+                "observed_count": 0,
+                "unavailable_count": 0,
+                "zero_action_completion": False,
+                "samples": [],
+            }
+            metric_error = None
+            scene_capabilities = None
+        else:
+            outcome = execution.outcome.to_dict()
+            trace_payload = execution.trace.to_dict()
+            ndtw_result = execution.metrics.get(
+                "ndtw",
+                {
+                    "status": "skipped",
+                    "reason": "metric_failed",
+                    "ndtw": None,
+                },
+            )
+            trajectory_meta = execution.metrics.get(
+                "trajectory",
+                {
+                    "path": str(case_dir / "uav_agent_trajectory.json"),
+                    "point_count": 0,
+                    "unit": "cm",
+                },
+            )
+            turn_diagnostics = execution.metrics.get("turn_diagnostics")
+            backend_action_tracking = execution.metrics.get(
+                "backend_action_tracking",
+                {
+                    "formal_action_count": trace_payload.get(
+                        "action_count", 0
+                    ),
+                    "tracked_action_count": 0,
+                    "observed_count": 0,
+                    "unavailable_count": 0,
+                    "zero_action_completion": (
+                        bool(outcome.get("completed"))
+                        and trace_payload.get("action_count", 0) == 0
+                    ),
+                    "samples": [],
+                },
+            )
+            metric_error = execution.metric_error
+            scene_capabilities = execution.scene_capabilities
+            if metric_error is not None and outcome["status"] == "ok":
+                outcome["status"] = "error"
+                outcome["error"] = metric_error
+
         stmr_summary = _stmr_summary(stmr_module)
         stmr_summary["mode"] = self.config.stmr_mode
-        trajectory_meta = export_trajectory(case, env_client.pose_history, case_dir / "uav_agent_trajectory.json")
-        run_artifacts = run_artifact_summary(run_dir, self.action_config)
-        ndtw_result = evaluate_case_ndtw(
-            trajectory_meta["path"],
-            case.reference_path_preprocessed,
-            class_name=case.class_name,
+        scenario_diagnostics = scenario.diagnostics_for(case.case_id)
+        scenario_contract = scenario_diagnostics.setdefault("contract", {})
+        actor_config = self.map_package.unrealcv.get("actor", {})
+        if isinstance(actor_config, dict):
+            scenario_contract.update(
+                {
+                    "camera_follow": actor_config.get("camera_follow"),
+                    "rotation_method": actor_config.get("rotation_method"),
+                    "yaw_offset_deg": actor_config.get("yaw_offset_deg"),
+                    "camera_validation": actor_config.get(
+                        "camera_validation"
+                    ),
+                    "capture_camera_id": self.map_package.unrealcv.get(
+                        "camera_id"
+                    ),
+                }
+            )
+            if actor_config.get("camera_follow") == "blueprint_pose":
+                scenario_contract.update(
+                    {
+                        "blueprint_camera_actor": actor_config.get("name"),
+                        "blueprint_camera_pose_source": (
+                            "controlled_actor_absolute_pose"
+                        ),
+                        "blueprint_viewport_method": "set_viewport",
+                    }
+                )
+            elif actor_config.get("camera_follow") == "standard_pose":
+                scenario_contract.update(
+                    {
+                        "capture_camera_pose_source": (
+                            "controlled_actor_absolute_pose"
+                        ),
+                        "capture_camera_sync_method": (
+                            "standard_unrealcv_pose"
+                        ),
+                    }
+                )
+        audit_summary = _audit_summary(
+            audit=audit,
+            frame_assets=frame_assets,
         )
-        plot_result = write_trajectory_plots(case_dir, trajectory_meta["path"], case)
+        review_html = str(case_dir / "review.html")
+        plot_result = write_trajectory_plots(
+            case_dir, trajectory_meta["path"], case
+        )
         visual_diagnostics = write_visual_diagnostics(
             case,
             run_dir=run_dir,
@@ -208,69 +444,219 @@ class UavFlowBenchmarkRunner:
             "case": case.to_dict(include_evaluation_truth=True),
             "planner_safe_case": case.planner_safe_metadata(),
             "run_dir": str(run_dir),
-            "status": status,
-            "completed": completed,
-            "stopped": stopped,
-            "stopped_reason": stopped_reason,
-            "stop_source": stop_source,
-            "error": error,
-            "run_artifacts": run_artifacts,
+            "review_html": review_html,
+            **outcome,
+            "audit_summary": audit_summary,
+            "audit": {
+                "path": audit_path,
+                "frame_assets": [
+                    item.to_dict() for item in frame_assets
+                ],
+            },
             "trajectory": trajectory_meta,
+            "trace": trace_payload,
+            "scene_capabilities": scene_capabilities,
+            "observation_profile": self.observation_profile.to_dict(),
+            "mask_label_map": scenario.label_map_for(case.case_id),
+            "scenario_diagnostics": scenario_diagnostics,
             "visual_diagnostics": visual_diagnostics,
             "plot_result": plot_result,
             "ndtw": ndtw_result,
+            "turn_diagnostics": turn_diagnostics,
+            "backend_action_tracking": backend_action_tracking,
             "sr_judge": sr_result,
             "stmr": stmr_summary,
+            "metric_error": metric_error,
         }
-        review_path = write_case_review(case_dir, case_payload)
         write_case_outputs(
             case_dir,
             {
                 "case.json": case_payload,
+                "trace.json": trace_payload,
                 "ndtw.json": ndtw_result,
+                "turn_diagnostics.json": turn_diagnostics,
+                "backend_action_tracking.json": backend_action_tracking,
+                "scenario_diagnostics.json": scenario_diagnostics,
                 "sr_judge.json": sr_result,
                 "plot_result.json": plot_result,
                 "visual_diagnostics_summary.json": visual_diagnostics,
                 "stmr_summary.json": stmr_summary,
+                "mask_label_map.json": scenario.label_map_for(case.case_id),
             },
+        )
+        self._case_reviews[case.case_id] = BenchmarkCaseReview(
+            case_id=case.case_id,
+            benchmark_name="UAV-Flow",
+            protocol_variant=UAV_FLOW_PROTOCOL,
+            instruction=case.selected_instruction,
+            outcome=dict(outcome),
+            metrics={
+                "class_name": case.class_name,
+                "ndtw": ndtw_result.get("ndtw"),
+                "ndtw_status": ndtw_result.get("status"),
+                "sr_status": sr_result.get("status"),
+                "reference_yaw_delta_deg": (
+                    turn_diagnostics or {}
+                ).get("reference_yaw_delta_deg"),
+                "actual_yaw_delta_deg": (
+                    turn_diagnostics or {}
+                ).get("actual_yaw_delta_deg"),
+                "final_yaw_error_deg": (
+                    turn_diagnostics or {}
+                ).get("final_yaw_error_deg"),
+                "translation_drift_m": (
+                    turn_diagnostics or {}
+                ).get("translation_drift_m"),
+                "turn_tracking_max_abs_error_deg": (
+                    (turn_diagnostics or {}).get("backend_turn_tracking")
+                    or {}
+                ).get("max_abs_error_deg"),
+                "translation_tracking_max_error_m": (
+                    backend_action_tracking or {}
+                ).get("max_position_error_m"),
+                "zero_action_completion": (
+                    backend_action_tracking or {}
+                ).get("zero_action_completion"),
+            },
+            audit=audit,
+            frame_assets=frame_assets,
+            sections=build_uav_flow_review_sections(
+                case_dir=case_dir,
+                ndtw_result=ndtw_result,
+                sr_result=sr_result,
+                visual_diagnostics=visual_diagnostics,
+                stmr_summary=stmr_summary,
+                plot_result=plot_result,
+                turn_diagnostics=turn_diagnostics,
+                backend_action_tracking=backend_action_tracking,
+                scenario_diagnostics=scenario_diagnostics,
+            ),
+            metadata=case.planner_safe_metadata(),
         )
         return {
             "case_id": case.case_id,
             "class_name": case.class_name,
-            "status": status,
-            "completed": completed,
-            "stopped": stopped,
-            "stopped_reason": stopped_reason,
-            "stop_source": stop_source,
+            **outcome,
             "run_dir": str(run_dir),
             "case_dir": str(case_dir),
-            "review_path": review_path,
-            "run_artifacts": run_artifacts,
+            "review_html": review_html,
+            "audit_path": audit_path,
+            "audit_summary": audit_summary,
             "visual_diagnostics": visual_diagnostics,
             "plot_result": plot_result,
             "ndtw": ndtw_result,
+            "turn_diagnostics": turn_diagnostics,
+            "backend_action_tracking": backend_action_tracking,
+            "scenario_diagnostics": scenario_diagnostics,
             "sr_judge": sr_result,
             "stmr": stmr_summary,
-            "error": error,
-        }, env_client
+            "metric_error": metric_error,
+        }
+
+    def _validate_review_config(self) -> None:
+        """Fail before scene launch when a real audit cannot be complete."""
+
+        if (
+            self.config.execution_mode == "dry"
+            or not self.config.generate_html_review
+        ):
+            return
+        missing = []
+        if not self.config.save_artifacts:
+            missing.append("save_artifacts=true")
+        if not self.config.enable_action_planner_debug:
+            missing.append("enable_action_planner_debug=true")
+        if missing:
+            raise ValueError(
+                "Real UAV-Flow HTML review requires "
+                + " and ".join(missing)
+            )
+
+    def _make_runtime(
+        self,
+        run_dir: Path,
+        recorder: AsyncRunLogger,
+        *,
+        planner: Any,
+        context_builder: ObservationContextBuilder | None,
+        task_parser: Any | None = None,
+    ) -> TaskRuntime:
+        backend_registry = None
+        execution_mode = self.config.execution_mode
+        if execution_mode == "dry":
+            backend_registry = _dry_unrealcv_registry()
+            server_mode = SimulationExecutionMode.ATTACH
+        else:
+            server_mode = SimulationExecutionMode.parse(execution_mode)
+        server = SimulationServer(
+            self.map_packages,
+            port_policy=self.port_policy,
+            run_dir=run_dir,
+            execution_mode=server_mode,
+            show_display=not self.config.headless,
+            action_config=self.action_config,
+            save_artifacts=self.config.save_artifacts,
+            backend_registry=backend_registry,
+        )
+        env_client = SimulatorEnvClient(
+            server, observation_profile=self.observation_profile
+        )
+        return TaskRuntime(
+            env_client,
+            recorder,
+            task_parser
+            or TaskParser(
+                mode=self.config.parser_mode,
+                model_config=self.model_config,
+            ),
+            planner=planner,
+            safety=SafetySupervisor(self.safety_config),
+            shutdown_policy=self.config.shutdown_policy,
+            action_config=self.action_config,
+            runtime_loop_guard_windows=self.config.runtime_loop_guard_windows,
+            enable_action_planner_debug=self.config.enable_action_planner_debug,
+            context_builder=context_builder,
+        )
+
+    def _load_profile(self) -> ObservationProfile:
+        if self.config.observation_profile_path:
+            return load_observation_profile(
+                self.config.observation_profile_path
+            )
+        if self.config.stmr_mode != "off":
+            return ObservationProfile.from_dict(
+                {
+                    "modalities": [
+                        "rgb",
+                        "depth",
+                        "segmentation",
+                        "pose",
+                    ]
+                }
+            )
+        return ObservationProfile()
 
     def _context_builder(
         self,
         planner: Any,
-    ) -> tuple[ObservationContextBuilder | None, StmrMapContextModule | None]:
-        """Build case-local optional perception inputs without global config changes."""
-
+    ) -> tuple[
+        ObservationContextBuilder | None, StmrMapContextModule | None
+    ]:
         include_depth = self.config.planner_depth_input == "now"
         include_stmr = self.config.stmr_mode != "off"
         if not include_depth and not include_stmr:
             return None, None
         default_registry = ContextModuleRegistry.default(
             plugin_registry=self.plugin_registry,
-            enable_model_skill_selection=getattr(planner, "planner_mode", "") == "model",
+            enable_model_skill_selection=(
+                getattr(planner, "planner_mode", "") == "model"
+            ),
         )
         modules = dict(default_registry.modules)
         if include_depth:
-            modules["image"] = DefaultImageContextModule(include_current_depth=True)
+            modules["image"] = DefaultImageContextModule(
+                include_current_depth=True
+            )
         stmr_module: StmrMapContextModule | None = None
         if include_stmr:
             stmr_module = StmrMapContextModule(
@@ -292,19 +678,21 @@ class UavFlowBenchmarkRunner:
                 safety_config=self.safety_config,
                 registry=registry,
                 plugin_registry=self.plugin_registry,
-                enable_model_skill_selection=getattr(planner, "planner_mode", "") == "model",
+                enable_model_skill_selection=(
+                    getattr(planner, "planner_mode", "") == "model"
+                ),
             ),
             stmr_module,
         )
 
     def _shared_stmr_session(self) -> Any:
         if self._stmr_session is None:
-            self._stmr_session = StmrPerceptionSession(device=self.config.stmr_device)
+            self._stmr_session = StmrPerceptionSession(
+                device=self.config.stmr_device
+            )
         return self._stmr_session
 
     def _prepare_stmr(self) -> None:
-        """Load optional perception models before launching a real UE process."""
-
         if self.config.stmr_mode == "off" or self._stmr_warmed:
             return
         session = self._shared_stmr_session()
@@ -313,20 +701,50 @@ class UavFlowBenchmarkRunner:
             warmup()
         self._stmr_warmed = True
 
-    def _make_env_client(self, case: UavFlowCase, run_dir: str | Path) -> UavFlowBenchmarkEnvClient:
-        return UavFlowBenchmarkEnvClient(
-            case,
-            run_dir=run_dir,
-            env_id=self.config.env_id,
-            uav_flow_repo_path=self.config.uav_flow_repo_path,
-            real_unrealcv=self.config.real_unrealcv,
-            time_dilation=self.config.time_dilation,
-            resolution=self.config.resolution,
-            seed=self.config.seed,
-            action_config=self.action_config,
-            enable_depth_capture=self.config.planner_depth_input == "now",
-            enable_research_frame_capture=self.config.stmr_mode != "off",
-        )
+
+def _audit_summary(
+    *,
+    audit: BenchmarkAuditLog,
+    frame_assets: tuple[ResolvedFrameAsset, ...],
+) -> dict[str, int]:
+    """Expose compact machine-readable counts without re-reading Runtime logs.
+
+    Full actions, messages, and frame provenance remain owned by Benchmark
+    Core's ``audit.json``. This summary is intentionally count-only so UAV-Flow
+    does not maintain a second audit interpretation path.
+    """
+
+    return {
+        "rgb_count": sum(
+            1
+            for item in frame_assets
+            if item.modality == "rgb" and item.display_path
+        ),
+        "action_count": len(audit.actions),
+        "agent_message_count": len(audit.agent_messages),
+    }
+
+
+def _dry_unrealcv_registry() -> BackendRegistry:
+    registry = BackendRegistry()
+    registry.register(
+        "unrealcv",
+        lambda context: UnrealCvBackend(
+            use_real_client=False,
+            action_config=context.action_config,
+            artifact_dir=context.artifact_dir,
+            save_artifacts=context.save_artifacts,
+        ),
+    )
+    return registry
+
+
+def _write_evaluation_truth(case_dir: Path, case: UavFlowCase) -> None:
+    path = case_dir / "evaluation_truth.json"
+    path.write_text(
+        json.dumps(case.evaluation_truth(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def _benchmark_action_config(config: UavFlowEvalConfig) -> Any:
@@ -343,17 +761,9 @@ def _benchmark_safety_config(config: UavFlowEvalConfig) -> Any:
     return loaded.__class__.from_dict(base)
 
 
-def _shared_env_failure(result: dict[str, Any]) -> bool:
-    error = result.get("error") or {}
-    if not isinstance(error, dict):
-        return False
-    text = f"{error.get('error_type', '')} {error.get('error', '')}".lower()
-    return any(term in text for term in ("unrealcv", "scene initialization", "object placement", "prepare_case"))
-
-
-def _stmr_summary(module: StmrMapContextModule | None) -> dict[str, Any]:
-    """Keep evaluation reporting fail-open when optional parity diagnostics fail."""
-
+def _stmr_summary(
+    module: StmrMapContextModule | None,
+) -> dict[str, Any]:
     if module is None:
         return {"mode": "off", "status": "disabled"}
     try:
@@ -366,24 +776,23 @@ def _stmr_summary(module: StmrMapContextModule | None) -> dict[str, Any]:
         }
 
 
-def _write_html_review_from_summary(eval_dir: str | Path, summary_paths: dict[str, str]) -> dict[str, str]:
-    """Generate static HTML review pages from the just-written summary."""
+def _append_html_review_links(
+    summary_paths: dict[str, str], review_paths: dict[str, str]
+) -> None:
+    """Append portable Core review links to existing text summaries."""
 
-    import json
-
-    summary_path = Path(summary_paths["summary_json"])
-    summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    html_paths = write_html_review(eval_dir, summary)
-    html_review = html_paths.get("html_review")
-    if html_review:
-        summary_md = Path(summary_paths["summary_md"])
-        console_txt = Path(summary_paths["console_txt"])
-        summary_md.write_text(
-            summary_md.read_text(encoding="utf-8") + f"\n## HTML Review\n\n- `{html_review}`\n",
-            encoding="utf-8",
-        )
-        console_txt.write_text(
-            console_txt.read_text(encoding="utf-8") + f"html_review: {html_review}\n",
-            encoding="utf-8",
-        )
-    return html_paths
+    html_review = review_paths.get("html_review")
+    if not html_review:
+        return
+    summary_md = Path(summary_paths["summary_md"])
+    console_txt = Path(summary_paths["console_txt"])
+    summary_md.write_text(
+        summary_md.read_text(encoding="utf-8")
+        + f"\n## HTML Review\n\n- `{html_review}`\n",
+        encoding="utf-8",
+    )
+    console_txt.write_text(
+        console_txt.read_text(encoding="utf-8")
+        + f"html_review: {html_review}\n",
+        encoding="utf-8",
+    )

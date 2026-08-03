@@ -2,20 +2,18 @@
 
 Why this script exists
 ----------------------
-UAV-Flow real evaluation usually needs many runtime switches: real UnrealCV,
-UE process reuse, SR judge, visual diagnostics, action-planner debug context,
-parser mode, and loop-guard settings. This script packages the debug-friendly
-defaults in one place so you can launch a run without pasting an inline Python
-program into PowerShell.
+UAV-Flow evaluation uses the same MapPackage, SimulationServer, EnvClient, and
+TaskRuntime composition as other runs. This script packages the
+benchmark-specific dataset/report switches without reviving the legacy gym
+scene lifecycle.
 
 Default behavior
 ----------------
-By default this script runs a small real-UnrealCV debug batch:
+The example config defaults to a small in-memory dry batch:
 
 - classes: Turn,Approach
 - limit_per_class: 1
-- real_unrealcv: True
-- reuse_real_unrealcv_env: True
+- execution_mode: dry
 - enable_sr_judge: True
 - enable_visual_diagnostics: True
 - enable_action_planner_debug: True
@@ -24,25 +22,29 @@ By default this script runs a small real-UnrealCV debug batch:
 
 Common commands
 ---------------
-Run the default 1x real debug smoke:
+Run the default 1x dry debug smoke:
 
     python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --eval-id uav_flow_manual_real_1x
 
-Run a 3x Turn/Approach real batch:
+Attach to an already-running DowntownWest UnrealCV scene:
 
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --classes Turn,Approach --limit-per-class 3 --eval-id uav_flow_manual_real_3x
+    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --execution-mode attach --classes Turn,Approach --limit-per-class 3 --eval-id uav_flow_manual_real_3x
 
 Run a dry benchmark smoke without launching UE:
 
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --dry-run --classes Turn --limit-per-class 1 --eval-id uav_flow_manual_dry
+    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --execution-mode dry --classes Turn --limit-per-class 1 --eval-id uav_flow_manual_dry
 
 Run a fast dry script check without model/SR/visual diagnostic calls:
 
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --dry-run --classes Turn --limit-per-class 1 --eval-id uav_flow_manual_dry_fast --parser-mode rule_based --no-sr-judge --no-visual-diagnostics --no-action-planner-debug
+    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --execution-mode dry --classes Turn --limit-per-class 1 --eval-id uav_flow_manual_dry_fast --parser-mode rule_based --no-sr-judge --no-visual-diagnostics --no-action-planner-debug
 
 Run one Move-only debug batch:
 
     python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --classes Move --limit-per-class 1 --eval-id uav_flow_manual_move_1x
+
+Run exact dataset cases in the requested order:
+
+    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --case-ids 2025-03-30_11-49-14,2025-03-30_11-49-27 --execution-mode managed --eval-id uav_flow_exact_cases
 
 Check real UnrealCV imports without launching UE:
 
@@ -75,7 +77,6 @@ trajectory plots.
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import sys
 from pathlib import Path
@@ -99,9 +100,9 @@ def main() -> int:
     config = _config_from_args(args)
     summary = _config_summary(config, args.eval_id)
     print(json.dumps({"uav_flow_manual_eval_config": summary}, indent=2, ensure_ascii=False))
-    if config.real_unrealcv:
-        preflight = _real_unrealcv_preflight(config)
-        print(json.dumps({"real_unrealcv_preflight": preflight}, indent=2, ensure_ascii=False))
+    if config.execution_mode != "dry":
+        preflight = _unrealcv_preflight(config)
+        print(json.dumps({"unrealcv_preflight": preflight}, indent=2, ensure_ascii=False))
         if preflight["status"] != "ok":
             return 2
         if args.preflight_only:
@@ -111,7 +112,7 @@ def main() -> int:
             "Check for old python/Collection/UE4/Unreal processes before running long batches."
         )
     elif args.preflight_only:
-        print("preflight_only skipped because --dry-run disables real UnrealCV.")
+        print("preflight_only skipped because execution_mode=dry.")
         return 0
     result = UavFlowBenchmarkRunner(config).run(eval_id=args.eval_id)
     print(json.dumps(_result_summary(result), indent=2, ensure_ascii=False))
@@ -126,10 +127,22 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="Base UAV-Flow eval config JSON.")
     parser.add_argument("--eval-id", default=None, help="Output eval id. Omit to use a timestamped eval directory.")
     parser.add_argument("--classes", default=",".join(DEFAULT_CLASSES), help="Comma-separated class names.")
+    parser.add_argument(
+        "--case-ids",
+        default=None,
+        help=(
+            "Comma-separated dataset case stems. Exact selection overrides "
+            "--classes, --limit-per-class, and --max-cases."
+        ),
+    )
     parser.add_argument("--limit-per-class", type=int, default=1, help="Number of cases per class.")
     parser.add_argument("--max-cases", type=int, default=None, help="Optional total case cap after class filtering.")
-    parser.add_argument("--dry-run", action="store_true", help="Use dry UnrealCV mode instead of launching real UE.")
-    parser.add_argument("--no-reuse-real-env", action="store_true", help="Disable real UE reuse across cases.")
+    parser.add_argument(
+        "--execution-mode",
+        choices=["dry", "attach", "managed"],
+        default=None,
+        help="Simulator ownership mode; dry uses the in-memory UnrealCV Backend.",
+    )
     parser.add_argument("--no-sr-judge", action="store_true", help="Disable SR judge.")
     parser.add_argument("--no-visual-diagnostics", action="store_true", help="Disable visual diagnostics.")
     parser.add_argument("--no-action-planner-debug", action="store_true", help="Disable action planner debug artifacts.")
@@ -153,12 +166,19 @@ def _parser() -> argparse.ArgumentParser:
 def _config_from_args(args: argparse.Namespace) -> UavFlowEvalConfig:
     base = UavFlowEvalConfig.from_file(args.config)
     data = base.to_dict()
+    case_ids = _parse_case_ids(args.case_ids)
     data.update(
         {
-            "real_unrealcv": not args.dry_run,
-            "reuse_real_unrealcv_env": not args.no_reuse_real_env,
-            "classes": _parse_classes(args.classes),
-            "limit_per_class": args.limit_per_class,
+            "execution_mode": args.execution_mode or base.execution_mode,
+            "case_ids": case_ids if case_ids is not None else base.case_ids,
+            "classes": (
+                None
+                if case_ids is not None
+                else _parse_classes(args.classes)
+            ),
+            "limit_per_class": (
+                None if case_ids is not None else args.limit_per_class
+            ),
             "enable_sr_judge": not args.no_sr_judge,
             "enable_visual_diagnostics": not args.no_visual_diagnostics,
             "enable_action_planner_debug": not args.no_action_planner_debug,
@@ -166,7 +186,9 @@ def _config_from_args(args: argparse.Namespace) -> UavFlowEvalConfig:
             "parser_mode": args.parser_mode,
         }
     )
-    if args.max_cases is not None:
+    if case_ids is not None:
+        data["max_cases"] = None
+    elif args.max_cases is not None:
         data["max_cases"] = args.max_cases
     if args.env_path:
         data["env_path"] = args.env_path
@@ -180,6 +202,12 @@ def _config_from_args(args: argparse.Namespace) -> UavFlowEvalConfig:
         data["stmr_max_queries"] = args.stmr_max_queries
     if args.stmr_device:
         data["stmr_device"] = args.stmr_device
+    if (
+        data["execution_mode"] != "dry"
+        and data.get("generate_html_review", True)
+    ):
+        data["save_artifacts"] = True
+        data["enable_action_planner_debug"] = True
     return UavFlowEvalConfig.from_dict(data)
 
 
@@ -189,19 +217,30 @@ def _parse_classes(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _parse_case_ids(value: str | None) -> list[str] | None:
+    if value is None:
+        return None
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def _config_summary(config: UavFlowEvalConfig, eval_id: str | None) -> dict[str, Any]:
     return {
         "eval_id": eval_id,
         "uav_flow_repo_path": config.uav_flow_repo_path,
         "output_dir": config.output_dir,
+        "case_ids": list(config.case_ids) if config.case_ids else None,
         "classes": config.classes,
         "limit_per_class": config.limit_per_class,
         "max_cases": config.max_cases,
-        "real_unrealcv": config.real_unrealcv,
-        "reuse_real_unrealcv_env": config.reuse_real_unrealcv_env,
+        "map_config_path": config.map_config_path,
+        "map_id": config.map_id,
+        "execution_mode": config.execution_mode,
+        "observation_profile_path": config.observation_profile_path,
         "enable_sr_judge": config.enable_sr_judge,
         "enable_visual_diagnostics": config.enable_visual_diagnostics,
         "enable_action_planner_debug": config.enable_action_planner_debug,
+        "generate_html_review": config.generate_html_review,
+        "save_artifacts": config.save_artifacts,
         "runtime_loop_guard_windows": config.runtime_loop_guard_windows,
         "parser_mode": config.parser_mode,
         "env_path": config.env_path,
@@ -213,42 +252,24 @@ def _config_summary(config: UavFlowEvalConfig, eval_id: str | None) -> dict[str,
     }
 
 
-def _real_unrealcv_preflight(config: UavFlowEvalConfig) -> dict[str, Any]:
-    repo = Path(config.uav_flow_repo_path)
+def _unrealcv_preflight(config: UavFlowEvalConfig) -> dict[str, Any]:
+    map_config = Path(config.map_config_path)
     result: dict[str, Any] = {
         "status": "ok",
         "python_executable": sys.executable,
-        "uav_flow_repo_path": str(repo),
-        "repo_exists": repo.exists(),
-        "imports": {},
+        "map_config_path": str(map_config),
+        "map_config_exists": map_config.exists(),
+        "execution_mode": config.execution_mode,
     }
-    if not repo.exists():
+    if not map_config.exists():
         result["status"] = "failed"
-        result["reason"] = "uav_flow_repo_path_missing"
-        return result
-    repo_text = str(repo)
-    if repo_text not in sys.path:
-        sys.path.insert(0, repo_text)
-    required_modules = ["gym", "gym_unrealcv", "unrealcv"]
-    if config.stmr_mode != "off":
-        required_modules.extend(["torch", "transformers"])
-    for module_name in required_modules:
-        spec = importlib.util.find_spec(module_name)
-        result["imports"][module_name] = {
-            "found": spec is not None,
-            "origin": getattr(spec, "origin", None) if spec else None,
-        }
-    missing = [name for name, item in result["imports"].items() if not item["found"]]
-    if missing:
-        result["status"] = "failed"
-        result["reason"] = "missing_python_modules"
-        result["missing_modules"] = missing
+        result["reason"] = "map_config_path_missing"
         return result
     try:
-        from gym_unrealcv.envs.wrappers import augmentation, configUE, time_dilation  # noqa: F401
+        from unrealcv import Client  # noqa: F401
     except Exception as exc:
         result["status"] = "failed"
-        result["reason"] = "gym_unrealcv_wrapper_import_failed"
+        result["reason"] = "unrealcv_import_failed"
         result["error_type"] = type(exc).__name__
         result["error"] = str(exc)
     return result

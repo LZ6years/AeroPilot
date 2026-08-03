@@ -52,8 +52,7 @@ def main() -> int:
     canary_id = args.canary_id or f"stmr_canary_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     common = replace(
         base,
-        real_unrealcv=not args.dry_run,
-        reuse_real_unrealcv_env=not args.no_reuse_real_env,
+        execution_mode="dry" if args.dry_run else args.execution_mode,
         enable_sr_judge=not args.no_sr_judge,
         enable_visual_diagnostics=not args.no_visual_diagnostics,
         enable_action_planner_debug=True,
@@ -105,7 +104,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--classes", default=",".join(DEFAULT_CLASSES))
     parser.add_argument("--modes", default="planner", help="Comma-separated: off,shadow,planner")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--no-reuse-real-env", action="store_true")
+    parser.add_argument(
+        "--execution-mode",
+        choices=["attach", "managed"],
+        default="attach",
+    )
     parser.add_argument("--no-sr-judge", action="store_true")
     parser.add_argument("--no-visual-diagnostics", action="store_true")
     parser.add_argument("--stmr-prior", default="default_uav_prior")

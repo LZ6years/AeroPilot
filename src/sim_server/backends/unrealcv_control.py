@@ -1,7 +1,7 @@
 """Provide simulator-agnostic camera and actor pose control for UnrealCV.
 
-The Backend selects one strategy from the MapPackage.  Camera control uses
-standard UnrealCV camera commands.  Actor control uses standard object
+The Backend selects one strategy from the MapPackage. Camera control uses
+standard UnrealCV camera commands. Actor control uses standard object
 location/rotation commands unless a packaged map explicitly declares the
 Blueprint yaw extension used by its controllable vehicle.
 
@@ -43,10 +43,18 @@ class ActorControlConfig:
 
     name: str
     camera_id: str
+    startup_hide_objects: tuple[str, ...]
+    scale: tuple[float, float, float] | None
     units_per_meter: float
     yaw_offset_deg: float
     rotation_method: str
     camera_follow: str
+    camera_validation_enabled: bool
+    camera_position_mode: str
+    camera_expected_body_offset_m: tuple[float, float, float]
+    camera_position_tolerance_m: float
+    camera_max_distance_m: float
+    camera_yaw_tolerance_deg: float
     disable_physics: bool
     yaw_settle_timeout_sec: float
     yaw_tolerance_deg: float
@@ -57,13 +65,49 @@ class ActorControlConfig:
         """Build the typed configuration after MapPackage schema validation."""
 
         actor = dict(unrealcv.get("actor", {}))
+        startup = dict(unrealcv.get("startup", {}))
+        camera_validation = dict(actor.get("camera_validation", {}))
+        configured_scale = actor.get("scale")
         return cls(
             name=str(actor["name"]),
             camera_id=str(unrealcv.get("camera_id", 0)),
+            startup_hide_objects=tuple(
+                str(value) for value in startup.get("hide_objects", ())
+            ),
+            scale=(
+                tuple(float(value) for value in configured_scale)
+                if configured_scale is not None
+                else None
+            ),
             units_per_meter=float(actor.get("units_per_meter", 100.0)),
             yaw_offset_deg=float(actor.get("yaw_offset_deg", 0.0)),
             rotation_method=str(actor.get("rotation_method", "standard_pose")),
             camera_follow=str(actor.get("camera_follow", "none")),
+            camera_validation_enabled=bool(
+                camera_validation.get("enabled", False)
+            ),
+            camera_position_mode=str(
+                camera_validation.get(
+                    "position_mode",
+                    "expected_body_offset",
+                )
+            ),
+            camera_expected_body_offset_m=tuple(
+                float(value)
+                for value in camera_validation.get(
+                    "expected_body_offset_m",
+                    (0.0, 0.0, 0.0),
+                )
+            ),
+            camera_position_tolerance_m=float(
+                camera_validation.get("position_tolerance_m", 0.05)
+            ),
+            camera_max_distance_m=float(
+                camera_validation.get("max_distance_m", 1.5)
+            ),
+            camera_yaw_tolerance_deg=float(
+                camera_validation.get("yaw_tolerance_deg", 1.0)
+            ),
             disable_physics=bool(actor.get("disable_physics", False)),
             yaw_settle_timeout_sec=float(
                 actor.get("yaw_settle_timeout_sec", 5.0)
@@ -148,12 +192,54 @@ class ActorPoseControl:
         # Reading the actor first gives a specific missing-actor error instead
         # of silently falling back to camera motion.
         self.get_pose()
+        self._hide_startup_objects()
+        if self.config.scale is not None:
+            scale = self.config.scale
+            command = (
+                f"vset /object/{self.config.name}/scale "
+                f"{scale[0]} {scale[1]} {scale[2]}"
+            )
+            _check_command_responses(
+                [command], [self.client.request(command)]
+            )
         if self.config.disable_physics:
             command = f"vbp {self.config.name} set_phy 0"
             _check_command_responses(
                 [command], [self.client.request(command)]
             )
-        self.sync_camera()
+        # The packaged map's default Actor pose may place the camera against
+        # arbitrary geometry before an episode initial pose is applied. Sync
+        # now so the scene is normalized, but validate only once Runtime calls
+        # episode set_pose (and again before every capture).
+        self._sync_camera(validate=False)
+
+    def _hide_startup_objects(self) -> None:
+        """Hide explicitly declared packaged-map meshes before capture.
+
+        Some packaged environments ship sample pawns whose meshes can leak
+        into a reusable camera. The MapPackage must name them explicitly;
+        control code never guesses from a benchmark or map identifier.
+        Missing objects are treated as already normalized so reconnecting to an
+        attached scene remains idempotent. Hiding preserves camera components
+        and stable camera ids, unlike destroying a camera-owning pawn.
+        """
+
+        if not self.config.startup_hide_objects:
+            return
+        inventory_command = "vget /objects"
+        before_text = _response_text(self.client.request(inventory_command))
+        _raise_for_error(inventory_command, before_text)
+        present = set(before_text.split())
+        commands = [
+            f"vset /object/{name}/hide"
+            for name in self.config.startup_hide_objects
+            if name in present
+        ]
+        if commands:
+            _check_command_responses(
+                commands,
+                [self.client.request(command) for command in commands],
+            )
 
     def get_pose(self) -> list[float]:
         location_command = f"vget /object/{self.config.name}/location"
@@ -169,12 +255,17 @@ class ActorPoseControl:
         # UnrealCv_API documents object rotation as [roll, yaw, pitch].
         roll_deg, native_yaw_deg, pitch_deg = native_rotation
         scale = self.config.units_per_meter
+        canonical_yaw = (
+            native_yaw_deg
+            if self.config.rotation_method == "blueprint_yaw"
+            else native_yaw_deg - self.config.yaw_offset_deg
+        )
         return [
             native_location[0] / scale,
             native_location[1] / scale,
             native_location[2] / scale,
             pitch_deg,
-            _normalize_yaw(native_yaw_deg - self.config.yaw_offset_deg),
+            _normalize_yaw(canonical_yaw),
             roll_deg,
         ]
 
@@ -204,18 +295,53 @@ class ActorPoseControl:
                 f"{pose[3]} {native_yaw} {pose[5]}"
             )
         else:
-            # This Blueprint extension accepts canonical/world yaw and
-            # internally applies the Actor mesh offset. It also interpolates,
-            # unlike standard UnrealCV object rotation.
+            # DowntownWest's Blueprint applies its mesh-facing offset inside
+            # ``set_rotation``. The command therefore receives the configured
+            # native yaw, matching the original UAV-Flow control path. Once
+            # interpolation finishes, the queried Actor yaw is the physical
+            # camera/world yaw and ``get_pose`` exposes it as canonical yaw.
             rotation_command = (
                 f"vbp {self.config.name} set_rotation "
-                f"{_normalize_yaw(pose[4])}"
+                f"{native_yaw}"
             )
         commands = [location_command, rotation_command]
         _check_command_responses(commands, _request_batch(self.client, commands))
         if self.config.rotation_method == "blueprint_yaw":
             self._wait_for_yaw(_normalize_yaw(pose[4]))
-        self.sync_camera()
+        if self.config.camera_validation_enabled:
+            self._validate_actor_pose(pose)
+        # Runtime preflight takeoff also uses set_pose. Validate on capture,
+        # after the episode initial pose has replaced that scene-level pose.
+        self._sync_camera(validate=False)
+
+    def _validate_actor_pose(self, expected_pose: list[float]) -> None:
+        """Reject acknowledged Actor writes that did not reach the requested pose."""
+
+        observed_pose = self.get_pose()
+        position_error_m = math.sqrt(
+            sum(
+                (observed_pose[index] - expected_pose[index]) ** 2
+                for index in range(3)
+            )
+        )
+        yaw_error_deg = abs(_yaw_delta(observed_pose[4], expected_pose[4]))
+        if (
+            position_error_m <= self.config.camera_position_tolerance_m
+            and yaw_error_deg <= self.config.camera_yaw_tolerance_deg
+        ):
+            return
+        raise RuntimeError(
+            "UnrealCV actor pose validation failed after acknowledged write: "
+            f"expected_xyz_m={tuple(float(value) for value in expected_pose[:3])}, "
+            f"observed_xyz_m={tuple(float(value) for value in observed_pose[:3])}, "
+            f"position_error_m={position_error_m:.6f}, "
+            "position_tolerance_m="
+            f"{self.config.camera_position_tolerance_m:.6f}, "
+            f"expected_yaw_deg={float(expected_pose[4]):.3f}, "
+            f"observed_yaw_deg={float(observed_pose[4]):.3f}, "
+            f"yaw_error_deg={yaw_error_deg:.3f}, "
+            f"yaw_tolerance_deg={self.config.camera_yaw_tolerance_deg:.3f}"
+        )
 
     def _wait_for_yaw(self, target_yaw_deg: float) -> None:
         """Wait for a Blueprint-interpolated yaw instead of reporting early."""
@@ -233,6 +359,12 @@ class ActorPoseControl:
             last_yaw = self.get_pose()[4]
 
     def sync_camera(self) -> None:
+        # Capture is the observable boundary that matters to callers. Actor
+        # pose writes sync without validation because scene-level takeoff also
+        # uses set_pose before Runtime applies the episode initial pose.
+        self._sync_camera(validate=True)
+
+    def _sync_camera(self, *, validate: bool) -> None:
         if self.config.camera_follow == "none":
             return
 
@@ -260,13 +392,140 @@ class ActorPoseControl:
             _check_command_responses(
                 commands, _request_batch(self.client, commands)
             )
+            if validate:
+                self._validate_camera_alignment(location, rotation)
             return
-        command = (
-            f"vbp {self.config.camera_id} set_cam "
-            f"{location[0]} {location[1]} {location[2]} "
-            f"{roll_deg} {pitch_deg} {yaw_deg}"
+        if self.config.camera_follow == "blueprint_pose":
+            # The historical UAV-Flow batch helper copies the controlled
+            # actor's absolute pose into the Blueprint camera on every update.
+            # ``vbp`` is addressed by the camera-owning actor; the numeric
+            # capture camera id is not an Actor id.
+            commands = [
+                (
+                    f"vbp {self.config.name} set_cam "
+                    f"{location[0]} {location[1]} {location[2]} "
+                    f"{roll_deg} {pitch_deg} {yaw_deg}"
+                ),
+                f"vbp {self.config.name} set_viewport",
+            ]
+            _check_command_responses(
+                commands, [self.client.request(command) for command in commands]
+            )
+            if validate:
+                self._validate_camera_alignment(location, rotation)
+            return
+        raise ValueError(
+            f"Unsupported actor camera_follow strategy: {self.config.camera_follow}"
         )
-        _check_command_responses([command], [self.client.request(command)])
+
+    def _validate_camera_alignment(
+        self,
+        actor_location: list[float],
+        actor_rotation: list[float],
+    ) -> None:
+        """Reject camera commands that acknowledged but did not take effect.
+
+        Some packaged Blueprints return ``ok`` for a syntactically accepted
+        command without moving the capture camera.  The map-level validation
+        contract therefore checks the observable camera pose rather than
+        trusting the command response.
+        """
+
+        if not self.config.camera_validation_enabled:
+            return
+        location_command = (
+            f"vget /camera/{self.config.camera_id}/location"
+        )
+        rotation_command = (
+            f"vget /camera/{self.config.camera_id}/rotation"
+        )
+        responses = _request_batch(
+            self.client, [location_command, rotation_command]
+        )
+        camera_location = _parse_float_list(
+            responses[0], location_command
+        )
+        camera_rotation = _parse_float_list(
+            responses[1], rotation_command
+        )
+        _require_length(camera_location, 3, "camera location")
+        _require_length(camera_rotation, 3, "camera rotation")
+        actor_yaw_deg = float(actor_rotation[1])
+        camera_yaw_deg = float(camera_rotation[1])
+        scale = self.config.units_per_meter
+        world_dx_m = (
+            camera_location[0] - actor_location[0]
+        ) / scale
+        world_dy_m = (
+            camera_location[1] - actor_location[1]
+        ) / scale
+        world_dz_m = (
+            camera_location[2] - actor_location[2]
+        ) / scale
+        yaw_rad = math.radians(actor_yaw_deg)
+        observed_body_offset_m = (
+            world_dx_m * math.cos(yaw_rad)
+            + world_dy_m * math.sin(yaw_rad),
+            -world_dx_m * math.sin(yaw_rad)
+            + world_dy_m * math.cos(yaw_rad),
+            world_dz_m,
+        )
+        expected_body_offset_m = (
+            self.config.camera_expected_body_offset_m
+        )
+        offset_error_m = math.sqrt(
+            sum(
+                (
+                    observed_body_offset_m[index]
+                    - expected_body_offset_m[index]
+                )
+                ** 2
+                for index in range(3)
+            )
+        )
+        camera_distance_m = math.sqrt(
+            sum(value**2 for value in observed_body_offset_m)
+        )
+        if self.config.camera_position_mode == "expected_body_offset":
+            position_ok = (
+                offset_error_m
+                <= self.config.camera_position_tolerance_m
+            )
+        elif self.config.camera_position_mode == "max_distance":
+            position_ok = (
+                camera_distance_m
+                <= self.config.camera_max_distance_m
+            )
+        else:  # Defensive guard for direct construction outside MapPackage.
+            raise ValueError(
+                "Unsupported camera validation position mode: "
+                f"{self.config.camera_position_mode}"
+            )
+        yaw_error_deg = abs(_yaw_delta(camera_yaw_deg, actor_yaw_deg))
+        if (
+            position_ok
+            and yaw_error_deg <= self.config.camera_yaw_tolerance_deg
+        ):
+            return
+        raise RuntimeError(
+            "UnrealCV camera follow validation failed: "
+            f"strategy={self.config.camera_follow}, "
+            f"actor={self.config.name}, camera_id={self.config.camera_id}, "
+            f"actor_location={actor_location}, "
+            f"camera_location={camera_location}, "
+            f"position_mode={self.config.camera_position_mode}, "
+            f"expected_body_offset_m={expected_body_offset_m}, "
+            f"observed_body_offset_m={observed_body_offset_m}, "
+            f"offset_error_m={offset_error_m:.6f}, "
+            "position_tolerance_m="
+            f"{self.config.camera_position_tolerance_m:.6f}, "
+            f"camera_distance_m={camera_distance_m:.6f}, "
+            f"max_distance_m={self.config.camera_max_distance_m:.6f}, "
+            f"actor_yaw_deg={actor_yaw_deg:.6f}, "
+            f"camera_yaw_deg={camera_yaw_deg:.6f}, "
+            f"yaw_error_deg={yaw_error_deg:.6f}, "
+            f"yaw_tolerance_deg={self.config.camera_yaw_tolerance_deg:.6f}"
+        )
 
 
 def create_pose_control(

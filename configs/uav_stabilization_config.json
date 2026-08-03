@@ -3,6 +3,7 @@
   "velocity_threshold_mps": 0.15,
   "timeout_sec": 8.0,
   "poll_interval_sec": 0.25,
+  "initialization_min_settle_sec": 0.0,
   "zero_velocity_brake_duration_sec": 2.0,
   "hover_after_brake": false,
   "motion_tools": [

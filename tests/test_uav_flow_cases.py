@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase, load_cases
 
 
@@ -57,6 +59,53 @@ def test_load_cases_uses_classification_and_limit(tmp_path):
     assert [case.class_name for case in cases] == ["Turn", "Move"]
 
 
+def test_load_cases_uses_exact_case_ids_in_requested_order(tmp_path):
+    write_case(tmp_path / "test_jsons" / "turn_a.json")
+    write_case(
+        tmp_path / "test_jsons" / "move_a.json",
+        instruction="Move forward",
+    )
+    (tmp_path / "classified_instr.json").write_text(
+        json.dumps(
+            {
+                "Turn": ["turn_a.json"],
+                "Move": ["move_a.json"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    cases = load_cases(
+        tmp_path,
+        case_ids=("move_a", "turn_a"),
+        classes=["Turn"],
+        limit_per_class=1,
+    )
+
+    assert [case.case_id for case in cases] == ["move_a", "turn_a"]
+    assert [case.class_name for case in cases] == ["Move", "Turn"]
+
+
+@pytest.mark.parametrize(
+    ("case_ids", "message"),
+    [
+        (("missing",), "not found"),
+        (("turn_a", "turn_a"), "unique"),
+        (("turn_a.json",), "without paths or .json"),
+        (("../turn_a",), "without paths or .json"),
+    ],
+)
+def test_load_cases_rejects_invalid_exact_case_ids(
+    tmp_path,
+    case_ids,
+    message,
+):
+    write_case(tmp_path / "test_jsons" / "turn_a.json")
+
+    with pytest.raises(ValueError, match=message):
+        load_cases(tmp_path, case_ids=case_ids)
+
+
 def test_invalid_case_requires_initial_pos(tmp_path):
     path = tmp_path / "bad.json"
     path.write_text(json.dumps({"instruction": "bad", "initial_pos": [1, 2]}), encoding="utf-8")
@@ -67,4 +116,3 @@ def test_invalid_case_requires_initial_pos(tmp_path):
         assert "initial_pos" in str(exc)
     else:
         raise AssertionError("expected invalid initial_pos to fail")
-

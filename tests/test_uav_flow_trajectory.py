@@ -39,6 +39,16 @@ def test_world_pose_to_model_pose_uses_meters_and_local_yaw():
     assert pose["coordinate_frame"] == "uav_flow_initial_local_canonical_m"
 
 
+def test_world_pose_to_model_pose_uses_local_pitch_and_roll():
+    pose = world_pose_to_model_pose(
+        [100.0, 200.0, 50.0, 15.0, 90.0, -5.0],
+        [100.0, 200.0, 50.0, 10.0, 90.0, -10.0],
+    )
+
+    assert pose["pitch_deg"] == 5.0
+    assert pose["roll_deg"] == 5.0
+
+
 def test_world_pose_to_model_pose_preserves_canonical_down_as_negative_z():
     pose = world_pose_to_model_pose([100.0, 200.0, -350.0, 0.0, 90.0, 0.0], [100.0, 200.0, 50.0, 0.0, 90.0, 0.0])
 

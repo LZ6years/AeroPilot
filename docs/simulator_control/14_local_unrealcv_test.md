@@ -15,7 +15,8 @@ flowchart TD
     MP["MapPackage"] --> CT{"control_target"}
     CT -->|"camera"| CP["CameraPoseControl"]
     CT -->|"actor"| AP["ActorPoseControl"]
-    AP --> SYNC["采图前同步 camera"]
+    AP --> INIT["hide declared meshes · scale · physics"]
+    INIT --> SYNC["按 camera_follow 采图前同步"]
     CP --> CAP["Batch capture"]
     SYNC --> CAP
     CAP --> OBS["RGB · Depth · Segmentation · Pose"]
@@ -37,6 +38,11 @@ flowchart TD
 
 `disable_physics=true`会在连接后对主 Actor 执行显式的 physics disable。它只作用于
 主控制目标，不会改变 Benchmark 人物、车辆或其他场景对象。
+可选的`scale=[x,y,z]`同样只在 Backend prepare 时设置一次，用于恢复打包地图
+声明的主 Actor 初始比例。
+`startup.hide_objects`用于隐藏打包地图自带、且已明确命名的 mesh，同时保留
+Actor 控制和 camera component。它可以包含主控制 Actor 以隐藏自机机身，但不能
+包含 Benchmark 在 episode 中创建的目标。
 
 ## DowntownWest 已确认部署
 
@@ -48,12 +54,20 @@ Collection\Binaries\Win64\Collection.exe
 Map argument: DowntownWest
 UnrealCV port: 9068
 Actor: BP_Drone01_2
+Actor scale: [0.1, 0.1, 0.1]
+Startup hide: BP_Character_2, BP_animal_2, BP_BaseCar_2, Sport_2, BP_Drone01_2
 Camera: 0
 Native units per meter: 100
 Yaw offset: -180 deg
 Camera follow: standard_pose
 Blueprint yaw settle: timeout 5 s, tolerance 1 deg
 ```
+
+`blueprint_pose` 中的 `set_cam` 由 camera-owning Actor 接收，数字 camera id 不能
+直接作为 `vbp` Actor id；例如 `vbp 0 set_cam ...` 在 DowntownWest 会明确返回找
+不到 Actor。当前 Collection 二进制还会对
+`vbp BP_Drone01_2 set_cam/set_viewport` 返回成功但不移动 camera 0/1，因此
+DowntownWest 不能选择该策略，必须使用已验证的 `standard_pose` 同步 capture camera。
 
 `Collection\Binaries\Win64\unrealcv.ini`中的 `Port`必须与 MapPackage 的
 `unrealcv.port`一致。通用底层不会修改打包环境目录中的 ini 文件。
@@ -160,19 +174,32 @@ UAV-Flow 后续迁移时，Benchmark 仍负责 case 场景设置；它只把飞�
 
 ### Blueprint 命令错误
 
-只有地图明确提供对应扩展时才使用 `blueprint_yaw`或`blueprint_pose`。可以直接写
-UnrealCV camera 的地图使用 `camera_follow=standard_pose`；已经自动跟随 Actor 的
-地图选择 `none`。
+只有地图明确提供对应扩展时才使用`blueprint_yaw`或`blueprint_pose`。可以直接写
+UnrealCV camera 的地图使用`camera_follow=standard_pose`；已经自动跟随 Actor 的
+地图选择`none`。
 
-DowntownWest 的 `set_rotation` Blueprint 接收 canonical yaw，并在 UE 内部逐步插值。
-Backend 会等待 Actor readback 达到 `yaw_tolerance_deg`，不会在命令刚发出时返回一个
-尚未实现的目标 pose。
+DowntownWest 的 `set_rotation` Blueprint 在命令侧需要地图配置的
+`yaw_offset_deg`，并在 UE 内部继续完成 mesh 朝向修正和逐步插值。完成后的 Actor
+readback 是相机物理 yaw，Backend 将其作为 canonical yaw，并等待 readback 达到
+`yaw_tolerance_deg`，不会在命令刚发出时返回尚未实现的目标 pose。
 
 ### 有连接但画面不变
 
 检查 `summary.json`中的 command、artifact 和 capture group，再查看
 `scenes/<id>/process.log`。Backend 允许合法暗场景；`--require-visual`才会把恒定
 画面视为实机验收失败。
+
+### RGB 出现第一人称手臂或无人机机身
+
+先对照旧环境初始化和最终 `get_image` 调用，而不是只看 Actor 的 camera 声明。
+DowntownWest 的 Drone 配置声明 camera 1，但旧 batch 最终采集 camera 0。它的
+`vbp 0 set_cam` 返回错误且旧客户端未校验；当前 Backend 不继承这个无效成功，而是
+用 `standard_pose` 将 camera 0 对齐到受控 Actor。旧 Gym
+会先把主 Actor scale 设置为`[0.1, 0.1, 0.1]`，并移除非 drone 的默认人物、
+动物和车辆 Pawn。当前 Backend 为保持固定 camera id，不销毁 camera-owning Pawn，
+而是通过`startup.hide_objects`隐藏相同的默认 mesh，并隐藏自机 mesh。确认
+MapPackage 同时声明正确的`actor.scale`和`startup.hide_objects`，再通过真实
+Turn、Move、Approach 首帧及动作帧验证构图。
 
 ## 最近一次真实结果
 

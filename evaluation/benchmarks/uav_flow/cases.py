@@ -121,6 +121,7 @@ def load_classification(path: str | Path) -> dict[str, list[str]]:
 def load_cases(
     uav_flow_repo_path: str | Path,
     *,
+    case_ids: tuple[str, ...] | list[str] | None = None,
     classes: list[str] | None = None,
     limit_per_class: int | None = None,
     instruction_field: str = DEFAULT_INSTRUCTION_FIELD,
@@ -132,8 +133,38 @@ def load_cases(
     repo = Path(uav_flow_repo_path)
     test_dir = Path(test_jsons_path) if test_jsons_path else repo / "test_jsons"
     classified_path = Path(classified_instr_path) if classified_instr_path else repo / "classified_instr.json"
+    by_class = (
+        load_classification(classified_path)
+        if classified_path.exists()
+        else {}
+    )
+    if case_ids is not None:
+        normalized_ids = _validate_case_ids(case_ids)
+        missing = [
+            case_id
+            for case_id in normalized_ids
+            if not (test_dir / f"{case_id}.json").is_file()
+        ]
+        if missing:
+            raise ValueError(
+                "UAV-Flow case_ids not found under "
+                f"{test_dir}: {', '.join(missing)}"
+            )
+        class_by_file = {
+            file_name: class_name
+            for class_name, file_names in by_class.items()
+            for file_name in file_names
+        }
+        return [
+            UavFlowCase.from_file(
+                test_dir / f"{case_id}.json",
+                class_name=class_by_file.get(f"{case_id}.json"),
+                instruction_field=instruction_field,
+            )
+            for case_id in normalized_ids
+        ]
+
     if classified_path.exists():
-        by_class = load_classification(classified_path)
         wanted_classes = classes or list(by_class)
         cases: list[UavFlowCase] = []
         for class_name in wanted_classes:
@@ -156,6 +187,29 @@ def load_cases(
     if limit_per_class is not None:
         file_paths = file_paths[: max(0, int(limit_per_class))]
     return [UavFlowCase.from_file(path, instruction_field=instruction_field) for path in file_paths]
+
+
+def _validate_case_ids(
+    case_ids: tuple[str, ...] | list[str],
+) -> tuple[str, ...]:
+    """Keep the loader safe when called without ``UavFlowEvalConfig``."""
+
+    normalized = tuple(str(item).strip() for item in case_ids)
+    if not normalized or any(not item for item in normalized):
+        raise ValueError("case_ids must contain non-empty dataset case stems")
+    invalid = [
+        item
+        for item in normalized
+        if item.endswith(".json") or "/" in item or "\\" in item
+    ]
+    if invalid:
+        raise ValueError(
+            "case_ids must use file-name stems without paths or .json: "
+            + ", ".join(invalid)
+        )
+    if len(set(normalized)) != len(normalized):
+        raise ValueError("case_ids must be unique")
+    return normalized
 
 
 def _float_list(value: Any) -> list[float]:
@@ -193,4 +247,3 @@ def _optional_int(value: Any) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
-

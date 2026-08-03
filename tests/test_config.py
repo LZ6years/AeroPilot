@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,9 @@ from src.runtime.configs.action_config import UavActionConfig, load_uav_action_c
 from src.runtime.configs.safety_config import UavSafetyConfig, load_uav_safety_config
 from src.runtime.configs.stabilization_config import UavStabilizationConfig, load_uav_stabilization_config
 from src.runtime.configs.map_config import load_map_config
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_load_map_config_valid(tmp_path):
@@ -96,6 +100,27 @@ def test_load_map_config_accepts_unrealcv_package(tmp_path):
     assert maps[0].provider == "packaged_unreal"
     assert maps[0].control_protocol == "unrealcv"
     assert maps[0].unrealcv["port"] == 9010
+
+
+def test_unrealcv_actor_example_uses_verified_uav_flow_camera_contract():
+    maps, _ = load_map_config(
+        REPO_ROOT / "configs" / "maps" / "unrealcv_actor_control.example.json"
+    )
+
+    actor = maps[0].unrealcv["actor"]
+    assert maps[0].unrealcv["camera_id"] == 0
+    assert actor["name"] not in maps[0].unrealcv["startup"]["hide_objects"]
+    assert actor["rotation_method"] == "blueprint_yaw"
+    assert actor["camera_follow"] == "standard_pose"
+    assert actor["camera_validation"] == {
+        "enabled": True,
+        "position_mode": "max_distance",
+        "expected_body_offset_m": [0.0, 0.0, 0.0],
+        "position_tolerance_m": 0.05,
+        "max_distance_m": 1.5,
+        "yaw_tolerance_deg": 1.0,
+    }
+    assert actor["yaw_offset_deg"] == -180.0
 
 
 def test_load_map_config_accepts_existing_remote_process(tmp_path):
@@ -228,6 +253,8 @@ def test_load_uav_stabilization_config_defaults_when_file_missing(tmp_path):
     config = load_uav_stabilization_config(tmp_path / "missing.json")
 
     assert config == UavStabilizationConfig()
+    with pytest.raises(ValueError, match="finite non-negative"):
+        UavStabilizationConfig(initialization_min_settle_sec=-0.1)
 
 
 def test_load_uav_stabilization_config_reads_runtime_wait_policy(tmp_path):
@@ -239,6 +266,7 @@ def test_load_uav_stabilization_config_reads_runtime_wait_policy(tmp_path):
                 "velocity_threshold_mps": 0.2,
                 "timeout_sec": 4.5,
                 "poll_interval_sec": 0.1,
+                "initialization_min_settle_sec": 3.5,
                 "zero_velocity_brake_duration_sec": 1.5,
                 "hover_after_brake": True,
                 "motion_tools": ["uav.move_body"],
@@ -253,11 +281,13 @@ def test_load_uav_stabilization_config_reads_runtime_wait_policy(tmp_path):
     assert config.velocity_threshold_mps == 0.2
     assert config.timeout_sec == 4.5
     assert config.poll_interval_sec == 0.1
+    assert config.initialization_min_settle_sec == 3.5
     assert config.zero_velocity_brake_duration_sec == 1.5
     assert config.hover_after_brake is True
     assert config.hover_before_wait is True
     assert config.motion_tools == {"uav.move_body"}
     assert config.to_dict()["hover_after_brake"] is True
+    assert config.to_dict()["initialization_min_settle_sec"] == 3.5
     assert config.to_dict()["motion_tools"] == ["uav.move_body"]
 
 
