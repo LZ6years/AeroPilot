@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -42,7 +43,26 @@ def main() -> int:
             "the deployment MapPackage"
         ),
     )
+    parser.add_argument(
+        "--probe-pose-canonical",
+        default=None,
+        type=_parse_canonical_pose,
+        help=(
+            "Optional safe map pose as x,y,z,yaw_deg,pitch_deg,roll_deg in "
+            "the canonical positive-up frame. Use a dataset start pose when "
+            "the packaged map's origin is not a renderable camera location."
+        ),
+    )
+    parser.add_argument(
+        "--pose-settle-sec",
+        type=float,
+        default=1.0,
+        help="Settle time after applying an explicit probe pose.",
+    )
     args = parser.parse_args()
+    probe_pose = args.probe_pose_canonical
+    if args.pose_settle_sec < 0:
+        parser.error("--pose-settle-sec must be non-negative")
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = Path(args.run_root) / run_id
@@ -86,7 +106,17 @@ def main() -> int:
     )
     report: dict = {
         "scene": scene_payload,
+        "deployment": {
+            "map_id": selected.map_id,
+            "scene_id": selected.scene_id,
+            "executable": selected.launch.get("linux_executable"),
+            "remote_endpoint": {
+                "host": selected.airsim.get("remote_host", "127.0.0.1"),
+                "port": selected.airsim.get("port"),
+            },
+        },
         "settings": {
+            "source_path": selected.airsim.get("settings_template"),
             "rendered_sha256": scene.settings_sha256,
             "source_sha256_before": (
                 _sha256(source_settings) if source_settings.is_file() else None
@@ -95,12 +125,29 @@ def main() -> int:
         "cleanup": {},
     }
     settings_mismatch: str | None = None
+    cleanup_mismatch: str | None = None
     try:
+        if scene.process_ownership == "external":
+            raise AssertionError(
+                "Remote probe refuses to exercise an external AirSim process"
+            )
         connected = client.execute_action(
             scene.scene_instance_id, "Drone_1", "connect", {}
         )
         if not connected.ok:
             raise RuntimeError(connected.message)
+        initial_pose_result = None
+        if probe_pose is not None:
+            initial_pose_result = client.execute_action(
+                scene.scene_instance_id,
+                "Drone_1",
+                "set_pose",
+                probe_pose,
+            )
+            if not initial_pose_result.ok:
+                raise RuntimeError(initial_pose_result.message)
+            if args.pose_settle_sec:
+                time.sleep(args.pose_settle_sec)
         before = client.get_observation(
             scene.scene_instance_id,
             "Drone_1",
@@ -109,7 +156,28 @@ def main() -> int:
         raw_before = RawObservation.from_env_observation(
             before, source="remote_probe_before"
         )
+        # Persist the earliest control/readback evidence before validating
+        # pixels so a failed real-engine gate still explains whether set_pose
+        # reached AirSim and which pose the camera reported.
+        report.update(
+            {
+                "connect": connected.to_dict(),
+                "probe_pose_canonical": probe_pose,
+                "initial_pose_result": (
+                    initial_pose_result.to_dict()
+                    if initial_pose_result is not None
+                    else None
+                ),
+                "before": before.to_dict(),
+            }
+        )
         _validate_frames(raw_before.frames)
+        report["frame_contract"] = _validate_dimensions(
+            raw_before.frames,
+            source_settings,
+            vehicle_name=str(selected.airsim["vehicle_name"]),
+            camera_name=str(selected.airsim["camera_name"]),
+        )
         initial = _pose_args(raw_before.pose)
 
         moved = client.execute_action(
@@ -157,6 +225,21 @@ def main() -> int:
             )
 
         reset_scene = client.reset_scene(scene.scene_instance_id)
+        reset_pose_result = None
+        if probe_pose is not None:
+            # AirSim reset returns the ComputerVision vehicle to the map
+            # origin, which is not guaranteed to be a renderable camera pose.
+            # Reapply the verified episode pose before validating capture.
+            reset_pose_result = client.execute_action(
+                scene.scene_instance_id,
+                "Drone_1",
+                "set_pose",
+                initial,
+            )
+            if not reset_pose_result.ok:
+                raise RuntimeError(reset_pose_result.message)
+            if args.pose_settle_sec:
+                time.sleep(args.pose_settle_sec)
         after_reset = client.get_observation(
             scene.scene_instance_id, "Drone_1", ["rgb", "depth", "pose"]
         )
@@ -166,8 +249,6 @@ def main() -> int:
         _validate_frames(raw_after_reset.frames)
         report.update(
             {
-                "connect": connected.to_dict(),
-                "before": before.to_dict(),
                 "move": moved.to_dict(),
                 "after_move": after_move.to_dict(),
                 "displacement_m": displacement,
@@ -175,6 +256,11 @@ def main() -> int:
                 "after_restore": after_restore.to_dict(),
                 "restore_error_m": restore_error,
                 "reset": reset_scene.to_dict(),
+                "reset_pose_result": (
+                    reset_pose_result.to_dict()
+                    if reset_pose_result is not None
+                    else None
+                ),
                 "after_reset": after_reset.to_dict(),
             }
         )
@@ -192,6 +278,22 @@ def main() -> int:
                 "error_type": type(exc).__name__,
                 "error": str(exc),
             }
+        if (
+            selected.connection_mode == "remote"
+            and scene.process_ownership == "remote_managed"
+        ):
+            try:
+                released = _remote_port_released(service, selected)
+                report["cleanup"]["remote_port_released"] = released
+                if not released:
+                    cleanup_mismatch = (
+                        "Remote AirSim port remains reachable after cleanup"
+                    )
+            except Exception as exc:
+                report["cleanup"]["port_verification_error"] = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+                cleanup_mismatch = "Remote AirSim port release was not verified"
         if (
             selected.connection_mode == "remote"
             and selected.airsim.get("settings_template_source") == "remote"
@@ -226,6 +328,8 @@ def main() -> int:
         print(json.dumps({"run_dir": str(run_dir), **report}, indent=2, ensure_ascii=False))
         if settings_mismatch is not None:
             raise AssertionError(settings_mismatch)
+        if cleanup_mismatch is not None:
+            raise AssertionError(cleanup_mismatch)
 
 
 def _pose_args(pose: dict) -> dict[str, float | bool]:
@@ -238,6 +342,38 @@ def _pose_args(pose: dict) -> dict[str, float | bool]:
         "pitch_deg": math.degrees(float(euler.get("pitch", 0.0))),
         "roll_deg": math.degrees(float(euler.get("roll", 0.0))),
         "yaw_deg": math.degrees(float(euler.get("yaw", 0.0))),
+        "ignore_collision": True,
+    }
+
+
+def _parse_canonical_pose(
+    value: str | None,
+) -> dict[str, float | bool] | None:
+    """Parse an explicit reusable map pose without benchmark coupling."""
+
+    if value is None:
+        return None
+    parts = [part.strip() for part in value.split(",")]
+    if len(parts) != 6:
+        raise argparse.ArgumentTypeError(
+            "probe pose must contain x,y,z,yaw_deg,pitch_deg,roll_deg"
+        )
+    try:
+        numbers = [float(part) for part in parts]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(
+            "probe pose values must be numeric"
+        ) from exc
+    if not all(math.isfinite(number) for number in numbers):
+        raise argparse.ArgumentTypeError("probe pose values must be finite")
+    x, y, z, yaw, pitch, roll = numbers
+    return {
+        "x": x,
+        "y": y,
+        "z": z,
+        "yaw_deg": yaw,
+        "pitch_deg": pitch,
+        "roll_deg": roll,
         "ignore_collision": True,
     }
 
@@ -289,6 +425,64 @@ def _validate_frames(frames: dict) -> None:
         raise AssertionError(
             f"Depth artifact is constant: std={float(depth_values.std()):.9f}"
         )
+
+
+def _validate_dimensions(
+    frames: dict,
+    settings_path: Path,
+    *,
+    vehicle_name: str,
+    camera_name: str,
+) -> dict[str, list[int]]:
+    settings = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+    captures = settings["Vehicles"][vehicle_name]["Cameras"][camera_name][
+        "CaptureSettings"
+    ]
+    expected = {
+        str(item["ImageType"]): [int(item["Width"]), int(item["Height"])]
+        for item in captures
+    }
+    actual = {
+        "rgb": [
+            int(frames["rgb"]["width"]),
+            int(frames["rgb"]["height"]),
+        ],
+        "depth": [
+            int(frames["depth"]["width"]),
+            int(frames["depth"]["height"]),
+        ],
+    }
+    if actual["rgb"] != expected.get("0"):
+        raise AssertionError(
+            f"RGB dimensions {actual['rgb']} do not match settings "
+            f"{expected.get('0')}"
+        )
+    if actual["depth"] != expected.get("2"):
+        raise AssertionError(
+            f"Depth dimensions {actual['depth']} do not match settings "
+            f"{expected.get('2')}"
+        )
+    return actual
+
+
+def _remote_port_released(service, package) -> bool:
+    target = service.remote_scene_control.target(package)
+    output = service.remote_scene_control.runner.run(
+        target,
+        [
+            "python3",
+            "-c",
+            (
+                "import json,socket,sys; "
+                "s=socket.socket(); s.settimeout(0.5); "
+                "r=s.connect_ex((sys.argv[1],int(sys.argv[2]))); s.close(); "
+                "print(json.dumps({'listening':r==0}))"
+            ),
+            str(package.airsim.get("remote_host", "127.0.0.1")),
+            str(package.airsim["port"]),
+        ],
+    )
+    return not bool(json.loads(output.strip().splitlines()[-1])["listening"])
 
 
 def _sha256(path: Path) -> str:

@@ -283,6 +283,42 @@ def test_ready_remote_scene_attaches_without_owning_external_ue(
     assert remote.tunnel.closed
 
 
+def test_ready_remote_scene_rejects_external_process_when_fresh_required(
+    tmp_path,
+):
+    template = _template(tmp_path)
+    package = _package("remote_air", "remote", "airsim", template)
+    package.launch["existing_process_policy"] = "reject"
+    registry = BackendRegistry()
+    registry.register("airsim", lambda context: ReadyBackend())
+    remote = AttachRemoteControl()
+    service = SimulationServer(
+        [package],
+        PortPolicy(control_port_start=35001, max_scene_num=1),
+        run_dir=tmp_path / "run",
+        execution_mode=SimulationExecutionMode.MANAGED,
+        remote_scene_control=remote,  # type: ignore[arg-type]
+        backend_registry=registry,
+    )
+
+    with pytest.raises(ConnectionError, match="fresh managed process"):
+        SimulatorEnvClient(service).start_scene("remote_air")
+
+    assert remote.starts == 0
+    assert remote.stops == 0
+    assert remote.tunnel.closed
+
+
+def test_map_package_rejects_unknown_existing_process_policy(tmp_path):
+    template = _template(tmp_path)
+    package = _package("remote_air", "remote", "airsim", template)
+    payload = package.to_dict()
+    payload["launch"]["existing_process_policy"] = "replace"
+
+    with pytest.raises(ValueError, match="existing_process_policy"):
+        MapPackage.from_dict(payload)
+
+
 class TunnelProcess:
     def __init__(self, command):
         self.command = command

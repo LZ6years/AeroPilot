@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -13,10 +14,19 @@ from evaluation.benchmarks.aerial_vln.adapter import (
 )
 from evaluation.benchmarks.aerial_vln.cases import (
     AerialVlnCase,
-    load_aerial_vln_cases,
+    AerialVlnDatasetProvenance,
+    load_aerial_vln_dataset,
 )
-from evaluation.benchmarks.aerial_vln.config import AerialVlnEvalConfig
+from evaluation.benchmarks.aerial_vln.config import (
+    AerialVlnEvalConfig,
+    aerial_vln_split_label,
+)
 from evaluation.benchmarks.aerial_vln.metrics import AerialVlnMetricSuite
+from evaluation.benchmarks.aerial_vln.selection import (
+    AerialVlnCaseSelection,
+    AerialVlnDifficultyAssignment,
+    classify_and_select_aerial_vln_cases,
+)
 from evaluation.benchmarks.core import (
     BenchmarkAuditReader,
     BenchmarkCaseReview,
@@ -53,12 +63,35 @@ from src.sim_server.execution import SimulationExecutionMode
 from src.sim_server.server import SimulationServer
 
 
+@dataclass(frozen=True)
+class PreparedAerialVlnEvaluation:
+    """Dataset classification plus simulator-readiness diagnostics."""
+
+    cases: tuple[AerialVlnCase, ...]
+    provenance: AerialVlnDatasetProvenance
+    selection: AerialVlnCaseSelection
+    execution_readiness: dict[str, Any]
+
+    def validation_dict(self) -> dict[str, Any]:
+        difficulty_assignment, case_selection = (
+            _dataset_bound_selection_artifacts(self)
+        )
+        return {
+            "dataset_provenance": self.provenance.to_dict(),
+            "difficulty_assignment": difficulty_assignment,
+            "case_selection": case_selection,
+            "execution_readiness": dict(self.execution_readiness),
+        }
+
+
 class AerialVlnBenchmarkRunner:
     """AerialVLN benchmark composition over the shared executor."""
 
     def __init__(self, config: AerialVlnEvalConfig) -> None:
         self.config = config
-        self.model_config = load_model_config(config.env_path)
+        # Dataset-only validation must not read model credentials or construct
+        # model clients. Runtime creation resolves this lazily.
+        self._loaded_model_config: Any | None = None
         self.action_config = _action_config(config)
         self.safety_config = _safety_config(config)
         self.map_packages, self.port_policy = load_map_config(
@@ -73,7 +106,6 @@ class AerialVlnBenchmarkRunner:
             else ObservationProfile()
         )
         self._case_reviews: dict[str, BenchmarkCaseReview] = {}
-        self._validate_review_config()
         if self.observation_profile.modalities != (
             "rgb",
             "depth",
@@ -83,34 +115,154 @@ class AerialVlnBenchmarkRunner:
                 "AerialVLN v1 requires observation modalities "
                 "rgb, depth, pose"
             )
-        self._validate_scene_map()
 
     def load_cases(self) -> list[AerialVlnCase]:
-        cases = load_aerial_vln_cases(
+        """Return the selected, execution-ready evaluation cases."""
+
+        return list(
+            self.prepare_evaluation(
+                require_execution_ready=True
+            ).cases
+        )
+
+    def prepare_evaluation(
+        self, *, require_execution_ready: bool
+    ) -> PreparedAerialVlnEvaluation:
+        """Load the full split, classify it, and inspect scene routing."""
+
+        population, provenance = load_aerial_vln_dataset(
             self.config.dataset_root,
             self.config.split,
-            max_cases=self.config.max_cases,
-            scene_filter=self.config.scene_filter,
+            dataset_family=self.config.dataset_family,
+            dataset_version=self.config.dataset_version,
         )
-        unknown = sorted(
-            {
-                case.scene_id
-                for case in cases
-                if case.scene_id not in self.config.scene_map
-            }
-        )
-        if unknown:
+        expected_sha256 = self.config.expected_split_sha256
+        if (
+            expected_sha256 is not None
+            and provenance.split_sha256 != expected_sha256
+        ):
             raise ValueError(
-                "AerialVLN scenes have no scene_map entry: "
-                + ", ".join(unknown)
+                "AerialVLN split SHA256 mismatch: expected "
+                f"{expected_sha256}, got {provenance.split_sha256}"
             )
-        return cases
+
+        # Legacy AerialVLN configs retain their historical filters. AerialVLN-S
+        # config validation forbids both so global thresholds always see the
+        # complete population of exactly one selected split.
+        selected_population = population
+        if self.config.scene_filter:
+            allowed = set(self.config.scene_filter)
+            selected_population = [
+                case
+                for case in selected_population
+                if case.scene_id in allowed
+            ]
+        if self.config.max_cases is not None:
+            selected_population = selected_population[
+                : max(0, self.config.max_cases)
+            ]
+
+        cases, selection = classify_and_select_aerial_vln_cases(
+            selected_population,
+            difficulties=self.config.difficulties,
+            limit_per_difficulty=(
+                self.config.limit_per_difficulty
+            ),
+        )
+        if not cases:
+            raise ValueError(
+                "AerialVLN difficulty selection produced no cases"
+            )
+        readiness = self._execution_readiness(selection.selected_scene_ids)
+        prepared = PreparedAerialVlnEvaluation(
+            cases=tuple(cases),
+            provenance=provenance,
+            selection=selection,
+            execution_readiness=readiness,
+        )
+        if require_execution_ready:
+            self._validate_dataset_for_execution(prepared)
+            if not readiness["ready"]:
+                raise ValueError(
+                    "AerialVLN selected scenes are not execution-ready: "
+                    + json.dumps(
+                        readiness,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                )
+        return prepared
+
+    def _model_config(self) -> Any:
+        if self._loaded_model_config is None:
+            self._loaded_model_config = load_model_config(
+                self.config.env_path
+            )
+        return self._loaded_model_config
+
+    def validate(self, *, eval_id: str | None = None) -> dict[str, Any]:
+        """Persist offline classification without constructing Runtime."""
+
+        prepared = self.prepare_evaluation(
+            require_execution_ready=False
+        )
+        eval_dir = _create_eval_dir(self.config.output_dir, eval_id)
+        paths = _write_preparation_artifacts(eval_dir, prepared)
+        return {
+            **prepared.validation_dict(),
+            "eval_dir": str(eval_dir),
+            "validation_paths": paths,
+        }
 
     def run(self, *, eval_id: str | None = None) -> dict[str, Any]:
-        cases = self.load_cases()
+        self._validate_review_config()
+        prepared = self.prepare_evaluation(
+            require_execution_ready=True
+        )
+        split_label = aerial_vln_split_label(self.config.split)
         eval_dir = _create_eval_dir(self.config.output_dir, eval_id)
-        results = [self.run_case(case, eval_dir) for case in cases]
+        preparation_paths = _write_preparation_artifacts(
+            eval_dir, prepared
+        )
+        assignments = prepared.selection.assignment_by_episode
+        results: list[dict[str, Any]] = []
+        abort_reason: dict[str, Any] | None = None
+        for case in prepared.cases:
+            result = self.run_case(
+                case,
+                eval_dir,
+                assignment=assignments[case.episode_id],
+                provenance=prepared.provenance,
+            )
+            results.append(result)
+            if (
+                self.config.abort_on_infrastructure_error
+                and result.get("infrastructure_error")
+            ):
+                abort_reason = {
+                    "episode_id": case.episode_id,
+                    **dict(result["infrastructure_error"]),
+                }
+                break
         summary = _summary(results)
+        summary.update(
+            {
+                "batch_status": (
+                    "aborted" if abort_reason is not None else "completed"
+                ),
+                "abort_reason": abort_reason,
+                "requested_case_count": len(prepared.cases),
+                "completed_case_count": len(results),
+                "dataset": prepared.provenance.to_dict(),
+                "dataset_split_label": split_label,
+                "difficulty_selection": (
+                    prepared.selection.to_dict()
+                ),
+                "execution_readiness": (
+                    prepared.execution_readiness
+                ),
+            }
+        )
         _write_json(eval_dir / "summary.json", summary)
         (eval_dir / "summary.md").write_text(
             _summary_markdown(summary), encoding="utf-8"
@@ -119,7 +271,11 @@ class AerialVlnBenchmarkRunner:
             "benchmark": "aerial_vln",
             "protocol_variant": AERIAL_VLN_PROTOCOL,
             "dataset_split": self.config.split,
+            "dataset_split_label": split_label,
             "dataset_version": self.config.dataset_version,
+            "dataset": prepared.provenance.to_dict(),
+            "difficulty_selection": prepared.selection.to_dict(),
+            "execution_readiness": prepared.execution_readiness,
             "upstream_reference_commit": (
                 self.config.upstream_reference_commit
             ),
@@ -131,6 +287,10 @@ class AerialVlnBenchmarkRunner:
             "initialization_min_settle_sec": (
                 self.config.initialization_min_settle_sec
             ),
+            "batch_status": summary["batch_status"],
+            "abort_reason": summary["abort_reason"],
+            "requested_case_count": summary["requested_case_count"],
+            "completed_case_count": summary["completed_case_count"],
             "case_count": len(results),
         }
         _write_json(eval_dir / "manifest.json", manifest)
@@ -141,7 +301,55 @@ class AerialVlnBenchmarkRunner:
                 BenchmarkSummaryReview(
                     benchmark_name="AerialVLN",
                     protocol_variant=AERIAL_VLN_PROTOCOL,
-                    metrics=dict(summary.get("metrics") or {}),
+                    metrics={
+                        **dict(summary.get("metrics") or {}),
+                        "dataset_family": (
+                            prepared.provenance.dataset_family
+                        ),
+                        "dataset_split": prepared.provenance.split,
+                        "dataset_split_label": split_label,
+                        "split_sha256": (
+                            prepared.provenance.split_sha256
+                        ),
+                        "difficulty_q33_m": prepared.selection.q33_m,
+                        "difficulty_q67_m": prepared.selection.q67_m,
+                        "population_scene_count": len(
+                            prepared.selection.population_scene_ids
+                        ),
+                        "selected_scene_count": len(
+                            prepared.selection.selected_scene_ids
+                        ),
+                        "ready_scene_count": len(
+                            prepared.execution_readiness[
+                                "ready_scene_ids"
+                            ]
+                        ),
+                        "missing_scenes": ", ".join(
+                            prepared.execution_readiness[
+                                "missing_scenes"
+                            ]
+                        )
+                        or "none",
+                        "batch_status": summary["batch_status"],
+                        "requested_case_count": summary[
+                            "requested_case_count"
+                        ],
+                        "completed_case_count": summary[
+                            "completed_case_count"
+                        ],
+                        **{
+                            f"population_{label}": count
+                            for label, count in (
+                                prepared.selection.bucket_counts.items()
+                            )
+                        },
+                        **{
+                            f"selected_{label}": count
+                            for label, count in (
+                                prepared.selection.selected_counts.items()
+                            )
+                        },
+                    },
                     cases=tuple(
                         {
                             "case_id": item.get("episode_id"),
@@ -165,12 +373,18 @@ class AerialVlnBenchmarkRunner:
                 "summary_json": str(eval_dir / "summary.json"),
                 "summary_md": str(eval_dir / "summary.md"),
                 "manifest": str(eval_dir / "manifest.json"),
+                **preparation_paths,
                 **review_paths,
             },
         }
 
     def run_case(
-        self, case: AerialVlnCase, eval_dir: str | Path
+        self,
+        case: AerialVlnCase,
+        eval_dir: str | Path,
+        *,
+        assignment: AerialVlnDifficultyAssignment | None = None,
+        provenance: AerialVlnDatasetProvenance | None = None,
     ) -> dict[str, Any]:
         case_dir = Path(eval_dir) / "cases" / case.episode_id
         case_dir.mkdir(parents=True, exist_ok=True)
@@ -242,6 +456,13 @@ class AerialVlnBenchmarkRunner:
                 outcome["status"] = "error"
                 outcome["error"] = metric_error
 
+        infrastructure_error = _infrastructure_error(
+            execution=execution,
+            setup_error=setup_error,
+            outcome=outcome,
+            capabilities=capabilities,
+        )
+
         trajectory = {
             "coordinate_frame": "airsim_ned_m",
             "samples": metrics.get("trajectory_ned", []),
@@ -253,11 +474,24 @@ class AerialVlnBenchmarkRunner:
             "episode_id": case.episode_id,
             "trajectory_id": case.trajectory_id,
             "scene_id": case.scene_id,
+            "dataset_split": self.config.split,
+            "dataset_split_label": aerial_vln_split_label(
+                self.config.split
+            ),
+            "difficulty": (
+                assignment.difficulty if assignment is not None else None
+            ),
+            "reference_path_length_m": (
+                assignment.reference_path_length_m
+                if assignment is not None
+                else None
+            ),
             "protocol_variant": AERIAL_VLN_PROTOCOL,
             "run_dir": str(run_dir),
             **outcome,
             "metrics": metrics,
             "metric_error": metric_error,
+            "infrastructure_error": infrastructure_error,
             "scene_capabilities": capabilities,
             "observation_profile": self.observation_profile.to_dict(),
             "audit_path": audit_path,
@@ -270,7 +504,20 @@ class AerialVlnBenchmarkRunner:
             case_dir / "manifest.json",
             {
                 "dataset_split": self.config.split,
+                "dataset_split_label": aerial_vln_split_label(
+                    self.config.split
+                ),
                 "dataset_version": self.config.dataset_version,
+                "dataset": (
+                    provenance.to_dict()
+                    if provenance is not None
+                    else None
+                ),
+                "difficulty": (
+                    assignment.to_dict()
+                    if assignment is not None
+                    else None
+                ),
                 "upstream_reference_commit": (
                     self.config.upstream_reference_commit
                 ),
@@ -306,10 +553,47 @@ class AerialVlnBenchmarkRunner:
                 key: value
                 for key, value in metrics.items()
                 if key not in {"trajectory_ned", "reference_path_ned"}
+            }
+            | {
+                "difficulty": (
+                    assignment.difficulty
+                    if assignment is not None
+                    else None
+                ),
+                "reference_path_length_m": (
+                    assignment.reference_path_length_m
+                    if assignment is not None
+                    else None
+                ),
             },
             audit=audit,
             frame_assets=frame_assets,
             sections=(
+                ReviewSection(
+                    "Dataset And Difficulty",
+                    "key_value",
+                    {
+                        "dataset_family": (
+                            provenance.dataset_family
+                            if provenance is not None
+                            else self.config.dataset_family
+                        ),
+                        "dataset_split": self.config.split,
+                        "dataset_split_label": aerial_vln_split_label(
+                            self.config.split
+                        ),
+                        "difficulty": (
+                            assignment.difficulty
+                            if assignment is not None
+                            else None
+                        ),
+                        "reference_path_length_m": (
+                            assignment.reference_path_length_m
+                            if assignment is not None
+                            else None
+                        ),
+                    },
+                ),
                 ReviewSection(
                     "Trajectory",
                     "key_value",
@@ -337,6 +621,15 @@ class AerialVlnBenchmarkRunner:
             metadata={
                 "trajectory_id": case.trajectory_id,
                 "scene_id": case.scene_id,
+                "dataset_split": self.config.split,
+                "dataset_split_label": aerial_vln_split_label(
+                    self.config.split
+                ),
+                "difficulty": (
+                    assignment.difficulty
+                    if assignment is not None
+                    else None
+                ),
             },
         )
         return {
@@ -352,6 +645,7 @@ class AerialVlnBenchmarkRunner:
         task_parser: Any | None = None,
         planner: Any | None = None,
     ) -> TaskRuntime:
+        model_config = self._model_config()
         backend_registry = None
         if self.config.execution_mode == "dry":
             backend_registry = _dry_airsim_registry()
@@ -378,9 +672,9 @@ class AerialVlnBenchmarkRunner:
             task_parser
             or TaskParser(
                 mode=self.config.parser_mode,
-                model_config=self.model_config,
+                model_config=model_config,
             ),
-            planner=planner or ModelActionPlanner(self.model_config),
+            planner=planner or ModelActionPlanner(model_config),
             safety=SafetySupervisor(self.safety_config),
             shutdown_policy=self.config.shutdown_policy,
             action_config=self.action_config,
@@ -395,30 +689,76 @@ class AerialVlnBenchmarkRunner:
             ),
         )
 
-    def _validate_scene_map(self) -> None:
-        missing = sorted(
-            {
-                map_id
-                for map_id in self.config.scene_map.values()
-                if map_id not in self.map_packages_by_id
-            }
-        )
-        if missing:
-            raise ValueError(
-                "AerialVLN scene_map references missing MapPackages: "
-                + ", ".join(missing)
-            )
-        wrong_scene = sorted(
+    def _execution_readiness(
+        self, selected_scene_ids: tuple[str, ...]
+    ) -> dict[str, Any]:
+        missing_scene_map = []
+        missing_map_packages = []
+        mismatched_map_packages = []
+        ready_scene_ids = []
+        for scene_id in selected_scene_ids:
+            map_id = self.config.scene_map.get(scene_id)
+            if map_id is None:
+                missing_scene_map.append(scene_id)
+                continue
+            package = self.map_packages_by_id.get(map_id)
+            if package is None:
+                missing_map_packages.append(
+                    {"scene_id": scene_id, "map_id": map_id}
+                )
+                continue
+            if str(package.scene_id) != str(scene_id):
+                mismatched_map_packages.append(
+                    {
+                        "scene_id": scene_id,
+                        "map_id": map_id,
+                        "map_package_scene_id": str(package.scene_id),
+                    }
+                )
+                continue
+            ready_scene_ids.append(scene_id)
+        missing_scenes = [
             scene_id
-            for scene_id, map_id in self.config.scene_map.items()
-            if str(self.map_packages_by_id[map_id].scene_id)
-            != str(scene_id)
-        )
-        if wrong_scene:
-            raise ValueError(
-                "AerialVLN scene_map keys must match MapPackage scene_id: "
-                + ", ".join(wrong_scene)
-            )
+            for scene_id in selected_scene_ids
+            if scene_id not in ready_scene_ids
+        ]
+        return {
+            "ready": not missing_scenes,
+            "selected_scene_ids": list(selected_scene_ids),
+            "ready_scene_ids": ready_scene_ids,
+            "missing_scenes": missing_scenes,
+            "missing_scene_map": missing_scene_map,
+            "missing_map_packages": missing_map_packages,
+            "mismatched_map_packages": mismatched_map_packages,
+        }
+
+    def _validate_dataset_for_execution(
+        self, prepared: PreparedAerialVlnEvaluation
+    ) -> None:
+        if self.config.dataset_family != "aerialvln-s":
+            return
+        if self.config.execution_mode in {"attach", "managed"}:
+            dataset_version = self.config.dataset_version.strip()
+            if (
+                not dataset_version
+                or dataset_version.lower() == "unspecified"
+            ):
+                raise ValueError(
+                    "Real AerialVLN-S evaluation requires dataset_version"
+                )
+            if self.config.expected_split_sha256 is None:
+                raise ValueError(
+                    "Real AerialVLN-S evaluation requires "
+                    "expected_split_sha256; run --validate-only first"
+                )
+        if (
+            self.config.expected_split_sha256 is not None
+            and prepared.provenance.split_sha256
+            != self.config.expected_split_sha256
+        ):
+            # Kept here as a defensive invariant even though preparation checks
+            # before selection as well.
+            raise ValueError("AerialVLN-S split SHA256 mismatch")
 
     def _validate_review_config(self) -> None:
         """Require persistent evidence for real, portable HTML reviews."""
@@ -477,6 +817,93 @@ def _create_eval_dir(root: str | Path, eval_id: str | None) -> Path:
     return path
 
 
+def _write_preparation_artifacts(
+    eval_dir: Path,
+    prepared: PreparedAerialVlnEvaluation,
+) -> dict[str, str]:
+    difficulty_assignment, case_selection = (
+        _dataset_bound_selection_artifacts(prepared)
+    )
+    artifacts = {
+        "dataset_provenance": (
+            eval_dir / "dataset_provenance.json",
+            prepared.provenance.to_dict(),
+        ),
+        "difficulty_assignment": (
+            eval_dir / "difficulty_assignment.json",
+            difficulty_assignment,
+        ),
+        "case_selection": (
+            eval_dir / "case_selection.json",
+            case_selection,
+        ),
+        "execution_readiness": (
+            eval_dir / "execution_readiness.json",
+            prepared.execution_readiness,
+        ),
+    }
+    for _, (path, payload) in artifacts.items():
+        _write_json(path, payload)
+    return {
+        name: str(path)
+        for name, (path, _) in artifacts.items()
+    }
+
+
+def _dataset_bound_selection_artifacts(
+    prepared: PreparedAerialVlnEvaluation,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Bind split identity to evaluation-only classification artifacts."""
+
+    dataset_identity = {
+        "dataset": prepared.provenance.to_dict(),
+        "dataset_split_label": aerial_vln_split_label(
+            prepared.provenance.split
+        ),
+    }
+    return (
+        {
+            **dataset_identity,
+            **prepared.selection.assignments_dict(),
+        },
+        {
+            **dataset_identity,
+            **prepared.selection.to_dict(),
+        },
+    )
+
+
+def _infrastructure_error(
+    *,
+    execution: Any | None,
+    setup_error: dict[str, Any] | None,
+    outcome: dict[str, Any],
+    capabilities: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Identify failures that make continuing a remote batch unsafe.
+
+    Planner and metric failures can occur after a valid simulator scene is
+    available and remain benchmark results. Failures before capabilities are
+    established, and all cleanup failures, indicate that later episodes could
+    inherit an unknown simulator state.
+    """
+
+    cleanup_errors = list(outcome.get("cleanup_errors") or [])
+    if cleanup_errors:
+        return {"stage": "cleanup", "errors": cleanup_errors}
+    if execution is None:
+        return {
+            "stage": "case_setup",
+            "error": setup_error or outcome.get("error"),
+        }
+    if outcome.get("error") and capabilities is None:
+        return {
+            "stage": "scene_setup",
+            "error": outcome.get("error"),
+        }
+    return None
+
+
 def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     metric_rows = [
         item["metrics"]
@@ -506,10 +933,21 @@ def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "protocol_variant": AERIAL_VLN_PROTOCOL,
         "case_count": len(results),
         "evaluated_count": len(metric_rows),
+        "difficulty_counts": {
+            label: sum(
+                item.get("difficulty") == label for item in results
+            )
+            for label in ("low", "medium", "high")
+        },
         "metrics": aggregates,
         "cases": [
             {
                 "episode_id": item.get("episode_id"),
+                "scene_id": item.get("scene_id"),
+                "difficulty": item.get("difficulty"),
+                "reference_path_length_m": item.get(
+                    "reference_path_length_m"
+                ),
                 "status": item.get("status"),
                 "metrics": item.get("metrics"),
             }
@@ -519,12 +957,39 @@ def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _summary_markdown(summary: dict[str, Any]) -> str:
+    dataset = summary.get("dataset") or {}
+    selection = summary.get("difficulty_selection") or {}
+    thresholds = selection.get("thresholds_m") or {}
+    readiness = summary.get("execution_readiness") or {}
+    split_label = summary.get("dataset_split_label") or dataset.get(
+        "split", "unknown"
+    )
     lines = [
         "# AerialVLN Native-Action Summary",
         "",
         f"- Protocol: `{summary['protocol_variant']}`",
+        "- Dataset: "
+        f"`{dataset.get('dataset_family', 'unknown')} / "
+        f"{dataset.get('split', 'unknown')} / {split_label}`",
+        f"- Split SHA256: `{dataset.get('split_sha256', 'unknown')}`",
+        "- Difficulty thresholds (m): "
+        f"q33={thresholds.get('q33')}, q67={thresholds.get('q67')}",
+        "- Scenes: "
+        f"population={len(dataset.get('scene_ids') or [])}, "
+        f"selected={len(selection.get('selected_scene_ids') or [])}, "
+        f"missing={readiness.get('missing_scenes') or []}",
         f"- Cases: {summary['case_count']}",
+        f"- Batch status: {summary.get('batch_status', 'completed')}",
+        "- Requested/completed: "
+        f"{summary.get('requested_case_count', summary['case_count'])}/"
+        f"{summary.get('completed_case_count', summary['case_count'])}",
+        f"- Abort reason: {summary.get('abort_reason')}",
         f"- Evaluated: {summary['evaluated_count']}",
+        "- Difficulty cases: "
+        + ", ".join(
+            f"{label}={count}"
+            for label, count in summary["difficulty_counts"].items()
+        ),
         "",
         "| Metric | Mean |",
         "|---|---:|",

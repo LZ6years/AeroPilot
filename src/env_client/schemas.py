@@ -262,7 +262,25 @@ class MapPackage:
                         )
                     actor[key] = value
                 unrealcv["actor"] = actor
-        launch = data.get("launch", {})
+        raw_launch = data.get("launch", {})
+        if not isinstance(raw_launch, dict):
+            raise ValueError(
+                f"MapPackage {data['map_id']} requires launch to be an object"
+            )
+        launch = dict(raw_launch)
+        existing_process_policy = str(
+            launch.get("existing_process_policy", "attach")
+        ).strip().lower()
+        if existing_process_policy not in {"attach", "reject"}:
+            raise ValueError(
+                f"MapPackage {data['map_id']} has unsupported "
+                "launch.existing_process_policy: "
+                f"{existing_process_policy}"
+            )
+        # Attaching remains the compatibility default. Benchmarks that require
+        # a provably fresh map can opt into rejection without changing the
+        # public EnvClient method surface.
+        launch["existing_process_policy"] = existing_process_policy
         connection = dict(data.get("connection", {}))
         if not connection.get("mode"):
             raise ValueError(

@@ -85,7 +85,7 @@ sequenceDiagram
 6. AirSim ping 成功则 attach，否则自动上传 Worker 并启动；
 7. 通过 `SimulatorEnvClient.execute_action("connect")`连接；
 8. 获取初始 RGB、Depth、Pose；
-9. 通过 ComputerVision strategy 执行 body-frame 前进 1 米；
+9. 通过 ComputerVision strategy 执行 body-frame 前进 0.5 米；
 10. 再次获取 RGB 和 Pose，验证位移；
 11. 使用 set_pose 恢复初始位姿；
 12. soft reset；
@@ -103,7 +103,7 @@ configs/maps/remote_ssh.example.json
 PowerShell：
 
 ```powershell
-$env:FLYAGENT_SSH_KEY = 'C:\Users\HP\.ssh\id_rsa_npu_wzq'
+$env:FLYAGENT_SSH_KEY = "$env:USERPROFILE\.ssh\id_rsa_npu_wzq"
 
 python tests/manual/remote_ssh_scene_probe.py `
   --config configs/maps/remote_ssh.example.json `
@@ -112,6 +112,9 @@ python tests/manual/remote_ssh_scene_probe.py `
 ```
 
 该 probe 只通过 `SimulatorEnvClient`调用底层，不构造专用 Remote Client。
+正式 AerialVLN-S 使用
+`configs/maps/aerial_vln_s_remote.example.json`，并通过
+`launch.existing_process_policy=reject`拒绝附着到身份未知的已有 scene。
 
 ## 预期输出
 
@@ -120,12 +123,12 @@ runs/manual_remote_ssh_probe/<run-id>/
 ├── map_package.json
 ├── remote_probe_report.json
 ├── scene_instance.json
-├── source-settings.json
-├── rendered-settings.json
-├── initial_rgb.png
-├── initial_depth.npy
-├── after_move_rgb.png
-└── after_move_depth.npy
+├── source.settings.after.json
+├── observation_profile.json
+├── artifacts/
+└── scenes/<scene-instance-id>/
+    ├── source.settings.json
+    └── settings.json
 ```
 
 `remote_probe_report.json`至少记录：
@@ -136,7 +139,9 @@ runs/manual_remote_ssh_probe/<run-id>/
 - settings SHA-256；
 - 初始和最终 pose；
 - 实际 pose delta；
-- reset/stop 结果。
+- reset/stop 结果；
+- RGB/Depth 尺寸与 settings 的一致性；
+- cleanup 后远端 AirSim 端口是否释放。
 
 ## 2026-07-29 实机结果
 
@@ -227,7 +232,7 @@ Backend strict visual acceptance above: PASSED
 没有启动或停止任何远程进程，也没有修改远端 settings。网络/VPN 恢复后可运行：
 
 ```powershell
-$env:FLYAGENT_SSH_KEY = "C:\Users\HP\.ssh\id_rsa_npu_wzq"
+$env:FLYAGENT_SSH_KEY = "$env:USERPROFILE\.ssh\id_rsa_npu_wzq"
 
 python tests/manual/task_runtime_episode_options_probe.py `
   --config configs/maps/remote_ssh.example.json `

@@ -166,6 +166,29 @@ def test_load_map_config_accepts_existing_remote_process(tmp_path):
     assert maps[0].unrealcv["remote_host"] == "127.0.0.1"
 
 
+def test_aerial_vln_remote_map_inventory_covers_all_official_scenes():
+    maps, policy = load_map_config(
+        REPO_ROOT
+        / "configs"
+        / "maps"
+        / "aerial_vln_s_remote.example.json"
+    )
+
+    expected_scene_ids = {
+        *(str(value) for value in range(1, 19)),
+        *(str(value) for value in range(20, 27)),
+    }
+    assert {package.scene_id for package in maps} == expected_scene_ids
+    assert len(maps) == 25
+    assert policy.control_port_start == 35001
+    assert policy.max_scene_num == 1
+    assert all(
+        package.launch["existing_process_policy"] == "reject"
+        for package in maps
+    )
+    assert all(package.airsim["port"] == 30001 for package in maps)
+
+
 def test_load_uav_action_config_defaults_when_file_missing(tmp_path):
     # Verify missing action config files use the built-in fixed action scale.
     config = load_uav_action_config(tmp_path / "missing.json")

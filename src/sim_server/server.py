@@ -226,6 +226,15 @@ class SimulationServer:
             package, "127.0.0.1", local_port
         ).ready
         if protocol_ready:
+            if (
+                package.launch.get("existing_process_policy", "attach")
+                == "reject"
+            ):
+                raise ConnectionError(
+                    f"Remote {package.control_protocol} is already ready at "
+                    f"{remote_host}:{remote_port}, but map "
+                    f"{package.map_id} requires a fresh managed process"
+                )
             return scene, False
 
         remote_status = self.remote_scene_control.remote_port_status(

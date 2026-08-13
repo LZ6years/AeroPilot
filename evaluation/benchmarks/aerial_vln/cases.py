@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
+import math
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -82,6 +84,62 @@ class AerialVlnCase:
         return data
 
 
+@dataclass(frozen=True)
+class AerialVlnDatasetProvenance:
+    """Identity and population summary for one resolved dataset split."""
+
+    dataset_family: str
+    dataset_version: str
+    split: str
+    split_file: str
+    split_sha256: str
+    episode_count: int
+    scene_ids: tuple[str, ...]
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["scene_ids"] = list(self.scene_ids)
+        return data
+
+
+def load_aerial_vln_dataset(
+    dataset_root: str | Path,
+    split: str,
+    *,
+    dataset_family: str = "aerialvln",
+    dataset_version: str = "unspecified",
+) -> tuple[list[AerialVlnCase], AerialVlnDatasetProvenance]:
+    """Load and identify a complete split before evaluation filtering."""
+
+    path = resolve_split_path(dataset_root, split)
+    payload = _read_json(path)
+    episodes = payload.get("episodes") if isinstance(payload, dict) else None
+    if not isinstance(episodes, list):
+        raise ValueError(f"AerialVLN split {path} requires an episodes list")
+    cases = []
+    for index, item in enumerate(episodes):
+        if not isinstance(item, dict):
+            raise ValueError(
+                f"AerialVLN split {path} episode {index} must be an object"
+            )
+        cases.append(AerialVlnCase.from_dict(dict(item)))
+    episode_ids = [case.episode_id for case in cases]
+    if len(set(episode_ids)) != len(episode_ids):
+        raise ValueError(f"AerialVLN split {path} has duplicate episode_id")
+    provenance = AerialVlnDatasetProvenance(
+        dataset_family=dataset_family,
+        dataset_version=dataset_version,
+        split=split,
+        split_file=path.name,
+        split_sha256=_sha256(path),
+        episode_count=len(cases),
+        scene_ids=tuple(
+            sorted({case.scene_id for case in cases}, key=_scene_sort_key)
+        ),
+    )
+    return cases, provenance
+
+
 def load_aerial_vln_cases(
     dataset_root: str | Path,
     split: str,
@@ -91,17 +149,12 @@ def load_aerial_vln_cases(
 ) -> list[AerialVlnCase]:
     """Load one split from JSON or JSON.GZ and apply stable filters."""
 
-    path = resolve_split_path(dataset_root, split)
-    payload = _read_json(path)
-    episodes = payload.get("episodes") if isinstance(payload, dict) else None
-    if not isinstance(episodes, list):
-        raise ValueError(f"AerialVLN split {path} requires an episodes list")
+    cases, _ = load_aerial_vln_dataset(dataset_root, split)
     allowed = {str(value) for value in (scene_filter or ())}
     cases = [
-        AerialVlnCase.from_dict(dict(item))
-        for item in episodes
-        if isinstance(item, dict)
-        and (not allowed or str(item.get("scene_id")) in allowed)
+        case
+        for case in cases
+        if not allowed or case.scene_id in allowed
     ]
     if max_cases is not None:
         cases = cases[: max(0, int(max_cases))]
@@ -134,6 +187,14 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8-sig"))
 
 
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _required_text(data: dict[str, Any], key: str) -> str:
     return _required_value_text(data.get(key), key)
 
@@ -153,9 +214,12 @@ def _fixed_floats(
             f"AerialVLN {label} must contain exactly {length} values"
         )
     try:
-        return tuple(float(item) for item in value)
+        parsed = tuple(float(item) for item in value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"AerialVLN {label} values must be numeric") from exc
+    if not all(math.isfinite(item) for item in parsed):
+        raise ValueError(f"AerialVLN {label} values must be finite")
+    return parsed
 
 
 def _path(value: Any) -> tuple[tuple[float, ...], ...]:
@@ -168,9 +232,21 @@ def _path(value: Any) -> tuple[tuple[float, ...], ...]:
                 "AerialVLN reference_path rows require at least XYZ"
             )
         try:
-            rows.append(tuple(float(item) for item in row))
+            parsed = tuple(float(item) for item in row)
         except (TypeError, ValueError) as exc:
             raise ValueError(
                 "AerialVLN reference_path values must be numeric"
             ) from exc
+        if not all(math.isfinite(item) for item in parsed):
+            raise ValueError(
+                "AerialVLN reference_path values must be finite"
+            )
+        rows.append(parsed)
     return tuple(rows)
+
+
+def _scene_sort_key(value: str) -> tuple[int, int | str]:
+    text = str(value)
+    if text.isdigit():
+        return 0, int(text)
+    return 1, text

@@ -1,4 +1,8 @@
-"""Real airvln_env_1 probe for initial pose, front RGB/depth, and cleanup."""
+"""Real AerialVLN scene probe for pose, front RGB/depth, and cleanup.
+
+This is a low-level MapPackage/Backend gate, not a benchmark result. Dataset
+difficulty selection and full evaluation remain owned by the production runner.
+"""
 
 from __future__ import annotations
 
@@ -14,14 +18,25 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from evaluation.benchmarks.aerial_vln.adapter import AerialVlnCaseAdapter
-from evaluation.benchmarks.aerial_vln.config import AerialVlnEvalConfig
+from evaluation.benchmarks.aerial_vln.cases import load_aerial_vln_dataset
+from evaluation.benchmarks.aerial_vln.config import (
+    AerialVlnEvalConfig,
+    aerial_vln_split_label,
+)
 from evaluation.benchmarks.aerial_vln.metrics import AerialVlnMetricSuite
 from evaluation.benchmarks.aerial_vln.runner import (
     AerialVlnBenchmarkRunner,
 )
 from evaluation.benchmarks.core import (
+    BenchmarkAuditReader,
+    BenchmarkCaseReview,
     BenchmarkEpisodeExecutor,
+    BenchmarkReviewRenderer,
+    BenchmarkSummaryReview,
+    FrameAssetResolver,
     NoopScenarioController,
+    ReviewSection,
+    write_audit_json,
 )
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
@@ -40,16 +55,56 @@ def main() -> int:
             "execution_mode": args.execution_mode,
             "save_artifacts": True,
             "enable_action_planner_debug": True,
-            "max_cases": 1,
-            "scene_filter": ["1"],
         }
     )
     config = AerialVlnEvalConfig.from_dict(data)
     runner = AerialVlnBenchmarkRunner(config)
-    cases = runner.load_cases()
-    if not cases:
-        raise ValueError("No scene_id=1 AerialVLN case is available")
-    case = cases[0]
+    cases, provenance = load_aerial_vln_dataset(
+        config.dataset_root,
+        config.split,
+        dataset_family=config.dataset_family,
+        dataset_version=config.dataset_version,
+    )
+    if (
+        config.expected_split_sha256 is not None
+        and provenance.split_sha256 != config.expected_split_sha256
+    ):
+        raise ValueError("AerialVLN split SHA256 mismatch")
+    if config.dataset_family == "aerialvln-s":
+        if config.expected_split_sha256 is None:
+            raise ValueError(
+                "Real AerialVLN-S probe requires expected_split_sha256"
+            )
+        dataset_version = config.dataset_version.strip()
+        if not dataset_version or dataset_version.lower() == "unspecified":
+            raise ValueError(
+                "Real AerialVLN-S probe requires dataset_version"
+            )
+    candidates = [
+        case
+        for case in cases
+        if case.scene_id == args.scene_id
+        and (
+            args.episode_id is None
+            or case.episode_id == args.episode_id
+        )
+    ]
+    if not candidates:
+        raise ValueError(
+            f"No AerialVLN case is available for scene_id={args.scene_id!r}"
+        )
+    case = candidates[0]
+    map_id = config.scene_map.get(case.scene_id)
+    if map_id is None or map_id not in runner.map_packages_by_id:
+        raise ValueError(
+            f"scene_id={case.scene_id!r} is not execution-ready"
+        )
+    map_package = runner.map_packages_by_id[map_id]
+    if str(map_package.scene_id) != case.scene_id:
+        raise ValueError(
+            f"scene_id={case.scene_id!r} routes to map_id={map_id!r}, "
+            f"whose MapPackage declares scene_id={map_package.scene_id!r}"
+        )
     probe_dir = Path(args.output_dir) / case.episode_id
     probe_dir.mkdir(parents=True, exist_ok=False)
     run_dir = RunStore(probe_dir / "runs").create_run_dir("runtime")
@@ -94,19 +149,22 @@ def main() -> int:
         for item in frames
         if item.get("observation_id") == "obs_0001"
     }
+    capabilities = execution.scene_capabilities or {}
+    expected_control_mode = str(
+        map_package.airsim.get("mode", "Multirotor")
+    )
     checks = {
         "runtime_status_ok": execution.outcome.status == "ok",
         "cleanup_errors_empty": not execution.outcome.cleanup_errors,
         "initial_ned_roundtrip_lte_0_05m": roundtrip_error <= 0.05,
         "front_rgb_depth_present": {"rgb", "depth"}.issubset(modalities),
-        "multirotor_takeoff_capability": bool(
-            execution.scene_capabilities
-            and execution.scene_capabilities.get("requires_takeoff")
-        ),
+        **capability_contract_checks(expected_control_mode, capabilities),
     }
     summary = {
         "status": "passed" if all(checks.values()) else "failed",
         "episode_id": case.episode_id,
+        "dataset": provenance.to_dict(),
+        "dataset_split_label": aerial_vln_split_label(config.split),
         "run_dir": str(run_dir),
         "protocol_variant": episode.protocol_variant,
         "checks": checks,
@@ -114,10 +172,79 @@ def main() -> int:
         "dataset_start_position_ned": list(case.start_position),
         "first_runtime_position_ned": first_ned,
         "observation_profile": runner.observation_profile.to_dict(),
-        "scene_capabilities": execution.scene_capabilities,
+        "scene_capabilities": capabilities,
         "metrics": execution.metrics,
         "metric_error": execution.metric_error,
     }
+    audit = BenchmarkAuditReader().read(execution.audit_cursor)
+    case_dir = probe_dir / "cases" / case.episode_id
+    frame_assets = FrameAssetResolver().materialize(audit, case_dir)
+    summary["audit_path"] = write_audit_json(
+        case_dir / "audit.json", audit, frame_assets
+    )
+    review_paths = BenchmarkReviewRenderer().write(
+        probe_dir,
+        BenchmarkSummaryReview(
+            benchmark_name="AerialVLN Infrastructure Probe",
+            protocol_variant=episode.protocol_variant,
+            metrics={
+                "status": summary["status"],
+                "dataset_split": config.split,
+                "dataset_split_label": aerial_vln_split_label(config.split),
+                "initial_ned_roundtrip_error_m": roundtrip_error,
+            },
+            cases=(
+                {
+                    "case_id": case.episode_id,
+                    "status": summary["status"],
+                    "metrics": checks,
+                },
+            ),
+        ),
+        (
+            BenchmarkCaseReview(
+                case_id=case.episode_id,
+                benchmark_name="AerialVLN Infrastructure Probe",
+                protocol_variant=episode.protocol_variant,
+                instruction=case.instruction,
+                outcome=execution.outcome.to_dict(),
+                metrics={
+                    **checks,
+                    "initial_ned_roundtrip_error_m": roundtrip_error,
+                },
+                audit=audit,
+                frame_assets=frame_assets,
+                sections=(
+                    ReviewSection(
+                        "Probe Contract",
+                        "key_value",
+                        {
+                            "benchmark_result": False,
+                            "dataset_split": config.split,
+                            "dataset_split_label": aerial_vln_split_label(
+                                config.split
+                            ),
+                            "scene_id": case.scene_id,
+                            "map_id": map_id,
+                            "expected_control_mode": expected_control_mode,
+                        },
+                    ),
+                    ReviewSection(
+                        "Coordinate Roundtrip",
+                        "key_value",
+                        {
+                            "dataset_start_position_ned": list(
+                                case.start_position
+                            ),
+                            "first_runtime_position_ned": first_ned,
+                            "error_m": roundtrip_error,
+                        },
+                    ),
+                ),
+            ),
+        ),
+    )
+    summary["review_paths"] = review_paths
     (probe_dir / "probe_result.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False),
         encoding="utf-8",
@@ -138,8 +265,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--execution-mode",
         choices=["attach", "managed"],
-        default="attach",
+        default="managed",
     )
+    parser.add_argument("--scene-id", default="1")
+    parser.add_argument("--episode-id", default=None)
     parser.add_argument(
         "--output-dir",
         default="tests/manual_outputs/aerial_vln_real_engine_probe",
@@ -155,6 +284,27 @@ def _read_jsonl(path: Path) -> list[dict]:
         for line in path.read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
+
+
+def capability_contract_checks(
+    expected_control_mode: str,
+    capabilities: dict,
+) -> dict[str, bool]:
+    """Validate takeoff semantics against the configured AirSim mode."""
+
+    expected_requires_takeoff = (
+        expected_control_mode.strip().lower()
+        not in {"computervision", "computer_vision", "cv"}
+    )
+    return {
+        "control_mode_matches_map_package": (
+            capabilities.get("control_mode") == expected_control_mode
+        ),
+        "takeoff_requirement_matches_control_mode": (
+            capabilities.get("requires_takeoff")
+            is expected_requires_takeoff
+        ),
+    }
 
 
 if __name__ == "__main__":
