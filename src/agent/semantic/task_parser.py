@@ -37,12 +37,17 @@ class TaskParser:
         model_config: ModelConfig | None = None,
         *,
         phase_skill_resolver: Any | None = None,
+        protocol_context: str | None = None,
     ) -> None:
         self.model_config = model_config or load_model_config()
         self.mode = mode or self.model_config.task_parser_mode
         self.config_warnings: list[str] = []
         self.last_parse_trace: dict[str, Any] = {}
         self.configured_evidence: list[str] = []
+        # Benchmark protocols may clarify how user-facing terminal verbs map
+        # onto an episode without changing the original instruction or the
+        # shared semantic-plan schema.
+        self.protocol_context = (protocol_context or "").strip()
         if self.mode == "model":
             self.agent_rules = self._load_agent_rules()
             self.structure_prompt = self._load_structure_prompt()
@@ -334,11 +339,18 @@ class TaskParser:
     def _build_structure_messages(self, instruction: str) -> list[dict[str, str]]:
         """Build the skill-free task-structure request."""
 
-        return [
-            {"role": "system", "content": self.agent_rules},
-            {"role": "system", "content": self.structure_prompt},
-            {"role": "user", "content": instruction},
-        ]
+        messages = [{"role": "system", "content": self.agent_rules}]
+        if self.protocol_context:
+            messages.append(
+                {"role": "system", "content": self.protocol_context}
+            )
+        messages.extend(
+            [
+                {"role": "system", "content": self.structure_prompt},
+                {"role": "user", "content": instruction},
+            ]
+        )
+        return messages
 
     def _build_phase_criteria_messages(
         self,
@@ -349,14 +361,16 @@ class TaskParser:
     ) -> list[dict[str, str]]:
         messages = [
             {"role": "system", "content": self.agent_rules},
+        ]
+        messages.append(
             {
                 "role": "system",
                 "content": (
                     "Semantic motion-metric convention: yaw_delta uses the same signed yaw convention as flight "
                     f"tools. {SIGNED_YAW_SEMANTICS}"
                 ),
-            },
-        ]
+            }
+        )
         if guidance:
             messages.append(
                 {
@@ -374,6 +388,13 @@ class TaskParser:
                     "role": "system",
                     "content": _configured_evidence_message(self.configured_evidence),
                 }
+            )
+        # Keep benchmark terminal semantics adjacent to the criteria contract.
+        # Phase skills and evidence describe how to judge a state, but must not
+        # override a benchmark's definition of what the terminal state means.
+        if self.protocol_context:
+            messages.append(
+                {"role": "system", "content": self.protocol_context}
             )
         messages.extend(
             [

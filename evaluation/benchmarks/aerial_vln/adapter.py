@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from evaluation.benchmarks.aerial_vln.cases import AerialVlnCase
+from evaluation.benchmarks.aerial_vln.protocol import AERIAL_VLN_PROTOCOL
 from evaluation.benchmarks.core import (
     EpisodeTrace,
     PreparedBenchmarkEpisode,
@@ -14,9 +15,6 @@ from evaluation.benchmarks.core import (
 )
 from src.env_client import ObservationProfile
 from src.runtime.configs import InitialPose, TaskExecutionOptions
-
-
-AERIAL_VLN_PROTOCOL = "aerial_vln.uav_agent_native_actions.v1"
 
 
 @dataclass(frozen=True)

@@ -1,7 +1,6 @@
 """AerialVLN data, adapter, metrics, and native-action runner."""
 
 from evaluation.benchmarks.aerial_vln.adapter import (
-    AERIAL_VLN_PROTOCOL,
     AerialVlnCaseAdapter,
     AerialVlnEvaluationPayload,
 )
@@ -17,6 +16,10 @@ from evaluation.benchmarks.aerial_vln.config import (
     aerial_vln_split_label,
 )
 from evaluation.benchmarks.aerial_vln.metrics import AerialVlnMetricSuite
+from evaluation.benchmarks.aerial_vln.protocol import (
+    AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
+    AERIAL_VLN_PROTOCOL,
+)
 from evaluation.benchmarks.aerial_vln.runner import AerialVlnBenchmarkRunner
 from evaluation.benchmarks.aerial_vln.selection import (
     AerialVlnCaseSelection,
@@ -27,6 +30,7 @@ from evaluation.benchmarks.aerial_vln.selection import (
 
 __all__ = [
     "AERIAL_VLN_PROTOCOL",
+    "AERIAL_VLN_PARSER_PROTOCOL_CONTEXT",
     "AERIAL_VLN_S_SPLITS",
     "AerialVlnCase",
     "AerialVlnCaseSelection",

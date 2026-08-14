@@ -176,6 +176,14 @@ def test_model_parser_prompts_split_structure_from_phase_criteria():
     assert "route reference being absent is not sufficient continuation evidence" not in criteria_prompt
     assert "never write bare reference absence" not in criteria_prompt
     assert "Do not output or modify intent, task_goal, total, goal" in criteria_prompt
+    assert "long sequential route" in structure_prompt
+    assert "4-8 phases" in structure_prompt
+    assert "execute_full_route_navigation" in structure_prompt
+    assert "takes precedence over the general interpretation" in structure_prompt
+    assert "unless an injected benchmark protocol" in structure_prompt
+    assert "one local navigation checkpoint" in criteria_prompt
+    assert "remaining route segment" in criteria_prompt
+    assert "instead of the general physical interpretation" in criteria_prompt
 
 
 def test_model_parser_builds_skill_free_structure_messages():
@@ -201,6 +209,62 @@ def test_model_parser_builds_skill_free_structure_messages():
     assert "semantic task-structure parser" in messages[1]["content"]
     assert "skill_text" not in messages[1]["content"]
     assert "a UAV that can understand natural-language user instructions" not in messages[1]["content"]
+
+
+def test_model_parser_injects_protocol_context_without_rewriting_instruction():
+    instruction = "Fly beside the tower and land by the red building."
+    protocol_context = "Benchmark terminal semantics apply."
+    parser = TaskParser(
+        mode="model",
+        model_config=ModelConfig(
+            task_parser_mode="model",
+            provider="openai_compatible",
+            model_name="test-model",
+            api_key="test-key",
+            base_url="https://example.test/v1",
+        ),
+        protocol_context=protocol_context,
+    )
+    structure = SemanticPlanStructure.from_dict(
+        {
+            "intent": "navigate_route",
+            "task_goal": {
+                "target": "red building",
+                "target_attributes": {},
+                "final_state": "episode_stopped_by_building",
+            },
+            "phases": [
+                {
+                    "index": 1,
+                    "total": 1,
+                    "name": "reach_red_building",
+                    "goal": "Reach the region by the red building",
+                }
+            ],
+        }
+    )
+
+    structure_messages = parser._build_structure_messages(instruction)
+    criteria_messages = parser._build_phase_criteria_messages(
+        instruction, structure, structure.phases[0], []
+    )
+
+    assert [message["role"] for message in structure_messages] == [
+        "system",
+        "system",
+        "system",
+        "user",
+    ]
+    assert structure_messages[1]["content"] == protocol_context
+    assert criteria_messages[-3]["content"] == protocol_context
+    assert sum(
+        message["content"] == protocol_context
+        for message in criteria_messages
+    ) == 1
+    assert structure_messages[-1] == {"role": "user", "content": instruction}
+    criteria_payload = criteria_messages[-1]["content"]
+    assert instruction in criteria_payload
+    assert "Benchmark terminal semantics" not in criteria_payload
 
 
 def test_model_parser_injects_configured_evidence_only_into_phase_criteria():

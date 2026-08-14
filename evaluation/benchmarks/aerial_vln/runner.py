@@ -8,10 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from evaluation.benchmarks.aerial_vln.adapter import (
-    AERIAL_VLN_PROTOCOL,
-    AerialVlnCaseAdapter,
-)
+from evaluation.benchmarks.aerial_vln.adapter import AerialVlnCaseAdapter
 from evaluation.benchmarks.aerial_vln.cases import (
     AerialVlnCase,
     AerialVlnDatasetProvenance,
@@ -22,6 +19,10 @@ from evaluation.benchmarks.aerial_vln.config import (
     aerial_vln_split_label,
 )
 from evaluation.benchmarks.aerial_vln.metrics import AerialVlnMetricSuite
+from evaluation.benchmarks.aerial_vln.protocol import (
+    AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
+    AERIAL_VLN_PROTOCOL,
+)
 from evaluation.benchmarks.aerial_vln.selection import (
     AerialVlnCaseSelection,
     AerialVlnDifficultyAssignment,
@@ -496,6 +497,12 @@ class AerialVlnBenchmarkRunner:
             "observation_profile": self.observation_profile.to_dict(),
             "audit_path": audit_path,
         }
+        semantic_plan_diagnostics = _semantic_plan_diagnostics(
+            run_dir, outcome
+        )
+        case_result["semantic_plan_diagnostics"] = (
+            semantic_plan_diagnostics
+        )
         _write_json(case_dir / "case_result.json", case_result)
         _write_json(case_dir / "trajectory.json", trajectory)
         _write_json(case_dir / "trace.json", trace)
@@ -522,6 +529,7 @@ class AerialVlnBenchmarkRunner:
                     self.config.upstream_reference_commit
                 ),
                 "protocol_variant": AERIAL_VLN_PROTOCOL,
+                "semantic_plan_diagnostics": semantic_plan_diagnostics,
                 "scene_capabilities": capabilities,
                 "observation_profile": self.observation_profile.to_dict(),
                 "runtime_loop_guard_windows": (
@@ -609,12 +617,19 @@ class AerialVlnBenchmarkRunner:
                     },
                 ),
                 ReviewSection(
+                    "Semantic Plan Diagnostics",
+                    "key_value",
+                    semantic_plan_diagnostics,
+                ),
+                ReviewSection(
                     "Protocol Notes",
                     "text",
                     (
                         "AerialVLN data and metrics with UAV-Agent native "
                         "continuous actions; coordinates are reported in "
-                        "AirSim NED meters."
+                        "AirSim NED meters. Landing language denotes reaching "
+                        "the requested target region and ending the episode; "
+                        "it does not require physical ground contact."
                     ),
                 ),
             ),
@@ -673,6 +688,7 @@ class AerialVlnBenchmarkRunner:
             or TaskParser(
                 mode=self.config.parser_mode,
                 model_config=model_config,
+                protocol_context=AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
             ),
             planner=planner or ModelActionPlanner(model_config),
             safety=SafetySupervisor(self.safety_config),
@@ -902,6 +918,56 @@ def _infrastructure_error(
             "error": outcome.get("error"),
         }
     return None
+
+
+def _semantic_plan_diagnostics(
+    run_dir: Path, outcome: dict[str, Any]
+) -> dict[str, Any]:
+    """Read evaluation-only phase diagnostics after Runtime logging closes."""
+
+    parse_result = _read_json_object(run_dir / "state" / "semantic_plan.json")
+    latest_state = _read_json_object(run_dir / "state" / "latest_state.json")
+    plan = parse_result.get("plan")
+    if not isinstance(plan, dict):
+        plan = latest_state.get("semantic_plan")
+    phases = plan.get("phases") if isinstance(plan, dict) else None
+    phase_rows = [item for item in phases or [] if isinstance(item, dict)]
+    phase_names = [str(item.get("name") or "") for item in phase_rows]
+    final_phase = phase_rows[-1] if phase_rows else {}
+
+    raw_current_index = latest_state.get("current_phase_index")
+    current_index = (
+        int(raw_current_index)
+        if isinstance(raw_current_index, int) and raw_current_index >= 0
+        else None
+    )
+    if phase_rows and current_index is not None:
+        reached_index = min(current_index, len(phase_rows) - 1)
+        reached_number = reached_index + 1
+        reached_name = phase_names[reached_index]
+    else:
+        reached_number = None
+        reached_name = None
+
+    return {
+        "phase_count": len(phase_rows),
+        "phase_names": phase_names,
+        "final_phase_done_when": list(final_phase.get("done_when") or []),
+        "last_reached_phase_number": reached_number,
+        "last_reached_phase_name": reached_name,
+        "stopped_reason": outcome.get("stopped_reason"),
+        "stop_source": outcome.get("stop_source"),
+    }
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {}
+    return value if isinstance(value, dict) else {}
 
 
 def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:

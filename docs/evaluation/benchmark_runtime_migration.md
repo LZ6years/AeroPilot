@@ -132,8 +132,11 @@ python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
 - `scene_map` 显式映射 dataset scene id 到 MapPackage；
 - `NoopScenarioController`，不做 benchmark 物体布置；
 - 协议固定记录为
-  `aerial_vln.uav_agent_native_actions.v1`，表示数据和指标兼容，但控制使用
-  UAV-Agent 连续 primitive，不宣称官方离散动作等价。
+  `aerial_vln.uav_agent_native_actions.v2`，表示数据和指标兼容，但控制使用
+  UAV-Agent 连续 primitive，不宣称官方离散动作等价；
+- 长路线按连续地标 checkpoint 拆分；`land on/in/by X` 表示到达对应目标
+  区域并结束 episode，不要求物理接地、AirSim landed 状态或调用
+  `uav.land`。
 
 指标包括 DistanceToGoal、Success、OracleSuccess、nDTW、sDTW、PathLength、
 StepsTaken 和 `uav_action_steps`。正常 completed episode 增加一个虚拟 STOP

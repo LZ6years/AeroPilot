@@ -4,8 +4,14 @@ AerialVLN-S 复用通用 Benchmark Core、TaskRuntime 和 AirSim Backend，控�
 仍为 UAV-Agent 原生连续 primitive：
 
 ```text
-aerial_vln.uav_agent_native_actions.v1
+aerial_vln.uav_agent_native_actions.v2
 ```
+
+v2 使用通用 TaskParser 的地标 checkpoint 拆分处理长路线。AerialVLN 的
+`land on/in/by X` 按 benchmark episode 协议解释为到达 X 对应的目标区域、
+确认 instruction 指定的位置关系并 STOP；不要求物理接地、AirSim landed
+状态或调用 `uav.land`。这段固定上下文只由 AerialVLN Runner 注入，原始
+instruction 不改写，也不影响 UAV-Flow。
 
 Benchmark 层负责 AerialVLN-S `val_seen` 和 `val_unseen` 的数据身份、难度
 分类、案例选择、指标和报告。reference path、difficulty、goal 与 official

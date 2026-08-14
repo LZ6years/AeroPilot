@@ -9,6 +9,9 @@ from pathlib import Path
 import pytest
 
 from evaluation.benchmarks.aerial_vln.config import AerialVlnEvalConfig
+from evaluation.benchmarks.aerial_vln.protocol import (
+    AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
+)
 from evaluation.benchmarks.aerial_vln.runner import (
     AerialVlnBenchmarkRunner,
 )
@@ -84,11 +87,23 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     assert case_result["reference_path_length_m"] == 0.0
     assert case_result["dataset_split"] == "val_seen"
     assert case_result["dataset_split_label"] == "Validation Seen"
+    assert case_result["semantic_plan_diagnostics"] == {
+        "phase_count": 1,
+        "phase_names": ["navigate"],
+        "final_phase_done_when": ["dry episode complete"],
+        "last_reached_phase_number": 1,
+        "last_reached_phase_name": "navigate",
+        "stopped_reason": None,
+        "stop_source": None,
+    }
     review_html = (case_dir / "review.html").read_text(encoding="utf-8")
     assert "Dataset And Difficulty" in review_html
     assert "aerialvln-s" in review_html
     assert "Validation Seen" in review_html
     assert "reference_path_length_m" in review_html
+    assert "Semantic Plan Diagnostics" in review_html
+    assert "navigate" in review_html
+    assert "Landing language denotes reaching" in review_html
     assert Path(result["summary_paths"]["html_review"]).exists()
     assert Path(result["summary_paths"]["dataset_provenance"]).exists()
     assert Path(result["summary_paths"]["difficulty_assignment"]).exists()
@@ -112,11 +127,14 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     )
     assert (
         manifest["protocol_variant"]
-        == "aerial_vln.uav_agent_native_actions.v1"
+        == "aerial_vln.uav_agent_native_actions.v2"
     )
     assert manifest["scene_map"] == {"1": "airvln_env_1"}
     assert manifest["runtime_loop_guard_windows"] == 40
     assert manifest["initialization_min_settle_sec"] == 0.25
+    assert FakeTaskParser.last_protocol_context == (
+        AERIAL_VLN_PARSER_PROTOCOL_CONTEXT
+    )
     assert manifest["dataset"]["dataset_family"] == "aerialvln-s"
     assert manifest["dataset"]["split"] == "val_seen"
     assert manifest["dataset_split_label"] == "Validation Seen"
@@ -783,8 +801,10 @@ def _fake_case_result(case, infrastructure_error):
 
 
 class FakeTaskParser:
+    last_protocol_context = None
+
     def __init__(self, *args, **kwargs) -> None:
-        return
+        type(self).last_protocol_context = kwargs.get("protocol_context")
 
     def parse(self, instruction: str) -> TaskParseResult:
         plan = semantic_plan_from_dict(

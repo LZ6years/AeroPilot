@@ -23,7 +23,10 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     assert '"observe"' not in structure_shape
     assert '"continue_when"' not in structure_shape
     assert '"metrics"' not in structure_shape
-    assert "phase count" in structure
+    assert "simple single-objective instruction as one phase" in structure
+    assert "ordered landmark and navigation checkpoints" in structure
+    assert "commonly need 4-8 phases" in structure
+    assert "execute_full_route_navigation" in structure
     assert "Phase structure comes from user intent" in structure
     assert "does not decide execution feasibility or downgrade the request for safety" in structure
     assert "Cover the complete requested outcome" in structure
