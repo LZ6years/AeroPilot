@@ -18,6 +18,7 @@ from evaluation.benchmarks.core.audit import (
     BenchmarkAuditLog,
     ResolvedFrameAsset,
 )
+from evaluation.benchmarks.core.report_io import atomic_write_text
 from src.agent.planning.model_inputs import build_model_user_content
 
 
@@ -63,10 +64,51 @@ class BenchmarkSummaryReview:
     metrics: dict[str, Any]
     cases: tuple[dict[str, Any], ...]
     failure_counts: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class BenchmarkReviewRenderer:
     """Write shared review CSS plus evaluation and case HTML pages."""
+
+    def write_case(
+        self,
+        eval_dir: str | Path,
+        case: BenchmarkCaseReview,
+    ) -> dict[str, str]:
+        """Write one finalized case without requiring the batch to finish."""
+
+        root = Path(eval_dir)
+        style_path = self._write_style(root)
+        case_dir = root / "cases" / case.case_id
+        case_dir.mkdir(parents=True, exist_ok=True)
+        case_html = case_dir / "review.html"
+        atomic_write_text(
+            case_html,
+            self._case_html(case, case_dir, style_path),
+        )
+        return {
+            "case_html": str(case_html),
+            "review_css": str(style_path),
+        }
+
+    def write_summary(
+        self,
+        eval_dir: str | Path,
+        summary: BenchmarkSummaryReview,
+    ) -> dict[str, str]:
+        """Write the evaluation index independently from case rendering."""
+
+        root = Path(eval_dir)
+        style_path = self._write_style(root)
+        index = root / "review.html"
+        atomic_write_text(
+            index,
+            self._summary_html(summary, root, style_path),
+        )
+        return {
+            "html_review": str(index),
+            "review_css": str(style_path),
+        }
 
     def write(
         self,
@@ -74,26 +116,15 @@ class BenchmarkReviewRenderer:
         summary: BenchmarkSummaryReview,
         cases: tuple[BenchmarkCaseReview, ...],
     ) -> dict[str, str]:
-        root = Path(eval_dir)
-        style_path = root / "review_assets" / "benchmark_review.css"
-        style_path.parent.mkdir(parents=True, exist_ok=True)
-        style_path.write_text(_STYLE, encoding="utf-8")
         for case in cases:
-            case_dir = root / "cases" / case.case_id
-            case_dir.mkdir(parents=True, exist_ok=True)
-            (case_dir / "review.html").write_text(
-                self._case_html(case, case_dir, style_path),
-                encoding="utf-8",
-            )
-        index = root / "review.html"
-        index.write_text(
-            self._summary_html(summary, root, style_path),
-            encoding="utf-8",
-        )
-        return {
-            "html_review": str(index),
-            "review_css": str(style_path),
-        }
+            self.write_case(eval_dir, case)
+        return self.write_summary(eval_dir, summary)
+
+    @staticmethod
+    def _write_style(root: Path) -> Path:
+        style_path = root / "review_assets" / "benchmark_review.css"
+        atomic_write_text(style_path, _STYLE)
+        return style_path
 
     def _summary_html(
         self,
@@ -112,6 +143,16 @@ class BenchmarkReviewRenderer:
                 f"<td>{_metrics_inline(case.get('metrics'))}</td>"
                 "</tr>"
             )
+        state = ""
+        if summary.metadata:
+            run_status = str(
+                summary.metadata.get("run_status") or "unknown"
+            ).lower()
+            state = (
+                f'<section class="run-state run-state-{_css_token(run_status)}">'
+                f"<h2>Evaluation State: {_e(run_status.upper())}</h2>"
+                f"{_key_value_table(summary.metadata)}</section>"
+            )
         return _document(
             title=f"{summary.benchmark_name} Benchmark Review",
             style_href=_relative_href(root, style_path),
@@ -119,6 +160,7 @@ class BenchmarkReviewRenderer:
                 f"<h1>{_e(summary.benchmark_name)} Benchmark Review</h1>"
                 '<p class="muted">Protocol: '
                 f"<code>{_e(summary.protocol_variant)}</code></p>"
+                f"{state}"
                 "<section><h2>Aggregate Metrics</h2>"
                 f"{_key_value_table(summary.metrics)}</section>"
                 "<section><h2>Failure Counts</h2>"
@@ -997,6 +1039,16 @@ def _url_part(value: str) -> str:
     return value.replace("\\", "_").replace("/", "_")
 
 
+def _css_token(value: str) -> str:
+    """Keep report-state CSS classes bounded to safe identifier characters."""
+
+    token = "".join(
+        character if character.isalnum() or character in {"-", "_"} else "-"
+        for character in value
+    ).strip("-")
+    return token or "unknown"
+
+
 def _e(value: Any) -> str:
     return html.escape("" if value is None else str(value), quote=True)
 
@@ -1008,6 +1060,11 @@ main { max-width: 1440px; margin: auto; padding: 28px; }
 h1, h2, h3, h4 { color: #102a43; }
 section { background: white; border: 1px solid #d9e2ec; border-radius: 12px;
   margin: 18px 0; padding: 18px; box-shadow: 0 3px 12px #102a430d; }
+.run-state { border-width: 2px; }
+.run-state-interrupted, .run-state-failed {
+  border-color: #d97706; background: #fffbeb; }
+.run-state-running { border-color: #2563eb; background: #eff6ff; }
+.run-state-completed { border-color: #059669; background: #ecfdf5; }
 table { border-collapse: collapse; width: 100%; font-size: 14px; }
 th, td { border-bottom: 1px solid #e8edf3; padding: 8px; text-align: left;
   vertical-align: top; }

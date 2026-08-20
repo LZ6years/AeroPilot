@@ -88,7 +88,8 @@ python tests/manual/unrealcv_local_actor_probe.py `
   --config <your-local-config.json> `
   --map-id downtownwest_local_unrealcv `
   --execution managed `
-  --require-visual
+  --require-visual `
+  --require-first-person
 ```
 
 安全动作闭环：
@@ -101,7 +102,8 @@ python tests/manual/unrealcv_local_actor_probe.py `
   --yaw-deg 10 `
   --move-forward-m 0.25 `
   --speed-mps 0.5 `
-  --require-visual
+  --require-visual `
+  --require-first-person
 ```
 
 执行顺序：
@@ -124,6 +126,8 @@ start_scene
 - 前移实际位移为 0.20–0.30 米；
 - 恢复位置误差不超过 0.05 米；
 - RGB 非纯色，Depth 有限且非恒定；
+- `--require-first-person` 会在 Backend 隐藏 mesh 前读取主 Actor 的 object-mask
+  颜色，并确认初始、转向、移动和恢复后的 Segmentation 中该颜色像素数均为零；
 - `MANAGED`启动的进程在结束后关闭。
 
 ## 输出
@@ -142,8 +146,8 @@ runs/manual_local_unrealcv_probe/<run-id>/
     └── segmentation/
 ```
 
-`summary.json`记录实际 capability、ownership、转向漂移、移动距离、恢复误差和清理
-状态。图像质量判断只属于这个验收工具，不进入 Backend。
+`summary.json`记录实际 capability、ownership、转向漂移、移动距离、恢复误差、自机
+mask 像素数和清理状态。图像质量及第一视角判断只属于这个验收工具，不进入 Backend。
 
 ## Benchmark 边界
 
@@ -200,6 +204,38 @@ DowntownWest 的 Drone 配置声明 camera 1，但旧 batch 最终采集 camera 
 而是通过`startup.hide_objects`隐藏相同的默认 mesh，并隐藏自机 mesh。确认
 MapPackage 同时声明正确的`actor.scale`和`startup.hide_objects`，再通过真实
 Turn、Move、Approach 首帧及动作帧验证构图。
+
+这里不是用自由 camera 代替无人机运动。`control_target=actor`仍然移动和读取
+`BP_Drone01_2`；`standard_pose`只负责让 capture camera 跟随 Actor；`hide_objects`
+只关闭自机 mesh 的渲染。若将`control_target`改为`camera`，才会变成 camera-only
+位姿控制，这不是 DowntownWest 的 UAV-Flow 配置。
+
+## 2026-08-20 第一视角修复验收
+
+真实底层闭环：
+
+```text
+runs/manual_local_unrealcv_probe/20260820_181150_572952
+```
+
+- 初始、转向、移动、恢复四张 Segmentation 中，`BP_Drone01_2`颜色
+  `[23, 127, 47]`的像素数均为 0；
+- 四张 RGB 人工抽查均没有自机机身；
+- 10°转向实际为 9.846°，位置漂移 0 m；
+- 前移 0.25 m 实际为 0.250005 m；
+- 恢复位置误差 0 m，yaw 误差 0.434°；
+- owned Collection 进程已停止，9068 已关闭。
+
+真实 UAV-Flow 单 case canary：
+
+```text
+evaluation/benchmarks/uav_flow/outputs/uav_flow_first_person_canary_20260820
+```
+
+case `2025-03-30_11-49-14`以`status=ok`完成，产生 36 张 RGB 和 35 个正式动作。
+Planner 的最终模型请求同时包含 phase-start RGB、当前 RGB 和
+`current_rgb_depth_overlay`；抽查第 1、16、36 张 RGB 均无自机。该 canary 只验证
+真实 Agent 输入与第一视角部署链路，不把单 case 的任务指标作为相机验收条件。
 
 ## 最近一次真实结果
 

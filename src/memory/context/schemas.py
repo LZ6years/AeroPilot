@@ -44,6 +44,7 @@ class StageContextInput:
     active_instruction: str
     semantic_plan: dict[str, Any] = field(default_factory=dict)
     current_phase: dict[str, Any] | None = None
+    phase_neighborhood: dict[str, Any] = field(default_factory=dict)
     semantic_goal: dict[str, Any] = field(default_factory=dict)
     safety_constraints: dict[str, Any] = field(default_factory=dict)
     allowed_action_constraints: dict[str, Any] = field(default_factory=dict)
@@ -56,6 +57,7 @@ class StageContextInput:
             "active_instruction": self.active_instruction,
             "semantic_plan": dict(self.semantic_plan),
             "current_phase": dict(self.current_phase) if self.current_phase is not None else None,
+            "phase_neighborhood": dict(self.phase_neighborhood),
             "semantic_goal": dict(self.semantic_goal),
             "safety_constraints": dict(self.safety_constraints),
             "allowed_action_constraints": dict(self.allowed_action_constraints),
@@ -76,6 +78,7 @@ class MemorySourceBundle:
 class PlannerContext:
     active_instruction: str
     current_phase: dict[str, Any] | None
+    phase_neighborhood: dict[str, Any]
     semantic_goal: dict[str, Any]
     fragments: list[ContextFragment]
     disabled_fragments: list[str] = field(default_factory=list)
@@ -92,6 +95,7 @@ class PlannerContext:
         return {
             "active_instruction": self.active_instruction,
             "current_phase": self.current_phase,
+            "phase_neighborhood": self.phase_neighborhood,
             "semantic_goal": self.semantic_goal,
             "fragments": [fragment.to_dict() for fragment in self.fragments],
             "disabled_fragments": list(self.disabled_fragments),

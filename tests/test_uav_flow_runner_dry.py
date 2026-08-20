@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -213,10 +214,69 @@ def test_config_rejects_invalid_exact_case_ids(case_ids):
         UavFlowEvalConfig.from_dict({"case_ids": case_ids})
 
 
-def test_manual_eval_cli_defaults_loop_guard_to_40():
-    from evaluation.benchmarks.uav_flow.scripts.run_manual_eval import _parser
+def test_manual_eval_cli_omitted_options_preserve_base_config():
+    from evaluation.benchmarks.uav_flow.scripts.run_manual_eval import (
+        _config_from_args,
+        _parser,
+    )
 
-    assert _parser().parse_args([]).runtime_loop_guard_windows == 40
+    args = _parser().parse_args([])
+    config = _config_from_args(args)
+
+    # ``None`` means "no CLI override". The effective values below come from
+    # uav_flow_eval.example.json rather than a second set of script defaults.
+    assert args.runtime_loop_guard_windows is None
+    assert args.parser_mode is None
+    assert args.enable_sr_judge is None
+    assert args.enable_visual_diagnostics is None
+    assert config.runtime_loop_guard_windows == 40
+    assert config.parser_mode == "model"
+    assert config.classes == ["Turn", "Move", "Approach"]
+    assert config.limit_per_class == 1
+    assert config.enable_sr_judge is False
+    assert config.enable_visual_diagnostics is False
+
+
+def test_manual_eval_cli_all_cases_clears_every_selector_and_preserves_switches(
+    tmp_path,
+):
+    from evaluation.benchmarks.uav_flow.scripts.run_manual_eval import (
+        _config_from_args,
+        _parser,
+    )
+
+    config_path = tmp_path / "full.local"
+    config_path.write_text(
+        json.dumps(
+            {
+                "case_ids": ["representative_case"],
+                "classes": ["Turn"],
+                "limit_per_class": 1,
+                "max_cases": 1,
+                "runtime_loop_guard_windows": 80,
+                "planner_depth_input": "now",
+                "enable_sr_judge": False,
+                "enable_visual_diagnostics": False,
+                "stmr_mode": "off",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    args = _parser().parse_args(
+        ["--config", str(config_path), "--all-cases"]
+    )
+    config = _config_from_args(args)
+
+    assert config.case_ids is None
+    assert config.classes is None
+    assert config.limit_per_class is None
+    assert config.max_cases is None
+    assert config.runtime_loop_guard_windows == 80
+    assert config.planner_depth_input == "now"
+    assert config.enable_sr_judge is False
+    assert config.enable_visual_diagnostics is False
+    assert config.stmr_mode == "off"
 
 
 def test_manual_eval_cli_accepts_exact_case_ids():

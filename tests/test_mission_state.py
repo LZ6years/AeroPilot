@@ -104,6 +104,8 @@ def test_mission_state_tracks_phase_execution_facts():
     assert data["safety"]["yaw_scan"] == {
         "offset_deg": 0.0,
         "extent_deg": 0.0,
+        "turn_count": 0,
+        "recharge_count": 0,
     }
     assert "world_pose" not in data["current_phase_progress"]
     assert "start_pose" not in data["current_phase_progress"]
@@ -126,16 +128,41 @@ def test_mission_state_tracks_one_sided_yaw_scan_extent_and_resets_per_phase():
 
     assert state.yaw_scan_offset_deg == 10.0
     assert state.yaw_scan_extent_deg == 30.0
+    assert state.yaw_scan_turn_count == 2
 
     state.record_action("uav.turn_relative", {"yaw_deg": -40.0}, {"ok": True})
 
     assert state.yaw_scan_offset_deg == -30.0
     assert state.yaw_scan_extent_deg == 30.0
+    assert state.yaw_scan_turn_count == 3
 
     state.advance_phase()
 
     assert state.yaw_scan_offset_deg == 0.0
     assert state.yaw_scan_extent_deg == 0.0
+    assert state.yaw_scan_turn_count == 0
+    assert state.yaw_scan_recharge_count == 0
+
+
+def test_mission_state_recharges_stationary_yaw_scan_segment():
+    state = make_state()
+    state.record_action("uav.turn_relative", {"yaw_deg": -30.0}, {"ok": True})
+    state.record_action("uav.turn_relative", {"yaw_deg": -20.0}, {"ok": True})
+
+    recharge = state.recharge_yaw_scan()
+
+    assert recharge == {
+        "previous_segment": {
+            "offset_deg": -50.0,
+            "extent_deg": 50.0,
+            "turn_count": 2,
+        },
+        "recharge_count": 1,
+    }
+    assert state.yaw_scan_offset_deg == 0.0
+    assert state.yaw_scan_extent_deg == 0.0
+    assert state.yaw_scan_turn_count == 0
+    assert state.yaw_scan_recharge_count == 1
 
 
 def test_mission_state_uses_phase_index_to_separate_duplicate_phase_names():

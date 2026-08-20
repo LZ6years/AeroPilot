@@ -29,8 +29,12 @@ class MissionState:
     airborne: bool = False
     observation_modalities: tuple[str, ...] = ("rgb", "depth", "pose")
     hover_required: bool = False
+    # These fields describe only the current stationary visual-search
+    # viewpoint. Runtime recharges the segment after verified translation.
     yaw_scan_offset_deg: float = 0.0
     yaw_scan_extent_deg: float = 0.0
+    yaw_scan_turn_count: int = 0
+    yaw_scan_recharge_count: int = 0
     current_phase_window_count_value: int = 0
     max_phase_window_count: int = 40
     current_phase_origin_pose: dict[str, Any] = field(default_factory=dict)
@@ -78,6 +82,8 @@ class MissionState:
         self.current_phase_origin_pose = {}
         self.yaw_scan_offset_deg = 0.0
         self.yaw_scan_extent_deg = 0.0
+        self.yaw_scan_turn_count = 0
+        self.yaw_scan_recharge_count = 0
 
     @property
     def current_phase_window_count(self) -> int:
@@ -166,6 +172,30 @@ class MissionState:
                     self.yaw_scan_extent_deg,
                     abs(self.yaw_scan_offset_deg),
                 )
+                self.yaw_scan_turn_count += 1
+
+    def recharge_yaw_scan(self) -> dict[str, Any]:
+        """Start a fresh stationary scan segment after verified translation.
+
+        TaskRuntime owns the displacement threshold because it has both the
+        post-action pose measurement and the active safety configuration.
+        MissionState only performs the atomic state transition and returns the
+        previous segment for audit logging.
+        """
+
+        previous = {
+            "offset_deg": self.yaw_scan_offset_deg,
+            "extent_deg": self.yaw_scan_extent_deg,
+            "turn_count": self.yaw_scan_turn_count,
+        }
+        self.yaw_scan_offset_deg = 0.0
+        self.yaw_scan_extent_deg = 0.0
+        self.yaw_scan_turn_count = 0
+        self.yaw_scan_recharge_count += 1
+        return {
+            "previous_segment": previous,
+            "recharge_count": self.yaw_scan_recharge_count,
+        }
 
     def record_observation(self, observation: dict[str, Any]) -> None:
         # Keep only the latest observation snapshot; history is written to memory/observations.jsonl.
@@ -180,6 +210,8 @@ class MissionState:
         yaw_scan = {
             "offset_deg": self.yaw_scan_offset_deg,
             "extent_deg": self.yaw_scan_extent_deg,
+            "turn_count": self.yaw_scan_turn_count,
+            "recharge_count": self.yaw_scan_recharge_count,
         }
         return {
             "run_id": self.run_id,

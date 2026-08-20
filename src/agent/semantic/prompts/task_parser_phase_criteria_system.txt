@@ -45,6 +45,15 @@ Terminal wording:
 - Use skill guidance as domain knowledge, never as current observed fact. Keep conditions concise and introduce no numeric threshold absent from the user instruction.
 - continue_when is non-exhaustive clarification of missing, conflicting, or contradicted terminal results. It is not an action explanation, self-motion explanation, completion gate, or reason to reject a state allowed by done_when.
 
+Movement-result integrity:
+- Match completion to the whole local route-leg endpoint in the immutable phase goal. A setup action such as turning or aligning does not complete a phase that also requires entering, following, crossing, ascending, descending, or reaching.
+- A phase may deliberately combine setup and progress when they establish one navigable checkpoint. Represent independently required parts as separate AND items in done_when, but do not change the immutable phase structure.
+- Orientation-only phases may complete from the requested directional relation, but visibility alone does not complete route progress, altitude change, passage, or arrival.
+- For follow, go, proceed, or reach, require that the requested route progress or arrival relation has actually been achieved. Seeing or facing the route or landmark is not sufficient by itself.
+- For ascend, descend, rise, lower, or lift, require that the requested altitude change or resulting vertical relation has actually been achieved. Seeing the elevated or lower region is not sufficient by itself.
+- For cross, pass, go through, or move beyond, require actual traversal progress and the resulting route relation. Yaw-only change, visibility of the far side, or a cue moving to another image side is not sufficient by itself and must not be presented as proof of physical passage.
+- Check every required terminal result in the immutable phase goal. Do not weaken achieved movement or relation into visibility, feasibility, preparation, or readiness to continue.
+
 Final output audit:
 - Re-run the support-independence question for every proposed item and split any item whose required results can differ in status.
 - Preserve every independently assessable boundary explicitly taught by selected skill guidance.

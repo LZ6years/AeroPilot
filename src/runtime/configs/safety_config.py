@@ -14,6 +14,10 @@ class UavSafetyConfig:
     max_vertical_velocity_mps: float = 3.0
     max_move_duration_sec: float = 8.0
     max_yaw_scan_extent_deg: float = 480.0
+    # A real viewpoint change starts a new stationary visual-search segment.
+    # The threshold is deliberately larger than normal pose jitter and smaller
+    # than the project's nominal 2-4 metre translation primitives.
+    yaw_scan_recharge_distance_m: float = 0.5
 
     @classmethod
     def from_dict(cls, data: dict) -> "UavSafetyConfig":
@@ -28,6 +32,12 @@ class UavSafetyConfig:
                     data.get("max_yaw_scan_accum_deg", cls.max_yaw_scan_extent_deg),
                 )
             ),
+            yaw_scan_recharge_distance_m=float(
+                data.get(
+                    "yaw_scan_recharge_distance_m",
+                    cls.yaw_scan_recharge_distance_m,
+                )
+            ),
         )
 
     def to_dict(self) -> dict[str, float]:
@@ -37,6 +47,7 @@ class UavSafetyConfig:
             "max_vertical_velocity_mps": self.max_vertical_velocity_mps,
             "max_move_duration_sec": self.max_move_duration_sec,
             "max_yaw_scan_extent_deg": self.max_yaw_scan_extent_deg,
+            "yaw_scan_recharge_distance_m": self.yaw_scan_recharge_distance_m,
         }
 
 

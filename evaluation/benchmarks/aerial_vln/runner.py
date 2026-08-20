@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -986,14 +987,11 @@ def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         "steps_taken",
         "uav_action_steps",
     )
-    aggregates = {
-        key: (
-            sum(float(row[key]) for row in metric_rows) / len(metric_rows)
-            if metric_rows
-            else None
-        )
-        for key in keys
-    }
+    # Failed episodes can still carry partial metrics (for example nDTW=0
+    # while distance_to_goal is unavailable because no pose was recorded).
+    # Aggregate each metric over its own valid observations so reporting a
+    # genuine failure never masks the case result with a summary exception.
+    aggregates = {key: _mean_available_metric(metric_rows, key) for key in keys}
     return {
         "benchmark": "aerial_vln",
         "protocol_variant": AERIAL_VLN_PROTOCOL,
@@ -1020,6 +1018,22 @@ def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
             for item in results
         ],
     }
+
+
+def _mean_available_metric(
+    metric_rows: list[dict[str, Any]],
+    key: str,
+) -> float | None:
+    values: list[float] = []
+    for row in metric_rows:
+        value = row.get(key)
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(numeric):
+            values.append(numeric)
+    return sum(values) / len(values) if values else None
 
 
 def _summary_markdown(summary: dict[str, Any]) -> str:

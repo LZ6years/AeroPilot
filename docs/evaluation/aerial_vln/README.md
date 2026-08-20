@@ -13,6 +13,11 @@ v2 使用通用 TaskParser 的地标 checkpoint 拆分处理长路线。AerialVL
 状态或调用 `uav.land`。这段固定上下文只由 AerialVLN Runner 注入，原始
 instruction 不改写，也不影响 UAV-Flow。
 
+AerialVLN 的多地标长路线默认允许每个语义阶段最多 100 个 action/observation
+window。该值只属于 AerialVLN Runner；TaskRuntime 和 UAV-Flow 的通用默认值仍为
+40。视觉 yaw budget 按当前观察位置计算，动作后实际三维位移达到 0.5m 时开启
+新的原地扫描段。
+
 Benchmark 层负责 AerialVLN-S `val_seen` 和 `val_unseen` 的数据身份、难度
 分类、案例选择、指标和报告。reference path、difficulty、goal 与 official
 actions 都是
@@ -105,6 +110,13 @@ python evaluation/benchmarks/aerial_vln/scripts/run_eval.py `
   --config evaluation/benchmarks/aerial_vln/configs/aerial_vln_eval.example.json `
   --all-per-difficulty `
   --validate-only
+
+# 仅运行 Validation Seen 的 low 三案例
+python evaluation/benchmarks/aerial_vln/scripts/run_eval.py `
+  --config evaluation/benchmarks/aerial_vln/configs/aerial_vln_eval.example.json `
+  --split val_seen `
+  --difficulties low `
+  --limit-per-difficulty 3
 ```
 
 ## 真实远端执行

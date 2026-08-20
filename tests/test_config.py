@@ -102,14 +102,16 @@ def test_load_map_config_accepts_unrealcv_package(tmp_path):
     assert maps[0].unrealcv["port"] == 9010
 
 
-def test_unrealcv_actor_example_uses_verified_uav_flow_camera_contract():
+def test_unrealcv_actor_example_uses_verified_first_person_camera_contract():
     maps, _ = load_map_config(
         REPO_ROOT / "configs" / "maps" / "unrealcv_actor_control.example.json"
     )
 
     actor = maps[0].unrealcv["actor"]
     assert maps[0].unrealcv["camera_id"] == 0
-    assert actor["name"] not in maps[0].unrealcv["startup"]["hide_objects"]
+    # The Actor remains the pose-control target while its mesh is excluded
+    # from egocentric observations.
+    assert actor["name"] in maps[0].unrealcv["startup"]["hide_objects"]
     assert actor["rotation_method"] == "blueprint_yaw"
     assert actor["camera_follow"] == "standard_pose"
     assert actor["camera_validation"] == {
@@ -239,6 +241,7 @@ def test_load_uav_safety_config_reads_hard_limits(tmp_path):
                 "max_vertical_velocity_mps": 4.0,
                 "max_move_duration_sec": 9.0,
                 "max_yaw_scan_accum_deg": 500.0,
+                "yaw_scan_recharge_distance_m": 0.75,
             }
         ),
         encoding="utf-8",
@@ -251,6 +254,7 @@ def test_load_uav_safety_config_reads_hard_limits(tmp_path):
     assert config.max_vertical_velocity_mps == 4.0
     assert config.max_move_duration_sec == 9.0
     assert config.max_yaw_scan_extent_deg == 500.0
+    assert config.yaw_scan_recharge_distance_m == 0.75
 
 
 def test_load_uav_safety_config_prefers_canonical_yaw_scan_extent(tmp_path):
@@ -269,6 +273,7 @@ def test_load_uav_safety_config_prefers_canonical_yaw_scan_extent(tmp_path):
 
     assert config.max_yaw_scan_extent_deg == 420.0
     assert config.to_dict()["max_yaw_scan_extent_deg"] == 420.0
+    assert config.to_dict()["yaw_scan_recharge_distance_m"] == 0.5
     assert "max_yaw_scan_accum_deg" not in config.to_dict()
 
 

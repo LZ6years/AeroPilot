@@ -32,6 +32,7 @@ def make_parse_result():
 def make_stage_context(
     result=None,
     current_phase: dict | None = None,
+    phase_neighborhood: dict | None = None,
     phase_execution_summary: dict | None = None,
 ) -> StageContextInput:
     result = result or make_parse_result()
@@ -39,6 +40,7 @@ def make_stage_context(
         active_instruction=result.instruction,
         semantic_plan=result.plan.to_dict(),
         current_phase=current_phase if current_phase is not None else result.plan.phases[0].to_dict(),
+        phase_neighborhood=phase_neighborhood or {},
         semantic_goal=result.plan.task_goal.to_dict(),
         safety_constraints={"hover_required": False},
         allowed_action_constraints={"planner_tools": ["uav.hover", "env.observe"]},
@@ -150,6 +152,7 @@ def test_stage_context_input_to_dict_has_expected_fields():
     assert data["active_instruction"] == result.instruction
     assert data["semantic_plan"] == result.plan.to_dict()
     assert data["current_phase"] == result.plan.phases[0].to_dict()
+    assert data["phase_neighborhood"] == {}
     assert data["semantic_goal"] == result.plan.task_goal.to_dict()
     assert data["safety_constraints"] == {"hover_required": False}
     assert data["allowed_action_constraints"]["planner_tools"] == ["uav.hover", "env.observe"]
@@ -166,6 +169,7 @@ def test_context_composer_outputs_uniform_fragments(tmp_path):
 
     assert context["active_instruction"] == memory.active_instruction
     assert context["current_phase"]["name"]
+    assert context["phase_neighborhood"] == {}
     assert context["semantic_goal"] == result.plan.task_goal.to_dict()
     assert [fragment["name"] for fragment in context["fragments"]] == [
         "instruction",
@@ -381,6 +385,15 @@ def test_action_module_reads_jsonl_refs_and_outputs_unified_motion_history(tmp_p
         "up_m": 0.0,
         "planar_m": 0.0,
         "yaw_delta_deg": 60.0,
+    }
+    assert summary["visual_search_progress"] == {
+        "scope": "current_stationary_viewpoint",
+        "yaw_offset_deg": 0.0,
+        "yaw_extent_deg": 0.0,
+        "yaw_remaining_deg": 0.0,
+        "turn_count": 0,
+        "recharge_count": 0,
+        "recharge_distance_m": 0.0,
     }
     assert summary["recent_execution_order"] == "oldest_to_newest"
     assert len(summary["recent_execution"]) == 5

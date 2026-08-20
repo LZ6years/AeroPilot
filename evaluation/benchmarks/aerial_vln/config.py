@@ -44,7 +44,10 @@ class AerialVlnEvalConfig:
     env_path: str = ".env"
     parser_mode: str = "model"
     shutdown_policy: str = "land"
-    runtime_loop_guard_windows: int = 40
+    # Long multi-landmark routes need more observation/action windows than the
+    # shared Runtime default. This remains benchmark-runner configuration and
+    # does not change TaskRuntime or UAV-Flow defaults.
+    runtime_loop_guard_windows: int = 100
     initialization_min_settle_sec: float = 0.0
     action_config_overrides: dict[str, float] = field(default_factory=dict)
     safety_overrides: dict[str, float] = field(default_factory=dict)
@@ -154,7 +157,7 @@ class AerialVlnEvalConfig:
             parser_mode=str(data.get("parser_mode", "model")),
             shutdown_policy=str(data.get("shutdown_policy", "land")),
             runtime_loop_guard_windows=int(
-                data.get("runtime_loop_guard_windows", 40)
+                data.get("runtime_loop_guard_windows", 100)
             ),
             initialization_min_settle_sec=_non_negative_float(
                 data.get("initialization_min_settle_sec", 0.0),

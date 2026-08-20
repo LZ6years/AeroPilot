@@ -180,6 +180,15 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert context["semantic_goal"] == state.semantic_plan.task_goal.to_dict()
     assert context["current_phase"]["name"] == "orient_leftward"
     assert context["current_phase"]["index"] == 1
+    assert context["phase_neighborhood"] == {
+        "previous": None,
+        "next": {
+            "index": state.semantic_plan.phases[1].index,
+            "name": state.semantic_plan.phases[1].name,
+            "goal": state.semantic_plan.phases[1].goal,
+            "status": "upcoming",
+        },
+    }
     assert context["safety_constraints"] == {
         "hover_required": False,
         "yaw_scan_offset_deg": 0.0,
@@ -187,6 +196,9 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
         "yaw_scan_remaining_deg": 480.0,
         "max_yaw_scan_extent_deg": 480.0,
         "yaw_scan_budget_exceeded": False,
+        "yaw_scan_turn_count": 0,
+        "yaw_scan_recharge_count": 0,
+        "yaw_scan_recharge_distance_m": 0.5,
     }
     action_constraints = context["allowed_action_constraints"]
     assert action_constraints["planner_tools"] == ["uav.hover", "uav.turn_relative", "uav.move_body"]
@@ -211,6 +223,7 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert context["phase_execution_summary"] == {}
     assert "phase_completion_criteria" not in context["context_schema"]["planner_context_fields"]
     assert "phase_execution_summary" in context["context_schema"]["planner_context_fields"]
+    assert "phase_neighborhood" in context["context_schema"]["planner_context_fields"]
     assert "forbidden_tools" not in action_constraints
     assert "lifecycle_tools_excluded" not in action_constraints
     assert action_constraints["action_schemas"]["uav.hover"]["args"] == {}
@@ -244,6 +257,39 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert "motion_history_summary" in context["context_schema"]["module_content_fields"]["action"]
     recent_execution = fragments["action"]["content"]["motion_history_summary"]["recent_execution"]
     assert recent_execution[-1] == {"tool": "uav.hover", "args": {}}
+
+
+def test_context_builder_exposes_only_compact_adjacent_phase_semantics(tmp_path):
+    state = make_state()
+    state.current_phase_index = 1
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
+
+    previous = context["phase_neighborhood"]["previous"]
+    next_phase = context["phase_neighborhood"]["next"]
+    assert previous == {
+        "index": state.semantic_plan.phases[0].index,
+        "name": state.semantic_plan.phases[0].name,
+        "goal": state.semantic_plan.phases[0].goal,
+        "status": "completed",
+    }
+    assert next_phase == {
+        "index": state.semantic_plan.phases[2].index,
+        "name": state.semantic_plan.phases[2].name,
+        "goal": state.semantic_plan.phases[2].goal,
+        "status": "upcoming",
+    }
+    assert set(previous) == {"index", "name", "goal", "status"}
+    assert set(next_phase) == {"index", "name", "goal", "status"}
+    assert "done_when" not in previous
+    assert "continue_when" not in next_phase
+    assert "metrics" not in next_phase
+    assert context["current_phase"] == state.semantic_plan.phases[1].to_dict()
+
+    state.current_phase_index = len(state.semantic_plan.phases) - 1
+    final_context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
+    assert final_context["phase_neighborhood"]["previous"]["status"] == "completed"
+    assert final_context["phase_neighborhood"]["next"] is None
 
 
 def test_context_builder_reports_runtime_resolved_observation_modalities(tmp_path):
@@ -664,13 +710,22 @@ def test_model_user_content_omits_fragment_debug_metadata(tmp_path):
     context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
 
     content = build_model_user_content(context)
-    text = content[0]["text"] if isinstance(content, list) else content
+    text = (
+        "\n".join(
+            part["text"]
+            for part in content
+            if isinstance(part, dict) and isinstance(part.get("text"), str)
+        )
+        if isinstance(content, list)
+        else content
+    )
 
     assert "selected_frame_metadata" not in text
     assert str(rgb_path) not in text
     assert "safety_constraints" not in text
     assert "observation_policy" not in text
     assert "yaw_scan_remaining_deg" not in text
+    assert "visual_search_progress" in text
     assert '"direction"' not in text
 
 
@@ -687,6 +742,15 @@ def test_context_builder_motion_history_preserves_recent_execution_order(tmp_pat
     action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
     summary = action["content"]["motion_history_summary"]
     assert summary["recent_execution_order"] == "oldest_to_newest"
+    assert summary["visual_search_progress"] == {
+        "scope": "current_stationary_viewpoint",
+        "yaw_offset_deg": 0.0,
+        "yaw_extent_deg": 0.0,
+        "yaw_remaining_deg": 480.0,
+        "turn_count": 0,
+        "recharge_count": 0,
+        "recharge_distance_m": 0.5,
+    }
     assert summary["recent_execution"] == [
         {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}},
         {"tool": "uav.turn_relative", "args": {"yaw_deg": -5}},
@@ -902,7 +966,12 @@ def test_context_builder_exposes_yaw_scan_budget(tmp_path):
     state = make_state()
     state.yaw_scan_offset_deg = 120.0
     state.yaw_scan_extent_deg = 450.0
-    safety_config = UavSafetyConfig(max_yaw_scan_extent_deg=480.0)
+    state.yaw_scan_turn_count = 7
+    state.yaw_scan_recharge_count = 2
+    safety_config = UavSafetyConfig(
+        max_yaw_scan_extent_deg=480.0,
+        yaw_scan_recharge_distance_m=0.5,
+    )
 
     context = ObservationContextBuilder(safety_config=safety_config).build(state, make_memory(tmp_path, state))
 
@@ -912,6 +981,24 @@ def test_context_builder_exposes_yaw_scan_budget(tmp_path):
     assert safety_constraints["yaw_scan_remaining_deg"] == 30.0
     assert safety_constraints["max_yaw_scan_extent_deg"] == 480.0
     assert safety_constraints["yaw_scan_budget_exceeded"] is False
+    assert safety_constraints["yaw_scan_turn_count"] == 7
+    assert safety_constraints["yaw_scan_recharge_count"] == 2
+    assert safety_constraints["yaw_scan_recharge_distance_m"] == 0.5
+
+    action = {
+        fragment["name"]: fragment for fragment in context["fragments"]
+    }["action"]
+    assert action["content"]["motion_history_summary"][
+        "visual_search_progress"
+    ] == {
+        "scope": "current_stationary_viewpoint",
+        "yaw_offset_deg": 120.0,
+        "yaw_extent_deg": 450.0,
+        "yaw_remaining_deg": 30.0,
+        "turn_count": 7,
+        "recharge_count": 2,
+        "recharge_distance_m": 0.5,
+    }
 
 
 def test_context_builder_loads_default_project_map_memory(tmp_path, monkeypatch):

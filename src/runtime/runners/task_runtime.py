@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 from collections.abc import Callable
 from typing import Any
@@ -703,6 +704,11 @@ class TaskRuntime:
             self._pose_from_observation(observation_before),
             self._pose_from_observation(observation_after),
         )
+        visual_search_recharge = self._maybe_recharge_visual_search_budget(
+            state,
+            window_measurements,
+            phase=phase_name,
+        )
         window_record = {
             "phase_key": phase_key,
             "phase": phase_name,
@@ -715,6 +721,8 @@ class TaskRuntime:
             "measurements": window_measurements,
             "safety_interventions": list(safety_decision.interventions),
         }
+        if visual_search_recharge is not None:
+            window_record["visual_search_recharge"] = visual_search_recharge
         window_ref = self._write_phase_window_debug_artifact(phase_key, state.current_phase_window_count, window_record)
         window_summary = {
             "phase": phase_name,
@@ -929,6 +937,48 @@ class TaskRuntime:
         max_yaw_scan = float(self.safety.safety_config.max_yaw_scan_extent_deg)
         yaw_scan_extent = float(getattr(state, "yaw_scan_extent_deg", 0.0) or 0.0)
         return max(0.0, max_yaw_scan - yaw_scan_extent)
+
+    def _maybe_recharge_visual_search_budget(
+        self,
+        state: MissionState,
+        measurements: dict[str, Any],
+        *,
+        phase: str,
+    ) -> dict[str, Any] | None:
+        """Recharge yaw search only after a verified viewpoint translation.
+
+        Command success alone is insufficient: a blocked vehicle can return a
+        successful command without changing the camera viewpoint. The
+        post-action observation supplies canonical planar and vertical motion,
+        so both horizontal relocation and altitude changes can start a fresh
+        stationary search segment.
+        """
+
+        try:
+            planar_m = abs(float(measurements.get("planar_displacement_m", 0.0) or 0.0))
+            vertical_m = abs(float(measurements.get("vertical_delta_m", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            return None
+        translation_3d_m = math.hypot(planar_m, vertical_m)
+        threshold_m = float(
+            self.safety.safety_config.yaw_scan_recharge_distance_m
+        )
+        if translation_3d_m < threshold_m:
+            return None
+
+        recharge = state.recharge_yaw_scan()
+        payload = {
+            "phase": phase,
+            "phase_key": state.current_phase_key,
+            "window_index": state.current_phase_window_count,
+            "planar_displacement_m": round(planar_m, 6),
+            "vertical_displacement_m": round(vertical_m, 6),
+            "translation_3d_m": round(translation_3d_m, 6),
+            "recharge_distance_m": threshold_m,
+            **recharge,
+        }
+        self._event("visual_search_budget_recharged", payload)
+        return payload
 
     def _executed_tool_names(self, executed_steps: list[dict]) -> list[str]:
         names = []

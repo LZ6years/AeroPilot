@@ -1147,6 +1147,13 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert state.stopped_reason == "runtime_loop_guard_reached"
     assert planner.contexts
     assert planner.contexts[0]["current_phase"]["name"] == "orient_right"
+    assert planner.contexts[0]["phase_neighborhood"]["previous"] is None
+    assert planner.contexts[0]["phase_neighborhood"]["next"] == {
+        "index": 2,
+        "name": "search_landmark",
+        "goal": "identify the black street lamp candidate",
+        "status": "upcoming",
+    }
     assert "fragments" in planner.contexts[0]
     assert "context_schema" in planner.contexts[0]
     assert "module_content_fields" in planner.contexts[0]["context_schema"]
@@ -1624,6 +1631,79 @@ def test_task_runtime_normalizes_yaw_wraparound_delta(tmp_path):
     recorder.close()
 
     assert measurements["yaw_delta_deg"] == 29.0
+
+
+def test_task_runtime_recharges_yaw_scan_only_after_verified_translation(
+    tmp_path,
+):
+    run_dir = tmp_path / "yaw_scan_recharge"
+    recorder = AsyncRunLogger(run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        safety=SafetySupervisor(
+            UavSafetyConfig(yaw_scan_recharge_distance_m=0.5)
+        ),
+    )
+    parsed = make_single_phase_parse_result()
+    state = MissionState("recharge", parsed.instruction, parsed.plan)
+    state.record_phase_window_started()
+    state.record_action(
+        "uav.turn_relative", {"yaw_deg": -120.0}, {"ok": True}
+    )
+
+    below_threshold = runtime._maybe_recharge_visual_search_budget(
+        state,
+        {
+            "planar_displacement_m": 0.49,
+            "vertical_delta_m": 0.0,
+        },
+        phase=state.current_phase_name,
+    )
+    assert below_threshold is None
+    assert state.yaw_scan_extent_deg == 120.0
+    assert state.yaw_scan_turn_count == 1
+
+    vertical_recharge = runtime._maybe_recharge_visual_search_budget(
+        state,
+        {
+            "planar_displacement_m": 0.0,
+            "vertical_delta_m": -0.5,
+        },
+        phase=state.current_phase_name,
+    )
+    assert vertical_recharge is not None
+    assert vertical_recharge["translation_3d_m"] == 0.5
+    assert vertical_recharge["previous_segment"]["extent_deg"] == 120.0
+    assert state.yaw_scan_extent_deg == 0.0
+    assert state.yaw_scan_turn_count == 0
+    assert state.yaw_scan_recharge_count == 1
+
+    state.record_action(
+        "uav.turn_relative", {"yaw_deg": 60.0}, {"ok": True}
+    )
+    planar_recharge = runtime._maybe_recharge_visual_search_budget(
+        state,
+        {
+            "planar_displacement_m": 0.5,
+            "vertical_delta_m": 0.0,
+        },
+        phase=state.current_phase_name,
+    )
+    assert planar_recharge is not None
+    assert planar_recharge["recharge_count"] == 2
+    assert state.yaw_scan_offset_deg == 0.0
+    recorder.close()
+
+    recharge_events = [
+        record
+        for record in load_event_records(run_dir)
+        if record["event"] == "visual_search_budget_recharged"
+    ]
+    assert len(recharge_events) == 2
+    assert recharge_events[0]["payload"]["vertical_displacement_m"] == 0.5
 
 
 def test_task_runtime_continue_transition_window_limit_stops_without_advancing_phase(tmp_path):

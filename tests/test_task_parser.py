@@ -177,12 +177,26 @@ def test_model_parser_prompts_split_structure_from_phase_criteria():
     assert "never write bare reference absence" not in criteria_prompt
     assert "Do not output or modify intent, task_goal, total, goal" in criteria_prompt
     assert "long sequential route" in structure_prompt
-    assert "4-8 phases" in structure_prompt
+    assert "Navigable-checkpoint segmentation contract" in structure_prompt
+    assert "It is not an atomic action or one verb per phase" in structure_prompt
+    assert "turn toward a road and proceed along it" in structure_prompt
+    assert "completing only the turn does not finish the phase" in structure_prompt
+    assert "Movement-mode changes alone do not force a boundary" in structure_prompt
+    assert "different stable landmarks, regions, route relations" in structure_prompt
+    assert "must never remove, skip, or postpone" in structure_prompt
+    assert "including all clauses near the end of a long instruction" in structure_prompt
+    assert "map each ordered route checkpoint to a phase" in structure_prompt
+    assert "Do not split mechanically at punctuation" in structure_prompt
     assert "execute_full_route_navigation" in structure_prompt
     assert "takes precedence over the general interpretation" in structure_prompt
     assert "unless an injected benchmark protocol" in structure_prompt
     assert "one local navigation checkpoint" in criteria_prompt
     assert "remaining route segment" in criteria_prompt
+    assert "Movement-result integrity" in criteria_prompt
+    assert "whole local route-leg endpoint" in criteria_prompt
+    assert "turning or aligning does not complete a phase" in criteria_prompt
+    assert "require actual traversal progress" in criteria_prompt
+    assert "must not be presented as proof of physical passage" in criteria_prompt
     assert "instead of the general physical interpretation" in criteria_prompt
 
 
@@ -446,12 +460,15 @@ def test_model_parser_runs_structure_then_independent_phase_criteria(monkeypatch
     parser.configure_evidence_capabilities(
         ["NOW RGB: current visible appearance and image-space relations."]
     )
+    structure_response = (
+        '{"intent":"face_target","task_goal":{"target":"person","target_attributes":{},'
+        '"final_state":"facing_person"},"phases":['
+        '{"index":1,"total":2,"name":"locate_person","goal":"Locate the person"},'
+        '{"index":2,"total":2,"name":"align_to_person","goal":"Face the person"}]}'
+    )
     responses = iter(
         [
-            '{"intent":"face_target","task_goal":{"target":"person","target_attributes":{},'
-            '"final_state":"facing_person"},"phases":['
-            '{"index":1,"total":2,"name":"locate_person","goal":"Locate the person"},'
-            '{"index":2,"total":2,"name":"align_to_person","goal":"Face the person"}]}',
+            structure_response,
             '{"index":1,"name":"locate_person","done_when":["person is identifiable"],'
             '"continue_when":["person is absent or ambiguous"],'
             '"metrics":[]}',
@@ -480,6 +497,9 @@ def test_model_parser_runs_structure_then_independent_phase_criteria(monkeypatch
     assert "skill_for_" not in str(requests[0])
     assert "skill_for_locate_person" in str(requests[1])
     assert "skill_for_align_to_person" in str(requests[2])
+    assert parser.last_parse_trace["structure_strategy"] == "single_pass_navigable_checkpoint"
+    assert parser.last_parse_trace["structure_phase_count"] == 2
+    assert "structure_audit_passes" not in parser.last_parse_trace
     assert [item["selected_skills"] for item in parser.last_parse_trace["phases"]] == [
         ["skill_for_locate_person"],
         ["skill_for_align_to_person"],

@@ -3,5 +3,6 @@
   "max_linear_velocity_mps": 6.0,
   "max_vertical_velocity_mps": 3.0,
   "max_move_duration_sec": 8.0,
-  "max_yaw_scan_extent_deg": 480.0
+  "max_yaw_scan_extent_deg": 480.0,
+  "yaw_scan_recharge_distance_m": 0.5
 }

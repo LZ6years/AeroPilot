@@ -255,6 +255,7 @@ def _package(control_target: str = "actor") -> MapPackage:
                 "BP_Character",
                 "BP_Animal",
                 "BP_Car",
+                "BP_Drone",
             ]
         }
     return MapPackage.from_dict(
@@ -490,6 +491,7 @@ def test_actor_prepare_normalizes_scene_before_camera_sync() -> None:
                 "BP_Character",
                 "BP_Animal",
                 "BP_Car",
+                "BP_Drone",
             ),
             scale=(0.1, 0.1, 0.1),
             camera_follow="standard_pose",
@@ -503,11 +505,13 @@ def test_actor_prepare_normalizes_scene_before_camera_sync() -> None:
         "vset /object/BP_Character/hide",
         "vset /object/BP_Animal/hide",
         "vset /object/BP_Car/hide",
+        "vset /object/BP_Drone/hide",
     ]
     assert client.hidden_objects == {
         "BP_Character",
         "BP_Animal",
         "BP_Car",
+        "BP_Drone",
     }
     assert all((command, 5) in client.requests for command in hide_commands)
     assert client.actor_scale == pytest.approx([0.1, 0.1, 0.1])
@@ -520,6 +524,32 @@ def test_actor_prepare_normalizes_scene_before_camera_sync() -> None:
         for index, command in enumerate(client.commands)
         if command.startswith("vset /camera/0/location ")
     )
+
+
+def test_hidden_controlled_actor_remains_pose_controllable() -> None:
+    """Hiding the UAV mesh must not turn Actor control into camera-only motion."""
+
+    client = FakeUnrealCvClient()
+    control = ActorPoseControl(
+        client,
+        _actor_config(
+            startup_hide_objects=("BP_Drone",),
+            camera_follow="standard_pose",
+            camera_validation_enabled=True,
+            disable_physics=False,
+        ),
+    )
+
+    control.prepare()
+    control.set_pose([1.5, 2.5, 3.5, 2.0, 20.0, 1.0])
+    control.sync_camera()
+
+    assert client.hidden_objects == {"BP_Drone"}
+    assert control.get_pose() == pytest.approx(
+        [1.5, 2.5, 3.5, 2.0, 20.0, 1.0]
+    )
+    assert client.actor_location == pytest.approx([150.0, 250.0, 350.0])
+    assert client.camera_location == pytest.approx(client.actor_location)
 
 
 def test_actor_prepare_ignores_missing_declared_hide_object() -> None:
@@ -624,6 +654,7 @@ def test_map_package_validates_actor_control_and_capabilities() -> None:
         "BP_Character",
         "BP_Animal",
         "BP_Car",
+        "BP_Drone",
     ]
     assert backend.describe_capabilities(actor_package).control_mode == "actor_pose"
     assert backend.describe_capabilities(camera_package).control_mode == "camera_pose"
@@ -673,14 +704,6 @@ def test_map_package_validates_actor_control_and_capabilities() -> None:
                 "startup": {"hide_objects": ["person", "person"]},
             },
             "unique",
-        ),
-        (
-            {
-                "control_target": "actor",
-                "actor": {"name": "drone"},
-                "startup": {"hide_objects": ["drone"]},
-            },
-            "cannot hide controlled",
         ),
         (
             {

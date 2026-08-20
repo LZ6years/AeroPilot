@@ -275,6 +275,8 @@ class TaskParser:
             phase_traces.append(phase_trace)
         self.last_parse_trace = {
             "strategy": "structure_then_phase_skill_criteria",
+            "structure_strategy": "single_pass_navigable_checkpoint",
+            "structure_phase_count": len(structure.phases),
             "configured_evidence": list(self.configured_evidence),
             "phases": phase_traces,
             "warnings": [*self.config_warnings, *normalization_warnings],

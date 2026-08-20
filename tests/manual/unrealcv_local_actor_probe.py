@@ -22,7 +22,8 @@ After copying the portable config example and replacing its local root:
         --yaw-deg 10 \
         --move-forward-m 0.25 \
         --speed-mps 0.5 \
-        --require-visual
+        --require-visual \
+        --require-first-person
 
 Inspect ``runs/manual_local_unrealcv_probe/<run-id>/summary.json`` plus the
 RGB, depth, depth-preview, and segmentation artifacts.
@@ -36,6 +37,7 @@ from datetime import datetime
 import json
 import math
 from pathlib import Path
+import re
 import sys
 from typing import Any
 
@@ -86,6 +88,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--require-visual",
         action="store_true",
         help="Reject constant RGB/depth artifacts instead of only saving them",
+    )
+    parser.add_argument(
+        "--require-first-person",
+        action="store_true",
+        help=(
+            "Require the configured controlled Actor to be hidden from every "
+            "captured segmentation frame"
+        ),
     )
     return parser
 
@@ -143,6 +153,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             "move_forward_m": args.move_forward_m,
             "speed_mps": args.speed_mps,
         },
+        "require_first_person": bool(args.require_first_person),
         "poses": {},
         "checks": {},
         "cleanup": {"attempted": False},
@@ -162,6 +173,41 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             raise AssertionError(
                 f"Expected actor_pose capabilities, received {capabilities}"
             )
+
+        # Query the Actor's segmentation color before Backend.connect() hides
+        # its mesh.  This keeps the frozen EnvClient API clean: the raw
+        # UnrealCV request exists only in this developer acceptance probe and
+        # never becomes Agent- or Benchmark-facing behavior.
+        self_actor_color: tuple[int, int, int] | None = None
+        if args.require_first_person:
+            actor = dict(package.unrealcv.get("actor", {}))
+            actor_name = str(actor.get("name", "")).strip()
+            hidden_objects = {
+                str(value)
+                for value in dict(package.unrealcv.get("startup", {})).get(
+                    "hide_objects", ()
+                )
+            }
+            if not actor_name:
+                raise ValueError(
+                    "--require-first-person requires unrealcv.actor.name"
+                )
+            if actor_name not in hidden_objects:
+                raise ValueError(
+                    "--require-first-person requires the controlled Actor "
+                    f"{actor_name!r} in unrealcv.startup.hide_objects"
+                )
+            self_actor_color = _query_object_color(
+                scene.control_host,
+                scene.control_port,
+                actor_name,
+            )
+            summary["first_person_contract"] = {
+                "actor_name": actor_name,
+                "segmentation_color": list(self_actor_color),
+                "validation": "controlled Actor color absent from object_mask",
+            }
+
         connected = client.execute_action(
             scene.scene_instance_id, args.agent_id, "connect", {}
         )
@@ -173,7 +219,10 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         summary["poses"]["before"] = before.pose
         _write_json(run_dir / "observation_before.json", before.to_dict())
         summary["checks"]["visual_before"] = _visual_quality(
-            before, require=args.require_visual
+            before,
+            require=args.require_visual,
+            self_actor_color=self_actor_color,
+            require_self_hidden=args.require_first_person,
         )
 
         if args.yaw_deg:
@@ -188,6 +237,12 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             after_turn = _observe(client, scene.scene_instance_id, args.agent_id)
             summary["poses"]["after_turn"] = after_turn.pose
             _write_json(run_dir / "observation_after_turn.json", after_turn.to_dict())
+            summary["checks"]["visual_after_turn"] = _visual_quality(
+                after_turn,
+                require=args.require_visual,
+                self_actor_color=self_actor_color,
+                require_self_hidden=args.require_first_person,
+            )
             summary["checks"]["turn"] = {
                 "position_drift_m": _position_distance(before.pose, after_turn.pose),
                 "yaw_delta_deg": _yaw_delta(
@@ -213,6 +268,12 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
             after_move = _observe(client, scene.scene_instance_id, args.agent_id)
             summary["poses"]["after_move"] = after_move.pose
             _write_json(run_dir / "observation_after_move.json", after_move.to_dict())
+            summary["checks"]["visual_after_move"] = _visual_quality(
+                after_move,
+                require=args.require_visual,
+                self_actor_color=self_actor_color,
+                require_self_hidden=args.require_first_person,
+            )
             motion_origin = (
                 summary["poses"].get("after_turn") or summary["poses"]["before"]
             )
@@ -252,7 +313,10 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 ),
             }
             summary["checks"]["visual_restored"] = _visual_quality(
-                restored_observation, require=args.require_visual
+                restored_observation,
+                require=args.require_visual,
+                self_actor_color=self_actor_color,
+                require_self_hidden=args.require_first_person,
             )
 
         _assert_acceptance(summary, args)
@@ -318,8 +382,15 @@ def _visual_quality(
     observation: RawObservation,
     *,
     require: bool,
+    self_actor_color: tuple[int, int, int] | None = None,
+    require_self_hidden: bool = False,
 ) -> dict[str, Any]:
-    """Validate saved artifacts without putting scene judgment in Backend."""
+    """Validate saved artifacts without putting scene judgment in Backend.
+
+    The object-mask check is intentionally opt-in and probe-local.  A generic
+    Backend may legally render its controlled Actor; only a deployment that
+    declares an egocentric/first-person acceptance contract must hide it.
+    """
 
     import numpy as np
     from PIL import Image
@@ -378,7 +449,95 @@ def _visual_quality(
     )
     if require and not result["ok"]:
         raise AssertionError(f"Visual artifacts are degenerate: {result}")
+    if self_actor_color is not None:
+        color = np.asarray(self_actor_color, dtype=np.uint8)
+        self_actor_pixels = int(
+            np.count_nonzero(np.all(segmentation == color, axis=2))
+        )
+        result["segmentation"].update(
+            {
+                "controlled_actor_color": list(self_actor_color),
+                "controlled_actor_pixels": self_actor_pixels,
+                "controlled_actor_hidden": self_actor_pixels == 0,
+            }
+        )
+        if require_self_hidden and self_actor_pixels:
+            raise AssertionError(
+                "Controlled Actor is still visible in the observation mask: "
+                f"color={self_actor_color}, pixels={self_actor_pixels}, "
+                f"path={segmentation_path}"
+            )
     return result
+
+
+def _query_object_color(
+    host: str,
+    port: int,
+    actor_name: str,
+) -> tuple[int, int, int]:
+    """Read one Actor mask color through a short-lived diagnostic connection.
+
+    This runs before the primary EnvClient connects and hides the mesh, avoiding
+    concurrent UnrealCV clients. The query is read-only and exists solely to
+    validate saved segmentation artifacts after normal Backend capture.
+    """
+
+    from unrealcv import Client
+
+    diagnostic = Client((str(host), int(port)))
+    try:
+        diagnostic.connect()
+        if not diagnostic.isconnected():
+            raise ConnectionError(
+                f"Could not connect diagnostic UnrealCV client to {host}:{port}"
+            )
+        command = f"vget /object/{actor_name}/color"
+        response = diagnostic.request(command)
+        text = (
+            response.decode("utf-8", errors="replace").strip()
+            if isinstance(response, bytes)
+            else str(response).strip()
+        )
+        if text.lower().startswith("error"):
+            raise RuntimeError(f"UnrealCV command failed: {command}: {text}")
+        return _parse_object_color(text, actor_name)
+    finally:
+        diagnostic.disconnect()
+
+
+def _parse_object_color(text: str, actor_name: str) -> tuple[int, int, int]:
+    """Accept both common UnrealCV object-color response encodings.
+
+    Older clients return ``"23 127 47"`` while the DowntownWest binary
+    returns ``"(R=23,G=127,B=47,A=255)"``. Alpha is intentionally ignored
+    because object-mask PNG artifacts are normalized to RGB by the Backend.
+    """
+
+    labelled = {
+        channel.upper(): value
+        for channel, value in re.findall(
+            r"([RGBA])\s*=\s*(-?\d+(?:\.\d+)?)",
+            text,
+            flags=re.IGNORECASE,
+        )
+    }
+    try:
+        if all(channel in labelled for channel in ("R", "G", "B")):
+            values = tuple(
+                int(float(labelled[channel])) for channel in ("R", "G", "B")
+            )
+        else:
+            values = tuple(int(float(value)) for value in text.split())
+    except ValueError as exc:
+        raise RuntimeError(
+            f"UnrealCV returned an invalid object color for {actor_name!r}: "
+            f"{text!r}"
+        ) from exc
+    if len(values) != 3 or any(value < 0 or value > 255 for value in values):
+        raise RuntimeError(
+            f"UnrealCV object color must contain three bytes; received {text!r}"
+        )
+    return values
 
 
 def _assert_acceptance(summary: dict[str, Any], args: argparse.Namespace) -> None:

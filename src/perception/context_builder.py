@@ -21,6 +21,19 @@ from src.uav.frames import SIGNED_YAW_SEMANTICS
 DEFAULT_MAP_MEMORY_PATH = Path("memory") / "map" / "map_memory.json"
 
 
+def _compact_phase_neighbor(phase: Any | None, *, status: str) -> dict[str, Any] | None:
+    """Return only the adjacent phase identity needed for route continuity."""
+
+    if phase is None:
+        return None
+    return {
+        "index": int(phase.index),
+        "name": str(phase.name),
+        "goal": str(phase.goal),
+        "status": status,
+    }
+
+
 class ObservationContextBuilder:
     def __init__(
         self,
@@ -66,6 +79,7 @@ class ObservationContextBuilder:
             active_instruction=memory.active_instruction,
             semantic_plan=state.semantic_plan.to_dict(),
             current_phase=self._current_phase(state),
+            phase_neighborhood=self._phase_neighborhood(state),
             semantic_goal=state.semantic_plan.task_goal.to_dict(),
             safety_constraints=self._safety_constraints(state),
             allowed_action_constraints=self._allowed_action_constraints(),
@@ -83,6 +97,23 @@ class ObservationContextBuilder:
             return None
         return state.semantic_plan.phases[state.current_phase_index].to_dict()
 
+    def _phase_neighborhood(self, state: MissionState) -> dict[str, Any]:
+        """Expose adjacent intent without duplicating actionable contracts.
+
+        The current phase remains authoritative. Neighbor goals provide route
+        continuity, while their criteria and execution evidence stay hidden so
+        an upcoming phase cannot be mistaken for the active phase.
+        """
+
+        phases = state.semantic_plan.phases
+        current_index = state.current_phase_index
+        previous = phases[current_index - 1] if 0 < current_index <= len(phases) else None
+        next_phase = phases[current_index + 1] if 0 <= current_index < len(phases) - 1 else None
+        return {
+            "previous": _compact_phase_neighbor(previous, status="completed"),
+            "next": _compact_phase_neighbor(next_phase, status="upcoming"),
+        }
+
     def _safety_constraints(self, state: MissionState) -> dict[str, Any]:
         max_yaw_scan = self.safety_config.max_yaw_scan_extent_deg
         yaw_scan_extent = float(state.yaw_scan_extent_deg)
@@ -94,6 +125,11 @@ class ObservationContextBuilder:
             "yaw_scan_remaining_deg": remaining,
             "max_yaw_scan_extent_deg": max_yaw_scan,
             "yaw_scan_budget_exceeded": remaining <= 0.0,
+            "yaw_scan_turn_count": int(state.yaw_scan_turn_count),
+            "yaw_scan_recharge_count": int(state.yaw_scan_recharge_count),
+            "yaw_scan_recharge_distance_m": float(
+                self.safety_config.yaw_scan_recharge_distance_m
+            ),
         }
 
     def _allowed_action_constraints(self) -> dict[str, Any]:

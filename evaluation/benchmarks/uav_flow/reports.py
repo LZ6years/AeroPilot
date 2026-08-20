@@ -10,6 +10,7 @@ from typing import Any
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.metrics import summarize_metrics
 from evaluation.benchmarks.uav_flow.trajectory import target_local_from_case
+from evaluation.benchmarks.core.report_io import atomic_write_text
 
 
 def create_eval_dir(output_root: str | Path, eval_id: str | None = None) -> Path:
@@ -67,9 +68,29 @@ def write_trajectory_plots(case_dir: str | Path, trajectory_path: str | Path, ca
         return {"status": "error", "error_type": type(exc).__name__, "error": str(exc)}
 
 
-def write_eval_summary(eval_dir: str | Path, results: list[dict[str, Any]], console_lines: list[str]) -> dict[str, str]:
+def write_eval_summary(
+    eval_dir: str | Path,
+    results: list[dict[str, Any]],
+    console_lines: list[str],
+    *,
+    report_metadata: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Write an atomic evaluation snapshot for completed cases.
+
+    ``report_metadata`` describes the batch lifecycle only.  It never changes
+    per-case metrics, and its defaults preserve the historical meaning of a
+    normally completed run.
+    """
+
     path = Path(eval_dir)
+    metadata = dict(report_metadata or {})
+    metadata.setdefault("run_status", "completed")
+    metadata.setdefault("expected_case_count", len(results))
+    metadata["finalized_case_count"] = len(results)
+    metadata.setdefault("incomplete_case_ids", [])
+    metadata.setdefault("report_generated_from", "live_runner")
     summary = {
+        **metadata,
         "metrics": summarize_metrics(results),
         "failure_counts": failure_counts(results),
         "backend_action_tracking": _summarize_backend_action_tracking(
@@ -80,9 +101,15 @@ def write_eval_summary(eval_dir: str | Path, results: list[dict[str, Any]], cons
     summary_json = path / "summary.json"
     summary_md = path / "summary.md"
     console_txt = path / "console.txt"
-    summary_json.write_text(json.dumps(summary, indent=2, ensure_ascii=False), encoding="utf-8")
-    summary_md.write_text(_summary_markdown(summary), encoding="utf-8")
-    console_txt.write_text("\n".join(console_lines) + ("\n" if console_lines else ""), encoding="utf-8")
+    atomic_write_text(
+        summary_json,
+        json.dumps(summary, indent=2, ensure_ascii=False),
+    )
+    atomic_write_text(summary_md, _summary_markdown(summary))
+    atomic_write_text(
+        console_txt,
+        "\n".join(console_lines) + ("\n" if console_lines else ""),
+    )
     return {"summary_json": str(summary_json), "summary_md": str(summary_md), "console_txt": str(console_txt)}
 
 
@@ -93,6 +120,10 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
     lines = [
         "# UAV-Flow Benchmark Summary",
         "",
+        f"- Run status: {summary.get('run_status', 'completed')}",
+        f"- Finalized cases: {summary.get('finalized_case_count', metrics.get('case_count', 0))}",
+        f"- Expected cases: {summary.get('expected_case_count', metrics.get('case_count', 0))}",
+        f"- Incomplete cases: {summary.get('incomplete_case_ids', [])}",
         f"- Cases: {metrics.get('case_count', 0)}",
         f"- Evaluated nDTW: {metrics.get('evaluated_count', 0)}",
         f"- Overall mean nDTW: {metrics.get('overall_mean_ndtw')}",

@@ -108,11 +108,10 @@ class MapPackage:
                         f"MapPackage {data['map_id']} requires unique "
                         "unrealcv.startup.hide_objects names"
                     )
-                if name in normalized_hide_objects:
-                    raise ValueError(
-                        f"MapPackage {data['map_id']} cannot hide controlled "
-                        f"unrealcv.actor.name {name!r} during startup"
-                    )
+                # Hiding an Actor only disables its rendered mesh in UnrealCV;
+                # it does not delete the Actor or remove pose control. Allowing
+                # the controlled Actor here is required by egocentric vehicle
+                # deployments that must keep self geometry out of observations.
                 startup["hide_objects"] = normalized_hide_objects
                 unrealcv["startup"] = startup
                 scale = actor.get("scale")

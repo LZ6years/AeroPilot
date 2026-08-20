@@ -9,14 +9,16 @@ scene lifecycle.
 
 Default behavior
 ----------------
-The example config defaults to a small in-memory dry batch:
+CLI options are overrides, not a second source of defaults. When an option is
+omitted, its value is preserved from the selected JSON config. The repository
+example config defaults to a small in-memory dry batch:
 
-- classes: Turn,Approach
+- classes: Turn,Move,Approach
 - limit_per_class: 1
 - execution_mode: dry
-- enable_sr_judge: True
-- enable_visual_diagnostics: True
-- enable_action_planner_debug: True
+- enable_sr_judge: False
+- enable_visual_diagnostics: False
+- enable_action_planner_debug: False
 - runtime_loop_guard_windows: 40
 - parser_mode: model
 
@@ -45,6 +47,10 @@ Run one Move-only debug batch:
 Run exact dataset cases in the requested order:
 
     python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --case-ids 2025-03-30_11-49-14,2025-03-30_11-49-27 --execution-mode managed --eval-id uav_flow_exact_cases
+
+Run every case from every class without selector truncation:
+
+    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --config evaluation/benchmarks/uav_flow/configs/uav_flow_full_273.local --all-cases --eval-id uav_flow_full
 
 Check real UnrealCV imports without launching UE:
 
@@ -92,7 +98,6 @@ from evaluation.benchmarks.uav_flow.runner import UavFlowBenchmarkRunner
 
 
 DEFAULT_CONFIG = "evaluation/benchmarks/uav_flow/configs/uav_flow_eval.example.json"
-DEFAULT_CLASSES = ["Turn", "Approach"]
 
 
 def main() -> int:
@@ -126,8 +131,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--config", default=DEFAULT_CONFIG, help="Base UAV-Flow eval config JSON.")
     parser.add_argument("--eval-id", default=None, help="Output eval id. Omit to use a timestamped eval directory.")
-    parser.add_argument("--classes", default=",".join(DEFAULT_CLASSES), help="Comma-separated class names.")
-    parser.add_argument(
+    selectors = parser.add_mutually_exclusive_group()
+    selectors.add_argument(
         "--case-ids",
         default=None,
         help=(
@@ -135,7 +140,20 @@ def _parser() -> argparse.ArgumentParser:
             "--classes, --limit-per-class, and --max-cases."
         ),
     )
-    parser.add_argument("--limit-per-class", type=int, default=1, help="Number of cases per class.")
+    selectors.add_argument(
+        "--all-cases",
+        action="store_true",
+        help=(
+            "Select every dataset case by clearing case_ids, classes, "
+            "limit_per_class, and max_cases from the base config."
+        ),
+    )
+    parser.add_argument(
+        "--classes",
+        default=None,
+        help="Optional comma-separated class override; omitted preserves the config.",
+    )
+    parser.add_argument("--limit-per-class", type=int, default=None, help="Optional number of cases per class.")
     parser.add_argument("--max-cases", type=int, default=None, help="Optional total case cap after class filtering.")
     parser.add_argument(
         "--execution-mode",
@@ -143,11 +161,34 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="Simulator ownership mode; dry uses the in-memory UnrealCV Backend.",
     )
-    parser.add_argument("--no-sr-judge", action="store_true", help="Disable SR judge.")
-    parser.add_argument("--no-visual-diagnostics", action="store_true", help="Disable visual diagnostics.")
-    parser.add_argument("--no-action-planner-debug", action="store_true", help="Disable action planner debug artifacts.")
-    parser.add_argument("--runtime-loop-guard-windows", type=int, default=40, help="Runtime loop guard window count.")
-    parser.add_argument("--parser-mode", default="model", help="Task parser mode.")
+    parser.add_argument(
+        "--sr-judge",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="enable_sr_judge",
+        help="Override the config's optional post-episode SR judge.",
+    )
+    parser.add_argument(
+        "--visual-diagnostics",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="enable_visual_diagnostics",
+        help="Override the config's optional frame-level visual diagnostics.",
+    )
+    parser.add_argument(
+        "--action-planner-debug",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        dest="enable_action_planner_debug",
+        help="Override action-planner debug artifact generation.",
+    )
+    parser.add_argument(
+        "--runtime-loop-guard-windows",
+        type=int,
+        default=None,
+        help="Optional per-semantic-phase runtime window limit.",
+    )
+    parser.add_argument("--parser-mode", default=None, help="Optional task parser mode override.")
     parser.add_argument("--env-path", default=None, help="Optional .env path for model config.")
     parser.add_argument(
         "--planner-depth-input",
@@ -167,29 +208,48 @@ def _config_from_args(args: argparse.Namespace) -> UavFlowEvalConfig:
     base = UavFlowEvalConfig.from_file(args.config)
     data = base.to_dict()
     case_ids = _parse_case_ids(args.case_ids)
-    data.update(
-        {
-            "execution_mode": args.execution_mode or base.execution_mode,
-            "case_ids": case_ids if case_ids is not None else base.case_ids,
-            "classes": (
-                None
-                if case_ids is not None
-                else _parse_classes(args.classes)
-            ),
-            "limit_per_class": (
-                None if case_ids is not None else args.limit_per_class
-            ),
-            "enable_sr_judge": not args.no_sr_judge,
-            "enable_visual_diagnostics": not args.no_visual_diagnostics,
-            "enable_action_planner_debug": not args.no_action_planner_debug,
-            "runtime_loop_guard_windows": args.runtime_loop_guard_windows,
-            "parser_mode": args.parser_mode,
-        }
-    )
-    if case_ids is not None:
-        data["max_cases"] = None
-    elif args.max_cases is not None:
-        data["max_cases"] = args.max_cases
+
+    # Selection flags are intentionally explicit. In particular, omitted CLI
+    # options must not turn a carefully reviewed full-run config back into the
+    # script's historical Turn/Approach one-case smoke selection.
+    if args.all_cases:
+        data.update(
+            {
+                "case_ids": None,
+                "classes": None,
+                "limit_per_class": None,
+                "max_cases": None,
+            }
+        )
+    elif case_ids is not None:
+        data.update(
+            {
+                "case_ids": case_ids,
+                "classes": None,
+                "limit_per_class": None,
+                "max_cases": None,
+            }
+        )
+    else:
+        if args.classes is not None:
+            data["case_ids"] = None
+            data["classes"] = _parse_classes(args.classes)
+        if args.limit_per_class is not None:
+            data["limit_per_class"] = args.limit_per_class
+        if args.max_cases is not None:
+            data["max_cases"] = args.max_cases
+
+    optional_overrides = {
+        "execution_mode": args.execution_mode,
+        "enable_sr_judge": args.enable_sr_judge,
+        "enable_visual_diagnostics": args.enable_visual_diagnostics,
+        "enable_action_planner_debug": args.enable_action_planner_debug,
+        "runtime_loop_guard_windows": args.runtime_loop_guard_windows,
+        "parser_mode": args.parser_mode,
+    }
+    for field_name, value in optional_overrides.items():
+        if value is not None:
+            data[field_name] = value
     if args.env_path:
         data["env_path"] = args.env_path
     if args.planner_depth_input:
@@ -211,10 +271,11 @@ def _config_from_args(args: argparse.Namespace) -> UavFlowEvalConfig:
     return UavFlowEvalConfig.from_dict(data)
 
 
-def _parse_classes(value: str | None) -> list[str]:
-    if not value:
-        return list(DEFAULT_CLASSES)
-    return [item.strip() for item in value.split(",") if item.strip()]
+def _parse_classes(value: str) -> list[str]:
+    classes = [item.strip() for item in value.split(",") if item.strip()]
+    if not classes:
+        raise ValueError("--classes must contain at least one class name; use --all-cases for the full dataset")
+    return classes
 
 
 def _parse_case_ids(value: str | None) -> list[str] | None:

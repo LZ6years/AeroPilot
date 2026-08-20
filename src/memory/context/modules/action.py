@@ -22,6 +22,7 @@ class DefaultActionContextModule(ContextModule):
         motion_history_summary = _motion_history_summary(
             recent_execution,
             stage_context.phase_execution_summary,
+            stage_context.safety_constraints,
         )
         failed = [item for item in actions if item.get("result", {}).get("ok") is False]
         risks = [
@@ -57,8 +58,9 @@ class DefaultActionContextModule(ContextModule):
             ],
             "content_fields": {
                 "motion_history_summary": (
-                    "Current-phase UAV displacement plus up to five recent successful actions, "
-                    "ordered oldest to newest. It is history evidence, not the current plan or target distance."
+                    "Current-phase UAV displacement, stationary visual-search progress, and up to five "
+                    "recent successful actions ordered oldest to newest. It is self-motion history, not "
+                    "the current plan or target distance."
                 ),
             },
             "risk_fields": {
@@ -98,8 +100,10 @@ def _model_facing_action_args(tool: Any, args: Any) -> dict[str, Any]:
 def _motion_history_summary(
     recent_execution: list[dict[str, Any]],
     phase_execution_summary: dict[str, Any] | None,
+    safety_constraints: dict[str, Any] | None,
 ) -> dict[str, Any]:
     phase_summary = phase_execution_summary if isinstance(phase_execution_summary, dict) else {}
+    safety_summary = safety_constraints if isinstance(safety_constraints, dict) else {}
     measurements = phase_summary.get("measurements", {})
     if not isinstance(measurements, dict):
         measurements = {}
@@ -109,6 +113,29 @@ def _motion_history_summary(
         "phase_start_relative_uav_motion": {
             key: _safe_float(measurements.get(key))
             for key in ("forward_m", "right_m", "up_m", "planar_m", "yaw_delta_deg")
+        },
+        # Expose only compact self-motion facts. Safety interventions and
+        # debug-only policy payloads remain outside model-facing text.
+        "visual_search_progress": {
+            "scope": "current_stationary_viewpoint",
+            "yaw_offset_deg": _safe_float(
+                safety_summary.get("yaw_scan_offset_deg")
+            ),
+            "yaw_extent_deg": _safe_float(
+                safety_summary.get("yaw_scan_extent_deg")
+            ),
+            "yaw_remaining_deg": _safe_float(
+                safety_summary.get("yaw_scan_remaining_deg")
+            ),
+            "turn_count": _safe_int(
+                safety_summary.get("yaw_scan_turn_count")
+            ),
+            "recharge_count": _safe_int(
+                safety_summary.get("yaw_scan_recharge_count")
+            ),
+            "recharge_distance_m": _safe_float(
+                safety_summary.get("yaw_scan_recharge_distance_m")
+            ),
         },
         "recent_execution_order": "oldest_to_newest",
         "recent_execution": list(recent_execution),

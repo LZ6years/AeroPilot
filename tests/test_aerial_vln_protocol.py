@@ -19,6 +19,9 @@ def test_aerial_vln_v2_protocol_defines_episode_stop_without_physical_land():
     assert '"land by X"' in context
     assert "reaching the target region" in context
     assert "ending the episode" in context
+    assert "In parsed task_goal and phase name/goal text" in context
+    assert "Do not carry land, landing, landed, touchdown, or descent wording" in context
+    assert "original user instruction remains unchanged" in context
     assert "position relation requested by the instruction" in context
     assert "does not require physical ground contact" in context
     assert "AirSim landed state" in context

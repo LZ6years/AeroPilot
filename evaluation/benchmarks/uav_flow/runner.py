@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -12,12 +13,12 @@ from evaluation.benchmarks.core import (
     BenchmarkCaseReview,
     BenchmarkEpisodeExecutor,
     BenchmarkReviewRenderer,
-    BenchmarkSummaryReview,
     EpisodeAuditCursor,
     FrameAssetResolver,
     ResolvedFrameAsset,
     write_audit_json,
 )
+from evaluation.benchmarks.core.report_io import atomic_write_text
 from evaluation.benchmarks.uav_flow.adapter import (
     UAV_FLOW_PROTOCOL,
     UavFlowCaseAdapter,
@@ -26,6 +27,9 @@ from evaluation.benchmarks.uav_flow.adapter import (
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase, load_cases
 from evaluation.benchmarks.uav_flow.config import UavFlowEvalConfig
 from evaluation.benchmarks.uav_flow.metric_suite import UavFlowMetricSuite
+from evaluation.benchmarks.uav_flow.postprocess import (
+    render_evaluation_report,
+)
 from evaluation.benchmarks.uav_flow.reports import (
     create_eval_dir,
     write_case_outputs,
@@ -89,6 +93,7 @@ class UavFlowBenchmarkRunner:
         self._stmr_session = stmr_session
         self._stmr_warmed = False
         self._case_reviews: dict[str, BenchmarkCaseReview] = {}
+        self._report_errors: list[dict[str, Any]] = []
         self._validate_review_config()
         self.map_packages, self.port_policy = load_map_config(
             config.map_config_path
@@ -131,100 +136,143 @@ class UavFlowBenchmarkRunner:
         return cases
 
     def run(self, *, eval_id: str | None = None) -> dict[str, Any]:
+        # A runner instance may be reused by a manual harness.  Report state is
+        # evaluation-local and must never leak case pages or errors across IDs.
+        self._case_reviews.clear()
+        self._report_errors.clear()
         self._prepare_stmr()
         eval_dir = create_eval_dir(self.config.output_dir, eval_id)
         console_lines = [f"uav_flow_eval: output={eval_dir}"]
-        results = []
-        for case in self.load_cases():
-            result = self.run_case(case, eval_dir)
-            results.append(result)
-            turn = result.get("turn_diagnostics") or {}
-            tracking = turn.get("backend_turn_tracking") or {}
-            action_tracking = result.get("backend_action_tracking") or {}
-            console_lines.append(
-                f"{case.case_id}: status={result.get('status')} "
-                f"ndtw={result.get('ndtw', {}).get('ndtw')} "
-                f"reference_yaw_delta_deg="
-                f"{turn.get('reference_yaw_delta_deg')} "
-                f"actual_yaw_delta_deg="
-                f"{turn.get('actual_yaw_delta_deg')} "
-                f"final_yaw_error_deg="
-                f"{turn.get('final_yaw_error_deg')} "
-                f"translation_drift_m="
-                f"{turn.get('translation_drift_m')} "
-                f"turn_tracking_max_abs_error_deg="
-                f"{tracking.get('max_abs_error_deg')} "
-                f"translation_tracking_max_error_m="
-                f"{action_tracking.get('max_position_error_m')} "
-                f"zero_action_completion="
-                f"{action_tracking.get('zero_action_completion')}"
-            )
-        summary_paths = write_eval_summary(eval_dir, results, console_lines)
-        if self.config.generate_html_review:
-            summary_payload = json.loads(
-                Path(summary_paths["summary_json"]).read_text(
-                    encoding="utf-8"
+        cases = self.load_cases()
+        results: list[dict[str, Any]] = []
+        summary_paths: dict[str, str] = {}
+        active_case_id: str | None = None
+        try:
+            for case in cases:
+                active_case_id = case.case_id
+                result = self.run_case(case, eval_dir)
+                results.append(result)
+                active_case_id = None
+                console_lines.append(_result_console_line(result))
+                summary_paths = self._write_report_snapshot(
+                    eval_dir,
+                    results,
+                    console_lines,
+                    run_status="running",
+                    expected_case_count=len(cases),
+                    incomplete_case_ids=[],
                 )
-            )
-            review_paths = BenchmarkReviewRenderer().write(
+        except BaseException as exc:
+            interrupted = isinstance(exc, KeyboardInterrupt)
+            summary_paths = self._write_report_snapshot(
                 eval_dir,
-                BenchmarkSummaryReview(
-                    benchmark_name="UAV-Flow",
-                    protocol_variant=UAV_FLOW_PROTOCOL,
-                    metrics=dict(summary_payload.get("metrics") or {}),
-                    failure_counts=dict(
-                        summary_payload.get("failure_counts") or {}
-                    ),
-                    cases=tuple(
-                        {
-                            "case_id": item.get("case_id"),
-                            "status": item.get("status"),
-                            "metrics": {
-                                "ndtw": (item.get("ndtw") or {}).get(
-                                    "ndtw"
-                                ),
-                                "reference_yaw_delta_deg": (
-                                    item.get("turn_diagnostics") or {}
-                                ).get("reference_yaw_delta_deg"),
-                                "actual_yaw_delta_deg": (
-                                    item.get("turn_diagnostics") or {}
-                                ).get("actual_yaw_delta_deg"),
-                                "final_yaw_error_deg": (
-                                    item.get("turn_diagnostics") or {}
-                                ).get("final_yaw_error_deg"),
-                                "translation_drift_m": (
-                                    item.get("turn_diagnostics") or {}
-                                ).get("translation_drift_m"),
-                                "turn_tracking_max_abs_error_deg": (
-                                    (
-                                        item.get("turn_diagnostics") or {}
-                                    ).get("backend_turn_tracking")
-                                    or {}
-                                ).get("max_abs_error_deg"),
-                                "translation_tracking_max_error_m": (
-                                    item.get("backend_action_tracking") or {}
-                                ).get("max_position_error_m"),
-                                "zero_action_completion": (
-                                    item.get("backend_action_tracking") or {}
-                                ).get("zero_action_completion"),
-                            },
-                        }
-                        for item in results
-                    ),
-                ),
-                tuple(
-                    self._case_reviews[item["case_id"]]
-                    for item in results
-                    if item.get("case_id") in self._case_reviews
+                results,
+                console_lines,
+                run_status="interrupted" if interrupted else "failed",
+                expected_case_count=len(cases),
+                incomplete_case_ids=(
+                    [active_case_id] if active_case_id is not None else []
                 ),
             )
-            summary_paths.update(review_paths)
-            _append_html_review_links(summary_paths, review_paths)
+            raise
+        summary_paths = self._write_report_snapshot(
+            eval_dir,
+            results,
+            console_lines,
+            run_status="completed",
+            expected_case_count=len(cases),
+            incomplete_case_ids=[],
+        )
         return {
             "eval_dir": str(eval_dir),
             "summary_paths": summary_paths,
             "results": results,
         }
+
+    def _write_report_snapshot(
+        self,
+        eval_dir: Path,
+        results: list[dict[str, Any]],
+        console_lines: list[str],
+        *,
+        run_status: str,
+        expected_case_count: int,
+        incomplete_case_ids: list[str],
+    ) -> dict[str, str]:
+        """Refresh progress without allowing report I/O to alter case status."""
+
+        metadata = {
+            "run_status": run_status,
+            "expected_case_count": expected_case_count,
+            "incomplete_case_ids": list(incomplete_case_ids),
+            "excluded_case_ids": [],
+            "report_generated_from": "live_runner",
+        }
+        try:
+            if self.config.generate_html_review:
+                paths = render_evaluation_report(
+                    eval_dir,
+                    results,
+                    (
+                        self._case_reviews[item["case_id"]]
+                        for item in results
+                        if item.get("case_id") in self._case_reviews
+                    ),
+                    console_lines,
+                    report_metadata=metadata,
+                    render_cases=False,
+                )
+            else:
+                paths = write_eval_summary(
+                    eval_dir,
+                    results,
+                    console_lines,
+                    report_metadata=metadata,
+                )
+        except Exception as exc:
+            self._report_errors.append(
+                {
+                    "stage": "evaluation_report_snapshot",
+                    "run_status": run_status,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            )
+            paths = {}
+        self._write_live_report_manifest(
+            eval_dir,
+            metadata=metadata,
+            finalized_case_count=len(results),
+            summary_paths=paths,
+        )
+        return paths
+
+    def _write_live_report_manifest(
+        self,
+        eval_dir: Path,
+        *,
+        metadata: dict[str, Any],
+        finalized_case_count: int,
+        summary_paths: dict[str, str],
+    ) -> None:
+        """Persist report errors separately from benchmark outcome data."""
+
+        payload = {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            **metadata,
+            "finalized_case_count": finalized_case_count,
+            "report_errors": list(self._report_errors),
+            "summary_paths": dict(summary_paths),
+        }
+        try:
+            atomic_write_text(
+                eval_dir / "report_manifest.json",
+                json.dumps(payload, indent=2, ensure_ascii=False),
+            )
+        except Exception:
+            # There is no safer report channel left at this point.  The case
+            # evidence remains authoritative and can be recovered offline.
+            pass
 
     def run_case(
         self, case: UavFlowCase, eval_dir: str | Path
@@ -484,7 +532,7 @@ class UavFlowBenchmarkRunner:
                 "mask_label_map.json": scenario.label_map_for(case.case_id),
             },
         )
-        self._case_reviews[case.case_id] = BenchmarkCaseReview(
+        case_review = BenchmarkCaseReview(
             case_id=case.case_id,
             benchmark_name="UAV-Flow",
             protocol_variant=UAV_FLOW_PROTOCOL,
@@ -533,6 +581,22 @@ class UavFlowBenchmarkRunner:
             ),
             metadata=case.planner_safe_metadata(),
         )
+        self._case_reviews[case.case_id] = case_review
+        if self.config.generate_html_review:
+            try:
+                # Case HTML is flushed now rather than held until every case
+                # finishes.  A later Ctrl+C can therefore only leave the
+                # currently active case incomplete.
+                BenchmarkReviewRenderer().write_case(eval_dir, case_review)
+            except Exception as exc:
+                self._report_errors.append(
+                    {
+                        "stage": "case_html",
+                        "case_id": case.case_id,
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
         return {
             "case_id": case.case_id,
             "class_name": case.class_name,
@@ -776,23 +840,23 @@ def _stmr_summary(
         }
 
 
-def _append_html_review_links(
-    summary_paths: dict[str, str], review_paths: dict[str, str]
-) -> None:
-    """Append portable Core review links to existing text summaries."""
+def _result_console_line(result: dict[str, Any]) -> str:
+    """Keep the historical detailed console summary for one finalized case."""
 
-    html_review = review_paths.get("html_review")
-    if not html_review:
-        return
-    summary_md = Path(summary_paths["summary_md"])
-    console_txt = Path(summary_paths["console_txt"])
-    summary_md.write_text(
-        summary_md.read_text(encoding="utf-8")
-        + f"\n## HTML Review\n\n- `{html_review}`\n",
-        encoding="utf-8",
-    )
-    console_txt.write_text(
-        console_txt.read_text(encoding="utf-8")
-        + f"html_review: {html_review}\n",
-        encoding="utf-8",
+    turn = result.get("turn_diagnostics") or {}
+    tracking = turn.get("backend_turn_tracking") or {}
+    action_tracking = result.get("backend_action_tracking") or {}
+    return (
+        f"{result.get('case_id')}: status={result.get('status')} "
+        f"ndtw={(result.get('ndtw') or {}).get('ndtw')} "
+        f"reference_yaw_delta_deg={turn.get('reference_yaw_delta_deg')} "
+        f"actual_yaw_delta_deg={turn.get('actual_yaw_delta_deg')} "
+        f"final_yaw_error_deg={turn.get('final_yaw_error_deg')} "
+        f"translation_drift_m={turn.get('translation_drift_m')} "
+        "turn_tracking_max_abs_error_deg="
+        f"{tracking.get('max_abs_error_deg')} "
+        "translation_tracking_max_error_m="
+        f"{action_tracking.get('max_position_error_m')} "
+        "zero_action_completion="
+        f"{action_tracking.get('zero_action_completion')}"
     )

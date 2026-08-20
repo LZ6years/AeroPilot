@@ -42,6 +42,7 @@ class ContextComposer:
         context = PlannerContext(
             active_instruction=stage_context.active_instruction,
             current_phase=stage_context.current_phase,
+            phase_neighborhood=dict(stage_context.phase_neighborhood),
             semantic_goal=dict(stage_context.semantic_goal),
             fragments=fragments,
             disabled_fragments=list(self.registry.disabled),
@@ -91,6 +92,10 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
         "planner_context_fields": {
             "active_instruction": "Current user instruction.",
             "current_phase": "Current semantic phase with goal, done_when, continue_when, and metrics.",
+            "phase_neighborhood": (
+                "Compact previous completed and next upcoming semantic phase summaries; "
+                "the current phase remains authoritative."
+            ),
             "semantic_goal": "Parsed lightweight task_goal.",
             "fragments": "Enabled context fragments.",
             "rules": "Global FlyAgent behavior guidance.",
@@ -143,7 +148,7 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
             "recent_pose_delta": "Delta between recent poses.",
         },
         "action": {
-            "motion_history_summary": "Current-phase UAV motion plus up to five successful actions ordered oldest to newest.",
+            "motion_history_summary": "Current-phase UAV motion, stationary visual-search progress, and up to five successful actions ordered oldest to newest.",
         },
         "map": {
             "recalled_map_memories": "Map memory clues; confirm with current observations.",

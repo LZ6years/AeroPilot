@@ -23,9 +23,20 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     assert '"observe"' not in structure_shape
     assert '"continue_when"' not in structure_shape
     assert '"metrics"' not in structure_shape
+    assert "Navigable-checkpoint segmentation contract" in structure
+    assert "It is not an atomic action or one verb per phase" in structure
+    assert "turn toward a road and proceed along it" in structure
+    assert "completing only the turn does not finish the phase" in structure
     assert "simple single-objective instruction as one phase" in structure
-    assert "ordered landmark and navigation checkpoints" in structure
-    assert "commonly need 4-8 phases" in structure
+    assert "ordered local checkpoints" in structure
+    assert "rather than targeting a preferred count" in structure
+    assert "Movement-mode changes alone do not force a boundary" in structure
+    assert "Setup and progress may share one phase" in structure
+    assert "different stable landmarks, regions, route relations" in structure
+    assert "must never remove, skip, or postpone" in structure
+    assert "including all clauses near the end of a long instruction" in structure
+    assert "map each ordered route checkpoint to a phase" in structure
+    assert "Do not split mechanically at punctuation" in structure
     assert "execute_full_route_navigation" in structure
     assert "Phase structure comes from user intent" in structure
     assert "does not decide execution feasibility or downgrade the request for safety" in structure
@@ -76,6 +87,14 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     assert "appears as achieved in done_when" in criteria
     assert "continue_when is non-exhaustive clarification" in criteria
     assert "not an action explanation, self-motion explanation, completion gate" in criteria
+    assert "Movement-result integrity" in criteria
+    assert "whole local route-leg endpoint" in criteria
+    assert "turning or aligning does not complete a phase" in criteria
+    assert "separate AND items in done_when" in criteria
+    assert "Seeing or facing the route or landmark is not sufficient" in criteria
+    assert "must not be presented as proof of physical passage" in criteria
+    assert "Seeing the elevated or lower region is not sufficient" in criteria
+    assert "Yaw-only change, visibility of the far side, or a cue moving to another image side" in criteria
     assert "Without a shared-frame target-relative measurement" in criteria
     assert "observable cues supported by selected skill guidance" in criteria
     assert "A target-relative radius, standoff, side relation" in criteria

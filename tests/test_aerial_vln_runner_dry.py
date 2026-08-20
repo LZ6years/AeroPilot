@@ -130,7 +130,7 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
         == "aerial_vln.uav_agent_native_actions.v2"
     )
     assert manifest["scene_map"] == {"1": "airvln_env_1"}
-    assert manifest["runtime_loop_guard_windows"] == 40
+    assert manifest["runtime_loop_guard_windows"] == 100
     assert manifest["initialization_min_settle_sec"] == 0.25
     assert FakeTaskParser.last_protocol_context == (
         AERIAL_VLN_PARSER_PROTOCOL_CONTEXT
@@ -215,6 +215,16 @@ def test_runner_continues_after_benchmark_failure(tmp_path, monkeypatch):
             "error_type": "PlannerError",
             "error": "model action failed",
         }
+        result["metrics"] = {
+            "distance_to_goal": None,
+            "success": False,
+            "oracle_success": False,
+            "ndtw": 0.0,
+            "sdtw": 0.0,
+            "path_length": 0,
+            "steps_taken": 0,
+            "uav_action_steps": 0,
+        }
         return result
 
     monkeypatch.setattr(runner, "run_case", fake_run_case)
@@ -225,6 +235,8 @@ def test_runner_continues_after_benchmark_failure(tmp_path, monkeypatch):
     assert result["summary"]["batch_status"] == "completed"
     assert result["summary"]["completed_case_count"] == 3
     assert result["summary"]["abort_reason"] is None
+    assert result["summary"]["metrics"]["distance_to_goal"] is None
+    assert result["summary"]["metrics"]["success"] == 0.0
 
 
 def test_aerial_real_review_requires_persistent_debug_artifacts(tmp_path):
