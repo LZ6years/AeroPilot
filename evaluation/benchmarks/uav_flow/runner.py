@@ -39,6 +39,9 @@ from evaluation.benchmarks.uav_flow.reports import (
 from evaluation.benchmarks.uav_flow.scenario import (
     UavFlowScenarioController,
 )
+from evaluation.benchmarks.uav_flow.scene_session import (
+    UavFlowBatchSceneSession,
+)
 from evaluation.benchmarks.uav_flow.review import (
     build_uav_flow_review_sections,
 )
@@ -94,6 +97,8 @@ class UavFlowBenchmarkRunner:
         self._stmr_warmed = False
         self._case_reviews: dict[str, BenchmarkCaseReview] = {}
         self._report_errors: list[dict[str, Any]] = []
+        self._batch_session: UavFlowBatchSceneSession | None = None
+        self._batch_eval_dir: Path | None = None
         self._validate_review_config()
         self.map_packages, self.port_policy = load_map_config(
             config.map_config_path
@@ -147,47 +152,56 @@ class UavFlowBenchmarkRunner:
         results: list[dict[str, Any]] = []
         summary_paths: dict[str, str] = {}
         active_case_id: str | None = None
+        self._batch_eval_dir = eval_dir
         try:
-            for case in cases:
-                active_case_id = case.case_id
-                result = self.run_case(case, eval_dir)
-                results.append(result)
-                active_case_id = None
-                console_lines.append(_result_console_line(result))
+            try:
+                for case in cases:
+                    active_case_id = case.case_id
+                    result = self.run_case(case, eval_dir)
+                    results.append(result)
+                    active_case_id = None
+                    console_lines.append(_result_console_line(result))
+                    summary_paths = self._write_report_snapshot(
+                        eval_dir,
+                        results,
+                        console_lines,
+                        run_status="running",
+                        expected_case_count=len(cases),
+                        incomplete_case_ids=[],
+                    )
+            except BaseException as exc:
+                interrupted = isinstance(exc, KeyboardInterrupt)
                 summary_paths = self._write_report_snapshot(
                     eval_dir,
                     results,
                     console_lines,
-                    run_status="running",
+                    run_status="interrupted" if interrupted else "failed",
                     expected_case_count=len(cases),
-                    incomplete_case_ids=[],
+                    incomplete_case_ids=(
+                        [active_case_id] if active_case_id is not None else []
+                    ),
                 )
-        except BaseException as exc:
-            interrupted = isinstance(exc, KeyboardInterrupt)
+                raise
             summary_paths = self._write_report_snapshot(
                 eval_dir,
                 results,
                 console_lines,
-                run_status="interrupted" if interrupted else "failed",
+                run_status="completed",
                 expected_case_count=len(cases),
-                incomplete_case_ids=(
-                    [active_case_id] if active_case_id is not None else []
-                ),
+                incomplete_case_ids=[],
             )
-            raise
-        summary_paths = self._write_report_snapshot(
-            eval_dir,
-            results,
-            console_lines,
-            run_status="completed",
-            expected_case_count=len(cases),
-            incomplete_case_ids=[],
-        )
-        return {
-            "eval_dir": str(eval_dir),
-            "summary_paths": summary_paths,
-            "results": results,
-        }
+            return {
+                "eval_dir": str(eval_dir),
+                "summary_paths": summary_paths,
+                "results": results,
+            }
+        finally:
+            # A batch owns one UE scene.  This outer finally is the only normal
+            # process-stop boundary, including Ctrl+C and report failures.
+            try:
+                self._close_batch_session()
+            finally:
+                self._batch_eval_dir = None
 
     def _write_report_snapshot(
         self,
@@ -277,57 +291,154 @@ class UavFlowBenchmarkRunner:
     def run_case(
         self, case: UavFlowCase, eval_dir: str | Path
     ) -> dict[str, Any]:
+        """Run one case using the active batch scene or a temporary session."""
+
+        session, owns_session = self._scene_session_for_case(Path(eval_dir))
+        try:
+            return self._run_case_with_session(case, eval_dir, session)
+        finally:
+            if owns_session:
+                session.close()
+
+    def _run_case_with_session(
+        self,
+        case: UavFlowCase,
+        eval_dir: str | Path,
+        session: UavFlowBatchSceneSession,
+    ) -> dict[str, Any]:
         self._prepare_stmr()
         case_dir = Path(eval_dir) / "cases" / case.case_id
         case_dir.mkdir(parents=True, exist_ok=True)
         _write_evaluation_truth(case_dir, case)
-        run_dir = RunStore(self.config.run_root).create_run_dir(
-            f"uav_flow_{case.case_id}"
-        )
-        recorder = AsyncRunLogger(run_dir)
+        episode = UavFlowCaseAdapter(
+            map_id=self.config.map_id,
+            scene_id=self.map_package.scene_id,
+            agent_id="uav_flow_drone",
+            observation_profile=self.observation_profile,
+        ).prepare_case(case)
+        recovery_attempts: list[dict[str, Any]] = []
+        attempt_number = 1
+        episode_prepared = False
+        execution = None
+        setup_error: dict[str, str] | None = None
         stmr_module: StmrMapContextModule | None = None
         scenario = UavFlowScenarioController(
             enabled=self.config.execution_mode != "dry"
         )
-        metric_suite = UavFlowMetricSuite(
-            case,
-            case_dir,
-            action_config=self.action_config,
-        )
-        try:
-            planner = ModelActionPlanner(self.model_config)
-            context_builder, stmr_module = self._context_builder(planner)
-            runtime = self._make_runtime(
-                run_dir,
-                recorder,
-                planner=planner,
-                context_builder=context_builder,
+
+        while True:
+            run_dir = RunStore(self.config.run_root).create_run_dir(
+                f"uav_flow_{case.case_id}_attempt{attempt_number}"
             )
-            episode = UavFlowCaseAdapter(
-                map_id=self.config.map_id,
-                scene_id=self.map_package.scene_id,
-                agent_id="uav_flow_drone",
-                observation_profile=self.observation_profile,
-            ).prepare_case(case)
-            execution = BenchmarkEpisodeExecutor().execute(
-                episode,
-                runtime=runtime,
-                scenario_controller=scenario,
-                metric_suite=metric_suite,
-                run_dir=run_dir,
+            recorder = AsyncRunLogger(run_dir)
+            scenario = UavFlowScenarioController(
+                enabled=self.config.execution_mode != "dry"
             )
-        except Exception as exc:
-            recorder.event(
-                "uav_flow_case_failed",
-                {"error_type": type(exc).__name__, "error": str(exc)},
+            metric_suite = UavFlowMetricSuite(
+                case,
+                case_dir,
+                action_config=self.action_config,
             )
+            setup_error = None
             execution = None
-            setup_error = {
-                "error_type": type(exc).__name__,
-                "error": str(exc),
+            try:
+                if not episode_prepared:
+                    # Place the UAV before TaskParser invokes a potentially slow
+                    # model. Runtime repeats and audits the same placement.
+                    session.prepare_episode(episode)
+                episode_prepared = False
+                planner = ModelActionPlanner(self.model_config)
+                context_builder, stmr_module = self._context_builder(planner)
+                runtime = self._make_runtime(
+                    run_dir,
+                    recorder,
+                    planner=planner,
+                    context_builder=context_builder,
+                    env_client=session.client,
+                )
+                execution = BenchmarkEpisodeExecutor().execute(
+                    episode,
+                    runtime=session.runtime_view(runtime),
+                    scenario_controller=scenario,
+                    metric_suite=metric_suite,
+                    run_dir=run_dir,
+                )
+            except Exception as exc:
+                recorder.event(
+                    "uav_flow_case_failed",
+                    {"error_type": type(exc).__name__, "error": str(exc)},
+                )
+                setup_error = {
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+            finally:
+                recorder.close()
+
+            attempt_error = (
+                setup_error
+                if execution is None
+                else execution.outcome.error
+            )
+            if not _is_recoverable_simulator_error(attempt_error):
+                break
+            if attempt_number >= 3:
+                break
+
+            recovery_action = (
+                "resynchronize" if attempt_number == 1 else "restart"
+            )
+            recovery_record = {
+                "attempt": attempt_number,
+                "run_dir": str(run_dir),
+                "error": dict(attempt_error or {}),
+                "recovery_action": recovery_action,
             }
-        finally:
-            recorder.close()
+            try:
+                if recovery_action == "restart":
+                    session.restart_scene(
+                        reason=str((attempt_error or {}).get("error", ""))
+                    )
+                session.prepare_episode(episode)
+                episode_prepared = True
+                recovery_record["status"] = "completed"
+                recovery_attempts.append(recovery_record)
+                attempt_number += 1
+                continue
+            except Exception as recovery_exc:
+                recovery_record.update(
+                    {
+                        "status": "failed",
+                        "recovery_error": {
+                            "error_type": type(recovery_exc).__name__,
+                            "error": str(recovery_exc),
+                        },
+                    }
+                )
+                recovery_attempts.append(recovery_record)
+                if recovery_action == "resynchronize":
+                    # A failed in-place probe skips directly to the one allowed
+                    # process restart rather than wasting another model attempt.
+                    try:
+                        session.restart_scene(reason=str(recovery_exc))
+                        session.prepare_episode(episode)
+                        episode_prepared = True
+                        recovery_attempts.append(
+                            {
+                                "attempt": attempt_number,
+                                "run_dir": str(run_dir),
+                                "recovery_action": "restart",
+                                "status": "completed",
+                            }
+                        )
+                        attempt_number = 3
+                        continue
+                    except Exception as restart_exc:
+                        setup_error = {
+                            "error_type": type(restart_exc).__name__,
+                            "error": str(restart_exc),
+                        }
+                break
 
         audit_cursor = (
             execution.audit_cursor
@@ -515,6 +626,7 @@ class UavFlowBenchmarkRunner:
             "sr_judge": sr_result,
             "stmr": stmr_summary,
             "metric_error": metric_error,
+            "simulator_recovery_attempts": recovery_attempts,
         }
         write_case_outputs(
             case_dir,
@@ -615,6 +727,7 @@ class UavFlowBenchmarkRunner:
             "sr_judge": sr_result,
             "stmr": stmr_summary,
             "metric_error": metric_error,
+            "simulator_recovery_attempts": recovery_attempts,
         }
 
     def _validate_review_config(self) -> None:
@@ -644,27 +757,13 @@ class UavFlowBenchmarkRunner:
         planner: Any,
         context_builder: ObservationContextBuilder | None,
         task_parser: Any | None = None,
+        env_client: SimulatorEnvClient | None = None,
     ) -> TaskRuntime:
-        backend_registry = None
-        execution_mode = self.config.execution_mode
-        if execution_mode == "dry":
-            backend_registry = _dry_unrealcv_registry()
-            server_mode = SimulationExecutionMode.ATTACH
-        else:
-            server_mode = SimulationExecutionMode.parse(execution_mode)
-        server = SimulationServer(
-            self.map_packages,
-            port_policy=self.port_policy,
-            run_dir=run_dir,
-            execution_mode=server_mode,
-            show_display=not self.config.headless,
-            action_config=self.action_config,
-            save_artifacts=self.config.save_artifacts,
-            backend_registry=backend_registry,
-        )
-        env_client = SimulatorEnvClient(
-            server, observation_profile=self.observation_profile
-        )
+        if env_client is None:
+            server = self._make_simulation_server(run_dir)
+            env_client = SimulatorEnvClient(
+                server, observation_profile=self.observation_profile
+            )
         return TaskRuntime(
             env_client,
             recorder,
@@ -681,6 +780,78 @@ class UavFlowBenchmarkRunner:
             enable_action_planner_debug=self.config.enable_action_planner_debug,
             context_builder=context_builder,
         )
+
+    def _make_simulation_server(self, run_dir: str | Path) -> SimulationServer:
+        """Build the one service owned by a real or dry batch session."""
+
+        backend_registry = None
+        execution_mode = self.config.execution_mode
+        if execution_mode == "dry":
+            backend_registry = _dry_unrealcv_registry()
+            server_mode = SimulationExecutionMode.ATTACH
+        else:
+            server_mode = SimulationExecutionMode.parse(execution_mode)
+        return SimulationServer(
+            self.map_packages,
+            port_policy=self.port_policy,
+            run_dir=run_dir,
+            execution_mode=server_mode,
+            show_display=not self.config.headless,
+            action_config=self.action_config,
+            save_artifacts=self.config.save_artifacts,
+            backend_registry=backend_registry,
+        )
+
+    def _scene_session_for_case(
+        self,
+        eval_dir: Path,
+    ) -> tuple[UavFlowBatchSceneSession, bool]:
+        """Return the batch session, or a one-case compatible session."""
+
+        if self._batch_eval_dir is not None:
+            if self._batch_session is None:
+                self._batch_session = self._new_scene_session(
+                    self._batch_eval_dir
+                )
+            return self._batch_session, False
+        return self._new_scene_session(eval_dir), True
+
+    def _new_scene_session(
+        self,
+        eval_dir: Path,
+    ) -> UavFlowBatchSceneSession:
+        service = self._make_simulation_server(
+            eval_dir / "scene_session_runtime"
+        )
+        client = SimulatorEnvClient(
+            service,
+            observation_profile=self.observation_profile,
+        )
+        return UavFlowBatchSceneSession(
+            service,
+            client,
+            map_id=self.config.map_id,
+            scene_id=self.map_package.scene_id,
+            eval_dir=eval_dir,
+        )
+
+    def _close_batch_session(self) -> None:
+        session = self._batch_session
+        self._batch_session = None
+        if session is not None:
+            try:
+                session.close()
+            except Exception as exc:
+                # Do not replace a KeyboardInterrupt or the original batch
+                # failure with a secondary cleanup exception. The session
+                # manifest already contains the exact stop failure.
+                self._report_errors.append(
+                    {
+                        "stage": "batch_scene_cleanup",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
 
     def _load_profile(self) -> ObservationProfile:
         if self.config.observation_profile_path:
@@ -860,3 +1031,43 @@ def _result_console_line(result: dict[str, Any]) -> str:
         "zero_action_completion="
         f"{action_tracking.get('zero_action_completion')}"
     )
+
+
+def _is_recoverable_simulator_error(
+    error: dict[str, Any] | None,
+) -> bool:
+    """Recognize protocol/scene failures without restarting UE for model I/O.
+
+    BenchmarkEpisodeExecutor serializes exceptions at its boundary, so this
+    classifier intentionally relies on stable simulator-owned message prefixes
+    rather than broad network exception classes.  In particular, generic SSL,
+    HTTP, TaskParser, Planner, and model-provider failures must not restart a
+    healthy UnrealCV process.
+    """
+
+    if not error:
+        return False
+    text = " ".join(
+        str(error.get(key, "")) for key in ("error_type", "error")
+    ).lower()
+    model_markers = (
+        "taskparser",
+        "task parser",
+        "planner",
+        "model provider",
+        "dashscope",
+        "ssl",
+        "https://",
+    )
+    if any(marker in text for marker in model_markers):
+        return False
+    simulator_markers = (
+        "unrealcv",
+        "camera follow validation failed",
+        "actor pose validation failed",
+        "simulator warm-up",
+        "simulator initial pose",
+        "simulator batch pre-position",
+        "scene endpoint",
+    )
+    return any(marker in text for marker in simulator_markers)

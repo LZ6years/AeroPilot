@@ -49,11 +49,14 @@ python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
 2. `2025-03-30_11-49-27`；
 3. `2025-03-30_11-52-45`。
 
-每个 case 使用独立 Runtime scene session。真实 HTML 运行自动启用 RGB artifact 和
-Planner debug。检查：
+每个 case 仍使用独立的 TaskRuntime、Planner、Memory 和 run directory，但同一批次、
+同一 `map_id + scene_id` 只启动一次 DowntownWest。UE 进程和 SceneInstance 在 case
+之间复用，避免重复启动地图；真实 HTML 运行自动启用 RGB artifact 和 Planner debug。
+检查：
 
 ```text
 outputs/<eval_id>/review.html
+outputs/<eval_id>/scene_session.json
 outputs/<eval_id>/cases/<case_id>/case.json
 outputs/<eval_id>/cases/<case_id>/review.html
 outputs/<eval_id>/cases/<case_id>/audit.json
@@ -123,13 +126,42 @@ checkpoint/resume。终止整个 Python 进程后，需要人工选择尚未完�
 ```mermaid
 flowchart LR
     P["静态与环境预检"] --> D["加载 273 Cases"]
-    D --> S["Managed 启动 DowntownWest"]
-    S --> R["TaskRuntime"]
-    R --> M["轨迹 · nDTW · HTML"]
-    M --> N{"还有 Case?"}
-    N -->|是| S
-    N -->|否| A["全量汇总"]
+    D --> S["Managed 启动 DowntownWest 一次"]
+    S --> I["设置 Episode 初始位姿 · 同步相机"]
+    I --> R["新 TaskRuntime · Planner · Memory"]
+    R --> M["冻结轨迹 · nDTW · HTML"]
+    M --> C["hover · 隐藏人物/车辆"]
+    C --> N{"还有 Case?"}
+    N -->|是| I
+    N -->|否| X["停止 DowntownWest 一次"]
+    X --> A["全量汇总"]
 ```
+
+### 批次场景生命周期
+
+Runner 在调用 TaskParser 前就应用 planner-safe 的 episode 初始位姿，并进行一次相机
+同步与 warm-up。该 warm-up 不写入正式 Runtime recorder，不计入 Agent 动作、轨迹或
+nDTW。TaskRuntime 随后按 `connect → capability-aware takeoff → set_pose → hover →
+first observation`完成有审计记录的初始化，因此不会先在地图默认位置 hover、再跳到
+case 初始位置。
+
+case 完成后只冻结正式轨迹、执行安全 hover、隐藏受控人物/车辆并释放 UnrealCV
+protocol client，不关闭 UE。人物、车辆的物理、外观、mask color 和位置在下一 case
+重新设置；每个 case 的 Agent Memory 仍完全独立。
+
+`scene_session.json`记录 `start_count`、`restart_count`、`stop_count`、SceneInstance 和
+生命周期事件。正常同地图批次应满足：
+
+```text
+start_count   = 1
+restart_count = 0
+stop_count    = 1
+```
+
+相机跟随、Actor pose 或 UnrealCV 连接失败时，Runner 先重新同步并重跑当前 case
+一次；仍失败才重启 UE 并再重跑一次。TaskParser、Planner、DashScope、SSL/HTTP 等
+模型网络错误不会触发 UE 重启。`Ctrl+C`、报告异常或正常结束都由批次外层 `finally`
+清理本次拥有的 UE。
 
 ## 4. Planner RGB 与深度融合
 

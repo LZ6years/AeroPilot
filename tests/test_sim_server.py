@@ -47,6 +47,26 @@ def make_package() -> MapPackage:
     )
 
 
+def make_unrealcv_package() -> MapPackage:
+    return MapPackage.from_dict(
+        {
+            "map_id": "unreal_map",
+            "provider": "packaged_unreal",
+            "scene_id": "scene",
+            "root": None,
+            "connection": {"mode": "local"},
+            "launch": {"manual": True},
+            "control": {"protocol": "unrealcv"},
+            "unrealcv": {
+                "host": "127.0.0.1",
+                "port": 9068,
+                "camera_id": 0,
+                "control_target": "camera",
+            },
+        }
+    )
+
+
 def make_launch_package(tmp_path) -> MapPackage:
     # Build a launchable MapPackage that points at a temporary fake script.
     script = tmp_path / "env_1" / "LinuxNoEditor" / "AirVLN.sh"
@@ -130,6 +150,19 @@ def test_get_or_start_scene_reuses_running_scene(tmp_path):
 
     assert second.scene_instance_id == first.scene_instance_id
     assert isolated.scene_instance_id != first.scene_instance_id
+
+
+def test_release_scene_client_keeps_unrealcv_scene_running(tmp_path):
+    server = SimulationServer([make_unrealcv_package()], run_dir=tmp_path)
+    scene = server.start_scene("unreal_map")
+
+    server.release_scene_client(scene.scene_instance_id)
+
+    assert server.get_scene_status(scene.scene_instance_id) == "running"
+    assert server.get_or_start_scene("unreal_map").scene_instance_id == (
+        scene.scene_instance_id
+    )
+    server.stop_scene(scene.scene_instance_id)
 
 
 def test_get_or_start_scene_does_not_reuse_stopped_scene(tmp_path):

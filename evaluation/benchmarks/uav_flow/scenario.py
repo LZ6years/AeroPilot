@@ -88,11 +88,6 @@ class UavFlowScenarioController:
     ) -> None:
         if not self.enabled or payload is None:
             return
-        if scene.process_ownership in {"local", "remote_managed"}:
-            # The owned process is already gone after Runtime shutdown, so its
-            # spawned objects cannot leak into another episode. Opening a new
-            # client here would also race single-client UnrealCV servers.
-            return
         connection = self._connect(scene)
         try:
             _set_location(connection, PERSON_NAME, HIDDEN_LOCATION)

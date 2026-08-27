@@ -361,9 +361,14 @@ class TaskRuntime:
         first_scene_use = scene.scene_instance_id not in self._preflight_scene_ids
         if first_scene_use:
             self._run_preflight(scene, agent_id, state)
-            self._preflight_scene_ids.add(scene.scene_instance_id)
         if options.initial_pose is not None:
             self._apply_initial_pose(scene, agent_id, state, options.initial_pose)
+        if first_scene_use:
+            # Hold only after an episode pose has replaced the packaged scene's
+            # default pose. This prevents a visible/default-pose hover followed
+            # by a large camera jump at the start of an evaluation episode.
+            self._run_preflight_hover(scene, agent_id, state)
+            self._preflight_scene_ids.add(scene.scene_instance_id)
 
         stabilization = None
         if first_scene_use or options.initial_pose is not None:
@@ -442,6 +447,15 @@ class TaskRuntime:
                 },
             )
 
+    def _run_preflight_hover(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+    ) -> None:
+        """Hold the initialized pose after connect/takeoff and set_pose."""
+
+        capabilities = scene.capabilities
         if capabilities is None or capabilities.supports("hover"):
             hover_result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
             hover_data = hover_result.to_dict()

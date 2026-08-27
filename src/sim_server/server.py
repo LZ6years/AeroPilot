@@ -153,6 +153,24 @@ class SimulationServer:
             return self.scene_manager.update_status(scene_instance_id, "running")
         return self.backends[scene_instance_id].reset(scene)
 
+    def release_scene_client(self, scene_instance_id: str) -> None:
+        """Release one Backend SDK client without stopping its simulator.
+
+        This is an internal orchestration hook, not part of EnvClient v1.  It
+        exists for benchmark scenario administration between episodes while
+        keeping process ownership and the SceneInstance intact.
+        """
+
+        scene = self.scene_manager.get(scene_instance_id)
+        backend = self.backends[scene_instance_id]
+        release = getattr(backend, "release_connection", None)
+        if not callable(release):
+            raise RuntimeError(
+                f"{scene.capabilities.protocol if scene.capabilities else 'backend'} "
+                "does not support releasing its protocol client"
+            )
+        release(scene)
+
     def get_scene_status(self, scene_instance_id: str) -> str:
         return self.scene_manager.get(scene_instance_id).status
 

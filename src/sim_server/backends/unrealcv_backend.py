@@ -117,12 +117,23 @@ class UnrealCvBackend:
     def stop(self, scene: SceneInstance) -> None:
         """Disconnect only this Backend client; process ownership lives above."""
 
+        self.release_connection(scene)
+        scene.status = "stopped"
+
+    def release_connection(self, scene: SceneInstance) -> None:
+        """Release UnrealCV protocol state while keeping the UE scene running.
+
+        Benchmark-owned scenario editors may need temporary exclusive access to
+        single-client UnrealCV packages between episodes.  This method changes
+        neither process ownership nor ``SceneInstance.status``; the next
+        ``connect``/observation/action lazily reconstructs control and capture.
+        """
+
         if self.client is not None:
             self.client.disconnect()
         self.client = None
         self.control = None
         self.capture = None
-        scene.status = "stopped"
 
     def reset(self, scene: SceneInstance) -> SceneInstance:
         """Keep the connection alive without claiming a generic UE reset."""

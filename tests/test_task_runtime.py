@@ -1949,8 +1949,8 @@ def test_task_runtime_applies_initial_pose_before_first_configured_observation(t
         (run_dir / "state/flight_memory.json").read_text(encoding="utf-8")
     )
 
-    assert event_names.index("preflight_hover_completed") < event_names.index(
-        "episode_initial_pose_completed"
+    assert event_names.index("episode_initial_pose_completed") < event_names.index(
+        "preflight_hover_completed"
     )
     assert event_names.index("episode_initial_pose_completed") < event_names.index(
         "initial_observation_updated"

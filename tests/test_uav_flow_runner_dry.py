@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,9 @@ import pytest
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.config import UavFlowEvalConfig
 from evaluation.benchmarks.uav_flow.runner import UavFlowBenchmarkRunner
+from evaluation.benchmarks.uav_flow.runner import (
+    _is_recoverable_simulator_error,
+)
 from src.agent.phase import COMPLETE_TASK, PhaseTransition
 from src.agent.planning.schemas import CoupledActionPhasePlan
 from src.agent.semantic.schemas import TaskParseResult
@@ -136,7 +140,9 @@ def test_runner_dry_writes_core_audit_truth_artifact_and_summary(tmp_path, monke
     assert (
         tmp_path / "eval" / "manual" / "cases" / case.case_id / "audit.json"
     ).exists()
-    case_payload = (tmp_path / "eval" / "manual" / "cases" / case.case_id / "case.json").read_text(encoding="utf-8")
+    case_payload = (
+        tmp_path / "eval" / "manual" / "cases" / case.case_id / "case.json"
+    ).read_text(encoding="utf-8")
     assert "reference_path_preprocessed" in case_payload
     assert "evaluation_truth_leak_check" not in case_payload
     assert '"audit_summary"' in case_payload
@@ -155,6 +161,109 @@ def test_runner_dry_writes_core_audit_truth_artifact_and_summary(tmp_path, monke
         / case.case_id
         / "evaluation_truth.json"
     ).exists()
+
+
+def test_runner_run_reuses_one_scene_for_multiple_cases(tmp_path, monkeypatch):
+    """The batch boundary, not an individual case, owns scene stop."""
+
+    import evaluation.benchmarks.uav_flow.runner as runner_module
+
+    monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
+    monkeypatch.setattr(runner_module, "ModelActionPlanner", FakePlanner)
+    runner = UavFlowBenchmarkRunner(
+        UavFlowEvalConfig.from_dict(
+            {
+                "output_dir": str(tmp_path / "eval"),
+                "run_root": str(tmp_path / "runs"),
+                "execution_mode": "dry",
+                "parser_mode": "fake",
+                "generate_html_review": False,
+            }
+        )
+    )
+    first = replace(make_case(), case_id="case_a", file_name="case_a.json")
+    second = replace(make_case(), case_id="case_b", file_name="case_b.json")
+    monkeypatch.setattr(runner, "load_cases", lambda: [first, second])
+
+    result = runner.run(eval_id="batch_reuse")
+
+    manifest = json.loads(
+        (
+            Path(result["eval_dir"]) / "scene_session.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert len(result["results"]) == 2
+    assert manifest["status"] == "closed"
+    assert manifest["start_count"] == 1
+    assert manifest["restart_count"] == 0
+    assert manifest["stop_count"] == 1
+
+
+def test_simulator_recovery_classifier_does_not_restart_for_model_network_errors():
+    assert _is_recoverable_simulator_error(
+        {
+            "error_type": "RuntimeError",
+            "error": "UnrealCV camera follow validation failed",
+        }
+    )
+    assert not _is_recoverable_simulator_error(
+        {
+            "error_type": "ConnectionError",
+            "error": "TaskParser model provider SSL EOF at dashscope",
+        }
+    )
+
+
+def test_runner_retries_one_case_after_in_place_simulator_recovery(
+    tmp_path, monkeypatch
+):
+    import evaluation.benchmarks.uav_flow.runner as runner_module
+
+    monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
+    monkeypatch.setattr(runner_module, "ModelActionPlanner", FakePlanner)
+    runner = UavFlowBenchmarkRunner(
+        UavFlowEvalConfig.from_dict(
+            {
+                "output_dir": str(tmp_path / "eval"),
+                "run_root": str(tmp_path / "runs"),
+                "execution_mode": "dry",
+                "parser_mode": "fake",
+                "generate_html_review": False,
+            }
+        )
+    )
+    eval_dir = tmp_path / "eval" / "recovery"
+    session = runner._new_scene_session(eval_dir)
+    real_prepare = session.prepare_episode
+    calls = 0
+
+    def flaky_prepare(episode):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("UnrealCV camera follow validation failed")
+        return real_prepare(episode)
+
+    monkeypatch.setattr(session, "prepare_episode", flaky_prepare)
+    try:
+        result = runner._run_case_with_session(make_case(), eval_dir, session)
+    finally:
+        session.close()
+
+    assert result["status"] == "ok"
+    assert result["simulator_recovery_attempts"] == [
+        {
+            "attempt": 1,
+            "run_dir": result["simulator_recovery_attempts"][0]["run_dir"],
+            "error": {
+                "error_type": "RuntimeError",
+                "error": "UnrealCV camera follow validation failed",
+            },
+            "recovery_action": "resynchronize",
+            "status": "completed",
+        }
+    ]
+    assert calls == 2
 
 
 def test_config_roundtrip_includes_runtime_scene_fields():

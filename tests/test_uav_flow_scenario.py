@@ -122,13 +122,11 @@ def test_scenario_cleanup_hides_both_objects():
     assert connection.disconnect_count == 1
 
 
-def test_managed_scenario_cleanup_relies_on_owned_process_shutdown():
-    called = False
+def test_managed_scenario_cleanup_hides_objects_while_batch_scene_is_alive():
+    connection = FakeConnection(existing=True)
 
     def factory(host, port):
-        nonlocal called
-        called = True
-        return FakeConnection(existing=True)
+        return connection
 
     controller = UavFlowScenarioController(connection_factory=factory)
 
@@ -136,7 +134,11 @@ def test_managed_scenario_cleanup_relies_on_owned_process_shutdown():
         scene(process_ownership="local"), payload(use_obj=1)
     )
 
-    assert called is False
+    assert connection.requests == [
+        f"vset /object/{PERSON_NAME}/location 0.0 0.0 -1000.0",
+        f"vset /object/{VEHICLE_NAME}/location 0.0 0.0 -1000.0",
+    ]
+    assert connection.disconnect_count == 1
 
 
 def test_disabled_dry_scenario_does_not_open_connection():
