@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
+import pytest
 
 from plugins.research.stmr_map.context_modules.map import PluginContextModule, STMR_MAP_USAGE
 from plugins.research.stmr_map.online import StmrOnlineMapBuilder, StmrOnlineMapResult
@@ -124,6 +126,68 @@ def test_online_builder_waits_for_pose_then_retries(tmp_path):
     assert recovered.processed_observation_count == repeated.processed_observation_count == 1
 
 
+def test_online_builder_reads_aerial_vln_nested_pose_and_artifact_paths(tmp_path):
+    _write_complete_memory(tmp_path, include_pose=False)
+    memory_dir = tmp_path / "memory"
+    pose = {
+        "id": "pose_0001",
+        "observation_id": "obs_0001",
+        "coordinate_frame": "canonical_unspecified",
+        "pose": {
+            "position": {"x": 48.25, "y": -7.0, "z": -9.45},
+            "euler_rad": {"pitch": 0.0, "roll": 0.0, "yaw": math.pi / 2.0},
+        },
+    }
+    (memory_dir / "poses.jsonl").write_text(json.dumps(pose) + "\n", encoding="utf-8")
+    frame_rows = [json.loads(line) for line in (memory_dir / "frames.jsonl").read_text(encoding="utf-8").splitlines()]
+    for row in frame_rows:
+        row["metadata"] = {**dict(row.get("metadata") or {}), "artifact_path": row.pop("path")}
+        row["path"] = None
+    (memory_dir / "frames.jsonl").write_text(
+        "\n".join(json.dumps(item) for item in frame_rows) + "\n",
+        encoding="utf-8",
+    )
+    builder = StmrOnlineMapBuilder(
+        session=StmrPerceptionSession(
+            grounding_backend=_FakeGrounding(), sam_backend=_FakeSam()
+        ),
+        device="cpu",
+    )
+
+    result = builder.build(_memory(tmp_path), _stage_context())
+
+    assert result.status == "ready"
+    assert result.center_pose == {
+        "x": 48.25,
+        "y": -7.0,
+        "z": -9.45,
+        "yaw_deg": 90.0,
+    }
+    payload = json.loads(result.json_path.read_text(encoding="utf-8"))
+    assert payload["stmr_map"]["coordinate_frame"]["world_frame"] == "canonical_unspecified"
+
+
+def test_online_builder_rejects_unknown_or_mixed_pose_frames(tmp_path):
+    _write_complete_memory(tmp_path, include_pose=True, observation_count=2)
+    pose_path = tmp_path / "memory" / "poses.jsonl"
+    rows = [json.loads(line) for line in pose_path.read_text(encoding="utf-8").splitlines()]
+    rows[0]["coordinate_frame"] = "unrealcv_world_m"
+    rows[1]["coordinate_frame"] = "canonical_unspecified"
+    pose_path.write_text(
+        "\n".join(json.dumps(item) for item in rows) + "\n",
+        encoding="utf-8",
+    )
+    builder = StmrOnlineMapBuilder(
+        session=StmrPerceptionSession(
+            grounding_backend=_FakeGrounding(), sam_backend=_FakeSam()
+        ),
+        device="cpu",
+    )
+
+    with pytest.raises(ValueError, match="mixed pose coordinate frames"):
+        builder.build(_memory(tmp_path), _stage_context())
+
+
 def test_online_builder_persists_failure_summary_without_snapshot(tmp_path):
     class FailingGrounding(_FakeGrounding):
         def detect(self, rgb_path, prompts, *, profiler=None):
@@ -199,6 +263,62 @@ def test_map_context_failure_falls_back_without_model_input():
     assert planner.risks[-1]["type"] == "stmr_map_unavailable"
     assert shadow.model_inputs == []
     assert shadow.risks == []
+
+
+def test_stmr_planner_summary_stays_bounded_as_history_grows(tmp_path):
+    png = tmp_path / "stmr.png"
+    Image.new("RGB", (4, 4), (20, 40, 60)).save(png)
+    sources = MemorySourceBundle(
+        FlightMemory("run", "map", "scene", "uav"),
+        MapMemoryStore(),
+    )
+
+    def fragment_for(observation_count: int):
+        result = StmrOnlineMapResult(
+            status="ready",
+            stale=False,
+            latest_observation_id=f"obs_{observation_count:04d}",
+            processed_observation_count=observation_count,
+            point_count=observation_count * 100,
+            voxel_count=observation_count * 10,
+            center_pose={
+                "x": 1.0,
+                "y": 2.0,
+                "z": 3.0,
+                "yaw_deg": 45.0,
+            },
+            map_config={
+                "grid_size": 20,
+                "meters_per_cell": 5.0,
+                "orientation": "uav_forward_up",
+            },
+            semantic_cell_counts={"building": 12},
+            trajectory_summary={
+                "pose_count": observation_count,
+                "total_translation_m": 20.0,
+                "recent_motion_local_m": {
+                    "forward_delta_m": 1.0,
+                    "right_delta_m": 0.0,
+                    "distance_m": 1.0,
+                },
+            },
+            png_path=png,
+            json_path=None,
+        )
+        return PluginContextModule(
+            mode="planner",
+            online_builder=_FakeOnlineBuilder(result),
+        ).build(sources, _stage_context())
+
+    short = fragment_for(1)
+    long = fragment_for(1000)
+    short_text = json.dumps(short.content, sort_keys=True)
+    long_text = json.dumps(long.content, sort_keys=True)
+
+    assert len(long.model_inputs) == len(short.model_inputs) == 1
+    assert "trajectory_trace" not in long_text
+    assert "frame_history" not in long_text
+    assert len(long_text) - len(short_text) < 32
 
 
 def test_stmr_media_follows_rgb_and_precedes_context_json(tmp_path):

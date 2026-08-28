@@ -266,6 +266,11 @@ def make_tool_plan(
 def test_model_user_content_stays_text_without_model_inputs():
     context = make_context()
     context["safety_constraints"] = {"yaw_scan_remaining_deg": 10.0}
+    context["simulator_contract"] = {
+        "protocol": "unrealcv",
+        "control_mode": "actor_pose",
+        "supported_actions": ["turn_relative", "move_body"],
+    }
     content = build_model_user_content(context)
 
     assert isinstance(content, str)
@@ -273,6 +278,12 @@ def test_model_user_content_stays_text_without_model_inputs():
     assert text_context["current_phase"]["name"] == "orient_leftward"
     assert "safety_constraints" not in text_context
     assert "observation_policy" not in text_context
+    assert "simulator_contract" not in text_context
+    assert text_context["allowed_action_constraints"]["planner_tools"] == [
+        "uav.hover",
+        "uav.turn_relative",
+        "uav.move_body",
+    ]
 
 
 def test_model_action_request_success_does_not_retry(monkeypatch):

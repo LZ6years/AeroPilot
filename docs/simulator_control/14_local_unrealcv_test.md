@@ -287,7 +287,7 @@ runs/manual_task_runtime_probe/task_runtime_probe_20260730_232925_cd9595/
 | requires_takeoff | `false` |
 | Runtime takeoff | `preflight_takeoff_skipped`，无 takeoff 调用 |
 | Planner tools | `uav.hover`、`uav.turn_relative`、`uav.move_body` |
-| simulator_contract | 已写入 Planner Context，无 host/port/path |
+| SceneCapabilities | 写入 `state/scene_capabilities.json`；Planner Context 不含 `simulator_contract` |
 | Observation | RGB、Depth、Pose artifacts 已生成 |
 | Initial/final position | 一致 |
 | Cleanup | `completed=true`，9068 关闭，无 Collection 残留 |

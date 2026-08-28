@@ -9,10 +9,17 @@ from .schemas import ActionRecord, CustomMapRecords, PosePoint, TrajectorySummar
 
 
 def build_trajectory(records: CustomMapRecords) -> TrajectorySummary:
-    path = list(records.poses)
+    # Runtime observation poses form the camera/map timeline and exclude
+    # preflight helpers such as connect/hover/set_pose. Older custom-map runs
+    # recorded only action-result poses, so keep that representation as a
+    # compatibility fallback when no observation-linked pose exists.
+    observation_path = [
+        pose for pose in records.poses if pose.observation_id is not None
+    ]
+    path = observation_path or list(records.poses)
     action_pose_by_id = {
         pose.action_id: pose
-        for pose in path
+        for pose in records.poses
         if pose.action_id
     }
     failed_markers = [
@@ -124,4 +131,3 @@ def _path_distance(path: list[PosePoint]) -> float:
     for left, right in zip(path, path[1:]):
         total += math.hypot(right.x - left.x, right.y - left.y)
     return total
-

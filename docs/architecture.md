@@ -84,7 +84,8 @@ flowchart LR
     EO --> RT["TaskRuntime"]
     EC --> RT
     SC["SceneCapabilities"] --> RT
-    RT --> CTX["simulator_contract"]
+    RT --> STATE["state/scene_capabilities.json"]
+    RT --> ACT["filtered planner_tools<br/>and action_schemas"]
     RT --> PF["capability-aware preflight"]
     RT --> ST["capability-aware stabilization / shutdown"]
 ```
@@ -119,8 +120,9 @@ primitive 可以安全执行。它们不携带 SSH、端口、executable、setti
 每次启动统一 Backend 场景后，Runtime 还会：
 
 - 写入 `state/scene_capabilities.json`；
-- 在 PlannerContext 中加入精简的 `simulator_contract`；
 - 用 `supported_actions`过滤 `planner_tools`与对应 action schemas；
+- 不把 protocol、control mode、lifecycle 与 observation capability 作为
+  `simulator_contract`注入模型上下文；
 - 在自定义 Planner 绕过模型 contract 时，于 ToolDispatcher 前再次拒绝不支持的动作；
 - 根据 capability 决定 takeoff、hover、brake、pose polling 与 land 是否执行或跳过。
 

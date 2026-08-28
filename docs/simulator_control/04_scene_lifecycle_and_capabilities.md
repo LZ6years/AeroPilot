@@ -117,20 +117,24 @@ Runtime 将能力快照写入：
 runs/<run-id>/state/scene_capabilities.json
 ```
 
-Planner 只看到部署无关的 `simulator_contract`：
+完整能力快照是 Runtime 内部事实和人工审计产物，不进入 Planner 模型上下文。
+Planner 只看到根据该快照过滤后的动作白名单与参数 schema，例如：
 
 ```json
 {
-  "protocol": "unrealcv",
-  "control_mode": "actor_pose",
-  "supported_actions": ["connect", "hover", "move_body", "turn_relative"],
-  "observation_modalities": ["rgb", "depth", "pose", "segmentation"],
-  "requires_takeoff": false,
-  "supports_soft_reset": false
+  "allowed_action_constraints": {
+    "planner_tools": ["uav.hover", "uav.move_body", "uav.turn_relative"],
+    "action_schemas": {
+      "uav.hover": {},
+      "uav.move_body": {"required": ["vx", "vy", "vz", "duration"]},
+      "uav.turn_relative": {"required": ["yaw_delta"]}
+    }
+  }
 }
 ```
 
-其中不包含 host、port、SSH、settings 或 executable。
+因此模型不接收 `protocol`、`control_mode`、生命周期能力、host、port、SSH、settings
+或 executable。Runtime 仍使用完整能力快照完成 preflight、稳定、停止和执行前校验。
 
 ## Action 与 Observation 路由
 

@@ -46,7 +46,10 @@ class PhaseWindowContextBuilder:
         completion = evaluate_phase_completion(metrics, state.current_phase_execution_summary)
         progress = self.phase_progress_evidence(state)
         planner_payload = dict(base_planner_context)
-        self._apply_scene_capabilities(planner_payload, scene_capabilities)
+        self._filter_actions_by_scene_capabilities(
+            planner_payload,
+            scene_capabilities,
+        )
         runtime_control = self.compact_runtime_control_context(runtime_control_context)
         if runtime_control:
             planner_payload["runtime_control"] = runtime_control
@@ -66,7 +69,7 @@ class PhaseWindowContextBuilder:
         )
 
     @staticmethod
-    def _apply_scene_capabilities(
+    def _filter_actions_by_scene_capabilities(
         planner_payload: dict[str, Any],
         capabilities: SceneCapabilities | None,
     ) -> None:
@@ -74,23 +77,21 @@ class PhaseWindowContextBuilder:
 
         EnvClient v1 still permits compatibility clients without a capability
         snapshot. In that legacy case the pre-existing PlannerContext remains
-        unchanged. A real unified Backend supplies capabilities, so Runtime can
-        expose a compact contract without leaking deployment hosts or paths.
+        unchanged apart from removing a stale simulator contract. A real
+        unified Backend supplies capabilities, but the model only needs the
+        resulting action whitelist and schemas. Protocol, control mode,
+        lifecycle support, and observation availability remain Runtime-owned
+        facts recorded separately in ``state/scene_capabilities.json``.
         """
+
+        # ``simulator_contract`` used to duplicate Backend metadata in every
+        # planner window. Remove it even when an older/custom context builder
+        # still supplies the field so low-level simulator details cannot leak
+        # back into the model-facing payload through a compatibility path.
+        planner_payload.pop("simulator_contract", None)
 
         if capabilities is None:
             return
-
-        planner_payload["simulator_contract"] = {
-            "protocol": capabilities.protocol,
-            "control_mode": capabilities.control_mode,
-            "supported_actions": list(capabilities.supported_actions),
-            "observation_modalities": list(
-                capabilities.observation_modalities
-            ),
-            "requires_takeoff": capabilities.requires_takeoff,
-            "supports_soft_reset": capabilities.supports_soft_reset,
-        }
 
         raw_constraints = planner_payload.get("allowed_action_constraints", {})
         constraints = (

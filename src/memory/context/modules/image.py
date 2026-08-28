@@ -50,9 +50,16 @@ class DefaultImageContextModule(ContextModule):
     def __init__(
         self,
         *,
+        include_phase_start_reference: bool = True,
         include_current_depth: bool = False,
         depth_display_max_m: float = _DEFAULT_DEPTH_DISPLAY_MAX_M,
     ) -> None:
+        # The default preserves the shared two-frame temporal contract.  A
+        # benchmark composition may disable the reference only when another
+        # bounded history representation is successfully attached.
+        self.include_phase_start_reference = bool(
+            include_phase_start_reference
+        )
         self.include_current_depth = bool(include_current_depth)
         self.depth_display_max_m = float(depth_display_max_m)
         if self.depth_display_max_m <= 0.0:
@@ -73,6 +80,12 @@ class DefaultImageContextModule(ContextModule):
             if reader
             else []
         )
+        if not bool(
+            getattr(self, "include_phase_start_reference", True)
+        ):
+            selected_rgb_frames = _current_only_rgb_selection(
+                selected_rgb_frames
+            )
         latest_rgb = rgb_frames[-1] if rgb_frames else None
         current_rgb = next(
             (
@@ -162,8 +175,14 @@ class DefaultImageContextModule(ContextModule):
     def describe_output(self) -> dict[str, Any]:
         semantic_evidence = [
             "NOW RGB: current visible appearance and image-space relations.",
-            "PAST RGB when distinct: phase-start comparison only; not current visibility.",
         ]
+        include_phase_start_reference = bool(
+            getattr(self, "include_phase_start_reference", True)
+        )
+        if include_phase_start_reference:
+            semantic_evidence.append(
+                "PAST RGB when distinct: phase-start comparison only; not current visibility."
+            )
         if bool(getattr(self, "include_current_depth", False)):
             semantic_evidence.append(
                 "NOW metric depth overlay: approximate camera distance at visible pixels."
@@ -179,11 +198,16 @@ class DefaultImageContextModule(ContextModule):
                 "visual_evidence": "Boolean availability summary such as has_rgb, has_depth, has_mock_frames, latest_observation_source, and interpretation_status.",
             },
             "model_inputs": (
-                "Up to two encoded real RGB images and an optional pixel-aligned current "
-                "RGB-depth overlay for planner multimodal input, ordered as a distinct "
-                "phase_start_reference, current_observation, then current_rgb_depth_overlay. "
-                "When both are attached, a concise trailing temporal evidence rule is included. "
-                "Mock, missing, unreadable, or duplicate images are not attached."
+                "One current RGB image"
+                + (
+                    " plus a distinct phase-start reference"
+                    if include_phase_start_reference
+                    else " without a phase-start reference"
+                )
+                + " and an optional pixel-aligned current RGB-depth overlay for planner "
+                "multimodal input. When both temporal RGB roles are attached, a concise "
+                "trailing temporal evidence rule is included. Mock, missing, unreadable, "
+                "or duplicate images are not attached."
             ),
             "risk_fields": {
                 "visual_evidence_missing": "No recent RGB evidence is available.",
@@ -245,6 +269,27 @@ def selected_rgb_frames_from_observations(
         item["usage"] = reason
         selected.append(item)
     return selected[:2]
+
+
+def _current_only_rgb_selection(
+    selected_frames: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Keep only NOW RGB and normalize its identity to the first image slot."""
+
+    current = next(
+        (
+            dict(frame)
+            for frame in selected_frames
+            if frame.get("selection_role") == "current_observation"
+        ),
+        None,
+    )
+    if current is None:
+        return []
+    current["selection_reason"] = CURRENT_IMAGE_USAGE
+    current["input_id"] = _image_input_id(1, "current_observation")
+    current["usage"] = CURRENT_IMAGE_USAGE
+    return [current]
 
 
 def selected_frame_summaries(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:

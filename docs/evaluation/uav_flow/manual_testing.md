@@ -187,7 +187,36 @@ phase 时窗口计数清零。
 `stopped_reason=runtime_loop_guard_reached`，保存已有轨迹并继续生成 nDTW 和报告，
 然后 Runner 进入下一个 case。不得把该状态统计为成功完成。
 
-## 6. Dry 自动化测试
+## 6. 五类低分任务 15-Case 回归
+
+本机配置：
+
+```text
+evaluation/benchmarks/uav_flow/configs/uav_flow_low5_3cases_depth_now_loop40.local
+```
+
+该配置锁定 Approach、Retreat、Land、Move、Pass 各 3 个 case，共 15 个，并使用
+Planner NOW depth 和每个语义 phase 40 个窗口。显式 `case_ids`用于保证修改前后使用
+完全相同的样本；不会再由分类文件顺序动态选择。SR judge、逐帧 visual diagnostics 和
+STMR 均关闭，因此 `completed/stopped/error`不能解释为 UAV-Flow SR。
+
+```powershell
+python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
+  --config evaluation/benchmarks/uav_flow/configs/uav_flow_low5_3cases_depth_now_loop40.local `
+  --execution-mode managed `
+  --planner-depth-input now `
+  --runtime-loop-guard-windows 40 `
+  --stmr-mode off `
+  --no-sr-judge `
+  --no-visual-diagnostics `
+  --eval-id uav_flow_low5_3cases_depth_now_loop40_no_contract_20260827
+```
+
+正常批次只启动和停止 DowntownWest 各一次。结果分析应分别统计 nDTW、loop guard、
+重复转向、前后或上下振荡、零动作完成、模型网络错误和 UnrealCV 错误。基础设施错误
+不作为 Agent 能力结论；需要补测时使用新的 `eval-id`和原始精确 case ID。
+
+## 7. Dry 自动化测试
 
 Dry 模式使用 in-memory UnrealCV Backend，只验证代码契约，不属于真实 benchmark：
 
@@ -203,7 +232,7 @@ python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
   --no-action-planner-debug
 ```
 
-## 7. STMR
+## 8. STMR
 
 STMR Profile 必须包含：
 

@@ -1299,9 +1299,14 @@ def _coordinate_frame(
     meters_per_cell: float,
     voxel_size_m: float,
 ) -> dict[str, Any]:
+    world_frame = (
+        center_pose.coordinate_frame
+        if center_pose is not None
+        else "canonical_unspecified"
+    )
     return {
         "center_pose": {} if center_pose is None else center_pose.to_model_dict(),
-        "world_frame": "uav_flow_pose_xy_yaw",
+        "world_frame": world_frame,
         "local_frame": "uav_centered_current_heading_up",
         "camera_to_body": "forward=z_cam, right=x_cam, up=-y_cam",
         "world_projection": {

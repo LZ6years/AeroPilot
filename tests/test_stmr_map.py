@@ -11,6 +11,7 @@ import pytest
 
 from plugins.research.custom_map.context_modules.custom_map.records import read_custom_map_records
 from plugins.research.custom_map.context_modules.custom_map.schemas import CustomMapRecords, FrameRecord, PosePoint
+from plugins.research.custom_map.context_modules.custom_map.trajectory import build_trajectory
 from plugins.research.custom_map.context_modules.custom_map.projection_geometry import (
     DEPTH_MODE_OPTICAL_Z,
     DEPTH_MODE_RAY_DISTANCE,
@@ -401,7 +402,7 @@ def test_stmr_top_height_projection_selects_highest_voxel_semantic(tmp_path):
     assert any(building.semantic_id in row for row in stmr_map.semantic_matrix)
     assert stmr_map.map_config["local_extent_m"] == 100.0
     assert stmr_map.map_config["meters_per_cell"] == 5.0
-    assert stmr_map.coordinate_frame["world_frame"] == "uav_flow_pose_xy_yaw"
+    assert stmr_map.coordinate_frame["world_frame"] == "canonical_unspecified"
     assert stmr_map.projection_debug["sampled_points"]
     first_point = stmr_map.projection_debug["sampled_points"][0]
     assert {"pixel_u", "pixel_v", "raw_depth_m", "camera_x", "camera_y", "camera_z", "local_forward_m", "local_right_m", "local_up_m"} <= set(first_point)
@@ -456,6 +457,45 @@ def test_stmr_world_to_local_coordinate_frame_handles_heading():
     assert round(world_plus_y["local_right_m"], 3) == 0.0
     assert round(world_plus_x["local_forward_m"], 3) == 0.0
     assert round(world_plus_x["local_right_m"], 3) == -5.0
+
+
+def test_stmr_trajectory_prefers_observation_poses_over_preflight_results():
+    records = CustomMapRecords(
+        run_dir=None,
+        actions=[],
+        poses=[
+            PosePoint(
+                x=0.0,
+                y=0.0,
+                z=0.0,
+                yaw_deg=0.0,
+                action_id="preflight_hover",
+            ),
+            PosePoint(
+                x=48.0,
+                y=-7.0,
+                z=-9.0,
+                yaw_deg=0.0,
+                observation_id="obs_0001",
+            ),
+            PosePoint(
+                x=52.0,
+                y=-7.0,
+                z=-9.0,
+                yaw_deg=0.0,
+                observation_id="obs_0002",
+            ),
+        ],
+        frames=[],
+    )
+
+    trajectory = build_trajectory(records)
+
+    assert [point.observation_id for point in trajectory.path] == [
+        "obs_0001",
+        "obs_0002",
+    ]
+    assert trajectory.summary["approx_path_distance_m"] == 4.0
 
 
 def test_stmr_voxel_center_reprojects_to_top_height_cell(tmp_path):

@@ -7,6 +7,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from evaluation.benchmarks.aerial_vln.config import AerialVlnEvalConfig
 from evaluation.benchmarks.aerial_vln.protocol import (
@@ -15,11 +16,196 @@ from evaluation.benchmarks.aerial_vln.protocol import (
 from evaluation.benchmarks.aerial_vln.runner import (
     AerialVlnBenchmarkRunner,
 )
+from plugins.research.stmr_map.online import StmrOnlineMapResult
 from src.agent.phase import COMPLETE_TASK, PhaseTransition
 from src.agent.planning.schemas import CoupledActionPhasePlan
 from src.agent.semantic.schemas import TaskParseResult
 from src.agent.semantic.validator import semantic_plan_from_dict
+from src.memory.context.schemas import MemorySourceBundle, StageContextInput
+from src.memory.flight_memory import FlightMemory
+from src.memory.stores import MapMemoryStore
 from src.runtime.logging.async_run_logger import AsyncRunLogger
+
+
+class FakeStmrSession:
+    def __init__(self) -> None:
+        self.warmup_calls = 0
+
+    def warmup(self) -> None:
+        self.warmup_calls += 1
+
+
+class FakeReadyStmrModule:
+    def __init__(self, png_path: Path) -> None:
+        self.png_path = png_path
+
+    def debug_summary(self):
+        return {
+            "status": "ready",
+            "stale": False,
+            "processed_observation_count": 2,
+            "attempted_observation_count": 2,
+            "failed_observation_count": 0,
+            "point_count": 32,
+            "voxel_count": 8,
+            "png_path": str(self.png_path),
+            "json_path": None,
+            "warnings": [],
+            "profiling": {
+                "stages": {
+                    "stmr_online_frame_total": {
+                        "sample_count": 2,
+                        "mean_ms": 10.0,
+                        "p95_ms": 12.0,
+                    },
+                    "stmr_online_perception_map_total": {
+                        "total_ms": 20.0,
+                    },
+                }
+            },
+        }
+
+
+class FakeOnlineStmrBuilder:
+    def __init__(self, result: StmrOnlineMapResult) -> None:
+        self.result = result
+
+    def build(self, memory, stage_context):
+        return self.result
+
+
+class FailingOnlineStmrBuilder:
+    def build(self, memory, stage_context):
+        raise RuntimeError("synthetic STMR failure")
+
+
+def test_aerial_vln_stmr_config_and_context_modes(tmp_path):
+    base = {
+        "dataset_root": str(tmp_path / "dataset"),
+        "execution_mode": "dry",
+        "scene_map": {"1": "airvln_env_1"},
+        "stmr_prior": "urban_aerial_v1",
+        "stmr_max_queries": 9,
+        "stmr_device": "cpu",
+    }
+    shadow_session = FakeStmrSession()
+    shadow = AerialVlnBenchmarkRunner(
+        AerialVlnEvalConfig.from_dict({**base, "stmr_mode": "shadow"}),
+        stmr_session=shadow_session,
+    )
+    shadow._prepare_stmr()
+    shadow._prepare_stmr()
+    shadow_context, shadow_module = shadow._planner_context_builder(
+        FakePlanner()
+    )
+
+    assert shadow.config.stmr_prior == "urban_aerial_v1"
+    assert shadow.config.stmr_max_queries == 9
+    assert shadow.config.stmr_device == "cpu"
+    assert shadow_session.warmup_calls == 1
+    assert shadow_context is None
+    assert shadow_module is None
+
+    planner_session = FakeStmrSession()
+    planner = AerialVlnBenchmarkRunner(
+        AerialVlnEvalConfig.from_dict({**base, "stmr_mode": "planner"}),
+        stmr_session=planner_session,
+    )
+    context_builder, stmr_module = planner._planner_context_builder(
+        FakePlanner()
+    )
+
+    assert context_builder is not None
+    assert stmr_module is not None
+    assert stmr_module.mode == "planner"
+    assert stmr_module.online_builder.session is planner_session
+    assert context_builder.composer.registry.modules["map"] is stmr_module
+    assert context_builder.composer.registry.module_order.index(
+        "map"
+    ) < context_builder.composer.registry.module_order.index("image")
+
+
+def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
+    tmp_path,
+):
+    runner = AerialVlnBenchmarkRunner(
+        AerialVlnEvalConfig.from_dict(
+            {
+                "dataset_root": str(tmp_path / "dataset"),
+                "execution_mode": "dry",
+                "scene_map": {"1": "airvln_env_1"},
+                "stmr_mode": "planner",
+            }
+        ),
+        stmr_session=FakeStmrSession(),
+    )
+    context_builder, stmr_module = runner._planner_context_builder(
+        FakePlanner()
+    )
+    assert context_builder is not None
+    assert stmr_module is not None
+    image_module = context_builder.composer.registry.modules["image"]
+    png_path = tmp_path / "stmr.png"
+    Image.new("RGB", (4, 4), (20, 40, 60)).save(png_path)
+    stmr_module.online_builder = FakeOnlineStmrBuilder(
+        StmrOnlineMapResult(
+            status="ready",
+            stale=False,
+            latest_observation_id="obs_0001",
+            processed_observation_count=1,
+            point_count=16,
+            voxel_count=3,
+            center_pose={
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "yaw_deg": 0.0,
+            },
+            map_config={
+                "grid_size": 20,
+                "meters_per_cell": 5.0,
+                "orientation": "uav_forward_up",
+            },
+            semantic_cell_counts={"building": 2},
+            trajectory_summary={"pose_count": 1},
+            png_path=png_path,
+            json_path=None,
+        )
+    )
+    sources = MemorySourceBundle(
+        FlightMemory("run", "map", "scene", "uav"),
+        MapMemoryStore(),
+    )
+    stage = StageContextInput(active_instruction="follow the road")
+
+    ready_fragment = stmr_module.build(sources, stage)
+
+    assert ready_fragment.model_inputs[0]["role"] == "stmr_semantic_map"
+    assert image_module.include_phase_start_reference is False
+
+    stmr_module.online_builder = FailingOnlineStmrBuilder()
+    failed_fragment = stmr_module.build(sources, stage)
+
+    assert failed_fragment.model_inputs == []
+    assert image_module.include_phase_start_reference is True
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("stmr_mode", "invalid"),
+        ("stmr_device", "tpu"),
+        ("stmr_max_queries", 0),
+    ],
+)
+def test_aerial_vln_rejects_invalid_stmr_config(tmp_path, field, value):
+    with pytest.raises(ValueError, match=field):
+        AerialVlnEvalConfig.from_dict(
+            {
+                "dataset_root": str(tmp_path / "dataset"),
+                field: value,
+            }
+        )
 
 
 def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
@@ -49,10 +235,22 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
             "parser_mode": "fake",
             "scene_map": {"1": "airvln_env_1"},
             "initialization_min_settle_sec": 0.25,
+            "stmr_mode": "shadow",
         }
     )
 
-    runner = AerialVlnBenchmarkRunner(config)
+    stmr_session = FakeStmrSession()
+    runner = AerialVlnBenchmarkRunner(
+        config,
+        stmr_session=stmr_session,
+    )
+    stmr_png = tmp_path / "fake_stmr.png"
+    Image.new("RGB", (8, 8), (20, 40, 60)).save(stmr_png)
+    monkeypatch.setattr(
+        runner,
+        "_build_shadow_stmr",
+        lambda *args, **kwargs: (FakeReadyStmrModule(stmr_png), None),
+    )
     runtime_dir = tmp_path / "runtime"
     runtime_dir.mkdir()
     runtime_recorder = AsyncRunLogger(runtime_dir)
@@ -82,7 +280,14 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     assert (case_dir / "metrics.json").exists()
     assert (case_dir / "manifest.json").exists()
     assert (case_dir / "audit.json").exists()
+    assert (case_dir / "stmr_summary.json").exists()
     assert (case_dir / "review.html").exists()
+    assert (
+        case_dir
+        / "review_assets"
+        / "stmr"
+        / "latest_stmr_map.png"
+    ).exists()
     assert case_result["difficulty"] == "low"
     assert case_result["reference_path_length_m"] == 0.0
     assert case_result["dataset_split"] == "val_seen"
@@ -102,6 +307,8 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     assert "Validation Seen" in review_html
     assert "reference_path_length_m" in review_html
     assert "Semantic Plan Diagnostics" in review_html
+    assert "STMR Spatial Memory" in review_html
+    assert "STMR Map" in review_html
     assert "navigate" in review_html
     assert "Landing language denotes reaching" in review_html
     assert Path(result["summary_paths"]["html_review"]).exists()
@@ -132,6 +339,8 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     assert manifest["scene_map"] == {"1": "airvln_env_1"}
     assert manifest["runtime_loop_guard_windows"] == 100
     assert manifest["initialization_min_settle_sec"] == 0.25
+    assert manifest["stmr"]["mode"] == "shadow"
+    assert stmr_session.warmup_calls == 1
     assert FakeTaskParser.last_protocol_context == (
         AERIAL_VLN_PARSER_PROTOCOL_CONTEXT
     )

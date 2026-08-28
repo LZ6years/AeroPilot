@@ -484,6 +484,11 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     mission_state = json.loads((run_dir / "state/latest_state.json").read_text(encoding="utf-8"))
     latest_observation = json.loads((run_dir / "debug/latest_observation.json").read_text(encoding="utf-8"))
     latest_context = json.loads((run_dir / "contexts/latest_context.json").read_text(encoding="utf-8"))
+    latest_model_context = json.loads(
+        (run_dir / "contexts/latest_action_planner_model_context.json").read_text(
+            encoding="utf-8"
+        )
+    )
     scene_capabilities = json.loads(
         (run_dir / "state/scene_capabilities.json").read_text(
             encoding="utf-8"
@@ -514,9 +519,10 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert (run_dir / "state/latest_state.json").exists()
     assert latest_observation["source"] == "automatic_phase_window"
     assert latest_context["active_instruction"]
-    assert latest_context["simulator_contract"] == scene_capabilities
-    assert "control_host" not in latest_context["simulator_contract"]
-    assert "control_port" not in latest_context["simulator_contract"]
+    assert scene_capabilities["protocol"] == "airsim"
+    assert scene_capabilities["control_mode"] == "Multirotor"
+    assert "simulator_contract" not in latest_context
+    assert "simulator_contract" not in latest_model_context
     assert latest_context["current_phase"] is not None
     assert "context_schema" in latest_context
     assert "image" in latest_context["context_schema"]["module_content_fields"]
@@ -1602,7 +1608,10 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     assert len(flight_memory["instruction_history"]) >= len(instructions)
     assert (run_dir / "memory/instructions.jsonl").read_text(encoding="utf-8").count("\n") >= len(instructions)
     assert fragments["instruction"]["content"]["current_instruction"]["text"] == instructions[-1]
-    assert len(fragments["instruction"]["content"]["instruction_history"]) == 5
+    instruction_history = fragments["instruction"]["content"]["instruction_history"]
+    assert len(instruction_history) == 5
+    assert [item["instruction"] for item in instruction_history] == instructions[-6:-1]
+    assert all(item["id"] != flight_memory["active_instruction_id"] for item in instruction_history)
     motion_history = fragments["action"]["content"]["motion_history_summary"]
     assert 1 <= len(motion_history["recent_execution"]) <= 5
     assert motion_history["recent_execution_order"] == "oldest_to_newest"

@@ -22,6 +22,9 @@ class PosePoint:
     source: str | None = None
     action_id: str | None = None
     observation_id: str | None = None
+    # Coordinate provenance remains attached to each point so cumulative map
+    # builders cannot silently combine poses expressed in different frames.
+    coordinate_frame: str = "canonical_unspecified"
 
     def to_model_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {"x": round(self.x, 3), "y": round(self.y, 3)}

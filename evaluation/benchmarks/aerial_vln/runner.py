@@ -7,6 +7,7 @@ import math
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+import shutil
 from typing import Any
 
 from evaluation.benchmarks.aerial_vln.adapter import AerialVlnCaseAdapter
@@ -41,6 +42,10 @@ from evaluation.benchmarks.core import (
     ReviewSection,
     write_audit_json,
 )
+from plugins.research.stmr_map.context_modules.map import (
+    PluginContextModule as StmrMapContextModule,
+)
+from plugins.research.stmr_map.perception import StmrPerceptionSession
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.agent.semantic.task_parser import TaskParser
@@ -49,6 +54,13 @@ from src.env_client import (
     SimulatorEnvClient,
     load_observation_profile,
 )
+from src.memory.context.registry import ContextModuleRegistry
+from src.memory.context.modules.image import DefaultImageContextModule
+from src.memory.context.schemas import StageContextInput
+from src.memory.flight_memory import FlightMemory
+from src.memory.stores import MemoryRecordReader
+from src.perception.context_builder import ObservationContextBuilder
+from src.plugins import PluginRegistry
 from src.runtime.configs import load_map_config
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.model_config import load_model_config
@@ -86,16 +98,63 @@ class PreparedAerialVlnEvaluation:
         }
 
 
+class _AerialVlnStmrMapContextModule(StmrMapContextModule):
+    """Coordinate one STMR build with the AerialVLN image fallback.
+
+    The registry normally builds RGB before map context.  Planner-mode STMR
+    must make the opposite decision: omit the phase-start RGB only when the
+    map produced for this exact context window is current and attachable.
+    Keeping this coordinator in the benchmark composition avoids changing the
+    shared registry order or the reusable STMR plugin contract.
+    """
+
+    def __init__(
+        self,
+        *,
+        image_module: DefaultImageContextModule,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.image_module = image_module
+
+    def build(self, sources: Any, stage_context: Any) -> Any:
+        fragment = super().build(sources, stage_context)
+        stmr = fragment.content.get("stmr")
+        current_map_attached = (
+            isinstance(stmr, dict)
+            and stmr.get("status") == "ready"
+            and not bool(stmr.get("stale"))
+            and any(
+                item.get("role") == "stmr_semantic_map"
+                for item in fragment.model_inputs
+            )
+        )
+        self.image_module.include_phase_start_reference = not (
+            current_map_attached
+        )
+        return fragment
+
+
 class AerialVlnBenchmarkRunner:
     """AerialVLN benchmark composition over the shared executor."""
 
-    def __init__(self, config: AerialVlnEvalConfig) -> None:
+    def __init__(
+        self,
+        config: AerialVlnEvalConfig,
+        *,
+        stmr_session: Any | None = None,
+    ) -> None:
         self.config = config
         # Dataset-only validation must not read model credentials or construct
         # model clients. Runtime creation resolves this lazily.
         self._loaded_model_config: Any | None = None
         self.action_config = _action_config(config)
         self.safety_config = _safety_config(config)
+        self.plugin_registry = PluginRegistry.from_config()
+        self._stmr_session = stmr_session
+        self._stmr_warmed = False
+        self._stmr_warmup_error: dict[str, str] | None = None
+        self._stmr_modules: dict[str, StmrMapContextModule] = {}
         self.map_packages, self.port_policy = load_map_config(
             config.map_config_path
         )
@@ -108,14 +167,24 @@ class AerialVlnBenchmarkRunner:
             else ObservationProfile()
         )
         self._case_reviews: dict[str, BenchmarkCaseReview] = {}
-        if self.observation_profile.modalities != (
-            "rgb",
-            "depth",
-            "pose",
+        missing_modalities = sorted(
+            {"rgb", "depth", "pose"}.difference(
+                self.observation_profile.modalities
+            )
+        )
+        if missing_modalities:
+            raise ValueError(
+                "AerialVLN requires observation modalities rgb, depth, pose; "
+                "missing " + ", ".join(missing_modalities)
+            )
+        if (
+            self.config.stmr_mode != "off"
+            and self.config.execution_mode != "dry"
+            and not self.config.save_artifacts
         ):
             raise ValueError(
-                "AerialVLN v1 requires observation modalities "
-                "rgb, depth, pose"
+                "Real AerialVLN STMR requires save_artifacts=true so RGB "
+                "and depth payloads remain available to the map builder"
             )
 
     def load_cases(self) -> list[AerialVlnCase]:
@@ -221,6 +290,7 @@ class AerialVlnBenchmarkRunner:
         prepared = self.prepare_evaluation(
             require_execution_ready=True
         )
+        self._prepare_stmr()
         split_label = aerial_vln_split_label(self.config.split)
         eval_dir = _create_eval_dir(self.config.output_dir, eval_id)
         preparation_paths = _write_preparation_artifacts(
@@ -289,6 +359,7 @@ class AerialVlnBenchmarkRunner:
             "initialization_min_settle_sec": (
                 self.config.initialization_min_settle_sec
             ),
+            "stmr": _stmr_config_summary(self.config),
             "batch_status": summary["batch_status"],
             "abort_reason": summary["abort_reason"],
             "requested_case_count": summary["requested_case_count"],
@@ -397,6 +468,8 @@ class AerialVlnBenchmarkRunner:
         recorder = AsyncRunLogger(run_dir)
         execution = None
         setup_error = None
+        stmr_module: StmrMapContextModule | None = None
+        stmr_postprocess_error: dict[str, str] | None = None
         try:
             runtime = self._make_runtime(run_dir, recorder)
             episode = AerialVlnCaseAdapter(
@@ -418,6 +491,24 @@ class AerialVlnBenchmarkRunner:
             recorder.event("aerial_vln_case_failed", setup_error)
         finally:
             recorder.close()
+
+        if self.config.stmr_mode == "planner":
+            stmr_module = self._stmr_modules.pop(str(run_dir), None)
+        elif self.config.stmr_mode == "shadow":
+            stmr_module, stmr_postprocess_error = self._build_shadow_stmr(
+                run_dir,
+                instruction=case.instruction,
+            )
+        stmr_summary = _stmr_summary(
+            stmr_module,
+            mode=self.config.stmr_mode,
+            warmup_error=self._stmr_warmup_error,
+            postprocess_error=stmr_postprocess_error,
+        )
+        stmr_assets = _materialize_stmr_assets(
+            case_dir,
+            stmr_summary,
+        )
 
         audit_cursor = (
             execution.audit_cursor
@@ -497,6 +588,7 @@ class AerialVlnBenchmarkRunner:
             "scene_capabilities": capabilities,
             "observation_profile": self.observation_profile.to_dict(),
             "audit_path": audit_path,
+            "stmr": stmr_summary,
         }
         semantic_plan_diagnostics = _semantic_plan_diagnostics(
             run_dir, outcome
@@ -508,6 +600,7 @@ class AerialVlnBenchmarkRunner:
         _write_json(case_dir / "trajectory.json", trajectory)
         _write_json(case_dir / "trace.json", trace)
         _write_json(case_dir / "metrics.json", metrics)
+        _write_json(case_dir / "stmr_summary.json", stmr_summary)
         _write_json(
             case_dir / "manifest.json",
             {
@@ -539,6 +632,7 @@ class AerialVlnBenchmarkRunner:
                 "initialization_min_settle_sec": (
                     self.config.initialization_min_settle_sec
                 ),
+                "stmr": stmr_summary,
             },
         )
         self._case_reviews[case.episode_id] = BenchmarkCaseReview(
@@ -623,6 +717,22 @@ class AerialVlnBenchmarkRunner:
                     semantic_plan_diagnostics,
                 ),
                 ReviewSection(
+                    "STMR Spatial Memory",
+                    "key_value",
+                    _compact_stmr_summary(stmr_summary),
+                ),
+                *(
+                    (
+                        ReviewSection(
+                            "STMR Map",
+                            "image_group",
+                            stmr_assets,
+                        ),
+                    )
+                    if stmr_assets
+                    else ()
+                ),
+                ReviewSection(
                     "Protocol Notes",
                     "text",
                     (
@@ -662,6 +772,12 @@ class AerialVlnBenchmarkRunner:
         planner: Any | None = None,
     ) -> TaskRuntime:
         model_config = self._model_config()
+        active_planner = planner or ModelActionPlanner(model_config)
+        context_builder, stmr_module = self._planner_context_builder(
+            active_planner
+        )
+        if stmr_module is not None:
+            self._stmr_modules[str(run_dir)] = stmr_module
         backend_registry = None
         if self.config.execution_mode == "dry":
             backend_registry = _dry_airsim_registry()
@@ -691,7 +807,7 @@ class AerialVlnBenchmarkRunner:
                 model_config=model_config,
                 protocol_context=AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
             ),
-            planner=planner or ModelActionPlanner(model_config),
+            planner=active_planner,
             safety=SafetySupervisor(self.safety_config),
             shutdown_policy=self.config.shutdown_policy,
             action_config=self.action_config,
@@ -704,7 +820,127 @@ class AerialVlnBenchmarkRunner:
             enable_action_planner_debug=(
                 self.config.enable_action_planner_debug
             ),
+            context_builder=context_builder,
         )
+
+    def _planner_context_builder(
+        self,
+        planner: Any,
+    ) -> tuple[
+        ObservationContextBuilder | None,
+        StmrMapContextModule | None,
+    ]:
+        """Install STMR only when it is allowed to affect model context."""
+
+        if self.config.stmr_mode != "planner":
+            return None, None
+        default_registry = ContextModuleRegistry.default(
+            plugin_registry=self.plugin_registry,
+            enable_model_skill_selection=(
+                getattr(planner, "planner_mode", "") == "model"
+            ),
+        )
+        modules = dict(default_registry.modules)
+        image_module = DefaultImageContextModule(
+            include_phase_start_reference=True
+        )
+        stmr_module = _AerialVlnStmrMapContextModule(
+            image_module=image_module,
+            mode="planner",
+            session=self._shared_stmr_session(),
+            prior=self.config.stmr_prior,
+            max_queries=self.config.stmr_max_queries,
+            device=self.config.stmr_device,
+        )
+        modules["image"] = image_module
+        modules["map"] = stmr_module
+        # Build the map before the image so the image module can apply the
+        # current-window fallback. ContextComposer later restores presentation
+        # order by priority (RGB before map), so model media order is unchanged.
+        module_order = list(default_registry.module_order)
+        module_order.remove("map")
+        module_order.insert(module_order.index("image"), "map")
+        registry = ContextModuleRegistry(
+            modules,
+            disabled=default_registry.disabled,
+            module_order=module_order,
+        )
+        return (
+            ObservationContextBuilder(
+                action_config=self.action_config,
+                safety_config=self.safety_config,
+                registry=registry,
+                plugin_registry=self.plugin_registry,
+                enable_model_skill_selection=(
+                    getattr(planner, "planner_mode", "") == "model"
+                ),
+            ),
+            stmr_module,
+        )
+
+    def _build_shadow_stmr(
+        self,
+        run_dir: Path,
+        *,
+        instruction: str,
+    ) -> tuple[StmrMapContextModule, dict[str, str] | None]:
+        """Build report-only STMR after Runtime logging has closed.
+
+        Keeping shadow outside ContextComposer guarantees that neither task
+        parsing nor Planner requests change while the spatial map is evaluated.
+        """
+
+        module = StmrMapContextModule(
+            mode="shadow",
+            session=self._shared_stmr_session(),
+            prior=self.config.stmr_prior,
+            max_queries=self.config.stmr_max_queries,
+            device=self.config.stmr_device,
+        )
+        memory = FlightMemory(
+            run_id=run_dir.name,
+            map_id="aerial_vln_shadow",
+            scene_instance_id="completed_episode",
+            agent_id="uav",
+            active_instruction=instruction,
+            memory_reader=MemoryRecordReader(run_dir),
+        )
+        try:
+            module.online_builder.build(
+                memory,
+                StageContextInput(active_instruction=instruction),
+            )
+        except Exception as exc:
+            # debug_summary preserves the last successful state when possible;
+            # report assembly remains fail-open by design.
+            return module, {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        return module, None
+
+    def _shared_stmr_session(self) -> Any:
+        if self._stmr_session is None:
+            self._stmr_session = StmrPerceptionSession(
+                device=self.config.stmr_device
+            )
+        return self._stmr_session
+
+    def _prepare_stmr(self) -> None:
+        if self.config.stmr_mode == "off" or self._stmr_warmed:
+            return
+        session = self._shared_stmr_session()
+        warmup = getattr(session, "warmup", None)
+        try:
+            if callable(warmup):
+                warmup()
+        except Exception as exc:
+            self._stmr_warmup_error = {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        finally:
+            self._stmr_warmed = True
 
     def _execution_readiness(
         self, selected_scene_ids: tuple[str, ...]
@@ -795,6 +1031,126 @@ class AerialVlnBenchmarkRunner:
                 "Real AerialVLN HTML review requires "
                 + " and ".join(missing)
             )
+
+
+def _stmr_config_summary(config: AerialVlnEvalConfig) -> dict[str, Any]:
+    return {
+        "mode": config.stmr_mode,
+        "prior": config.stmr_prior,
+        "max_queries": config.stmr_max_queries,
+        "device": config.stmr_device,
+    }
+
+
+def _stmr_summary(
+    module: StmrMapContextModule | None,
+    *,
+    mode: str,
+    warmup_error: dict[str, str] | None,
+    postprocess_error: dict[str, str] | None,
+) -> dict[str, Any]:
+    """Return human-facing STMR diagnostics without rebuilding the map."""
+
+    if module is None:
+        summary: dict[str, Any] = {
+            "mode": mode,
+            "status": "disabled" if mode == "off" else "unavailable",
+        }
+    else:
+        try:
+            summary = {"mode": mode, **module.debug_summary()}
+            summary["latency"] = _stmr_latency_summary(
+                summary.get("profiling")
+            )
+        except Exception as exc:
+            summary = {
+                "mode": mode,
+                "status": "summary_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+    if warmup_error is not None:
+        summary["warmup_error"] = dict(warmup_error)
+    if postprocess_error is not None:
+        summary["postprocess_error"] = dict(postprocess_error)
+        if summary.get("status") in {None, "waiting_for_complete_observation"}:
+            summary["status"] = "postprocess_failed"
+    return summary
+
+
+def _compact_stmr_summary(summary: dict[str, Any]) -> dict[str, Any]:
+    """Keep the case page readable while full debug stays in JSON."""
+
+    keys = (
+        "mode",
+        "status",
+        "stale",
+        "processed_observation_count",
+        "attempted_observation_count",
+        "failed_observation_count",
+        "point_count",
+        "voxel_count",
+        "latency",
+        "png_path",
+        "json_path",
+        "warnings",
+        "warmup_error",
+        "postprocess_error",
+    )
+    return {key: summary.get(key) for key in keys if key in summary}
+
+
+def _stmr_latency_summary(profiling: Any) -> dict[str, Any]:
+    if not isinstance(profiling, dict):
+        return {}
+    stages = profiling.get("stages")
+    if not isinstance(stages, dict):
+        return {}
+    frame = stages.get("stmr_online_frame_total")
+    total = stages.get("stmr_online_perception_map_total")
+    frame = frame if isinstance(frame, dict) else {}
+    total = total if isinstance(total, dict) else {}
+    return {
+        "frame_sample_count": frame.get("sample_count"),
+        "frame_mean_ms": frame.get("mean_ms"),
+        "frame_p95_ms": frame.get("p95_ms"),
+        "total_ms": total.get("total_ms"),
+    }
+
+
+def _materialize_stmr_assets(
+    case_dir: Path,
+    summary: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """Copy the latest report-only STMR image beside portable case HTML."""
+
+    raw_path = summary.get("png_path")
+    source = Path(str(raw_path)) if raw_path else None
+    if source is None or not source.is_file():
+        return []
+    destination = case_dir / "review_assets" / "stmr" / "latest_stmr_map.png"
+    try:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    except OSError as exc:
+        summary.setdefault("asset_errors", []).append(
+            {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "source": str(source),
+            }
+        )
+        return []
+    return [
+        {
+            "path": str(destination),
+            "label": "Latest STMR semantic history",
+            "description": (
+                "UAV-centered accumulated semantics and actual trajectory; "
+                "blank cells are unknown, not verified free space."
+            ),
+        }
+    ]
 
 
 def _dry_airsim_registry() -> BackendRegistry:

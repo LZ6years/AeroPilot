@@ -41,6 +41,12 @@ class AerialVlnEvalConfig:
     save_artifacts: bool = False
     generate_html_review: bool = True
     enable_action_planner_debug: bool = False
+    # STMR is benchmark opt-in. Shadow builds report-only spatial memory after
+    # an episode; planner additionally exposes the compact map to the model.
+    stmr_mode: str = "off"
+    stmr_prior: str = "default_uav_prior"
+    stmr_max_queries: int = 16
+    stmr_device: str = "auto"
     env_path: str = ".env"
     parser_mode: str = "model"
     shutdown_policy: str = "land"
@@ -153,6 +159,23 @@ class AerialVlnEvalConfig:
             enable_action_planner_debug=bool(
                 data.get("enable_action_planner_debug", False)
             ),
+            stmr_mode=_choice(
+                data.get("stmr_mode", "off"),
+                {"off", "shadow", "planner"},
+                field_name="stmr_mode",
+            ),
+            stmr_prior=str(
+                data.get("stmr_prior", "default_uav_prior")
+            ),
+            stmr_max_queries=_positive_int(
+                data.get("stmr_max_queries", 16),
+                field_name="stmr_max_queries",
+            ),
+            stmr_device=_choice(
+                data.get("stmr_device", "auto"),
+                {"auto", "cuda", "cpu"},
+                field_name="stmr_device",
+            ),
             env_path=str(data.get("env_path", ".env")),
             parser_mode=str(data.get("parser_mode", "model")),
             shutdown_policy=str(data.get("shutdown_policy", "land")),
@@ -258,5 +281,24 @@ def _non_negative_float(value: Any, *, field_name: str) -> float:
     if not math.isfinite(parsed) or parsed < 0.0:
         raise ValueError(
             f"AerialVLN {field_name} must be finite and non-negative"
+        )
+    return parsed
+
+
+def _positive_int(value: Any, *, field_name: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise ValueError(f"AerialVLN {field_name} must be positive")
+    return parsed
+
+
+def _choice(
+    value: Any, choices: set[str], *, field_name: str
+) -> str:
+    parsed = str(value).strip().lower()
+    if parsed not in choices:
+        raise ValueError(
+            f"AerialVLN {field_name} must be one of: "
+            + ", ".join(sorted(choices))
         )
     return parsed

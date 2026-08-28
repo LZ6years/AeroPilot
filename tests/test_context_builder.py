@@ -22,6 +22,7 @@ from src.memory.context.modules.image import (
     _image_banner,
     _rgb_depth_overlay_data_url,
 )
+from src.memory.context.modules.instruction import _summarize_instruction_history
 from src.memory.context.modules.action import DefaultActionContextModule
 from src.memory.context.modules.map import DefaultMapContextModule
 from src.memory.context.modules.pose import DefaultPoseContextModule
@@ -70,6 +71,35 @@ def make_state() -> MissionState:
         ],
     )
     return MissionState("run_test", result.instruction, result.plan)
+
+
+def test_instruction_history_excludes_active_record_by_id_not_text():
+    records = [
+        {
+            "id": "inst_0001",
+            "instruction": "repeat this instruction",
+            "semantic_plan": {"intent": "first"},
+        },
+        {
+            "id": "inst_0002",
+            "instruction": "repeat this instruction",
+            "semantic_plan": {"intent": "second"},
+        },
+    ]
+
+    history = _summarize_instruction_history(
+        records,
+        active_instruction_id="inst_0002",
+        max_items=5,
+    )
+
+    assert history == [
+        {
+            "id": "inst_0001",
+            "instruction": "repeat this instruction",
+            "intent": "first",
+        }
+    ]
 
 
 def make_memory(tmp_path, state: MissionState, actions=None, observations=None) -> FlightMemory:
@@ -241,10 +271,7 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     instruction = fragments["instruction"]["content"]
     assert instruction["current_instruction"]["text"] == state.user_instruction
     assert "current_phase" not in instruction
-    assert instruction["instruction_history"][0]["instruction"] == state.user_instruction
-    assert "semantic_plan" not in instruction["instruction_history"][0]
-    assert "phases" not in instruction["instruction_history"][0]
-    assert "completion_criteria" not in instruction["instruction_history"][0]
+    assert instruction["instruction_history"] == []
     assert fragments["image"]["content"]["selected_frames"][0]["role"] == "current_observation"
     assert fragments["image"]["model_inputs"] == []
     assert fragments["image"]["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
@@ -414,6 +441,59 @@ def test_context_builder_default_image_attaches_key_rgb_frames(tmp_path):
     assert "visual_evidence" not in context_text
     assert "selected_frames" not in context_text
     assert temporal_rule.endswith("An object visible only in PAST is not currently visible.")
+
+
+def test_context_builder_image_can_omit_phase_start_reference(tmp_path):
+    state = make_state()
+    observations = []
+    for index in range(4):
+        rgb_path = tmp_path / f"compressed_{index}.png"
+        write_test_png(
+            rgb_path,
+            color=(index + 20, index + 30, index + 40),
+        )
+        observations.append(
+            {
+                "scene_instance_id": "scene_1",
+                "agent_id": "uav_1",
+                "modalities": ["rgb"],
+                "frames": {
+                    "rgb": {"path": str(rgb_path), "mock": False}
+                },
+                "source": f"phase_window_{index}",
+            }
+        )
+    default_registry = ContextModuleRegistry.default()
+    modules = dict(default_registry.modules)
+    modules["image"] = DefaultImageContextModule(
+        include_phase_start_reference=False
+    )
+    registry = ContextModuleRegistry(
+        modules,
+        disabled=default_registry.disabled,
+        module_order=default_registry.module_order,
+    )
+
+    context = ObservationContextBuilder(registry=registry).build(
+        state,
+        make_memory(tmp_path, state, observations=observations),
+    )
+
+    image = {
+        fragment["name"]: fragment for fragment in context["fragments"]
+    }["image"]
+    assert [
+        item["role"] for item in image["content"]["selected_frames"]
+    ] == ["current_observation"]
+    assert [item["role"] for item in image["model_inputs"]] == [
+        "current_observation"
+    ]
+    assert image["model_inputs"][0]["input_id"] == (
+        "image_1_current_observation"
+    )
+    assert "PAST RGB" not in " ".join(
+        modules["image"].describe_output()["semantic_evidence"]
+    )
 
 
 def test_context_builder_optionally_attaches_aligned_current_rgb_depth_overlay(tmp_path):

@@ -162,6 +162,10 @@ def test_phase_window_context_filters_tools_using_scene_capabilities():
     state = make_state()
     base_context = {
         "fragments": [],
+        "simulator_contract": {
+            "protocol": "legacy_unrealcv",
+            "control_mode": "legacy_actor_pose",
+        },
         "allowed_action_constraints": {
             "planner_tools": [
                 "uav.hover",
@@ -196,14 +200,10 @@ def test_phase_window_context_filters_tools_using_scene_capabilities():
     constraints = result.planner_payload["allowed_action_constraints"]
     assert constraints["planner_tools"] == ["uav.turn_relative", "skill.inspect"]
     assert set(constraints["action_schemas"]) == {"uav.turn_relative", "skill.inspect"}
-    assert result.planner_payload["simulator_contract"] == {
-        "protocol": "unrealcv",
-        "control_mode": "actor_pose",
-        "supported_actions": ["connect", "turn_relative", "get_pose"],
-        "observation_modalities": ["rgb", "pose"],
-        "requires_takeoff": False,
-        "supports_soft_reset": False,
-    }
+    assert "simulator_contract" not in result.planner_payload
+    assert "simulator_contract" not in result.model_context
+    # Building one model window must not mutate the reusable base context.
+    assert base_context["simulator_contract"]["protocol"] == "legacy_unrealcv"
     assert base_context["allowed_action_constraints"]["planner_tools"] == [
         "uav.hover",
         "uav.turn_relative",
@@ -233,3 +233,4 @@ def test_phase_window_context_preserves_absent_legacy_tool_fields():
     constraints = result.planner_payload["allowed_action_constraints"]
     assert "planner_tools" not in constraints
     assert "action_schemas" not in constraints
+    assert "simulator_contract" not in result.planner_payload

@@ -263,6 +263,11 @@ def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
     context.pop("phase_progress_evidence", None)
     context.pop("phase_execution_summary", None)
     context.pop("latest_observation_summary", None)
+    # Backend capability details belong to Runtime lifecycle handling and its
+    # state artifact. The model receives only the already-filtered canonical
+    # action contract. Keeping this defensive removal prevents a custom or
+    # legacy context source from reintroducing the obsolete duplicate field.
+    context.pop("simulator_contract", None)
 
 
 def _remove_phase_judge_debug_fields(context: dict[str, Any]) -> None:

@@ -119,6 +119,35 @@ python evaluation/benchmarks/aerial_vln/scripts/run_eval.py `
   --limit-per-difficulty 3
 ```
 
+## STMR 历史压缩
+
+AerialVLN-S 可选使用现有 STMR 将 episode 内的 RGB、metric depth、canonical
+pose 和轨迹压缩成 UAV 居中的语义地图。配置项为：
+
+```json
+{
+  "stmr_mode": "off",
+  "stmr_prior": "default_uav_prior",
+  "stmr_max_queries": 16,
+  "stmr_device": "auto"
+}
+```
+
+- `off`：保持原有行为，不加载 STMR 模型。
+- `shadow`：episode 结束并关闭 Runtime logger 后离线生成 STMR；不修改
+  TaskParser、Planner context 或动作。
+- `planner`：在线增量生成 STMR，并通过现有 `map` context slot 向 Planner
+  提供一张语义历史图和紧凑摘要。当前窗口的地图成功生成且非 stale 时，
+  图像输入为“当前 RGB + STMR map”，不再重复附加 phase-start RGB；首帧、
+  地图尚未 ready 或本窗口更新失败时，自动回退为“phase-start RGB + 当前
+  RGB”。
+
+Shadow/Planner 都要求 observation profile 至少包含 `rgb + depth + pose`。
+STMR 空白格表示未知，不表示可通行。完整 voxel、性能数据和失败信息只写入
+`stmr_summary.json`；HTML 展示复制到 case `review_assets/stmr/` 的最新地图。
+Planner 输入始终只包含一份有界地图摘要，不包含 raw voxel、完整 frame history
+或完整轨迹。建议先用同一 low case 完成 Shadow 验证，再切换 Planner 模式。
+
 ## 真实远端执行
 
 每个被选中案例通过 `scene_id -> map_id` 查找 MapPackage。真实运行前会一次性
@@ -210,7 +239,7 @@ review.html
 ```
 
 每个 case 继续生成 `case_result.json`、`metrics.json`、`trajectory.json`、
-`audit.json` 和 `review.html`。HTML 显示 dataset family、官方 split ID、
+`audit.json`、`stmr_summary.json` 和 `review.html`。HTML 显示 dataset family、官方 split ID、
 Validation Seen/Unseen 标签、difficulty、reference path length、RGB、Planner
 debug 和轨迹。Depth 保留在 audit 资产中，不进入默认 gallery。
 
