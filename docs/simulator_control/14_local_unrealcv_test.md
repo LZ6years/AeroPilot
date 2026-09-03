@@ -58,6 +58,7 @@ Actor scale: [0.1, 0.1, 0.1]
 Startup hide: BP_Character_2, BP_animal_2, BP_BaseCar_2, Sport_2, BP_Drone01_2
 Camera: 0
 Native units per meter: 100
+Landed Actor-origin Z: 0.35 m
 Yaw offset: -180 deg
 Camera follow: standard_pose
 Blueprint yaw settle: timeout 5 s, tolerance 1 deg
@@ -101,6 +102,7 @@ python tests/manual/unrealcv_local_actor_probe.py `
   --execution managed `
   --yaw-deg 10 `
   --move-forward-m 0.25 `
+  --descend-m 0.10 `
   --speed-mps 0.5 `
   --require-visual `
   --require-first-person
@@ -114,16 +116,22 @@ start_scene
 → batch RGB/depth/segmentation
 → turn_relative
 → move_body
+→ descend（可选，检查 AGL 单调减小）
 → set_pose 恢复
 → 再次 batch capture
 → stop owned SceneInstance
 ```
+
+`--descend-m`只有在 MapPackage 配置`actor.landed_origin_z_m`时才能通过。Probe 比较
+下降前后的`pose.agl_m`，要求它随下降减小，并在最终恢复初始 Pose。该检查验证的是
+局部标定和 Backend enrichment，不把固定地面高度写入 Runtime 或 Benchmark。
 
 验收阈值：
 
 - 转向位置漂移不超过 0.05 米；
 - yaw 误差不超过 2 度；
 - 前移实际位移为 0.20–0.30 米；
+- 显式下降时，AGL 减小量与请求值误差不超过 0.05 米；
 - 恢复位置误差不超过 0.05 米；
 - RGB 非纯色，Depth 有限且非恒定；
 - `--require-first-person` 会在 Backend 隐藏 mesh 前读取主 Actor 的 object-mask

@@ -145,6 +145,14 @@ class MapPackage:
                         "unrealcv.actor.yaw_offset_deg"
                     )
                 actor["yaw_offset_deg"] = yaw_offset_deg
+                if "landed_origin_z_m" in actor:
+                    landed_origin_z_m = float(actor["landed_origin_z_m"])
+                    if not math.isfinite(landed_origin_z_m):
+                        raise ValueError(
+                            f"MapPackage {data['map_id']} requires a finite "
+                            "unrealcv.actor.landed_origin_z_m"
+                        )
+                    actor["landed_origin_z_m"] = landed_origin_z_m
                 rotation_method = str(
                     actor.get("rotation_method", "standard_pose")
                 ).strip().lower()

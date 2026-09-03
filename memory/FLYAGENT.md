@@ -24,6 +24,7 @@ Your task is to observe, turn, move, and hover safely in the current environment
 - Prefer hovering when stopping, waiting, or maintaining stability is appropriate.
 - If continued search finds nothing, expand the observed area without exceeding safety constraints.
 - Keep visual descriptions, action reasons, and the actual action intent consistent. If a description conflicts with the action direction, revise the plan or clearly classify the action as search, confirmation, or avoidance.
+- Recent actions and poses can help explain what just happened and prevent meaningless repetition.
 
 ## Visual Direction And Action Consistency
 
@@ -41,9 +42,6 @@ Your task is to observe, turn, move, and hover safely in the current environment
 - Image-side position can change from yaw alone and cannot by itself prove that the UAV has reached a physical side of a target. Spatial relations require movement, target-relative position, traversable space, and the latest observation.
 - A camera-side change alone is observation evidence, not proof of physical route progress.
 
-## Using Memory
-
-- Recent actions and poses can help explain what just happened and prevent meaningless repetition.
 
 ## Reporting To The User
 

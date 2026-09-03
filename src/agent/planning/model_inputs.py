@@ -175,6 +175,8 @@ def _compact_model_facing_fragment(fragment: dict[str, Any]) -> dict[str, Any] |
     content = fragment.get("content")
     if isinstance(content, dict):
         model_content = copy.deepcopy(content)
+        if name == "pose":
+            model_content = _compact_model_facing_pose(model_content)
         for key in (
             "visual_evidence",
             "selected_frames",
@@ -191,7 +193,31 @@ def _compact_model_facing_fragment(fragment: dict[str, Any]) -> dict[str, Any] |
         if isinstance(value, list) and value:
             compact[key] = value
 
+    # A calibrated AGL value is the pose module's only model-facing evidence.
+    # Do not retain a name-only pose fragment when a simulator cannot provide
+    # that optional value.
+    if name == "pose" and "content" not in compact and not any(
+        key in compact for key in ("risks", "warnings")
+    ):
+        return None
     return compact or None
+
+
+def _compact_model_facing_pose(content: dict[str, Any]) -> dict[str, Any]:
+    """Defensively keep only optional AGL from any pose context producer.
+
+    Custom or legacy modules may still publish absolute world pose fields.
+    Those values are useful in the full planner/debug payload but must not
+    regain model visibility through a compatibility path.
+    """
+
+    if "agl_m" not in content:
+        return {}
+    compact = {"agl_m": content["agl_m"]}
+    semantics = content.get("field_semantics")
+    if isinstance(semantics, dict) and "agl_m" in semantics:
+        compact["field_semantics"] = {"agl_m": semantics["agl_m"]}
+    return compact
 
 
 def _drop_empty_values(data: dict[str, Any]) -> dict[str, Any]:

@@ -198,6 +198,16 @@ def test_model_parser_prompts_split_structure_from_phase_criteria():
     assert "require actual traversal progress" in criteria_prompt
     assert "must not be presented as proof of physical passage" in criteria_prompt
     assert "instead of the general physical interpretation" in criteria_prompt
+    assert "Keep each spatial relation attached to the entity and role it modifies" in structure_prompt
+    assert "it is not an instruction to change UAV heading" in structure_prompt
+    assert "image bearing, target-relative position, UAV orientation, and route relation" in structure_prompt
+    assert "Words such as left, right, front, or behind do not create an orientation result" in structure_prompt
+    assert "Absolute UAV position and heading are self-state" in criteria_prompt
+    assert "cannot by themselves prove a target-relative" in criteria_prompt
+    assert "For a physical landing result" in criteria_prompt
+    assert "above-ground clearance" in criteria_prompt
+    assert "do not invent a numeric clearance threshold" in criteria_prompt
+    assert "confidence" not in criteria_prompt
 
 
 def test_model_parser_builds_skill_free_structure_messages():

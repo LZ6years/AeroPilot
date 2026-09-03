@@ -71,3 +71,28 @@ def test_two_clients_can_select_different_capture_sources_for_one_service():
 
     assert service.capture_sources[0]["depth"] == "depth_perspective"
     assert service.capture_sources[1]["depth"] == "depth_vis"
+
+
+def test_client_preserves_optional_agl_inside_existing_pose_observation():
+    """Optional pose enrichment must not require another public client call."""
+
+    class GroundAwareService:
+        def get_observation(
+            self,
+            scene_instance_id,
+            agent_id,
+            modalities,
+            capture_sources=None,
+        ):
+            return Observation(
+                scene_instance_id,
+                agent_id,
+                modalities,
+                {"pose": {"z": 2.5, "agl_m": 2.15}},
+            )
+
+    observation = SimulatorEnvClient(GroundAwareService()).get_observation(
+        "scene_1", "uav_1", ["pose"]
+    )
+
+    assert observation.data["pose"] == {"z": 2.5, "agl_m": 2.15}

@@ -138,7 +138,7 @@ def test_semantic_evidence_capabilities_follow_module_order_and_depth_config():
         "PAST RGB when distinct: phase-start comparison only; not current visibility.",
         "NOW metric depth overlay: approximate camera distance at visible pixels.",
     ]
-    assert capabilities[3].startswith("UAV pose:")
+    assert capabilities[3].startswith("UAV ground clearance")
     assert capabilities[4].startswith("Action history:")
     assert capabilities[5].startswith("Map memory:")
     assert ObservationContextBuilder(registry=registry).semantic_evidence_capabilities() == capabilities
@@ -805,7 +805,9 @@ def test_model_user_content_omits_fragment_debug_metadata(tmp_path):
     assert "safety_constraints" not in text
     assert "observation_policy" not in text
     assert "yaw_scan_remaining_deg" not in text
-    assert "visual_search_progress" in text
+    assert "visual_search_progress" not in text
+    assert "phase_start_relative_uav_motion" in text
+    assert "not target-relative distance or bearing" in text
     assert '"direction"' not in text
 
 
@@ -822,7 +824,7 @@ def test_context_builder_motion_history_preserves_recent_execution_order(tmp_pat
     action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
     summary = action["content"]["motion_history_summary"]
     assert summary["recent_execution_order"] == "oldest_to_newest"
-    assert summary["visual_search_progress"] == {
+    assert action["metadata"]["visual_search_progress"] == {
         "scope": "current_stationary_viewpoint",
         "yaw_offset_deg": 0.0,
         "yaw_extent_deg": 0.0,
@@ -1068,9 +1070,7 @@ def test_context_builder_exposes_yaw_scan_budget(tmp_path):
     action = {
         fragment["name"]: fragment for fragment in context["fragments"]
     }["action"]
-    assert action["content"]["motion_history_summary"][
-        "visual_search_progress"
-    ] == {
+    assert action["metadata"]["visual_search_progress"] == {
         "scope": "current_stationary_viewpoint",
         "yaw_offset_deg": 120.0,
         "yaw_extent_deg": 450.0,

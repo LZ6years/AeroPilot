@@ -213,6 +213,7 @@ Remote 规则：
       "name": "BP_Drone01_2",
       "scale": [0.1, 0.1, 0.1],
       "units_per_meter": 100.0,
+      "landed_origin_z_m": 0.35,
       "yaw_offset_deg": -180.0,
       "rotation_method": "blueprint_yaw",
       "camera_follow": "standard_pose",
@@ -244,6 +245,7 @@ UnrealCV 不生成 AirSim settings，`settings_path`保持 null。完整便携�
 | `actor.name` | 无 | Actor 模式必填，不由 Backend 猜测 |
 | `actor.scale` | 无 | 可选的三轴正数缩放；连接时设置一次 |
 | `actor.units_per_meter` | `100.0` | 正数；UE native location 到米的比例 |
+| `actor.landed_origin_z_m` | 无 | 可选；主 Actor 在局部落地参考面上静止时，其 canonical 原点的世界 Z（米） |
 | `actor.yaw_offset_deg` | `0.0` | 标准 rotation 的 canonical/native 偏移；Blueprint yaw 的命令偏移 |
 | `actor.rotation_method` | `standard_pose` | `standard_pose`或`blueprint_yaw` |
 | `actor.camera_follow` | `none` | `none`、`standard_pose`或`blueprint_pose` |
@@ -270,12 +272,16 @@ canonical yaw；标准 `standard_pose`仍在读写两侧使用 offset 换算。
 例如 DowntownWest 的历史 UAV-Flow 初始化会把`BP_Drone01_2`从打包地图默认比例
 调整为`[0.1, 0.1, 0.1]`，否则贴近 Actor 的主相机可能拍到机身部件。
 
+`actor.landed_origin_z_m`也是地图部署标定，不是 episode 的目标高度。配置后 Backend
+按`agl_m=max(0, current_z_m-landed_origin_z_m)`给 Pose 增加可选 AGL。一个值同时吸收
+局部地面高度和 Actor 原点离机身底部的偏移，避免再配置两个参数。它只适用于该标定
+覆盖的局部落地区域；起伏地形没有可靠地面来源时应省略该字段。
+
 `startup.hide_objects`同样属于显式地图归一化。Backend 只隐藏 MapPackage 中
 列出的 mesh；对象的 pose、Blueprint 控制和 camera component 仍然保留，对象已
 不存在时按已归一化处理。DowntownWest 使用该字段隐藏默认人物、动物和车辆 Pawn。
-camera-owning `BP_Drone01_2` 不能整 Actor 隐藏，否则 Blueprint viewport/camera
-跟随会失效；Schema 会直接拒绝将 controlled actor 写入该列表。Benchmark 创建的目标人物和
-车辆不写入此列表。
+主控制 Actor 可以写入该列表以隐藏自机 mesh；Actor 本体、Pose 控制与 camera
+component 仍保留。Benchmark 创建的目标人物和车辆不写入此列表。
 
 相机验证是地图级契约，不是 episode 配置。scene prepare 和 Actor pose write
 只负责同步，因为 Runtime preflight takeoff 也会经过 pose write；严格 readback

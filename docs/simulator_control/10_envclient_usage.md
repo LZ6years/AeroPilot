@@ -200,6 +200,23 @@ contexts/latest_context.json
 Pose 的 `coordinate_frame`由 Backend/Adapter 自描述并原样进入 Memory；旧生产者未
 提供时记录为 `canonical_unspecified`，Memory 不会根据协议名称猜测坐标系。
 
+### Pose 中的可选 AGL
+
+调用方仍通过原有观测接口读取 Pose：
+
+```python
+observation = client.get_observation(scene_id, agent_id, ["pose"])
+pose = observation.data["pose"]
+agl_m = pose.get("agl_m")
+```
+
+`agl_m`表示 UAV 相对已配置局部落地参考的垂直净空，单位为米。它是可选字段：
+
+- Backend 有可靠标定或传感器时返回；
+- 不支持时字段缺失，不返回假零值；
+- 调用方不得用世界`z`自行猜测 AGL；
+- 不新增`get_agl()`，也不产生第二次 C/S 请求。
+
 ## SimulationExecutionMode
 
 ```python

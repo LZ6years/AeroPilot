@@ -201,6 +201,26 @@ def test_model_facing_prompts_and_reusable_skills_do_not_leak_benchmark_repairs(
             assert term not in text, f"{path} leaks benchmark-specific term {term!r}"
 
 
+def test_task_parser_keeps_general_spatial_roles_and_optional_agl_evidence():
+    structure = Path(
+        "src/agent/semantic/prompts/task_parser_structure_system.txt"
+    ).read_text(encoding="utf-8")
+    criteria = Path(
+        "src/agent/semantic/prompts/task_parser_phase_criteria_system.txt"
+    ).read_text(encoding="utf-8")
+
+    assert "target-relative side or route side is a position/path relation" in structure
+    assert "it is not an instruction to change UAV heading" in structure
+    assert "explicitly asks the UAV to face, orient, turn, look toward" in structure
+    assert "Absolute UAV position and heading are self-state" in criteria
+    assert "cannot by themselves prove a target-relative side" in criteria
+    assert "physical landing result" in criteria
+    assert "above-ground clearance is available" in criteria
+    assert "do not invent a numeric clearance threshold" in criteria
+    assert "completion confidence" not in structure + criteria
+    assert "single-frame" not in structure + criteria
+
+
 def test_flyagent_rules_contain_general_visual_action_alignment_without_internal_terms():
     rules = (Path("memory") / "FLYAGENT.md").read_text(encoding="utf-8")
 

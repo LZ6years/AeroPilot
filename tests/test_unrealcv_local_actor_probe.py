@@ -17,6 +17,7 @@ import pytest
 from src.perception.raw_observation import RawObservation
 from tests.manual.unrealcv_local_actor_probe import (
     _parse_object_color,
+    _required_agl,
     _visual_quality,
 )
 
@@ -90,3 +91,11 @@ def test_object_color_parser_accepts_unrealcv_encodings(
     expected: tuple[int, int, int],
 ) -> None:
     assert _parse_object_color(response, "BP_Drone01_2") == expected
+
+
+def test_agl_probe_helper_requires_finite_optional_pose_value() -> None:
+    assert _required_agl({"agl_m": 1.25}) == 1.25
+    with pytest.raises(AssertionError, match="landed_origin_z_m"):
+        _required_agl({"z": 2.0})
+    with pytest.raises(AssertionError, match="finite"):
+        _required_agl({"agl_m": float("nan")})

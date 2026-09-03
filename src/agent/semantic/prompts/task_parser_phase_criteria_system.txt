@@ -37,6 +37,8 @@ Obligation grouping:
 
 Terminal wording:
 - State the observable minimum completed result, not hidden self pose, heading, absolute geometry, calibration, an evidence recipe, a preferred proof, or readiness for another action.
+- Keep evidence roles distinct. Absolute UAV position and heading are self-state and cannot by themselves prove a target-relative side, bearing, distance, facing relation, or route relation.
+- Preserve the relation named by the immutable goal. Do not turn a positional or route-side result into an orientation result unless the goal explicitly requires UAV facing or heading.
 - Treat the immutable phase as one local navigation checkpoint. For an intermediate route phase, judge only that checkpoint and do not require a later landmark, remaining route segment, final destination, or episode stop.
 - For the final route phase, judge only the requested destination region and terminal relation. Do not repeat completion of every earlier checkpoint as final-phase obligations.
 - Preserve every explicit terminal result in the immutable phase goal as a state that has already been achieved. Do not replace a required result with proximity, feasibility, preparation, or ability to perform it next.
@@ -51,6 +53,7 @@ Movement-result integrity:
 - Orientation-only phases may complete from the requested directional relation, but visibility alone does not complete route progress, altitude change, passage, or arrival.
 - For follow, go, proceed, or reach, require that the requested route progress or arrival relation has actually been achieved. Seeing or facing the route or landmark is not sufficient by itself.
 - For ascend, descend, rise, lower, or lift, require that the requested altitude change or resulting vertical relation has actually been achieved. Seeing the elevated or lower region is not sufficient by itself.
+- For a physical landing result, require controlled downward progress plus available evidence that the UAV is at or sufficiently near the landing surface. When above-ground clearance is available it may support that self-state; do not invent a numeric clearance threshold absent from the instruction.
 - For cross, pass, go through, or move beyond, require actual traversal progress and the resulting route relation. Yaw-only change, visibility of the far side, or a cue moving to another image side is not sufficient by itself and must not be presented as proof of physical passage.
 - Check every required terminal result in the immutable phase goal. Do not weaken achieved movement or relation into visibility, feasibility, preparation, or readiness to continue.
 

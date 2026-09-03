@@ -1,7 +1,8 @@
-"""Compact pose context module."""
+"""Keep raw UAV pose for audit while exposing only decision-useful AGL."""
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
@@ -25,35 +26,63 @@ class DefaultPoseContextModule(ContextModule):
         ]
         latest_pose = poses[-1] if poses else {}
         recent_delta = pose_delta(poses[-2], poses[-1]) if len(poses) >= 2 else {}
+        content = _model_pose_content(latest_pose)
         return ContextFragment(
             name=self.name,
             enabled=True,
             source=self.__class__.__name__,
-            content={
+            content=content,
+            risks=[] if latest_pose else [{"type": "pose_missing", "source": self.__class__.__name__}],
+            confidence="high" if latest_pose else "low",
+            budget=BudgetSpec(priority=self.priority, tokens_estimate=45, max_items=self.max_items),
+            metadata={
+                "reset_epoch": memory.reset_epoch,
+                "pose_history_count": len(poses),
+                # Absolute world pose is essential for trace/debug work but is
+                # not target-relative evidence. Keep it out of model content.
                 "latest_pose": latest_pose,
                 "recent_pose_delta": recent_delta,
             },
-            risks=[] if latest_pose else [{"type": "pose_missing", "source": self.__class__.__name__}],
-            confidence="high" if latest_pose else "low",
-            budget=BudgetSpec(priority=self.priority, tokens_estimate=90, max_items=self.max_items),
-            metadata={"reset_epoch": memory.reset_epoch, "pose_history_count": len(poses)},
         )
 
     def describe_output(self) -> dict[str, Any]:
         return {
-            "summary": "Latest UAV pose and recent pose delta.",
+            "summary": "Optional UAV above-ground clearance; absolute pose remains debug-only.",
             "semantic_evidence": [
-                "UAV pose: self position and orientation plus recent pose change; not target-relative geometry."
+                "UAV ground clearance when calibrated; self-state, not target-relative geometry."
             ],
             "content_fields": {
-                "latest_pose": "Most recent model-facing pose from pose refs; raw velocity is intentionally removed.",
-                "recent_pose_delta": "Difference between the last two poses as dx, dy, dz, and normalized dyaw_deg when available.",
+                "agl_m": "Optional vertical clearance above the configured local landing reference, in meters.",
+                "field_semantics": "Compact meaning and evidence boundary for agl_m.",
             },
             "metadata_fields": {
                 "pose_history_count": "Number of recent pose refs considered before compacting the planner-facing pose context.",
+                "latest_pose": "Debug-only latest canonical world pose; never target-relative evidence.",
+                "recent_pose_delta": "Debug-only delta between the latest two canonical poses.",
             },
             "risk_fields": {
                 "pose_missing": "No recent pose is available; avoid precise movement decisions.",
             },
-            "coordinate_note": "Pose values follow the runtime environment coordinate convention, currently AirSim NED for map-related context.",
+            "coordinate_note": "Raw coordinate-frame values remain in metadata and are not sent to the model.",
         }
+
+
+def _model_pose_content(latest_pose: dict[str, Any]) -> dict[str, Any]:
+    """Expose one optional scalar instead of ambiguous absolute world pose."""
+
+    try:
+        agl_m = float(latest_pose["agl_m"])
+    except (KeyError, TypeError, ValueError):
+        return {}
+    if not math.isfinite(agl_m):
+        return {}
+    return {
+        "agl_m": agl_m,
+        "field_semantics": {
+            "agl_m": (
+                "UAV vertical clearance above the configured local landing "
+                "reference, in meters; smaller means closer to ground. This "
+                "is UAV self-state, not target distance."
+            )
+        },
+    }

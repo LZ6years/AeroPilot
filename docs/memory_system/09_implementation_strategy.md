@@ -121,7 +121,7 @@ ImageModule:
   最近 3 轮 RGB/depth metadata、artifact refs、图像可用性
 
 PoseModule:
-  latest_pose、最近 2-3 个 pose、pose delta
+  模型侧可选 AGL；完整 latest pose 和最近 pose delta 仅保留在 debug metadata
 
 ActionModule:
   最近 3-5 个 action、动作结果、失败记录

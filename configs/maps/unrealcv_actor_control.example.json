@@ -38,6 +38,7 @@
           "name": "BP_Drone01_2",
           "scale": [0.1, 0.1, 0.1],
           "units_per_meter": 100.0,
+          "landed_origin_z_m": 0.35,
           "yaw_offset_deg": -180.0,
           "rotation_method": "blueprint_yaw",
           "camera_follow": "standard_pose",

@@ -27,6 +27,7 @@ from src.uav import (
 )
 
 from .base import BackendProbe
+from .ground_clearance import enrich_pose_with_agl
 from .unrealcv_capture import UnrealCvCapture
 from .unrealcv_control import UnrealCvPoseControl, create_pose_control
 
@@ -348,7 +349,7 @@ class UnrealCvBackend:
                 else "unrealcv_camera_native"
             )
         )
-        return {
+        model_pose: dict[str, float | str] = {
             "x": float(pose[0]),
             "y": float(pose[1]),
             "z": float(pose[2]),
@@ -357,6 +358,10 @@ class UnrealCvBackend:
             "roll_deg": float(pose[5]),
             "coordinate_frame": coordinate_frame,
         }
+        return enrich_pose_with_agl(
+            model_pose,
+            landed_origin_z_m=self._landed_origin_z_m(),
+        )
 
     def _get_frames(
         self,
@@ -405,6 +410,20 @@ class UnrealCvBackend:
 
     def _control_label(self) -> str:
         return "actor" if self._control_target() == "actor" else "camera"
+
+    def _landed_origin_z_m(self) -> float | None:
+        """Return the optional local landing calibration for Actor control.
+
+        Camera control has no vehicle-origin landing meaning, so even a stale
+        actor block must not accidentally produce AGL in that mode.
+        """
+
+        if self.package is None or self._control_target() != "actor":
+            return None
+        actor = self.package.unrealcv.get("actor", {})
+        if not isinstance(actor, dict) or "landed_origin_z_m" not in actor:
+            return None
+        return float(actor["landed_origin_z_m"])
 
     def _require_control(self) -> UnrealCvPoseControl:
         if self.control is None:

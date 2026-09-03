@@ -9,6 +9,7 @@
 - `control.protocol=unrealcv`；
 - actor 为 `BP_Drone01_2`；
 - `units_per_meter=100`；
+- `landed_origin_z_m=0.35`，用于 DowntownWest 当前局部落地区域的可选 AGL；
 - `yaw_offset_deg=-180`；
 - `camera_follow=standard_pose`；
 - `startup.hide_objects`包含`BP_Drone01_2`，只隐藏自机 mesh，Actor 仍负责真实位姿和
@@ -21,6 +22,10 @@
 `--require-first-person`。后者会按受控 Actor 的 object-mask 颜色检查初始、转向、
 移动和恢复帧，防止配置遗漏导致自机偶尔进入视野。该检查只验证部署，不读取 case
 目标或评测真值。已经落盘的历史图片不会被配置更新追溯修改。
+
+Land 回归前可以额外传入`--descend-m 0.10`。Backend 通过现有 Pose 返回可选
+`agl_m`，不新增 EnvClient 调用；模型侧只看到该离地净空，不看到绝对世界
+`x/y/z/yaw`。历史批次不会补算 AGL，也不会被追溯改写。
 
 2026-08-20 的真实闭环中，四个阶段的自机 mask 像素数均为 0；随后 UAV-Flow canary
 `uav_flow_first_person_canary_20260820`完成 1 个真实 Turn case，Planner 请求包含当前

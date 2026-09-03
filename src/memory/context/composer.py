@@ -144,11 +144,12 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
             "visual_evidence": "RGB availability, mock status, attached image count, and interpretation status.",
         },
         "pose": {
-            "latest_pose": "Latest UAV pose.",
-            "recent_pose_delta": "Delta between recent poses.",
+            "agl_m": "Optional UAV clearance above the configured local landing reference.",
+            "field_semantics": "Meaning and evidence boundary for optional AGL.",
         },
         "action": {
-            "motion_history_summary": "Current-phase UAV motion, stationary visual-search progress, and up to five successful actions ordered oldest to newest.",
+            "motion_history_summary": "Current-phase UAV self-motion and up to five successful actions ordered oldest to newest.",
+            "field_semantics": "Meanings and evidence boundaries for self-motion fields.",
         },
         "map": {
             "recalled_map_memories": "Map memory clues; confirm with current observations.",

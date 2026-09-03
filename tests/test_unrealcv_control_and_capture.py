@@ -13,7 +13,8 @@ import numpy as np
 from PIL import Image
 import pytest
 
-from src.env_client.schemas import MapPackage
+from src.env_client.schemas import MapPackage, SceneInstance
+from src.sim_server.backends.ground_clearance import enrich_pose_with_agl
 from src.sim_server.backends.unrealcv_backend import UnrealCvBackend
 from src.sim_server.backends.unrealcv_capture import UnrealCvCapture
 from src.sim_server.backends.unrealcv_control import (
@@ -234,6 +235,7 @@ def _package(control_target: str = "actor") -> MapPackage:
             "name": "BP_Drone",
             "scale": [0.1, 0.1, 0.1],
             "units_per_meter": 100.0,
+            "landed_origin_z_m": 0.35,
             "yaw_offset_deg": -180.0,
             "rotation_method": "blueprint_yaw",
             "camera_follow": "blueprint_pose",
@@ -649,6 +651,7 @@ def test_map_package_validates_actor_control_and_capabilities() -> None:
     backend = UnrealCvBackend()
 
     assert actor_package.unrealcv["actor"]["units_per_meter"] == 100.0
+    assert actor_package.unrealcv["actor"]["landed_origin_z_m"] == 0.35
     assert actor_package.unrealcv["actor"]["scale"] == [0.1, 0.1, 0.1]
     assert actor_package.unrealcv["startup"]["hide_objects"] == [
         "BP_Character",
@@ -658,6 +661,53 @@ def test_map_package_validates_actor_control_and_capabilities() -> None:
     ]
     assert backend.describe_capabilities(actor_package).control_mode == "actor_pose"
     assert backend.describe_capabilities(camera_package).control_mode == "camera_pose"
+
+
+def test_ground_clearance_enrichment_is_optional_clamped_and_non_mutating() -> None:
+    pose = {"x": 1.0, "z": 0.2, "coordinate_frame": "unrealcv_world_m"}
+
+    enriched = enrich_pose_with_agl(pose, landed_origin_z_m=0.35)
+    unavailable = enrich_pose_with_agl(pose, landed_origin_z_m=None)
+
+    assert enriched["agl_m"] == 0.0
+    assert "agl_m" not in unavailable
+    assert "agl_m" not in pose
+
+
+def test_unrealcv_observation_and_get_pose_share_optional_agl() -> None:
+    backend = UnrealCvBackend()
+    scene = SceneInstance(
+        scene_instance_id="scene_1",
+        map_id="test_actor",
+        scene_id="test",
+        machine_id="local",
+        control_host="127.0.0.1",
+        control_port=9068,
+        settings_path=None,
+        process_id=None,
+        status="starting",
+    )
+    backend.start(_package("actor"), scene)
+
+    observed_pose = backend.get_observation(
+        scene, "drone_1", ["pose"]
+    ).data["pose"]
+    action_pose = backend.execute_action(
+        scene, "drone_1", "get_pose", {}
+    ).data["pose"]
+
+    assert observed_pose == action_pose
+    assert observed_pose["agl_m"] == pytest.approx(2.65)
+
+
+def test_unrealcv_camera_pose_does_not_inherit_actor_agl_calibration() -> None:
+    backend = UnrealCvBackend()
+    package = _package("camera")
+    # A stale actor block must not give camera control a vehicle-ground meaning.
+    package.unrealcv["actor"] = {"landed_origin_z_m": 0.35}
+    backend.package = package
+
+    assert "agl_m" not in backend._pose_to_model([0, 0, 3, 0, 0, 0])
 
 
 @pytest.mark.parametrize(
@@ -775,6 +825,13 @@ def test_map_package_validates_actor_control_and_capabilities() -> None:
                 "actor": {"name": "drone", "yaw_settle_timeout_sec": 0},
             },
             "yaw_settle_timeout_sec",
+        ),
+        (
+            {
+                "control_target": "actor",
+                "actor": {"name": "drone", "landed_origin_z_m": float("nan")},
+            },
+            "landed_origin_z_m",
         ),
     ],
 )

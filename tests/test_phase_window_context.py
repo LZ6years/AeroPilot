@@ -234,3 +234,41 @@ def test_phase_window_context_preserves_absent_legacy_tool_fields():
     assert "planner_tools" not in constraints
     assert "action_schemas" not in constraints
     assert "simulator_contract" not in result.planner_payload
+
+
+def test_phase_window_context_defensively_hides_absolute_pose_from_model():
+    state = make_state()
+    base_context = {
+        "fragments": [
+            {
+                "name": "pose",
+                "content": {
+                    "latest_pose": {
+                        "x": 10.0,
+                        "y": -4.0,
+                        "z": 2.5,
+                        "yaw_deg": -170.0,
+                    },
+                    "recent_pose_delta": {"dx": 1.0, "dyaw_deg": 10.0},
+                    "agl_m": 2.15,
+                    "field_semantics": {
+                        "agl_m": "UAV self-state, not target distance."
+                    },
+                },
+                "metadata": {"debug": True},
+            }
+        ]
+    }
+
+    result = PhaseWindowContextBuilder().build(state, base_context, {"pose": {}})
+    pose = next(
+        item for item in result.model_context["fragments"] if item["name"] == "pose"
+    )
+
+    assert pose["content"] == {
+        "agl_m": 2.15,
+        "field_semantics": {"agl_m": "UAV self-state, not target distance."},
+    }
+    assert "latest_pose" not in str(result.model_context)
+    assert "recent_pose_delta" not in str(result.model_context)
+    assert "context_schema" not in result.model_context

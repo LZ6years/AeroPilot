@@ -110,6 +110,9 @@ ObservationProfile 是一次 Benchmark 运行的静态观测选择。它不进�
 但不能改变已有 canonical 字段的含义。调用方必须依据 `SceneCapabilities` 判断动作
 和观测是否可用，不能根据 `map_id` 或 Benchmark 名称推断。
 
+例如 Backend 可以在已有 Pose 字典中增加可选`agl_m`。字段缺失表示该部署没有可靠
+地面参考；这不增加新的 EnvClient 方法，也不改变 Pose 既有坐标字段的含义。
+
 ## 兼容规则
 
 下列修改保持在 v1 内：

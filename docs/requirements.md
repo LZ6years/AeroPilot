@@ -169,7 +169,9 @@ runtime 可以使用生命周期和诊断能力：
 - depth 图像。
 - pose。
 
-runtime 根据 `observation_policy` 自动采集这些数据。模型通过 `PlannerContext.fragments` 阅读整理后的图像 metadata、artifact refs、pose 和 action history。
+runtime 根据 `observation_policy` 自动采集这些数据。模型通过
+`PlannerContext.fragments`阅读整理后的图像输入、可选 AGL 和相位累计动作历史；
+绝对世界 pose 保留在运行审计中，不作为目标相对关系证据发送给模型。
 
 以下能力暂不在第一阶段模块化：
 

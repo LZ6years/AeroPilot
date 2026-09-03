@@ -6,11 +6,11 @@ MapPackage supplies only deployment and primary-vehicle control information.
 
 Safety defaults
 ---------------
-The probe starts and captures a scene but does not move it unless
-``--yaw-deg`` or ``--move-forward-m`` is explicitly provided.  Whenever motion
-is requested it records the initial canonical pose, restores that pose in a
-``finally`` path, and then asks EnvClient to stop only the process owned by the
-current SceneInstance.
+The probe starts and captures a scene but does not move it unless a yaw,
+forward, or descent test is explicitly provided. Whenever motion is requested
+it records the initial canonical pose, restores that pose in a ``finally``
+path, and then asks EnvClient to stop only the process owned by the current
+SceneInstance.
 
 Example
 -------
@@ -21,6 +21,7 @@ After copying the portable config example and replacing its local root:
         --map-id downtownwest_local_unrealcv \
         --yaw-deg 10 \
         --move-forward-m 0.25 \
+        --descend-m 0.10 \
         --speed-mps 0.5 \
         --require-visual \
         --require-first-person
@@ -83,6 +84,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.0,
         help="Optional forward distance; zero performs no translation",
     )
+    parser.add_argument(
+        "--descend-m",
+        type=float,
+        default=0.0,
+        help=(
+            "Optional controlled descent used to verify that pose.agl_m "
+            "decreases; zero performs no descent"
+        ),
+    )
     parser.add_argument("--speed-mps", type=float, default=0.5)
     parser.add_argument(
         "--require-visual",
@@ -112,6 +122,8 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
 
     if args.move_forward_m < 0.0:
         raise ValueError("--move-forward-m must be zero or positive")
+    if args.descend_m < 0.0:
+        raise ValueError("--descend-m must be zero or positive")
     if args.speed_mps <= 0.0:
         raise ValueError("--speed-mps must be greater than zero")
 
@@ -143,6 +155,9 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         show_display=True,
     )
     client = SimulatorEnvClient(service, observation_profile=profile)
+    motion_requested = bool(
+        args.yaw_deg or args.move_forward_m or args.descend_m
+    )
     summary: dict[str, Any] = {
         "status": "starting",
         "run_dir": str(run_dir),
@@ -151,6 +166,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         "requested_motion": {
             "yaw_deg": args.yaw_deg,
             "move_forward_m": args.move_forward_m,
+            "descend_m": args.descend_m,
             "speed_mps": args.speed_mps,
         },
         "require_first_person": bool(args.require_first_person),
@@ -283,10 +299,39 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
                 )
             }
 
+        if args.descend_m:
+            descent_origin = _observe(
+                client, scene.scene_instance_id, args.agent_id
+            )
+            before_agl = _required_agl(descent_origin.pose)
+            result = client.execute_action(
+                scene.scene_instance_id,
+                args.agent_id,
+                "descend",
+                {"meters": args.descend_m, "speed_mps": args.speed_mps},
+            )
+            if not result.ok:
+                raise RuntimeError(result.message)
+            after_descent = _observe(
+                client, scene.scene_instance_id, args.agent_id
+            )
+            after_agl = _required_agl(after_descent.pose)
+            summary["poses"]["before_descent"] = descent_origin.pose
+            summary["poses"]["after_descent"] = after_descent.pose
+            _write_json(
+                run_dir / "observation_after_descent.json",
+                after_descent.to_dict(),
+            )
+            summary["checks"]["descent"] = {
+                "agl_before_m": before_agl,
+                "agl_after_m": after_agl,
+                "agl_decrease_m": before_agl - after_agl,
+            }
+
         # Explicit set_pose restoration is the portable UnrealCV episode
         # primitive. The Backend intentionally does not advertise a fake soft
         # reset because scenario objects belong to the Benchmark layer.
-        if args.yaw_deg or args.move_forward_m:
+        if motion_requested:
             restore_result = client.execute_action(
                 scene.scene_instance_id,
                 args.agent_id,
@@ -331,9 +376,7 @@ def run_probe(args: argparse.Namespace) -> dict[str, Any]:
         # first movement. Cleanup must proceed even when restoration fails.
         if scene is not None:
             summary["cleanup"]["attempted"] = True
-            if initial_pose is not None and not restored and (
-                args.yaw_deg or args.move_forward_m
-            ):
+            if initial_pose is not None and not restored and motion_requested:
                 try:
                     client.execute_action(
                         scene.scene_instance_id,
@@ -553,10 +596,32 @@ def _assert_acceptance(summary: dict[str, Any], args: argparse.Namespace) -> Non
             raise AssertionError(
                 f"Forward displacement must be 0.20-0.30 m, received {actual}"
             )
-    if args.yaw_deg or args.move_forward_m:
+    if args.descend_m:
+        descent = summary["checks"]["descent"]
+        if descent["agl_after_m"] >= descent["agl_before_m"]:
+            raise AssertionError(f"AGL did not decrease during descent: {descent}")
+        if abs(descent["agl_decrease_m"] - args.descend_m) > 0.05:
+            raise AssertionError(
+                "AGL decrease differs from requested descent by more than "
+                f"0.05 m: {descent}"
+            )
+    if args.yaw_deg or args.move_forward_m or args.descend_m:
         restore = summary["checks"]["restore"]
         if restore["position_error_m"] > 0.05 or restore["yaw_error_deg"] > 2.0:
             raise AssertionError(f"Pose restoration exceeded tolerance: {restore}")
+
+
+def _required_agl(pose: dict[str, Any]) -> float:
+    """Return calibrated AGL or fail the explicit AGL acceptance sequence."""
+
+    if "agl_m" not in pose:
+        raise AssertionError(
+            "AGL acceptance requires unrealcv.actor.landed_origin_z_m"
+        )
+    value = float(pose["agl_m"])
+    if not math.isfinite(value):
+        raise AssertionError(f"AGL must be finite, received {value}")
+    return value
 
 
 def _set_pose_args(pose: dict[str, Any]) -> dict[str, float | bool]:

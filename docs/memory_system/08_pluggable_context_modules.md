@@ -68,9 +68,9 @@ class ContextModule:
 ```python
 def describe_output(self) -> dict:
     return {
-        "summary": "Latest UAV pose and recent pose delta.",
+        "summary": "Optional UAV above-ground clearance; absolute pose remains debug-only.",
         "semantic_evidence": [
-            "UAV pose: self position and orientation; not target-relative geometry."
+            "UAV ground clearance when calibrated; self-state, not target-relative geometry."
         ],
     }
 ```

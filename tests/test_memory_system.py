@@ -198,7 +198,8 @@ def test_context_composer_outputs_uniform_fragments(tmp_path):
         "map",
     }
     assert "selected_skills" in context["context_schema"]["module_content_fields"]["skills"]
-    assert "latest_pose" in context["context_schema"]["module_content_fields"]["pose"]
+    assert "agl_m" in context["context_schema"]["module_content_fields"]["pose"]
+    assert "latest_pose" not in context["context_schema"]["module_content_fields"]["pose"]
     assert "selected_frames" in context["context_schema"]["module_content_fields"]["image"]
 
 
@@ -386,7 +387,7 @@ def test_action_module_reads_jsonl_refs_and_outputs_unified_motion_history(tmp_p
         "planar_m": 0.0,
         "yaw_delta_deg": 60.0,
     }
-    assert summary["visual_search_progress"] == {
+    assert action["metadata"]["visual_search_progress"] == {
         "scope": "current_stationary_viewpoint",
         "yaw_offset_deg": 0.0,
         "yaw_extent_deg": 0.0,
@@ -418,7 +419,8 @@ def test_pose_and_image_modules_read_jsonl_refs(tmp_path):
     pose = _fragment(context, "pose")
     image = _fragment(context, "image")
 
-    assert pose["content"]["latest_pose"] == {"x": 1.0, "y": 0.0, "z": -2.0}
+    assert pose["content"] == {}
+    assert pose["metadata"]["latest_pose"] == {"x": 1.0, "y": 0.0, "z": -2.0}
     assert "recent_pose_history" not in pose["content"]
     assert image["content"]["visual_evidence"]["has_rgb"] is True
     assert image["content"]["visual_evidence"]["has_depth"] is False
@@ -670,9 +672,40 @@ def test_pose_module_keeps_three_recent_pose_refs(tmp_path):
     pose = _fragment(context, "pose")
 
     assert pose["metadata"]["pose_history_count"] == 3
-    assert pose["content"]["recent_pose_delta"]["dyaw_deg"] == 10.0
-    assert "velocity" not in pose["content"]["latest_pose"]
+    assert pose["metadata"]["recent_pose_delta"]["dyaw_deg"] == 10.0
+    assert "velocity" not in pose["metadata"]["latest_pose"]
+    assert pose["content"] == {}
     assert pose["facts"] == []
+
+
+def test_pose_module_exposes_only_optional_agl_to_model_content(tmp_path):
+    writer = MemoryEventWriter(tmp_path)
+    reader = MemoryRecordReader(tmp_path)
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
+    memory.append_pose_ref(
+        writer.write_pose(
+            {
+                "x": 10.0,
+                "y": -4.0,
+                "z": 2.5,
+                "yaw_deg": -170.0,
+                "agl_m": 2.15,
+                "coordinate_frame": "unrealcv_world_m",
+            },
+            "observation",
+        )
+    )
+
+    context = ContextComposer().compose(
+        MemorySourceBundle(memory, MapMemoryStore()),
+        make_stage_context(current_phase={"name": "land"}),
+    )
+    pose = _fragment(context, "pose")
+
+    assert pose["content"]["agl_m"] == 2.15
+    assert "target distance" in pose["content"]["field_semantics"]["agl_m"]
+    assert pose["metadata"]["latest_pose"]["yaw_deg"] == -170.0
+    assert set(pose["content"]) == {"agl_m", "field_semantics"}
 
 
 def test_flight_memory_json_is_manifest_not_raw_history(tmp_path):
@@ -767,11 +800,15 @@ def test_default_modules_describe_their_outputs():
     assert "current_instruction" in descriptions["instruction"]["content_fields"]
     assert "selected_skills" in descriptions["skills"]["content_fields"]
     assert "selected_frames" in descriptions["image"]["content_fields"]
-    assert "latest_pose" in descriptions["pose"]["content_fields"]
+    assert "agl_m" in descriptions["pose"]["content_fields"]
+    assert "latest_pose" in descriptions["pose"]["metadata_fields"]
+    assert "latest_pose" not in descriptions["pose"]["content_fields"]
     assert "motion_history_summary" in descriptions["action"]["content_fields"]
+    assert "field_semantics" in descriptions["action"]["content_fields"]
     assert "recent_actions" not in descriptions["action"]["content_fields"]
     assert "action_trend" not in descriptions["action"]["content_fields"]
     assert "motion_history_summary_sources" in descriptions["action"]["metadata_fields"]
+    assert "visual_search_progress" in descriptions["action"]["metadata_fields"]
     assert "recalled_map_memories" in descriptions["map"]["content_fields"]
 
 

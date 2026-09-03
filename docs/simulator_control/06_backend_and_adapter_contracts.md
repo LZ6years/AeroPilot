@@ -187,6 +187,23 @@ Blueprint 命令失败时都不会回退到 camera 模式。
 相机，再批量采集。严格的“画面是否纯色”判断只属于 Demo/manual probe，Backend
 只验证协议载荷是否可解码。
 
+## 可选 AGL enrichment
+
+AGL 不增加 EnvClient 方法，也不成为新的 observation modality。Backend 在 canonical
+Pose 生成后调用内部 `GroundClearanceResolver`；只有地图或传感器提供可靠地面参考时，
+返回的 Pose 才增加 `agl_m`。没有可靠来源时字段保持缺失，不能用 `0`代表未知。
+
+```mermaid
+flowchart LR
+    P["canonical pose"] --> R["GroundClearanceResolver"]
+    C["Backend calibration / sensor"] --> R
+    R -->|"available"| A["pose + agl_m"]
+    R -->|"unavailable"| U["pose unchanged"]
+```
+
+当前 UnrealCV Actor 实现使用局部落地原点标定；未来 AirSim 距离传感器可以实现同一
+内部边界，不需要改变 Runtime 或 EnvClient v1。
+
 ## 场景编辑不属于 EnvClient
 
 控制主 UAV Actor 与摆放 Benchmark 目标是两个责任：
