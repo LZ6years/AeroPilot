@@ -151,7 +151,6 @@ tests/test_boundaries.py
 - 当前 phase 的 `goal`
 - 当前 phase 的 `done_when`
 - 当前 phase 的 `continue_when`
-- 当前 phase 的 `metrics`
 - 可选追加一个通用 recovery / fallback phase
 
 不允许更新：

@@ -16,6 +16,8 @@ from typing import Any
 
 from src.agent.semantic.task_parser import (
     DEFAULT_AGENT_RULES_PATH,
+    DEFAULT_DONE_WHEN_RULES_PATH,
+    DEFAULT_USER_PREFERENCES_PATH,
     _configured_evidence_message,
     _loads_json_object,
     _normalize_configured_evidence,
@@ -39,6 +41,14 @@ class SemanticPlanUpdater:
     ) -> None:
         self.model_config = model_config or load_model_config()
         self.agent_rules = self._load_agent_rules(agent_rules_path)
+        self.user_preferences = self._load_required_text(
+            DEFAULT_USER_PREFERENCES_PATH,
+            label="FlyAgent user language preferences",
+        )
+        self.done_when_rules = self._load_required_text(
+            DEFAULT_DONE_WHEN_RULES_PATH,
+            label="FlyAgent done_when generation rules",
+        )
         self.system_prompt = self._load_system_prompt(prompt_path)
 
     def update(self, context: dict[str, Any]) -> dict[str, Any]:
@@ -90,7 +100,10 @@ class SemanticPlanUpdater:
         configured_evidence = _normalize_configured_evidence(
             update_context.pop("configured_evidence", [])
         )
-        messages = [{"role": "system", "content": self.agent_rules}]
+        messages = [
+            {"role": "system", "content": self.agent_rules},
+            {"role": "system", "content": self.user_preferences},
+        ]
         if isinstance(selected_guidance, list) and selected_guidance:
             messages.append(
                 {
@@ -109,6 +122,9 @@ class SemanticPlanUpdater:
                     "content": _configured_evidence_message(configured_evidence),
                 }
             )
+        messages.append(
+            {"role": "system", "content": self.done_when_rules}
+        )
         messages.extend(
             [
                 {"role": "system", "content": self.system_prompt},
@@ -124,16 +140,20 @@ class SemanticPlanUpdater:
     @staticmethod
     def _load_agent_rules(agent_rules_path: str | None) -> str:
         path = Path(agent_rules_path) if agent_rules_path else DEFAULT_AGENT_RULES_PATH
+        return SemanticPlanUpdater._load_required_text(path, label="FlyAgent rules")
+
+    @staticmethod
+    def _load_required_text(path: Path, *, label: str) -> str:
         if not path.exists():
-            raise SemanticPlanUpdaterConfigError(f"FlyAgent rules file not found: {path}")
+            raise SemanticPlanUpdaterConfigError(f"{label} file not found: {path}")
         text = path.read_text(encoding="utf-8-sig").strip()
         if not text:
-            raise SemanticPlanUpdaterConfigError(f"FlyAgent rules file is empty: {path}")
+            raise SemanticPlanUpdaterConfigError(f"{label} file is empty: {path}")
         return text
 
 
 _NUMBER_PATTERN = re.compile(r"(?<![\w.])[-+]?(?:\d+(?:\.\d+)?|\.\d+)")
-_PHASE_NUMERIC_SOURCE_FIELDS = ("goal", "done_when", "continue_when", "metrics")
+_PHASE_NUMERIC_SOURCE_FIELDS = ("goal", "done_when", "continue_when")
 
 
 def validate_semantic_plan_patch_numeric_provenance(

@@ -97,9 +97,9 @@ flowchart TD
 ## 4. Module 职责
 
 - `InstructionModule`：当前指令、历史指令、semantic goal、phase goal。
-- `ImageModule`：最新 RGB/depth metadata、artifact refs、图像可用性。
-- `PoseModule`：latest pose、最近 2-3 个 pose、pose delta。
-- `ActionModule`：最近 3-5 个 action、执行结果、失败记录。
+- `ImageModule`：当前/phase-start 图像选择、可选 depth overlay、artifact refs。
+- `PoseModule`：模型侧可选 AGL；绝对 pose 和 delta 留在审计 metadata。
+- `ActionModule`：当前阶段策略、phase-relative 自身运动、上一窗口位移、最近动作和必要字段语义。
 - `MapModule`：当前 map/scene 相关线索、recall filter、requires_reconfirmation。
 
 module 不做：
@@ -143,7 +143,13 @@ module 不做：
 - `observation_policy` 告诉模型观察由 runtime 自动完成。
 - `phase_transition_policy` 告诉模型 action plan 不输出 `phase_transition`，阶段推进在执行后判断。
 - `phase_execution_summary` 保留为 runtime/debug 的原始 phase 进展来源，不直接发送给模型。
-- planner 只读取 action fragment 中的 `motion_history_summary`：phase-start-relative UAV motion，以及按从旧到新排列的最近成功动作。
+- planner 只读取 action fragment 中的当前 `phase_strategy`（首次进入 phase 时省略）和
+  `motion_history_summary`：phase-start-relative UAV motion、上一窗口 UAV motion，
+  以及按从旧到新排列的最近成功动作。策略 revision 和完整历史仅保留在 Runtime/debug。
+- `last_window_uav_motion` 来自紧邻本轮规划前、已完成动作窗口的前后位姿差。规划前仅刷新
+  累计进展时必须保留该快照；只有显式测得的零运动窗口才会把它更新为零。
+- 模型先判断上一版 active stage 自身的可观察停止条件，再决定保持、推进或重规划；整个
+  phase 的 `done_when` 尚未满足，不会阻止中间 stage 推进。
 
 ## 6. facts / inferences / goals / risks
 
@@ -160,13 +166,13 @@ ContextComposer:
   合并、排序、裁剪，不创造新事实
 
 ModelActionPlanner:
-  基于 PlannerContext 输出 tool-only action plan
+  一次调用完成 completion assessment、phase strategy 更新和 tool-only action plan
 
 TaskRuntime:
   构造 coupled planner context，执行动作并自动观察
 
-PhaseTransition judge:
-  基于执行后的 state + 历史判断 continue / advance / complete
+TaskRuntime:
+  根据 completion assessment 派生 continue / advance / complete
 ```
 
 当前不单独实现 `PhaseCompletionEvaluator`。阶段推进先复用 `ModelActionPlanner` 的模型调用能力和 `PhaseTransition` schema；后续如果判断复杂，可以把这部分独立成 evaluator。

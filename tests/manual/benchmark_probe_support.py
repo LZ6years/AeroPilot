@@ -31,7 +31,6 @@ class StaticProbeTaskParser:
                         "goal": "exercise simulator primitives",
                         "done_when": ["probe actions completed"],
                         "continue_when": ["probe actions not completed"],
-                        "metrics": [],
                     }
                 ],
             }

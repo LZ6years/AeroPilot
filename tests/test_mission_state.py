@@ -32,7 +32,6 @@ def movement_phase(index: int, total: int, name: str, goal: str) -> SemanticPhas
         goal=goal,
         done_when=[f"{goal} is complete"],
         continue_when=[f"{goal} is incomplete"],
-        metrics=[],
     )
 
 
@@ -48,11 +47,70 @@ def test_mission_state_advances_phase():
 def test_mission_state_tracks_semantic_plan_version():
     state = make_state()
     original_version = state.semantic_plan_version
+    state.update_current_phase_strategy(
+        {
+            "stages": ["Move until the target relation is visible"],
+            "active_stage": 0,
+            "reason": "The phase still requires progress",
+        }
+    )
 
     state.apply_semantic_plan_update(state.semantic_plan)
 
     assert state.semantic_plan_version == original_version + 1
     assert state.to_dict()["semantic_plan_version"] == 1
+    assert state.current_phase_strategy == {}
+    assert state.current_phase_strategy_revision == 0
+
+
+def test_mission_state_tracks_phase_strategy_updates_and_revision():
+    state = make_state()
+    stages = [
+        "Move laterally until the route is open",
+        "Move forward until the target has been passed",
+    ]
+
+    initialized = state.update_current_phase_strategy(
+        {"stages": stages, "active_stage": 0, "reason": "The route is visible"}
+    )
+    kept = state.update_current_phase_strategy(
+        {"stages": stages, "active_stage": 0, "reason": "More lateral progress is needed"}
+    )
+    advanced = state.update_current_phase_strategy(
+        {"stages": stages, "active_stage": 1, "reason": "The lateral relation is established"}
+    )
+    replanned = state.update_current_phase_strategy(
+        {
+            "stages": ["Move around the obstacle until the route reopens"],
+            "active_stage": 0,
+            "reason": "A new obstacle blocks the old route",
+        }
+    )
+
+    assert [initialized["update_kind"], kept["update_kind"], advanced["update_kind"], replanned["update_kind"]] == [
+        "initialize",
+        "keep",
+        "advance",
+        "replan",
+    ]
+    assert state.current_phase_strategy_revision == 4
+    assert state.to_dict()["current_phase_strategy"]["active_stage"] == 0
+
+
+def test_mission_state_clears_phase_strategy_when_advancing():
+    state = make_state()
+    state.update_current_phase_strategy(
+        {
+            "stages": ["Move until the current phase is complete"],
+            "active_stage": 0,
+            "reason": "The phase still requires progress",
+        }
+    )
+
+    state.advance_phase()
+
+    assert state.current_phase_strategy == {}
+    assert state.current_phase_strategy_revision == 0
 
 
 def test_mission_state_records_action_and_observation():
@@ -118,6 +176,73 @@ def test_mission_state_tracks_phase_execution_facts():
     assert data["current_phase_progress"]["measurements"]["forward_m"] == 1.0
     assert "coordinate_frames" not in data["current_phase_progress"]
     assert data["current_phase_key"] == "1:orient_right"
+
+
+def test_mission_state_preserves_last_window_when_only_cumulative_progress_refreshes():
+    state = make_state()
+    state.record_phase_window_started()
+    state.ensure_current_phase_progress(
+        {"pose": {"position": {"x": 0.0, "y": 0.0, "z": -2.0}, "euler_rad": {"yaw": 0.0}}}
+    )
+    last_window = {
+        "forward_displacement_m": 0.25,
+        "right_displacement_m": -0.75,
+        "up_displacement_m": 0.0,
+        "planar_displacement_m": 0.791,
+        "vertical_delta_m": 0.0,
+        "yaw_delta_deg": 0.0,
+    }
+    state.update_current_phase_progress(
+        {"pose": {"position": {"x": 0.25, "y": -0.75, "z": -2.0}, "euler_rad": {"yaw": 0.0}}},
+        last_window_measurements=last_window,
+    )
+
+    # Planning-time refreshes have no newly completed action window. They must
+    # refresh cumulative displacement without converting absence into zero motion.
+    state.update_current_phase_progress(
+        {"pose": {"position": {"x": 0.5, "y": -1.0, "z": -2.0}, "euler_rad": {"yaw": 0.0}}}
+    )
+
+    progress = state.current_phase_progress
+    assert progress["last_window"] == {
+        "forward_m": 0.25,
+        "right_m": -0.75,
+        "up_m": 0.0,
+        "planar_m": 0.791,
+        "vertical_m": 0.0,
+        "yaw_delta_deg": 0.0,
+    }
+    assert progress["measurements"]["forward_m"] == 0.5
+    assert progress["measurements"]["right_m"] == -1.0
+
+
+def test_mission_state_explicit_zero_window_replaces_older_motion():
+    state = make_state()
+    state.ensure_current_phase_progress({"pose": {"x": 0.0, "y": 0.0, "z": -2.0}})
+    state.update_current_phase_progress(
+        {"pose": {"x": 1.0, "y": 0.0, "z": -2.0}},
+        latest_window_measurements={"forward_displacement_m": 1.0, "planar_displacement_m": 1.0},
+    )
+    state.update_current_phase_progress(
+        {"pose": {"x": 1.0, "y": 0.0, "z": -2.0}},
+        last_window_measurements={
+            "forward_displacement_m": 0.0,
+            "right_displacement_m": 0.0,
+            "up_displacement_m": 0.0,
+            "planar_displacement_m": 0.0,
+            "vertical_delta_m": 0.0,
+            "yaw_delta_deg": 0.0,
+        },
+    )
+
+    assert state.current_phase_progress["last_window"] == {
+        "forward_m": 0.0,
+        "right_m": 0.0,
+        "up_m": 0.0,
+        "planar_m": 0.0,
+        "vertical_m": 0.0,
+        "yaw_delta_deg": 0.0,
+    }
 
 
 def test_mission_state_tracks_one_sided_yaw_scan_extent_and_resets_per_phase():

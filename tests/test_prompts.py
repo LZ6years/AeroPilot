@@ -12,8 +12,9 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     prompt_dir = Path("src") / "agent" / "semantic" / "prompts"
     structure = (prompt_dir / "task_parser_structure_system.txt").read_text(encoding="utf-8")
     criteria = (prompt_dir / "task_parser_phase_criteria_system.txt").read_text(encoding="utf-8")
+    done_when = (prompt_dir / "done_when_generation_system.txt").read_text(encoding="utf-8")
     structure_shape = structure.split("Boundaries:", 1)[0]
-    criteria_shape = criteria.split("Immutable structure:", 1)[0]
+    criteria_shape = criteria.split("Assembly contract:", 1)[0]
 
     assert not (prompt_dir / "task_parser_system.txt").exists()
     assert '"intent"' in structure_shape
@@ -23,92 +24,29 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     assert '"observe"' not in structure_shape
     assert '"continue_when"' not in structure_shape
     assert '"metrics"' not in structure_shape
-    assert "Navigable-checkpoint segmentation contract" in structure
-    assert "It is not an atomic action or one verb per phase" in structure
-    assert "turn toward a road and proceed along it" in structure
-    assert "completing only the turn does not finish the phase" in structure
-    assert "simple single-objective instruction as one phase" in structure
-    assert "ordered local checkpoints" in structure
-    assert "rather than targeting a preferred count" in structure
-    assert "Movement-mode changes alone do not force a boundary" in structure
-    assert "Setup and progress may share one phase" in structure
-    assert "different stable landmarks, regions, route relations" in structure
-    assert "must never remove, skip, or postpone" in structure
-    assert "including all clauses near the end of a long instruction" in structure
-    assert "map each ordered route checkpoint to a phase" in structure
-    assert "Do not split mechanically at punctuation" in structure
-    assert "execute_full_route_navigation" in structure
-    assert "Phase structure comes from user intent" in structure
-    assert "does not decide execution feasibility or downgrade the request for safety" in structure
-    assert "Cover the complete requested outcome" in structure
-    assert "Every explicit terminal result" in structure
-    assert "phase name and goal" in structure
-    assert '"prepare for X"' in structure
-    assert "controlled descent and a landed/stable result" in structure
-    assert "check every requested outcome verb" in structure
-    assert "A number by itself requests its stated relation, not exact measurement" in structure
-    assert "remove exact, exactly, precise, or precisely from a phase goal" in structure
-    assert "Do not rewrite them as centered in the image or camera" in structure
+    assert "One phase is one local route leg" in structure
+    assert "It is not one primitive action" in structure
+    assert "Do not split only because movement mode or punctuation changes" in structure
+    assert "Never weaken a result into preparing" in structure
+    assert "Create an orientation result only when" in structure
     assert '"done_when"' in criteria_shape
     assert '"observe"' not in criteria_shape
     assert '"continue_when"' in criteria_shape
-    assert '"metrics"' in criteria_shape
+    assert '"metrics"' not in criteria_shape
     assert '"intent"' not in criteria_shape
     assert '"task_goal"' not in criteria_shape
-    assert '"forward_distance | right_distance | up_distance | planar_distance | yaw_delta | hover_stability"' in criteria
-    assert "target-relative" in criteria
-    assert "not phase-start planar_distance" in criteria
-    assert "user instruction is the only numeric source" in criteria
-    assert "current metric schema has no target-distance metric" in criteria
-    assert "Never add yaw_delta=0" in criteria
-    assert "Together the items must cover the immutable phase goal" in criteria
-    assert "controlled descent or altitude/surface progress" not in criteria
-    assert "exception never permits invented numbers" in criteria
-    assert '"Move to a position N meters from a target"' in criteria
-    assert "Do not infer yaw_delta=360" in criteria
-    assert "scan every number" in criteria
-    assert "invented lower/upper bounds" in criteria
-    assert "one minimum sufficient terminal obligation" in criteria
-    assert "All list items are AND conditions" in criteria
-    assert "another obligation only when it is independently required" in criteria
-    assert "support-independence question" in criteria
-    assert "calls facts independently assessable or says to assess them separately" in criteria
-    assert "identifying the cue inherently supplies that usable relation" in criteria
-    assert "their support cannot differ" in criteria
-    assert "Do not create items from evidence sources" in criteria
-    assert "observable minimum completed result" in criteria
-    assert "hidden self pose, heading, absolute geometry, calibration" in criteria
-    assert "every explicit terminal result in the immutable phase goal" in criteria
-    assert "proximity, feasibility, preparation, or ability to perform it next" in criteria
-    assert "Preserve selected-skill approximation and accepted variation explicitly" in criteria
-    assert "Final output audit:" in criteria
-    assert "split any item whose required results can differ in status" in criteria
-    assert "Preserve every independently assessable boundary" in criteria
-    assert "appears as achieved in done_when" in criteria
-    assert "continue_when is non-exhaustive clarification" in criteria
-    assert "not an action explanation, self-motion explanation, completion gate" in criteria
-    assert "Movement-result integrity" in criteria
-    assert "whole local route-leg endpoint" in criteria
-    assert "turning or aligning does not complete a phase" in criteria
-    assert "separate AND items in done_when" in criteria
-    assert "Seeing or facing the route or landmark is not sufficient" in criteria
-    assert "must not be presented as proof of physical passage" in criteria
-    assert "Seeing the elevated or lower region is not sufficient" in criteria
-    assert "Yaw-only change, visibility of the far side, or a cue moving to another image side" in criteria
-    assert "Without a shared-frame target-relative measurement" in criteria
-    assert "observable cues supported by selected skill guidance" in criteria
-    assert "A target-relative radius, standoff, side relation" in criteria
-    assert "numeric target-relative standoff without a deterministic target-distance metric" not in criteria
-    assert "visual scale and available perspective, depth, scene, or observation-change cues" not in criteria
-    assert "no clear evidence that the target is substantially nearer or farther" not in criteria
-    assert "evidence-source items" in criteria
-    assert "circular confirmation requirements" in criteria
-    assert "configured_evidence message" in criteria
-    assert "capability metadata, not proof" in criteria
-    assert "Do not split RGB, depth, pose, map, or action history" in criteria
-    assert "mechanically copy capability names" in criteria
-    assert "uav.turn_relative" in structure
-    assert "uav.move_body" in criteria
+    assert "Preserve numeric requirements inside the natural-language completed result" in criteria
+    assert "potential evidence capabilities as possible future evidence" in criteria
+    assert "not as separate terminal obligations" in criteria
+    assert "continue_when is a non-exhaustive clarification" in criteria
+    assert "Keep target-relative distance distinct from UAV self-motion" in criteria
+    assert "minimum sufficient result" in done_when
+    assert "Evidence sources and alternative" in done_when
+    assert "Split conditions only when" in done_when
+    assert "invented object axes" in done_when
+    assert "must not gain a terminal heading" in done_when
+    for task_specific in ("Approach", "Retreat", "Pass", "Land", "Orbit", "Surround"):
+        assert task_specific not in structure + criteria + done_when
     assert '"action_bias"' not in structure + criteria
     assert '"direction":' not in structure + criteria
     assert '"uncertainties"' not in structure + criteria
@@ -123,6 +61,7 @@ def test_legacy_action_and_phase_judge_prompts_removed():
 
 def test_agent_boundaries_document_prompt_and_skill_writing_rules():
     guide = Path("AGENT.md").read_text(encoding="utf-8")
+    compact_guide = " ".join(guide.split())
 
     assert "Prompt And Skill Writing Rules" in guide
     assert "Reusable skills are flight-domain knowledge" in guide
@@ -131,14 +70,13 @@ def test_agent_boundaries_document_prompt_and_skill_writing_rules():
     assert "`phase_progress_evidence`" in guide
     assert "`model_inputs`" in guide
     assert "Do not restore model-facing `direction` shorthand" in guide
-    assert "`relation` plus measurable metrics" in guide
+    assert "natural-language completion conditions" in guide
     assert "hidden benchmark truth" in guide
-    assert "`memory/FLYAGENT.md` is the shared Agent identity" in guide
-    assert "both model planning and model semantic task parsing" in guide
-    assert "must not duplicate" in guide
-    assert "organizes output by independently required terminal obligations" in guide
-    assert "evidence source or proof path" in guide
-    assert "contain task-domain tutorials" in guide
+    assert "`memory/FLYAGENT.md` owns only the shared embodied Agent identity" in guide
+    assert "`memory/USER.md` owns ordinary human spatial" in guide
+    assert "`src/agent/semantic/prompts/done_when_generation_system.txt` owns the general" in guide
+    assert "must not duplicate generic" in guide
+    assert "must not duplicate generic done_when rules or contain visual" in guide
     assert "must not teach `done_when`" in guide
     assert "reuses the triggering planner window's selected core skill guidance" in guide
     assert "declare a short `semantic_evidence` capability list" in guide
@@ -146,11 +84,16 @@ def test_agent_boundaries_document_prompt_and_skill_writing_rules():
     assert "does not add fields to `SemanticPlan`" in guide
     assert "must not infer AND/OR semantics" in guide
     assert "rather than exact long prompt sentences" in guide
-    assert "Target identity and a requested relation are not mechanically split" in guide
-    assert "conflicting evidence is not an independent terminal" in guide
+    assert "condition quality, and grouping" in compact_guide
     assert "phase-decision prompt owns only completion-evidence" in guide
-    assert "classification. The action prompt owns tool choice" in guide
-    assert "action prompt owns tool choice, signed argument use" in guide
+    assert "classification. The phase-strategy prompt owns" in guide
+    assert "ordered maneuver stages and active stage" in compact_guide
+    assert "action prompt owns tool choice, signed argument use" in compact_guide
+    assert "Phase strategy is mutable Runtime state" in guide
+    assert "not part of `SemanticPlan`" in guide
+    assert "intermediate strategy stage may advance while phase completion remains unknown" in compact_guide
+    assert "planning-time refresh with no new window measurement preserves that snapshot" in compact_guide
+    assert "explicitly measured zero-motion window replaces it with zeros" in compact_guide
     assert "canonical UAV tool contract" in guide
 
 
@@ -186,7 +129,6 @@ def test_model_facing_prompts_and_reusable_skills_do_not_leak_benchmark_repairs(
         "SR judge",
         "case id",
         "benchmark class",
-        "reference path",
         "reference_path",
         "reference_path_preprocessed",
         "target_pos",
@@ -208,15 +150,15 @@ def test_task_parser_keeps_general_spatial_roles_and_optional_agl_evidence():
     criteria = Path(
         "src/agent/semantic/prompts/task_parser_phase_criteria_system.txt"
     ).read_text(encoding="utf-8")
+    compact_criteria = " ".join(criteria.split())
 
-    assert "target-relative side or route side is a position/path relation" in structure
-    assert "it is not an instruction to change UAV heading" in structure
-    assert "explicitly asks the UAV to face, orient, turn, look toward" in structure
-    assert "Absolute UAV position and heading are self-state" in criteria
-    assert "cannot by themselves prove a target-relative side" in criteria
-    assert "physical landing result" in criteria
-    assert "above-ground clearance is available" in criteria
-    assert "do not invent a numeric clearance threshold" in criteria
+    assert "Image bearing, target-relative position, route relation, and UAV" in structure
+    assert "Create an orientation result only when" in structure
+    assert "side or route relation alone" in structure
+    assert "does not create one" in structure
+    assert "potential evidence capabilities as possible future evidence" in compact_criteria
+    assert "not as facts already observed" in compact_criteria
+    assert "Do not output extra fields" in criteria
     assert "completion confidence" not in structure + criteria
     assert "single-frame" not in structure + criteria
 
@@ -224,23 +166,17 @@ def test_task_parser_keeps_general_spatial_roles_and_optional_agl_evidence():
 def test_flyagent_rules_contain_general_visual_action_alignment_without_internal_terms():
     rules = (Path("memory") / "FLYAGENT.md").read_text(encoding="utf-8")
 
-    assert "## Visual Direction And Action Consistency" in rules
-    assert "A cue on the left side of the image calls for a leftward alignment adjustment" in rules
-    assert "a cue on the right calls for a rightward alignment adjustment" in rules
+    assert "## Who You Are" in rules
+    assert "## Spatial And Action Consistency" in rules
+    assert "When a visible cue is on the left" in rules
+    assert "Apply the same rule in reverse" in rules
     assert "negative yaw means turn left" not in rules
     assert "positive yaw means turn right" not in rules
-    assert "make a small turn toward the same side" in rules
-    assert "A turn toward the opposite side" in rules
-    assert "not centering the currently visible cue" in rules
-    assert "it must not also say that turning right will center it" in rules
-    assert "Basic flight knowledge always applies" in rules
-    assert "## Spatial And Route Relations" in rules
-    assert "Image-side position can change from yaw alone" in rules
-    assert "cannot by itself prove that the UAV has reached a physical side of a target" in rules
+    assert "Do not turn away from a visible cue" in rules
+    assert "does not prove physical travel" in rules
     assert '"Pass the target on its right"' not in rules
     assert "A semantic plan must not translate" not in rules
     assert "A side-passage phase" not in rules
-    assert "A camera-side change alone is observation evidence" in rules
     assert "move forward, backward, left, right, up, or down in sequence" not in rules
 
     parser_prompt = "\n".join(
@@ -250,20 +186,13 @@ def test_flyagent_rules_contain_general_visual_action_alignment_without_internal
             Path("src/agent/semantic/prompts/task_parser_phase_criteria_system.txt"),
         ]
     )
-    duplicated_route_rules = [
-        "Image-side position can change from yaw alone",
-        'A semantic plan must not translate "the target is on the left or right of the image"',
-        "A search phase only confirms the target and a plausible route",
-        "A side-passage phase must rely on translation or route progress",
-        "Yaw alone can support search or observation",
-    ]
+    duplicated_route_rules = ["Who You Are", "How You Work", "Decision Style"]
     for rule in duplicated_route_rules:
         assert rule not in parser_prompt
 
     forbidden_terms = [
         "UAV-Flow",
         "sunshade",
-        "person",
         "case id",
         "coupled planner",
         "phase judge",
@@ -273,6 +202,29 @@ def test_flyagent_rules_contain_general_visual_action_alignment_without_internal
     ]
     for term in forbidden_terms:
         assert term not in rules
+
+    for implementation_term in (
+        "PAST",
+        "NOW",
+        "Depth",
+        "AGL",
+        "Pose",
+        "phase window",
+        "overlay",
+        "AirSim",
+        "UnrealCV",
+    ):
+        assert implementation_term not in rules
+
+    user_preferences = Path("memory/USER.md").read_text(encoding="utf-8")
+    assert "entity's own facing direction" in user_preferences
+    assert "observer-relative position" in user_preferences
+    assert "route relation" in user_preferences
+    assert "positive evidence for an ordinary front-side route or position" in user_preferences
+    assert "Only an explicit request" in user_preferences
+    assert "to face, orient toward, or turn" in user_preferences
+    for implementation_term in ("Runtime", "Backend", "Schema", "PAST", "NOW", "overlay"):
+        assert implementation_term not in user_preferences
 
 
 def test_model_repair_prompt_requires_contract_valid_tool_only_plan():
@@ -296,57 +248,38 @@ def test_semantic_plan_update_prompt_is_limited_to_current_phase_patch():
         encoding="utf-8"
     )
 
-    assert "limited semantic patch" in prompt
+    assert "limited patch" in prompt
     assert '"phase"' in prompt
     assert '"append_recovery_phase"' in prompt
     assert '"goal"' in prompt
     assert '"done_when"' in prompt
     assert '"continue_when"' in prompt
-    assert '"metrics"' in prompt
+    assert '"metrics"' not in prompt
     assert '"observe"' not in prompt
-    assert "Do not rewrite task_goal, instruction, full phases" in prompt
-    assert "configured_evidence message" in prompt
-    assert "capability metadata, not current observation fact" in prompt
-    assert "Without a shared-frame target-relative measurement" in prompt
-    assert "observable cues supported by selected skill guidance" in prompt
-    assert "Do not split RGB, depth, pose, map, or action history" in prompt
-    assert "Do not output UAV tool names" in prompt
-    assert "Treat continue_when as non-exhaustive clarification" in prompt
-    assert "allowed by a valid done_when path" in prompt
-    assert "support-independence test used by criteria generation" in prompt
-    assert "calls facts independently assessable or says to assess them separately" in prompt
-    assert "identifying the cue inherently supplies that usable relation" in prompt
-    assert "their support cannot differ" in prompt
-    assert "Evidence sources do not define obligations" in prompt
-    assert "observable minimum terminal results directly" in prompt
-    assert "hidden self pose, heading, absolute geometry, calibration" in prompt
-    assert "every explicit terminal result in the current phase goal" in prompt
-    assert "proximity, feasibility, preparation, or ability to perform it next" in prompt
-    assert "Preserve approximation and accepted variation explicitly" in prompt
-    assert "Remove any standalone item that only states that conflicting or contrary evidence is absent" in prompt
-    assert "re-run the support-independence test" in prompt
-    assert "preserve every boundary explicitly taught by selected skill guidance" in prompt
-    assert "selected-skill guidance is domain knowledge" in prompt
+    assert "Do not rewrite the instruction, task goal, completed phases" in prompt
+    assert "potential evidence" in prompt
+    assert "Neither is current observed fact" in prompt
+    assert "Do not output primitive actions" in prompt
+    assert "continue_when remains non-exhaustive clarification" in prompt
+    assert "Apply the preceding general completion-condition rules" in prompt
+    assert "selected domain knowledge" in prompt
     assert "route-reference passage" not in prompt
     assert "visual facing or orientation" not in prompt
     assert "numeric target-relative standoff" not in prompt
     assert 'Never begin a done_when list item with "or" or "alternatively"' not in prompt
     assert "keep target confirmation and a required target-relative relation in separate items" not in prompt
-    assert "uav.turn_relative" in prompt
-    assert "uav.move_body" in prompt
-    assert "evaluation sample" in prompt
-    assert "Treat planner_request as a hypothesis, not authority" in prompt
-    assert "planner_request.payload.focus" in prompt
+    assert "Treat the planner's request as a hypothesis" in prompt
     assert "reference path" not in prompt
 
 
 def test_coupled_prompt_fragments_have_clear_boundaries():
     prompt_dir = Path("src") / "agent" / "planning" / "prompts"
     phase_prompt = (prompt_dir / "coupled_phase_decision_system.txt").read_text(encoding="utf-8")
+    strategy_prompt = (prompt_dir / "coupled_phase_strategy_system.txt").read_text(encoding="utf-8")
     action_prompt = (prompt_dir / "coupled_action_planner_system.txt").read_text(encoding="utf-8")
 
     assert not (prompt_dir / "coupled_action_phase_planner_system.txt").exists()
-    assert "Do not output phase_decision" in phase_prompt
+    assert "Output only completion_assessment" in phase_prompt
     assert "completion_assessment" in phase_prompt
     assert len(phase_prompt) <= 3000
     assert "control_actions" not in phase_prompt
@@ -358,14 +291,16 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "phase_execution_summary.window_count is already high" not in phase_prompt
     assert "repeated same-kind actions have produced meaningful phase_progress_evidence" not in phase_prompt
     assert "endless small corrective actions" not in phase_prompt
-    assert "Completion Contract" in phase_prompt
-    assert "Every done_when list item is a required core condition" in phase_prompt
-    assert "Apply the selected skill's observable sufficiency and stopping rule directly" in phase_prompt
-    assert "hidden geometry, calibration, stability checks, confirmation" in phase_prompt
+    assert "Judgment:" in phase_prompt
+    assert "Judge every supplied completion condition" in phase_prompt
+    assert "Missing ideal measurements" in phase_prompt
+    assert "unavailable sensors are not" in phase_prompt
     assert "explicit either/or inside one done_when item" not in phase_prompt
-    assert "continue_when is non-exhaustive clarification" in phase_prompt
-    assert "not a completion gate or extra requirement" in phase_prompt
-    assert "Residual possibility or optional optimization" in phase_prompt
+    assert "Continuation descriptions are" in phase_prompt
+    assert "not additional gates" in phase_prompt
+    assert "Residual possibility, lack of absolute certainty, or optional optimization" in phase_prompt
+    assert "returning unknown only for lack of a" in phase_prompt
+    assert "centroid, exact pixel, direct measurement, or tolerance" in phase_prompt
     assert "no calibrated measurement" not in phase_prompt
     assert "target-distance condition" not in phase_prompt
     assert "familiar target scale" not in phase_prompt
@@ -374,34 +309,49 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "route_traversal" not in phase_prompt
     assert "spatial_relation" not in phase_prompt
     assert "circulation_or_orbit" not in phase_prompt
-    assert "UAV pose, current yaw, pose change, and motion_history_summary describe UAV self-state" in phase_prompt
-    assert "not target-relative geometry or current target error" in phase_prompt
-    assert "zero yaw has no special completion meaning" in phase_prompt
+    assert "hidden coordinates" in phase_prompt
     assert "phase_progress_evidence" not in phase_prompt
     assert "phase_execution_summary" not in phase_prompt
     assert "action_trend" not in phase_prompt
     assert "yaw_only_so_far" not in phase_prompt
-    assert "Metric Authority" in phase_prompt
-    assert "all_within_tolerance are deterministic evidence" in phase_prompt
-    assert "Tolerance is the completion band" in phase_prompt
-    assert "Empty metrics means semantic-only completion, not missing evidence" in phase_prompt
+    assert "phase_metrics" not in phase_prompt
+    assert "phase_completion_evaluation" not in phase_prompt
     assert "vertical flight-path angle" not in phase_prompt
     assert "yaw, heading, vehicle pitch" not in phase_prompt
-    assert "exactly one object for each current_phase.done_when item" in phase_prompt
-    assert "status must be supported, unknown, or contradicted" in phase_prompt
-    assert "evidence is explanatory only" in phase_prompt
-    assert "cannot change supported back to unknown" in phase_prompt
+    assert "exactly one object for every" in phase_prompt
+    assert "status is exactly supported, unknown, or contradicted" in phase_prompt
+    assert "evidence briefly states" in phase_prompt
     assert "If continue_when is still true or evidence is uncertain" not in phase_prompt
+
+    assert "current-phase maneuver strategy planner" in strategy_prompt
+    assert "only stages, active_stage, and reason" in strategy_prompt
+    assert "1-4 short ordered stages" in strategy_prompt
+    assert "maneuver intent plus observable terminal state" in strategy_prompt
+    assert "Never put UAV tool names or argument fields" in strategy_prompt
+    assert "independently assess whether the previous active stage" in strategy_prompt
+    assert "Phase completion may remain unknown while an intermediate stage is satisfied" in strategy_prompt
+    assert "keep is not the default update" in strategy_prompt
+    assert "ideal geometric proof is not required" in strategy_prompt
+    assert "last-window UAV motion" in strategy_prompt
+    assert "indefinitely repeating the same action" in strategy_prompt
+    assert "Keep the ordered stages unchanged when the route remains valid" in strategy_prompt
+    assert "Rewrite only the active and future stages" in strategy_prompt
+    assert "phase_strategy does not determine phase completion" in strategy_prompt
+    assert "sunshade" not in strategy_prompt
+    assert "trees" not in strategy_prompt
+    assert "control_actions" not in strategy_prompt
 
     assert "Do not output phase_decision" in action_prompt
     assert "completion_assessment" in action_prompt
+    assert "a request for about 4.5 m with a credible target" in action_prompt
+    assert "is supported, not unknown" in action_prompt
     assert "control_actions" in action_prompt
     assert "Runtime Control Actions" in action_prompt
     assert "Never put ask_user or semantic_plan_update in steps" in action_prompt
     assert "runtime_control.available" in action_prompt
     assert "semantic_plan_update may be requested alongside 1-3 safe UAV tool steps" in action_prompt
     assert "semantic_plan_update payload must include reason" in action_prompt
-    assert "goal, done_when, continue_when, or metrics" in action_prompt
+    assert "goal, done_when, or continue_when" in action_prompt
     assert "steps must be []" in action_prompt
     assert "use exactly one step" in action_prompt
     assert "kind=\"observe\"" in action_prompt
@@ -416,13 +366,36 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "negative turns left" not in action_prompt
     assert '"direction":' not in action_prompt
     assert "agent_messages" in action_prompt
+    assert '"phase_strategy"' in action_prompt
+    assert "updated phase_strategy.stages[phase_strategy.active_stage]" in action_prompt
+    assert "do not repeat an earlier stage after the strategy has advanced" in action_prompt
     assert "Phase Decision Guide" not in action_prompt
     assert "route progress evidence" not in action_prompt
-    assert "phase_transition_judge_system" not in phase_prompt + action_prompt
-    assert '"blocking"' not in phase_prompt + action_prompt
-    assert '"async"' not in phase_prompt + action_prompt
-    assert '"use_when"' not in phase_prompt + action_prompt
-    assert '"avoid_when"' not in phase_prompt + action_prompt
+    coupled_prompts = phase_prompt + strategy_prompt + action_prompt
+    assert "phase_transition_judge_system" not in coupled_prompts
+    assert '"blocking"' not in coupled_prompts
+    assert '"async"' not in coupled_prompts
+    assert '"use_when"' not in coupled_prompts
+    assert '"avoid_when"' not in coupled_prompts
+
+
+def test_phase_strategy_prompt_separates_stage_progress_from_phase_completion():
+    prompt_dir = Path("src") / "agent" / "planning" / "prompts"
+    strategy_prompt = (prompt_dir / "coupled_phase_strategy_system.txt").read_text(encoding="utf-8")
+    action_prompt = (prompt_dir / "coupled_action_planner_system.txt").read_text(encoding="utf-8")
+
+    assert "independently assess whether the previous active stage" in strategy_prompt
+    assert "Phase completion may remain unknown while an intermediate stage is satisfied" in strategy_prompt
+    assert "keep is not the default update" in strategy_prompt
+    assert "ideal geometric proof is not required" in strategy_prompt
+    assert "last-window UAV motion" in strategy_prompt
+    assert "phase-start-relative cumulative motion" in strategy_prompt
+    assert "indefinitely repeating the same action" in strategy_prompt
+    assert "Never put UAV tool names or argument fields" in strategy_prompt
+    assert "sunshade" not in strategy_prompt
+    assert "trees" not in strategy_prompt
+    assert "updated phase_strategy.stages[phase_strategy.active_stage]" in action_prompt
+    assert "do not repeat an earlier stage after the strategy has advanced" in action_prompt
 
 
 def test_orbit_skill_stays_compact_and_action_oriented():
@@ -433,9 +406,10 @@ def test_orbit_skill_stays_compact_and_action_oriented():
 
     assert "yaw alone is not orbit progress" in normalized
     assert "lateral or tangential translation" in normalized
-    assert "brief radial repair and resume circulation" in normalized
+    assert "brief radial repair without replacing circulation" in normalized
     assert "stop orbit movement" in normalized
     assert "repeated radial corrections" in normalized
+    assert "do not enforce a fixed maneuver sequence" in normalized
     assert "Estimate radius" not in skill
     forbidden_internal_terms = [
         "phase_progress_evidence",
@@ -456,7 +430,7 @@ def test_skill_selection_prompt_keeps_compound_locate_and_approach_phases_covere
     assert "minimal useful set" in prompt
     assert "current semantic phase" in prompt
     assert "Select skills for the current semantic phase only" in prompt
-    assert "current_phase.goal, current_phase.done_when, current_phase.continue_when, and current_phase.metrics" in prompt
+    assert "current_phase.goal, current_phase.done_when, and current_phase.continue_when" in prompt
     assert "active_instruction and semantic_goal only to understand the target, user intent, and final relation" in prompt
     assert "do not preload skills for future phases" in prompt
     assert "primary concern" in prompt
@@ -506,7 +480,7 @@ def test_semantic_criteria_skill_selection_has_no_hard_count_or_reference_reques
 
     assert "There is no numeric selection limit" in prompt
     assert "smallest genuinely useful set" in prompt
-    assert "completion conditions, continuation conditions, evidence sources, or valid metrics" in prompt
+    assert "completion conditions, continuation conditions, or evidence interpretation" in prompt
     assert "phase name, goal, order, or task meaning" in prompt
     assert "requested_references" not in prompt
     assert "at most" not in prompt

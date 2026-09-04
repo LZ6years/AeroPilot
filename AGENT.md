@@ -15,17 +15,23 @@ logic.
 - `src/agent/planning/prompts/*.txt` defines general planner and judge
   contracts. Prompts may describe how to use available evidence, but should not
   duplicate module internals or become a case-specific controller.
-- `memory/FLYAGENT.md` is the shared Agent identity and general flight-knowledge
-  baseline for both model planning and model semantic task parsing. Load it as
-  its own model message instead of copying its guidance into parser prompts.
+- `coupled_phase_strategy_system.txt` owns the compact, revisable maneuver
+  strategy between immutable phase semantics and one-window tool actions. It
+  must not redefine completion or contain benchmark-specific routes.
+- `memory/FLYAGENT.md` owns only the shared embodied Agent identity, general
+  work cycle, direction consistency, and safety/reporting baseline. It must not
+  enumerate configured sensors, temporal image roles, task-specific completion
+  rules, or project-private fields. `memory/USER.md` owns ordinary human spatial
+  language and precision preferences. Load both as separate model messages
+  instead of copying their guidance into parser prompts.
 - `src/agent/semantic/prompts/task_parser_structure_system.txt` owns only task
   intent, task goal, and immutable phase structure. Phase count, order, name,
   and goal come from the user instruction before any skill is selected.
-- `src/agent/semantic/prompts/task_parser_phase_criteria_system.txt` owns the
-  per-phase `done_when`, `continue_when`, and `metrics` contract. It
-  organizes output by independently required terminal obligations, not by
-  evidence source or proof path. It may apply selected knowledge guidance, but
-  it must not rewrite task or phase structure or contain task-domain tutorials.
+- `src/agent/semantic/prompts/done_when_generation_system.txt` owns the general
+  quality rules for a stable, minimal, judgeable completed state. It contains no
+  task-domain tutorial. `task_parser_phase_criteria_system.txt` only assembles
+  the per-phase `done_when` and `continue_when` JSON contract from
+  that shared rule, selected domain knowledge, and configured evidence.
 - `plugins/knowledge/*/SKILL.md` contains reusable domain knowledge. Skills must
   not depend on local context field names, debug schemas, benchmark cases, or
   project-private runtime details.
@@ -61,8 +67,9 @@ capability, do not make it in the shared runtime, prompts, or knowledge base.
 
 Model-facing context should be small, current, and decision useful:
 - current instruction and semantic phase;
-- current observation image;
-- phase-start reference image when distinct;
+- one current observation image, preferring the aligned RGB-depth overlay when
+  configured and valid;
+- one raw phase-start reference image when distinct;
 - one compact motion history summary containing phase-start-relative UAV motion
   and a short oldest-to-newest successful-action sequence;
 - compact phase completion evidence.
@@ -87,32 +94,12 @@ as general UAV behavior, visual reasoning, movement, route, safety, or
 completion knowledge.
 
 Semantic completion uses one shared contract across criteria generation,
-semantic updates, and phase decisions. Every `done_when` list item is one
-independently required terminal obligation, and all items must hold. Evidence
-sources and alternative proof paths do not define list boundaries: several
-forms of evidence may support the same obligation. Conditions describe the
-minimum sufficient completed state rather than an ideal view or preferred
-proof. An item is atomic when its required terminal parts cannot differ in
-support status; independently supportable terminal parts belong in separate
-items. Target identity and a requested relation are not mechanically split:
-they may form one observable terminal obligation when selected skill guidance
-defines identifying the cue with that usable relation as one sufficient state.
-They remain separate when the target can be identified while another required
-distance, side, route, or terminal operating state is still unknown, wrong, or
-incomplete. Criteria generation and semantic updates preserve terminal-fact
-boundaries that selected skill guidance explicitly marks as independently
-assessable. The absence of
-conflicting evidence is not an independent terminal
-obligation; conflict can qualify a positive obligation or explain continuation.
-`continue_when` is non-exhaustive clarification only: it can explain
-missing or conflicting evidence, but it is not a completion gate or an
-additional positive condition. It must not classify a valid completed state as
-unfinished without concrete contradictory evidence.
-
-Criteria and updater prompts own output shape, terminal-obligation grouping,
-metric provenance, and minimum-sufficiency rules. They must not duplicate
-visual, route, orbit, landing, or other task-domain tutorials. Knowledge skills
-own those evidence and behavior semantics, but must not teach `done_when`,
+semantic updates, and phase decisions. The shared done_when prompt owns
+minimum sufficiency, stable completed-state wording, condition quality, and
+grouping. Criteria and updater prompts own only their output shape and numeric
+provenance in natural-language conditions; they must not duplicate generic done_when rules or contain visual,
+route, orbit, landing, or other task-domain tutorials. Knowledge skills own
+task evidence and behavior semantics, but must not teach `done_when`,
 `continue_when`, schema fields, or list organization. The semantic updater
 reuses the triggering planner window's selected core skill guidance; it does
 not run another selection pass or load skill references.
@@ -120,8 +107,8 @@ Every explicit terminal result in an immutable phase goal must remain an
 already-achieved result in `done_when`; criteria and updater may not weaken it
 into proximity, feasibility, preparation, or readiness for a later action.
 
-Semantic evidence capabilities are discovered from enabled context modules
-before task parsing. The structure parser must not receive them because they do
+Semantic evidence capabilities are rediscovered from enabled context modules
+before each model task parse. The structure parser must not receive them because they do
 not decide task or phase structure. Per-phase criteria generation and semantic
 updates may receive the same bounded capability list after selected skill
 guidance and before their output contract. They must treat it as potential
@@ -139,18 +126,34 @@ knowledge or preserve contradictory wording.
 
 Phase-start-relative cumulative motion describes the whole phase; a short
 recent-action tail must not override it. The coupled model classifies every
-`done_when` item as `supported`, `unknown`, or `contradicted`, while planner
-code alone combines those judgments with deterministic metrics to derive the
-phase transition. Free-text evidence is explanatory and must not be parsed as
-control logic. The phase-decision prompt must not duplicate separate visual,
+`done_when` item as `supported`, `unknown`, or `contradicted`; those judgments
+alone derive the semantic phase transition. Numeric requirements stay in the
+natural-language condition and are judged from the evidence available at the
+requested precision. Free-text evidence is explanatory and must not be parsed
+as control logic. The phase-decision prompt must not duplicate separate visual,
 route, orbit, or landing tutorials.
 
 Within coupled planning, the phase-decision prompt owns only completion-evidence
-classification. The action prompt owns tool choice, signed argument use,
-action-window consistency, and runtime-control output. Stable primitive argument
+classification. The phase-strategy prompt owns the current phase's short
+ordered maneuver stages and active stage. The action prompt owns tool choice,
+signed argument use, action-window consistency, and runtime-control output.
+Stable primitive argument
 semantics belong to the canonical UAV tool contract and enter model context
 through action schemas; prompts and knowledge skills must not maintain duplicate
 sign conventions.
+
+Phase strategy is mutable Runtime state, not part of `SemanticPlan` and not a
+phase-completion authority. Runtime owns its revision and update classification;
+the model sees only the latest compact snapshot through the action context.
+An intermediate strategy stage may advance while phase completion remains
+unknown. Strategy updates must assess the active stage's own observable cue
+before selecting the next action; they must not use the final `done_when` result
+as the stage-advance gate.
+
+`last_window_uav_motion` means measured UAV self-motion during the immediately
+preceding completed action window. A planning-time refresh with no new window
+measurement preserves that snapshot; only an explicitly measured zero-motion
+window replaces it with zeros.
 
 Knowledge skills under `plugins/knowledge/*/SKILL.md` use one compact authoring
 contract in this order: `Application Boundary`, `Evidence Model`, `Decision
@@ -180,8 +183,8 @@ prompt examples unless that prompt explicitly owns the field.
 
 Model task parsing uses two distinct stages. The structure stage sees no skill
 body. After structure is validated, each phase independently selects all and
-only the knowledge skills relevant to its completion, continuation, evidence,
-or metric criteria. There is no runtime hard limit on the number selected, but
+only the knowledge skills relevant to its completion, continuation, or evidence
+criteria. There is no runtime hard limit on the number selected, but
 the selector should choose the smallest genuinely relevant set. Parser-time
 selection loads bounded `SKILL.md` knowledge only: no references, source paths,
 or callable capabilities.
@@ -193,9 +196,8 @@ skill list into the other as an implicit decision or let a skill determine
 phase count, order, name, or goal.
 
 Do not restore model-facing `direction` shorthand for movement. UAV movement
-plans use numeric velocity arguments, and semantic direction should be expressed
-through `relation` plus measurable metrics such as `forward_distance`,
-`right_distance`, and `up_distance`.
+plans use numeric velocity arguments, while semantic direction and distance
+requirements stay in phase goals and natural-language completion conditions.
 
 Do not add prompt or skill warnings about data that should never be provided to
 the model, such as hidden benchmark truth. Enforce that boundary in context and

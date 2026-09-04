@@ -207,30 +207,10 @@ class CliNarrativePanel:
         print(color_text(clean, color))
 
     def _phase_completion_line(self, payload: dict[str, Any], *, fallback: str) -> str:
-        phase = str(payload.get("phase") or self.current_phase or "")
-        index_text = self._phase_index_text(phase).strip()
-        phase_name = self._humanize_phase(phase)
-        prefix = f'{_ZH["phase_done"]} {index_text}{_ZH["colon"]}{phase_name}' if index_text else f'{_ZH["phase_done"]}{_ZH["colon"]}{phase_name}'
-        metric = self._phase_completion_metric(payload)
-        return f"{prefix}{metric}{_ZH['period']}" if metric else fallback
-
-    @staticmethod
-    def _phase_completion_metric(payload: dict[str, Any]) -> str:
-        evaluation = payload.get("phase_completion_evaluation", {})
-        evaluations = evaluation.get("evaluations", []) if isinstance(evaluation, dict) else []
-        if not evaluations or not isinstance(evaluations[0], dict):
-            return ""
-        item = evaluations[0]
-        criteria = item.get("criteria", {}) if isinstance(item.get("criteria", {}), dict) else {}
-        actual = _format_number(item.get("actual"))
-        target = _format_number(item.get("target"))
-        error = _format_number(item.get("error"), signed=True)
-        unit = str(criteria.get("unit") or "").strip()
-        if actual is None or target is None:
-            return ""
-        unit_text = f" {unit}" if unit else ""
-        error_text = f"{_ZH['comma']}{_ZH['error']} {error}{unit}" if error is not None else ""
-        return f"{_ZH['left_paren']}{actual}/{target}{unit_text}{error_text}{_ZH['right_paren']}"
+        # Semantic completion is now evidence-based. The caller already owns
+        # the user-facing completion message, so no hidden numeric gate is
+        # appended to it.
+        return fallback
 
     def _phase_index_text(self, phase: str) -> str:
         if not self.phase_names or not phase:
@@ -289,18 +269,6 @@ class CliNarrativePanel:
         for src, dst in _PHASE_REPLACEMENTS:
             lowered = lowered.replace(src, dst)
         return lowered
-
-
-def _format_number(value: Any, *, signed: bool = False) -> str | None:
-    if value is None:
-        return None
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
-        return str(value)
-    text = f"{number:+.2f}" if signed else f"{number:.2f}"
-    return text.rstrip("0").rstrip(".")
-
 
 def _display_width(text: str) -> int:
     width = 0

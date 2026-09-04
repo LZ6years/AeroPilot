@@ -98,12 +98,12 @@ Model task parser 使用独立的两阶段流程：
 用户指令
   -> structure model 生成 intent / task_goal / phase index,total,name,goal
   -> 每个 phase 独立选择相关 knowledge skill
-  -> criteria model 生成 done_when / continue_when / metrics
+  -> criteria model 生成 done_when / continue_when
   -> 确定性合并并执行 semantic validator
 ```
 
 Structure 调用不加载 skill。phase 数量、顺序、名称和 goal 只能来自用户指令，skill 不能修改这些字段。
 
-Criteria selector 不设置数量硬上限，可以保留任意数量的合法选择，但 prompt 要求选择最小必要集合。Runtime 只校验名称、去重并保持顺序，不截断合法结果。selector 失败时，该 phase 使用 `FLYAGENT.md` 基础规则继续生成 criteria。
+Criteria selector 不设置数量硬上限，可以保留任意数量的合法选择，但 prompt 要求选择最小必要集合。Runtime 只校验名称、去重并保持顺序，不截断合法结果。selector 失败时，该 phase 仍使用 `FLYAGENT.md + USER.md + 通用 done_when 规则 + 动态证据能力`生成 criteria。
 
-Parser 侧只加载有长度限制的 `SKILL.md` 正文，不向 selector 或 criteria model 提供 references、source path、scripts 或 callable capability。因此每份核心正文必须保留应用边界、证据模型和完成/停止知识。Planner 仍按当前 runtime evidence 独立选择 skill；parser 的选择结果不会传给 planner 作为隐式决定。
+Parser 侧只加载有长度限制的 `SKILL.md` 正文，不向 selector 或 criteria model 提供 references、source path、scripts 或 callable capability。因此每份核心正文保留应用边界、证据模型、行动与停止知识，但不定义 Agent 身份、JSON Schema、`done_when`拆分规则或 Runtime 字段。Planner 仍按当前 runtime evidence 独立选择 skill；parser 的选择结果不会传给 planner 作为隐式决定。

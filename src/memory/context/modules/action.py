@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
@@ -34,30 +35,39 @@ class DefaultActionContextModule(ContextModule):
                 "source": self.__class__.__name__,
             }
         ] if failed else []
+        content = {
+            "motion_history_summary": motion_history_summary,
+            "field_semantics": {
+                "phase_start_relative_uav_motion": (
+                    "Cumulative UAV self-motion since the current phase "
+                    "began, expressed in the phase-start body frame; it is "
+                    "not target-relative distance or bearing."
+                ),
+                "last_window_uav_motion": (
+                    "UAV self-motion during the most recently completed action window."
+                ),
+                "forward_m": "Positive is forward from the phase-start UAV heading.",
+                "right_m": "Positive is right from the phase-start UAV heading.",
+                "up_m": "Positive is upward.",
+                "yaw_delta_deg": (
+                    "Cumulative UAV heading change; it does not indicate "
+                    "where a target is."
+                ),
+            },
+        }
+        # Omit this field at phase entry so absence clearly requests strategy
+        # initialization instead of presenting an empty prior strategy.
+        if stage_context.phase_strategy:
+            content["phase_strategy"] = copy.deepcopy(stage_context.phase_strategy)
+
         return ContextFragment(
             name=self.name,
             enabled=True,
             source=self.__class__.__name__,
-            content={
-                "motion_history_summary": motion_history_summary,
-                "field_semantics": {
-                    "phase_start_relative_uav_motion": (
-                        "Cumulative UAV self-motion since the current phase "
-                        "began, expressed in the phase-start body frame; it is "
-                        "not target-relative distance or bearing."
-                    ),
-                    "forward_m": "Positive is forward from the phase-start UAV heading.",
-                    "right_m": "Positive is right from the phase-start UAV heading.",
-                    "up_m": "Positive is upward.",
-                    "yaw_delta_deg": (
-                        "Cumulative UAV heading change; it does not indicate "
-                        "where a target is."
-                    ),
-                },
-            },
+            content=content,
             risks=risks,
             confidence="high",
-            budget=BudgetSpec(priority=self.priority, tokens_estimate=230, max_items=self.max_items),
+            budget=BudgetSpec(priority=self.priority, tokens_estimate=350, max_items=self.max_items),
             metadata={
                 "motion_history_summary_sources": {
                     "phase_scope": "stage_context.phase_execution_summary when provided",
@@ -81,6 +91,9 @@ class DefaultActionContextModule(ContextModule):
                     "Current-phase UAV displacement and up to five "
                     "recent successful actions ordered oldest to newest. It is self-motion history, not "
                     "the current plan or target distance."
+                ),
+                "phase_strategy": (
+                    "Previous compact current-phase maneuver strategy, omitted before initialization."
                 ),
                 "field_semantics": "Compact meanings for ambiguous self-motion fields.",
             },
@@ -127,11 +140,18 @@ def _motion_history_summary(
     measurements = phase_summary.get("measurements", {})
     if not isinstance(measurements, dict):
         measurements = {}
+    last_window = phase_summary.get("last_window", {})
+    if not isinstance(last_window, dict):
+        last_window = {}
 
     return {
         "window_count": _safe_int(phase_summary.get("window_count")),
         "phase_start_relative_uav_motion": {
             key: _safe_float(measurements.get(key))
+            for key in ("forward_m", "right_m", "up_m", "planar_m", "yaw_delta_deg")
+        },
+        "last_window_uav_motion": {
+            key: _safe_float(last_window.get(key))
             for key in ("forward_m", "right_m", "up_m", "planar_m", "yaw_delta_deg")
         },
         "recent_execution_order": "oldest_to_newest",

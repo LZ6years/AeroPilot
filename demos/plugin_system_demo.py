@@ -347,7 +347,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
                 goal="Confirm the person visually and approach conservatively.",
                 done_when=["person is identifiable", "approach remains safe"],
                 continue_when=["person identity is unclear", "safe approach relation is unclear"],
-                metrics=[],
             )
         ],
     )

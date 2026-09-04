@@ -10,6 +10,7 @@ from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRE
 
 ACTION_WINDOW_SCOPE_CURRENT_PHASE = "current_phase_only"
 VALID_DONE_WHEN_ASSESSMENT_STATUSES = {"supported", "unknown", "contradicted"}
+MAX_PHASE_STRATEGY_STAGES = 4
 
 
 @dataclass(frozen=True)
@@ -98,6 +99,65 @@ class ActionWindow:
             "scope": self.scope,
             "requires_intermediate_observation": self.requires_intermediate_observation,
             "expected_effect": self.expected_effect,
+        }
+
+
+@dataclass(frozen=True)
+class PhaseStrategy:
+    """Compact, revisable maneuver strategy for the active semantic phase.
+
+    The strategy is deliberately operational rather than semantic: it may
+    change between action windows, but it never changes the phase goal or its
+    completion contract. Runtime owns revision metadata outside this model
+    response schema.
+    """
+
+    stages: list[str]
+    active_stage: int
+    reason: str
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PhaseStrategy":
+        allowed_fields = {"stages", "active_stage", "reason"}
+        extra_fields = sorted(set(data) - allowed_fields)
+        if extra_fields:
+            raise ValueError(
+                "PhaseStrategy contains unsupported fields: "
+                + ", ".join(extra_fields)
+            )
+
+        raw_stages = data.get("stages")
+        if not isinstance(raw_stages, list):
+            raise ValueError("PhaseStrategy stages must be a list")
+        if not 1 <= len(raw_stages) <= MAX_PHASE_STRATEGY_STAGES:
+            raise ValueError(
+                "PhaseStrategy stages must contain 1 to "
+                f"{MAX_PHASE_STRATEGY_STAGES} items"
+            )
+        if any(not isinstance(item, str) or not item.strip() for item in raw_stages):
+            raise ValueError("PhaseStrategy stages must contain non-empty strings")
+        stages = [" ".join(item.split()) for item in raw_stages]
+
+        active_stage = data.get("active_stage")
+        if isinstance(active_stage, bool) or not isinstance(active_stage, int):
+            raise ValueError("PhaseStrategy active_stage must be an integer")
+        if not 0 <= active_stage < len(stages):
+            raise ValueError("PhaseStrategy active_stage must index an existing stage")
+
+        reason = data.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("PhaseStrategy reason must be a non-empty string")
+        return cls(
+            stages=stages,
+            active_stage=active_stage,
+            reason=" ".join(reason.split()),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "stages": list(self.stages),
+            "active_stage": self.active_stage,
+            "reason": self.reason,
         }
 
 
@@ -270,6 +330,7 @@ class CoupledActionPhasePlan:
     agent_messages: list[AgentMessage] = field(default_factory=list)
     control_actions: list[RuntimeControlAction] = field(default_factory=list)
     completion_assessment: CompletionAssessment | None = None
+    phase_strategy: PhaseStrategy | None = None
 
     @classmethod
     def from_dict(
@@ -305,6 +366,14 @@ class CoupledActionPhasePlan:
             if isinstance(completion_assessment_data, dict)
             else None
         )
+        phase_strategy_data = data.get("phase_strategy")
+        if phase_strategy_data is not None and not isinstance(phase_strategy_data, dict):
+            raise ValueError("CoupledActionPhasePlan phase_strategy must be an object when present")
+        phase_strategy = (
+            PhaseStrategy.from_dict(dict(phase_strategy_data))
+            if isinstance(phase_strategy_data, dict)
+            else None
+        )
 
         action_window_data = data.get("action_window")
         action_window = (
@@ -332,6 +401,7 @@ class CoupledActionPhasePlan:
             agent_messages=[AgentMessage.from_dict(dict(item)) for item in messages_data],
             control_actions=[RuntimeControlAction.from_dict(dict(item)) for item in control_actions_data],
             completion_assessment=completion_assessment,
+            phase_strategy=phase_strategy,
         )
 
     def to_short_horizon_plan(self) -> ShortHorizonPlan:
@@ -353,4 +423,6 @@ class CoupledActionPhasePlan:
         }
         if self.completion_assessment is not None:
             data["completion_assessment"] = self.completion_assessment.to_dict()
+        if self.phase_strategy is not None:
+            data["phase_strategy"] = self.phase_strategy.to_dict()
         return data

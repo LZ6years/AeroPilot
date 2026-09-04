@@ -12,16 +12,16 @@ from typing import Any
 from src.agent.semantic.parser_contracts import (
     SemanticPlanStructure,
     merge_semantic_plan,
-    normalize_phase_criteria_metrics,
     validate_phase_criteria,
 )
 from src.agent.semantic.schemas import SemanticPlan, TaskParseResult
 from src.agent.semantic.validator import semantic_plan_from_dict, validate_semantic_plan
 from src.runtime.configs.model_config import ModelConfig, load_model_config
-from src.uav.frames import SIGNED_YAW_SEMANTICS
 
 
 DEFAULT_AGENT_RULES_PATH = Path(__file__).resolve().parents[3] / "memory" / "FLYAGENT.md"
+DEFAULT_USER_PREFERENCES_PATH = Path(__file__).resolve().parents[3] / "memory" / "USER.md"
+DEFAULT_DONE_WHEN_RULES_PATH = Path(__file__).resolve().parent / "prompts" / "done_when_generation_system.txt"
 MAX_CONFIGURED_EVIDENCE_ITEMS = 8
 MAX_CONFIGURED_EVIDENCE_CHARS = 160
 
@@ -50,11 +50,21 @@ class TaskParser:
         self.protocol_context = (protocol_context or "").strip()
         if self.mode == "model":
             self.agent_rules = self._load_agent_rules()
+            self.user_preferences = self._load_required_text(
+                DEFAULT_USER_PREFERENCES_PATH,
+                label="FlyAgent user language preferences",
+            )
+            self.done_when_rules = self._load_required_text(
+                DEFAULT_DONE_WHEN_RULES_PATH,
+                label="FlyAgent done_when generation rules",
+            )
             self.structure_prompt = self._load_structure_prompt()
             self.criteria_prompt = self._load_criteria_prompt()
             self.phase_skill_resolver = phase_skill_resolver or self._default_phase_skill_resolver()
         else:
             self.agent_rules = ""
+            self.user_preferences = ""
+            self.done_when_rules = ""
             self.structure_prompt = ""
             self.criteria_prompt = ""
             self.phase_skill_resolver = None
@@ -228,26 +238,17 @@ class TaskParser:
         )
         criteria_by_phase: list[dict[str, Any]] = []
         phase_traces: list[dict[str, Any]] = []
-        normalization_warnings: list[dict[str, Any]] = []
         for phase in structure.phases:
             guidance, selection_trace = self._resolve_phase_guidance(instruction, structure, phase)
-            criteria_warnings: list[dict[str, Any]] = []
 
             def validate_criteria(
                 data: dict[str, Any],
                 immutable_phase: dict[str, Any] = phase,
             ) -> dict[str, Any]:
-                normalized, warnings = normalize_phase_criteria_metrics(
-                    data,
-                    instruction=instruction,
-                )
-                criteria_warnings.clear()
-                criteria_warnings.extend(warnings)
                 return validate_phase_criteria(
-                    normalized,
+                    data,
                     immutable_phase,
                     instruction=instruction,
-                    task_goal=structure.task_goal,
                 )
 
             criteria = self._call_json_contract(
@@ -260,18 +261,8 @@ class TaskParser:
                 "index": phase["index"],
                 "name": phase["name"],
                 **selection_trace,
-                "criteria_status": "normalized" if criteria_warnings else "ok",
+                "criteria_status": "ok",
             }
-            if criteria_warnings:
-                phase_trace["criteria_warnings"] = list(criteria_warnings)
-                normalization_warnings.extend(
-                    {
-                        "phase_index": phase["index"],
-                        "phase_name": phase["name"],
-                        **warning,
-                    }
-                    for warning in criteria_warnings
-                )
             phase_traces.append(phase_trace)
         self.last_parse_trace = {
             "strategy": "structure_then_phase_skill_criteria",
@@ -279,7 +270,7 @@ class TaskParser:
             "structure_phase_count": len(structure.phases),
             "configured_evidence": list(self.configured_evidence),
             "phases": phase_traces,
-            "warnings": [*self.config_warnings, *normalization_warnings],
+            "warnings": list(self.config_warnings),
         }
         return merge_semantic_plan(structure, criteria_by_phase)
 
@@ -341,7 +332,10 @@ class TaskParser:
     def _build_structure_messages(self, instruction: str) -> list[dict[str, str]]:
         """Build the skill-free task-structure request."""
 
-        messages = [{"role": "system", "content": self.agent_rules}]
+        messages = [
+            {"role": "system", "content": self.agent_rules},
+            {"role": "system", "content": self.user_preferences},
+        ]
         if self.protocol_context:
             messages.append(
                 {"role": "system", "content": self.protocol_context}
@@ -363,16 +357,8 @@ class TaskParser:
     ) -> list[dict[str, str]]:
         messages = [
             {"role": "system", "content": self.agent_rules},
+            {"role": "system", "content": self.user_preferences},
         ]
-        messages.append(
-            {
-                "role": "system",
-                "content": (
-                    "Semantic motion-metric convention: yaw_delta uses the same signed yaw convention as flight "
-                    f"tools. {SIGNED_YAW_SEMANTICS}"
-                ),
-            }
-        )
         if guidance:
             messages.append(
                 {
@@ -391,13 +377,19 @@ class TaskParser:
                     "content": _configured_evidence_message(self.configured_evidence),
                 }
             )
-        # Keep benchmark terminal semantics adjacent to the criteria contract.
-        # Phase skills and evidence describe how to judge a state, but must not
-        # override a benchmark's definition of what the terminal state means.
+        # Keep an optional external protocol adjacent to the criteria contract.
+        # Domain skills and evidence describe how to judge a state, but do not
+        # override an explicitly supplied protocol definition.
         if self.protocol_context:
             messages.append(
                 {"role": "system", "content": self.protocol_context}
             )
+        # Completion-condition quality is a shared semantic contract rather
+        # than a task tutorial. Keep it in its own message so Criteria remains
+        # a small schema assembler and domain Skills remain reusable.
+        messages.append(
+            {"role": "system", "content": self.done_when_rules}
+        )
         messages.extend(
             [
                 {"role": "system", "content": self.criteria_prompt},
@@ -465,12 +457,18 @@ class TaskParser:
 
     @staticmethod
     def _load_agent_rules() -> str:
-        path = DEFAULT_AGENT_RULES_PATH
+        return TaskParser._load_required_text(
+            DEFAULT_AGENT_RULES_PATH,
+            label="FlyAgent rules",
+        )
+
+    @staticmethod
+    def _load_required_text(path: Path, *, label: str) -> str:
         if not path.exists():
-            raise TaskParserConfigError(f"FlyAgent rules file not found: {path}")
+            raise TaskParserConfigError(f"{label} file not found: {path}")
         text = path.read_text(encoding="utf-8-sig").strip()
         if not text:
-            raise TaskParserConfigError(f"FlyAgent rules file is empty: {path}")
+            raise TaskParserConfigError(f"{label} file is empty: {path}")
         return text
 
     @staticmethod
@@ -490,15 +488,12 @@ def _phase(
     goal: str,
     done_when: list[str],
     continue_when: list[str],
-    *,
-    metrics: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "name": name,
         "goal": goal,
         "done_when": done_when,
         "continue_when": continue_when,
-        "metrics": metrics or [],
     }
 
 
@@ -523,10 +518,12 @@ def _normalize_configured_evidence(capabilities: list[str] | None) -> list[str]:
 
 
 def _configured_evidence_message(capabilities: list[str]) -> str:
+    bullets = "\n".join(f"- {item}" for item in capabilities)
     return (
-        "Configured semantic evidence capabilities follow. They describe potential "
-        "runtime evidence, not facts observed in the current scene.\n\n"
-        + json.dumps({"configured_evidence": capabilities}, ensure_ascii=False)
+        "Potential semantic evidence configured for this run is listed below. "
+        "It describes evidence that may become available during execution, not "
+        "facts already observed in the current scene.\n"
+        + bullets
     )
 
 

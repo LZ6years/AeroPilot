@@ -46,7 +46,7 @@ semantic_plan_update:
 
 适合触发的情况：
 
-- 当前 phase 的 `done_when`、`continue_when` 或 `metrics` 和真实进展长期冲突。
+- 当前 phase 的 `done_when` 或 `continue_when` 和真实进展长期冲突。
 - planner 已经有动作进展，但 phase 合约仍要求不可观察或过严证据。
 - parser 生成的阶段粒度不适合当前视觉证据或运动证据。
 - 需要把继续恢复、重新定位、降级完成条件表达成通用语义阶段。
@@ -114,7 +114,6 @@ semantic_plan_update:
 - 当前 phase 的 `goal`
 - 当前 phase 的 `done_when`
 - 当前 phase 的 `continue_when`
-- 当前 phase 的 `metrics`
 - 可选追加一个通用 recovery/fallback phase
 
 不允许：
@@ -210,8 +209,7 @@ updater 应返回 patch，而不是自由重写完整计划。
   "current_phase_patch": {
     "goal": "更新后的 phase goal",
     "done_when": ["更新后的完成条件"],
-    "continue_when": ["更新后的继续条件"],
-    "metrics": []
+    "continue_when": ["更新后的继续条件"]
   },
   "append_phases": []
 }

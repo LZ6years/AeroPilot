@@ -32,7 +32,6 @@ def _semantic_hint(
     phase_name: str,
     phase_goal: str,
     final_state: str,
-    metrics: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     return {
         "intent": intent,
@@ -42,7 +41,6 @@ def _semantic_hint(
         "phase_goal": phase_goal,
         "done_when": [final_state],
         "continue_when": ["task-relevant progress is insufficient"],
-        "metrics": list(metrics or []),
     }
 
 
@@ -84,7 +82,6 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
             phase_name="execute_numeric_body_translation",
             phase_goal="Execute a numeric body-frame translation.",
             final_state="The requested numeric translation is complete.",
-            metrics=[{"name": "planar_distance", "target": "instruction_distance_m"}],
         ),
     },
     "Rotate": {
@@ -102,7 +99,6 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
             phase_name="execute_numeric_yaw_rotation",
             phase_goal="Execute a numeric yaw rotation.",
             final_state="The requested numeric yaw rotation is complete.",
-            metrics=[{"name": "yaw_delta_deg", "target": "instruction_yaw_deg"}],
         ),
     },
     "Surround": {
@@ -125,7 +121,6 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
             phase_name="controlled_altitude_change",
             phase_goal="Make bounded vertical progress toward the requested altitude change.",
             final_state="The UAV reaches the requested altitude change and stabilizes.",
-            metrics=[{"name": "up_distance", "target": "instruction_vertical_distance_m"}],
         ),
     },
     "Approach": {

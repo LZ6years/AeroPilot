@@ -18,6 +18,7 @@ def build_model_user_content(
     context: dict[str, Any],
     *,
     image_mode: str = "all",
+    include_memory_documents: bool = True,
 ) -> str | list[dict[str, Any]]:
     """Build an OpenAI-compatible user message from sanitized context and inputs.
 
@@ -28,7 +29,10 @@ def build_model_user_content(
     if image_mode not in {"all", "current_only"}:
         raise ValueError(f"unsupported image_mode: {image_mode}")
 
-    sanitized_context = sanitize_context_for_model_text(context)
+    sanitized_context = sanitize_context_for_model_text(
+        context,
+        include_memory_documents=include_memory_documents,
+    )
     text = json.dumps(sanitized_context, ensure_ascii=False)
     media_parts, supplemental_text_parts = _model_input_parts(
         context,
@@ -51,10 +55,12 @@ def _model_input_parts(
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     media_parts: list[dict[str, Any]] = []
     supplemental_text_parts: list[dict[str, Any]] = []
-    for item in _iter_model_inputs(context):
+    model_inputs = list(_iter_model_inputs(context))
+    current_recovery_role = _current_recovery_role(model_inputs)
+    for item in model_inputs:
         input_type = item.get("type")
         if input_type == "image":
-            if image_mode == "current_only" and item.get("role") != "current_observation":
+            if image_mode == "current_only" and item.get("role") != current_recovery_role:
                 continue
             part = _image_part(item)
             if part is not None:
@@ -71,6 +77,23 @@ def _model_input_parts(
         else:
             part = None
     return media_parts, supplemental_text_parts
+
+
+def _current_recovery_role(model_inputs: list[dict[str, Any]]) -> str:
+    """Choose one current image role for provider recovery.
+
+    A valid overlay contains the current RGB scene as well as aligned distance
+    cues, so it is the most informative single-image retry. Raw current RGB is
+    retained as the fallback for profiles without an overlay.
+    """
+
+    if any(
+        item.get("type") == "image"
+        and item.get("role") == "current_rgb_depth_overlay"
+        for item in model_inputs
+    ):
+        return "current_rgb_depth_overlay"
+    return "current_observation"
 
 
 def _iter_model_inputs(context: dict[str, Any]):
@@ -122,13 +145,23 @@ def _text_part(item: dict[str, Any]) -> dict[str, Any] | None:
     return {"type": "text", "text": text}
 
 
-def sanitize_context_for_model_text(context: dict[str, Any]) -> dict[str, Any]:
+def sanitize_context_for_model_text(
+    context: dict[str, Any],
+    *,
+    include_memory_documents: bool = True,
+) -> dict[str, Any]:
     """Return the lightweight JSON payload that accompanies model inputs."""
 
     sanitized = copy.deepcopy(context)
     _remove_debug_only_top_level_fields(sanitized)
+    _remove_legacy_semantic_metric_fields(sanitized)
+    if not include_memory_documents:
+        # ModelActionPlanner promotes these stable documents to separate system
+        # messages. Keeping duplicate copies in JSON weakens their role and
+        # wastes context, while standalone callers retain the previous default.
+        sanitized.pop("rules", None)
+        sanitized.pop("user_preferences", None)
     _remove_model_facing_direction_shorthand(sanitized)
-    _normalize_model_facing_phase_completion(sanitized)
     fragments = sanitized.get("fragments", [])
     if isinstance(fragments, list):
         compact_fragments = []
@@ -259,7 +292,6 @@ def _order_model_text_context(context: dict[str, Any]) -> dict[str, Any]:
         "fragments",
         "allowed_action_constraints",
         "user_preferences",
-        "phase_completion_evaluation",
     )
     ordered: dict[str, Any] = {}
     for key in preferred_order:
@@ -287,6 +319,8 @@ def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
     context.pop("metadata", None)
     context.pop("disabled_fragments", None)
     context.pop("phase_progress_evidence", None)
+    context.pop("phase_completion_evaluation", None)
+    context.pop("phase_metrics", None)
     context.pop("phase_execution_summary", None)
     context.pop("latest_observation_summary", None)
     # Backend capability details belong to Runtime lifecycle handling and its
@@ -294,6 +328,14 @@ def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
     # action contract. Keeping this defensive removal prevents a custom or
     # legacy context source from reintroducing the obsolete duplicate field.
     context.pop("simulator_contract", None)
+
+
+def _remove_legacy_semantic_metric_fields(context: dict[str, Any]) -> None:
+    """Prevent stale custom contexts from reviving the removed metric schema."""
+
+    current_phase = context.get("current_phase")
+    if isinstance(current_phase, dict):
+        current_phase.pop("metrics", None)
 
 
 def _remove_phase_judge_debug_fields(context: dict[str, Any]) -> None:
@@ -366,21 +408,7 @@ def _sanitize_move_body_schema(schema: dict[str, Any]) -> None:
     ]
 
 
-def _normalize_model_facing_phase_completion(context: dict[str, Any]) -> None:
-    evaluation = context.get("phase_completion_evaluation")
-    if not isinstance(evaluation, dict):
-        return
-    measurable_count = int(evaluation.get("measurable_count") or 0)
-    metrics_count = int(evaluation.get("metrics_count") or 0)
-    if metrics_count == 0 or measurable_count == 0:
-        context.pop("phase_completion_evaluation", None)
-
-
 def _remove_empty_and_debug_top_level_fields(context: dict[str, Any]) -> None:
-    for key in ("phase_metrics",):
-        value = context.get(key)
-        if value in (None, "", [], {}):
-            context.pop(key, None)
     for key in list(context):
         if context.get(key) in (None, "", [], {}):
             context.pop(key, None)

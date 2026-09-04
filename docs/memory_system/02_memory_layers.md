@@ -127,7 +127,6 @@ scene_instance_id + agent_id
   "recent_frame_refs": [
     {"id": "frame_0016", "ref": "memory/frames.jsonl#16"}
   ],
-  "latest_pose_ref": {"id": "pose_0019", "ref": "memory/poses.jsonl#19"},
   "reset_epoch": 0
 }
 ```
@@ -214,7 +213,7 @@ MapContextModule
 
 | 层 | 保存内容 | 不保存内容 | 使用者 |
 | --- | --- | --- | --- |
-| `state/flight_memory.json` | 当前 active instruction ref、最近 instruction/action/observation/pose/frame refs、latest pose ref、reset_epoch、scene/map/uav identity | 完整 RGB/depth、大量 action result、重复 pose 压缩结果、复杂摘要 | `ContextModuleRegistry` / 调试审计 |
+| `state/flight_memory.json` | 当前 active instruction ref、最近 instruction/action/observation/pose/frame refs、reset_epoch、scene/map/uav identity | 完整 RGB/depth、大量 action result、重复 pose 压缩结果、复杂摘要 | `ContextModuleRegistry` / 调试审计 |
 | `memory/instructions.jsonl` | 每条用户指令、semantic plan、timestamp | 图像、动作结果 | `InstructionContextModule` |
 | `memory/actions.jsonl` | tool、args、result、timestamp、phase/action id | 最终 planner context | `ActionContextModule` / 后续 evaluator |
 | `memory/poses.jsonl` | pose、坐标系、来源 observation/action ref | 图像文件内容 | `PoseContextModule` |

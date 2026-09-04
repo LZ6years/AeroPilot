@@ -20,7 +20,7 @@ FORBIDDEN_ACTION_TOKENS = (
     "get_pose",
 )
 
-SEMANTIC_PHASE_PATCH_FIELDS = {"goal", "done_when", "continue_when", "metrics"}
+SEMANTIC_PHASE_PATCH_FIELDS = {"goal", "done_when", "continue_when"}
 SEMANTIC_PLAN_PATCH_TOP_LEVEL_FIELDS = {"phase", "append_recovery_phase"}
 
 

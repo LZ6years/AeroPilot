@@ -50,9 +50,9 @@ StageContextInput
 | Module | 职责 |
 | --- | --- |
 | `InstructionModule` | 当前指令、历史指令、当前 goal / phase goal |
-| `ImageModule` | 最近 3 轮 RGB/depth metadata、artifact refs、图像可用性 |
-| `PoseModule` | latest pose、最近 2-3 个 pose、pose delta |
-| `ActionModule` | 最近 3-5 个 action、动作结果、失败记录 |
+| `ImageModule` | 当前与可选 phase-start 图像、可选当前 depth overlay、artifact refs |
+| `PoseModule` | 模型侧可选 AGL；绝对 pose 和 delta 仅留在审计 metadata |
+| `ActionModule` | phase-relative自身运动、最近动作与字段语义 |
 | `MapModule` | 当前 map/scene 相关线索、requires_reconfirmation |
 
 每个 module 必须实现字段自解释能力，输出自己的 `describe_output()`，由 registry 汇总进入 `context_schema.module_content_fields`。

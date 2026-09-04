@@ -52,7 +52,7 @@ class RuntimeControlRegistry:
                     description="request a non-blocking semantic contract update for the current phase",
                     model_contract=(
                         "After multiple action-observation cycles, request when confidence is low that the current "
-                        "goal, done_when, continue_when, or metrics still fit observed progress and user intent. "
+                        "goal, done_when, or continue_when still fit observed progress and user intent. "
                         "Name the doubtful fields and evidence; keep normal UAV steps if continuing."
                     ),
                     required_payload_fields=("reason",),

@@ -137,6 +137,7 @@ class ModelActionPlanner:
                     agent_messages=list(repaired_plan.agent_messages),
                     control_actions=list(coupled_plan.control_actions),
                     completion_assessment=coupled_plan.completion_assessment,
+                    phase_strategy=coupled_plan.phase_strategy,
                 )
         return coupled_plan
 
@@ -149,9 +150,9 @@ class ModelActionPlanner:
         """Derive the phase transition from model evidence assessments.
 
         The model owns semantic evidence classification. This method owns the
-        deterministic mapping from those classifications and runtime metrics to
-        a phase transition, so free-text explanations cannot override a
-        supported completion contract.
+        deterministic mapping from those classifications to a phase transition,
+        so free-text explanations cannot override a supported completion
+        contract.
         """
 
         current_phase = context.get("current_phase")
@@ -182,13 +183,11 @@ class ModelActionPlanner:
                 reason=f"invalid_completion_assessment:{str(exc)[:240]}",
             )
 
-        metric_complete = self._deterministic_metrics_complete(current_phase, context)
         semantic_complete = all(item.status == "supported" for item in assessment.done_when)
         transition = self._derived_phase_transition(
             state,
             assessment,
             semantic_complete=semantic_complete,
-            metric_complete=metric_complete,
         )
         normalized = dict(response)
         corrections: list[str] = []
@@ -215,7 +214,6 @@ class ModelActionPlanner:
                     expected_count=len(done_when),
                     reason="continue_steps_missing_or_out_of_range",
                     assessment=assessment,
-                    metric_complete=metric_complete,
                 )
             if "action_window" not in normalized:
                 return self._completion_fallback_plan(
@@ -223,7 +221,13 @@ class ModelActionPlanner:
                     expected_count=len(done_when),
                     reason="continue_action_window_missing",
                     assessment=assessment,
-                    metric_complete=metric_complete,
+                )
+            if not isinstance(normalized.get("phase_strategy"), dict):
+                return self._completion_fallback_plan(
+                    state,
+                    expected_count=len(done_when),
+                    reason="continue_phase_strategy_missing_or_invalid",
+                    assessment=assessment,
                 )
 
         try:
@@ -238,7 +242,6 @@ class ModelActionPlanner:
                     expected_count=len(done_when),
                     reason=f"continue_plan_parse_error:{str(exc)[:240]}",
                     assessment=assessment,
-                    metric_complete=metric_complete,
                 )
             raise
 
@@ -246,7 +249,6 @@ class ModelActionPlanner:
             "status": "assessed",
             "assessment": assessment.to_dict(),
             "semantic_complete": semantic_complete,
-            "metric_complete": metric_complete,
             "derived_decision": transition.decision,
             "fallback": bool(corrections),
             "fallback_reasons": corrections,
@@ -254,37 +256,23 @@ class ModelActionPlanner:
         return plan
 
     @staticmethod
-    def _deterministic_metrics_complete(
-        current_phase: dict[str, Any],
-        context: dict[str, Any],
-    ) -> bool:
-        metrics = current_phase.get("metrics")
-        if not isinstance(metrics, list) or not metrics:
-            return True
-        evaluation = context.get("phase_completion_evaluation")
-        return isinstance(evaluation, dict) and evaluation.get("all_within_tolerance") is True
-
-    @staticmethod
     def _derived_phase_transition(
         state: MissionState,
         assessment: CompletionAssessment,
         *,
         semantic_complete: bool,
-        metric_complete: bool,
     ) -> PhaseTransition:
-        if semantic_complete and metric_complete:
+        if semantic_complete:
             decision = COMPLETE_TASK if state.is_final_phase else ADVANCE_TO_NEXT_PHASE
             return PhaseTransition(
                 decision,
-                "all done_when conditions are supported and deterministic metrics are satisfied",
+                "all done_when conditions are supported by the available evidence",
             )
         pending = ", ".join(
             f"{item.index}={item.status}"
             for item in assessment.done_when
             if item.status != "supported"
         )
-        if not metric_complete:
-            pending = f"{pending}, metrics=outside_tolerance".strip(", ")
         return PhaseTransition(
             CONTINUE_CURRENT_PHASE,
             f"completion evidence still requires progress: {pending or 'unknown'}",
@@ -297,7 +285,6 @@ class ModelActionPlanner:
         expected_count: int,
         reason: str,
         assessment: CompletionAssessment | None = None,
-        metric_complete: bool | None = None,
     ) -> CoupledActionPhasePlan:
         """Return one safe observation-producing window for an invalid contract."""
 
@@ -340,7 +327,6 @@ class ModelActionPlanner:
             "status": "fallback",
             "assessment": fallback_assessment.to_dict(),
             "semantic_complete": False,
-            "metric_complete": metric_complete,
             "derived_decision": CONTINUE_CURRENT_PHASE,
             "fallback": True,
             "fallback_reasons": [reason],
@@ -351,13 +337,18 @@ class ModelActionPlanner:
         return self._call_openai_compatible_json(self.coupled_action_phase_system_prompt, context)
 
     def _call_openai_compatible_json(self, system_prompt: str, user_payload: dict[str, Any]) -> dict[str, Any]:
-        full_content = build_model_user_content(user_payload)
+        memory_system_messages = _memory_system_messages(user_payload)
+        full_content = build_model_user_content(
+            user_payload,
+            include_memory_documents=False,
+        )
         attempts: list[dict[str, Any]] = []
 
         try:
             result = self._request_openai_compatible_json(
                 system_prompt,
                 full_content,
+                memory_system_messages,
                 attempt=1,
                 image_mode="all",
                 attempts=attempts,
@@ -367,6 +358,7 @@ class ModelActionPlanner:
                 result = self._retry_same_model_request(
                     system_prompt,
                     full_content,
+                    memory_system_messages,
                     attempts,
                     first_error,
                 )
@@ -377,6 +369,7 @@ class ModelActionPlanner:
                     system_prompt,
                     user_payload,
                     full_content,
+                    memory_system_messages,
                     attempts,
                     first_error,
                 )
@@ -398,6 +391,7 @@ class ModelActionPlanner:
         self,
         system_prompt: str,
         content: str | list[dict[str, Any]],
+        memory_system_messages: list[dict[str, str]],
         attempts: list[dict[str, Any]],
         first_error: _ModelActionRequestError,
     ) -> dict[str, Any]:
@@ -405,6 +399,7 @@ class ModelActionPlanner:
             return self._request_openai_compatible_json(
                 system_prompt,
                 content,
+                memory_system_messages,
                 attempt=2,
                 image_mode="all",
                 attempts=attempts,
@@ -417,6 +412,7 @@ class ModelActionPlanner:
         system_prompt: str,
         user_payload: dict[str, Any],
         full_content: str | list[dict[str, Any]],
+        memory_system_messages: list[dict[str, str]],
         attempts: list[dict[str, Any]],
         first_error: _ModelActionRequestError,
     ) -> dict[str, Any]:
@@ -425,6 +421,7 @@ class ModelActionPlanner:
             return self._request_openai_compatible_json(
                 system_prompt,
                 full_content,
+                memory_system_messages,
                 attempt=2,
                 image_mode="all",
                 attempts=attempts,
@@ -437,6 +434,7 @@ class ModelActionPlanner:
         current_only_content = build_model_user_content(
             user_payload,
             image_mode="current_only",
+            include_memory_documents=False,
         )
         if _model_image_count(current_only_content) == 0:
             self._raise_model_request_failure(
@@ -448,6 +446,7 @@ class ModelActionPlanner:
             return self._request_openai_compatible_json(
                 system_prompt,
                 current_only_content,
+                memory_system_messages,
                 attempt=3,
                 image_mode="current_only",
                 attempts=attempts,
@@ -459,6 +458,7 @@ class ModelActionPlanner:
         self,
         system_prompt: str,
         user_content: str | list[dict[str, Any]],
+        memory_system_messages: list[dict[str, str]],
         *,
         attempt: int,
         image_mode: str,
@@ -468,6 +468,7 @@ class ModelActionPlanner:
         payload = {
             "model": self.model_config.model_name,
             "messages": [
+                *memory_system_messages,
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_content},
             ],
@@ -678,20 +679,41 @@ class ModelActionPlanner:
 
         prompt_dir = Path(__file__).resolve().parent / "prompts"
         overview = (
-            "You are FlyAgent's experimental coupled action-and-phase planner.\n\n"
-            "In one JSON response, assess every current done_when condition and plan "
-            "UAV tool actions only when the structured evidence assessment still "
-            "requires progress. Runtime derives the phase transition deterministically."
+            "You are FlyAgent's coupled action, strategy, and phase planner.\n\n"
+            "In one JSON response, assess every current done_when condition, maintain "
+            "a compact current-phase maneuver strategy, and plan UAV tool actions only "
+            "when the structured evidence assessment still requires progress. Runtime "
+            "derives the phase transition after this response."
         )
         phase_prompt = (prompt_dir / "coupled_phase_decision_system.txt").read_text(encoding="utf-8").strip()
+        strategy_prompt = (prompt_dir / "coupled_phase_strategy_system.txt").read_text(encoding="utf-8").strip()
         action_prompt = (prompt_dir / "coupled_action_planner_system.txt").read_text(encoding="utf-8").strip()
-        return "\n\n--- Phase Decision Contract ---\n\n".join([overview, phase_prompt]) + (
-            "\n\n--- Action Planning Contract ---\n\n" + action_prompt
+        return overview + (
+            "\n\n--- Phase Completion Contract ---\n\n" + phase_prompt
+            + "\n\n--- Phase Strategy Contract ---\n\n" + strategy_prompt
+            + "\n\n--- Action Planning Contract ---\n\n" + action_prompt
         )
 
 
 def _canonical_plan_signature(plan: dict[str, Any]) -> str:
     return json.dumps(plan, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+
+
+def _memory_system_messages(context: dict[str, Any]) -> list[dict[str, str]]:
+    """Promote stable identity and user-language documents to system messages.
+
+    ContextComposer keeps source metadata beside each document for audit. The
+    planner needs only the text and must receive it before the coupled contract
+    so spatial-language conventions are not demoted to ordinary JSON data.
+    """
+
+    messages: list[dict[str, str]] = []
+    for key in ("rules", "user_preferences"):
+        value = context.get(key)
+        text = value.get("text") if isinstance(value, dict) else value
+        if isinstance(text, str) and text.strip():
+            messages.append({"role": "system", "content": text.strip()})
+    return messages
 
 
 def _model_request_attempt(

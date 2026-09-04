@@ -12,7 +12,7 @@ from typing import Any
 
 SEMANTIC_PLAN_UPDATE_RECOMMENDATION = (
     "review_now: multiple action-observation cycles completed; request only if confidence in "
-    "goal/done_when/continue_when/metrics is now low"
+    "goal/done_when/continue_when is now low"
 )
 MIN_PHASE_WINDOW_COUNT = 4
 MIN_TOTAL_TOOL_COUNT = 4

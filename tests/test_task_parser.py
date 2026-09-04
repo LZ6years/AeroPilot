@@ -12,7 +12,6 @@ from src.agent.semantic.parser_contracts import (
     SemanticPlanStructure,
     TaskParserContractError,
     merge_semantic_plan,
-    normalize_phase_criteria_metrics,
     validate_phase_criteria,
 )
 from src.agent.semantic.task_parser import TaskParser, TaskParserConfigError
@@ -117,7 +116,7 @@ def test_model_parser_requires_api_key():
         parser.parse("前面右转会有一个黑色的路灯，右转面向路灯后停下")
 
 
-def test_semantic_phase_accepts_metrics():
+def test_semantic_phase_drops_legacy_metrics_from_serialized_contract():
     phase = SemanticPhase.from_dict(
         {
             "index": 1,
@@ -138,16 +137,7 @@ def test_semantic_phase_accepts_metrics():
         }
     )
 
-    assert phase.metrics == [
-        {
-            "name": "forward_distance",
-            "target": 5.0,
-            "unit": "m",
-            "tolerance": 1.0,
-            "correction_allowed": True,
-        }
-    ]
-    assert phase.to_dict()["metrics"][0]["name"] == "forward_distance"
+    assert "metrics" not in phase.to_dict()
 
 
 def test_model_parser_prompts_split_structure_from_phase_criteria():
@@ -158,55 +148,26 @@ def test_model_parser_prompts_split_structure_from_phase_criteria():
         "src/agent/semantic/prompts/task_parser_phase_criteria_system.txt"
     ).read_text(encoding="utf-8")
 
-    assert "Output only intent, task_goal, and phase index/total/name/goal" in structure_prompt
-    assert "Do not output done_when, continue_when, metrics" in structure_prompt
-    assert "Do not add hover, hold, stabilize, or stability" in structure_prompt
-    assert "Do not rewrite them as centered in the image or camera" in structure_prompt
-    assert "skill-informed stage" in structure_prompt
-    assert "done_when" not in structure_prompt.split("Boundaries:", 1)[0]
-    assert "Metric provenance" in criteria_prompt
-    assert "target-relative" in criteria_prompt
-    assert "not phase-start planar_distance" in criteria_prompt
-    assert "Modest lateral offset, incidental scene occlusion" not in criteria_prompt
-    assert "support-independence question" in criteria_prompt
-    assert "another obligation only when it is independently required" in criteria_prompt
-    assert "Do not require exact centering, full-body or full-object visibility" not in criteria_prompt
-    assert "observable minimum completed result" in criteria_prompt
-    assert "inside the same item" not in criteria_prompt
-    assert "route reference being absent is not sufficient continuation evidence" not in criteria_prompt
-    assert "never write bare reference absence" not in criteria_prompt
-    assert "Do not output or modify intent, task_goal, total, goal" in criteria_prompt
-    assert "long sequential route" in structure_prompt
-    assert "Navigable-checkpoint segmentation contract" in structure_prompt
-    assert "It is not an atomic action or one verb per phase" in structure_prompt
-    assert "turn toward a road and proceed along it" in structure_prompt
-    assert "completing only the turn does not finish the phase" in structure_prompt
-    assert "Movement-mode changes alone do not force a boundary" in structure_prompt
-    assert "different stable landmarks, regions, route relations" in structure_prompt
-    assert "must never remove, skip, or postpone" in structure_prompt
-    assert "including all clauses near the end of a long instruction" in structure_prompt
-    assert "map each ordered route checkpoint to a phase" in structure_prompt
-    assert "Do not split mechanically at punctuation" in structure_prompt
-    assert "execute_full_route_navigation" in structure_prompt
-    assert "takes precedence over the general interpretation" in structure_prompt
-    assert "unless an injected benchmark protocol" in structure_prompt
-    assert "one local navigation checkpoint" in criteria_prompt
-    assert "remaining route segment" in criteria_prompt
-    assert "Movement-result integrity" in criteria_prompt
-    assert "whole local route-leg endpoint" in criteria_prompt
-    assert "turning or aligning does not complete a phase" in criteria_prompt
-    assert "require actual traversal progress" in criteria_prompt
-    assert "must not be presented as proof of physical passage" in criteria_prompt
-    assert "instead of the general physical interpretation" in criteria_prompt
-    assert "Keep each spatial relation attached to the entity and role it modifies" in structure_prompt
-    assert "it is not an instruction to change UAV heading" in structure_prompt
-    assert "image bearing, target-relative position, UAV orientation, and route relation" in structure_prompt
-    assert "Words such as left, right, front, or behind do not create an orientation result" in structure_prompt
-    assert "Absolute UAV position and heading are self-state" in criteria_prompt
-    assert "cannot by themselves prove a target-relative" in criteria_prompt
-    assert "For a physical landing result" in criteria_prompt
-    assert "above-ground clearance" in criteria_prompt
-    assert "do not invent a numeric clearance threshold" in criteria_prompt
+    assert "Output only intent, task_goal" in structure_prompt
+    assert "Do not output completion conditions" in structure_prompt
+    assert "Keep every relation attached" in structure_prompt
+    assert "Image bearing, target-relative position, route relation, and UAV" in structure_prompt
+    assert "Create an orientation result only when" in structure_prompt
+    assert "One phase is one local route leg" in structure_prompt
+    assert "It is not one primitive action" in structure_prompt
+    assert "Do not split only because movement mode or punctuation changes" in structure_prompt
+    assert "Preserve all requested outcomes in order" in structure_prompt
+    assert "one minimum sufficient completed result" in criteria_prompt
+    assert "potential evidence capabilities as possible future evidence" in criteria_prompt
+    assert "not as separate terminal obligations" in criteria_prompt
+    assert "continue_when is a non-exhaustive clarification" in criteria_prompt
+    assert "Preserve numeric requirements inside the natural-language completed result" in criteria_prompt
+    assert '"metrics"' not in criteria_prompt
+    assert "Keep target-relative distance distinct from UAV self-motion" in criteria_prompt
+    assert "Do not output extra fields" in criteria_prompt
+    for task_specific in ("Approach", "Retreat", "Pass", "Land", "Orbit", "Surround"):
+        assert task_specific not in structure_prompt
+        assert task_specific not in criteria_prompt
     assert "confidence" not in criteria_prompt
 
 
@@ -225,14 +186,14 @@ def test_model_parser_builds_skill_free_structure_messages():
     messages = parser._build_structure_messages("Progress past the visual landmark from the right side")
     expected_rules = Path("memory/FLYAGENT.md").read_text(encoding="utf-8-sig").strip()
 
-    assert [message["role"] for message in messages] == ["system", "system", "user"]
+    assert [message["role"] for message in messages] == ["system", "system", "system", "user"]
     assert messages[0]["content"] == expected_rules
-    assert messages[1]["content"] == parser.structure_prompt
-    assert messages[2]["content"] == "Progress past the visual landmark from the right side"
+    assert messages[1]["content"] == parser.user_preferences
+    assert messages[2]["content"] == parser.structure_prompt
+    assert messages[3]["content"] == "Progress past the visual landmark from the right side"
     assert "You are FlyAgent" in messages[0]["content"]
-    assert "semantic task-structure parser" in messages[1]["content"]
-    assert "skill_text" not in messages[1]["content"]
-    assert "a UAV that can understand natural-language user instructions" not in messages[1]["content"]
+    assert "semantic task-structure parser" in messages[2]["content"]
+    assert "skill_text" not in messages[2]["content"]
 
 
 def test_model_parser_injects_protocol_context_without_rewriting_instruction():
@@ -277,10 +238,11 @@ def test_model_parser_injects_protocol_context_without_rewriting_instruction():
         "system",
         "system",
         "system",
+        "system",
         "user",
     ]
-    assert structure_messages[1]["content"] == protocol_context
-    assert criteria_messages[-3]["content"] == protocol_context
+    assert structure_messages[2]["content"] == protocol_context
+    assert criteria_messages[-4]["content"] == protocol_context
     assert sum(
         message["content"] == protocol_context
         for message in criteria_messages
@@ -334,18 +296,13 @@ def test_model_parser_injects_configured_evidence_only_into_phase_criteria():
     )
 
     assert "configured_evidence" not in str(structure_messages)
-    assert [message["role"] for message in criteria_messages] == [
-        "system",
-        "system",
-        "system",
-        "system",
-        "system",
-        "user",
-    ]
+    assert [message["role"] for message in criteria_messages] == ["system"] * 6 + ["user"]
+    assert criteria_messages[1]["content"] == parser.user_preferences
     assert "Use approximate target-distance cues." in criteria_messages[2]["content"]
-    assert '"configured_evidence"' in criteria_messages[3]["content"]
-    assert "not facts observed in the current scene" in criteria_messages[3]["content"]
-    assert criteria_messages[4]["content"] == parser.criteria_prompt
+    assert "Potential semantic evidence configured" in criteria_messages[3]["content"]
+    assert "not facts already observed in the current scene" in criteria_messages[3]["content"]
+    assert criteria_messages[4]["content"] == parser.done_when_rules
+    assert criteria_messages[5]["content"] == parser.criteria_prompt
 
 
 def test_model_parser_custom_contracts_keep_default_flyagent_rules(tmp_path):
@@ -389,10 +346,10 @@ def test_model_parser_custom_contracts_keep_default_flyagent_rules(tmp_path):
 
     expected_rules = Path("memory/FLYAGENT.md").read_text(encoding="utf-8-sig").strip()
     assert structure_messages[0]["content"] == expected_rules
-    assert structure_messages[1]["content"] == "Return custom immutable structure JSON."
+    assert structure_messages[1]["content"] == parser.user_preferences
+    assert structure_messages[2]["content"] == "Return custom immutable structure JSON."
     assert criteria_messages[0]["content"] == expected_rules
-    assert "yaw_delta" in criteria_messages[1]["content"]
-    assert "negative turns left; positive turns right" in criteria_messages[1]["content"]
+    assert criteria_messages[1]["content"] == parser.user_preferences
     assert criteria_messages[-2]["content"] == "Return custom criteria patch JSON."
     assert "rough alignment" in criteria_messages[2]["content"]
 
@@ -480,11 +437,10 @@ def test_model_parser_runs_structure_then_independent_phase_criteria(monkeypatch
         [
             structure_response,
             '{"index":1,"name":"locate_person","done_when":["person is identifiable"],'
-            '"continue_when":["person is absent or ambiguous"],'
-            '"metrics":[]}',
+            '"continue_when":["person is absent or ambiguous"]}',
             '{"index":2,"name":"align_to_person","done_when":['
             '"person is clearly visible and roughly aligned"],'
-            '"continue_when":["person is clearly outside the forward view"],"metrics":[]}',
+            '"continue_when":["person is clearly outside the forward view"]}',
         ]
     )
     requests = []
@@ -503,7 +459,7 @@ def test_model_parser_runs_structure_then_independent_phase_criteria(monkeypatch
     assert len(resolver.calls) == 2
     assert [call[2]["name"] for call in resolver.calls] == ["locate_person", "align_to_person"]
     assert len(requests) == 3
-    assert [message["role"] for message in requests[0]] == ["system", "system", "user"]
+    assert [message["role"] for message in requests[0]] == ["system", "system", "system", "user"]
     assert "skill_for_" not in str(requests[0])
     assert "skill_for_locate_person" in str(requests[1])
     assert "skill_for_align_to_person" in str(requests[2])
@@ -535,8 +491,7 @@ def test_model_parser_continues_without_skill_when_phase_selector_fails(monkeypa
             '"final_state":"facing_person"},"phases":['
             '{"index":1,"total":1,"name":"align_to_person","goal":"Face the person"}]}',
             '{"index":1,"name":"align_to_person","done_when":["person is roughly aligned"],'
-            '"continue_when":["person is not aligned"],'
-            '"metrics":[]}',
+            '"continue_when":["person is not aligned"]}',
         ]
     )
     requests = []
@@ -550,8 +505,7 @@ def test_model_parser_continues_without_skill_when_phase_selector_fails(monkeypa
     result = parser.parse("Face the person")
 
     assert result.plan.phases[0].done_when == ["person is roughly aligned"]
-    assert [message["role"] for message in requests[1]] == ["system", "system", "system", "user"]
-    assert "yaw_delta" in requests[1][1]["content"]
+    assert [message["role"] for message in requests[1]] == ["system"] * 4 + ["user"]
     assert parser.last_parse_trace["phases"][0]["selection_status"] == "resolver_error"
 
 
@@ -573,10 +527,9 @@ def test_model_parser_repairs_invalid_phase_criteria_once(monkeypatch):
             '"final_state":"facing_person"},"phases":['
             '{"index":1,"total":1,"name":"align_to_person","goal":"Face the person"}]}',
             '{"index":1,"name":"align_to_person","goal":"illegally rewritten",'
-            '"done_when":["person is centered"],"observe":[],"continue_when":[],"metrics":[]}',
+            '"done_when":["person is centered"],"observe":[],"continue_when":[]}',
             '{"index":1,"name":"align_to_person","done_when":["person is roughly aligned"],'
-            '"continue_when":["alignment is insufficient"],'
-            '"metrics":[]}',
+            '"continue_when":["alignment is insufficient"]}',
         ]
     )
     requests = []
@@ -606,7 +559,6 @@ def test_phase_criteria_validator_does_not_infer_logic_from_connective_words():
                 "alternatively the motion evidence supports the other required obligation",
             ],
             "continue_when": ["the terminal relation lacks support"],
-            "metrics": [],
         },
         phase,
     )
@@ -614,7 +566,7 @@ def test_phase_criteria_validator_does_not_infer_logic_from_connective_words():
     assert len(result["done_when"]) == 2
 
 
-def test_model_parser_drops_unsupported_metric_without_contract_repair(monkeypatch):
+def test_model_parser_repairs_removed_metrics_field(monkeypatch):
     resolver = SimpleNamespace(
         resolve=lambda instruction, semantic_goal, phase: SimpleNamespace(
             selected_skills=[],
@@ -636,6 +588,9 @@ def test_model_parser_drops_unsupported_metric_without_contract_repair(monkeypat
             '"continue_when":["retreat progress is not yet supported"],'
             '"metrics":[{"name":"forward_distance","target":-3.0,"unit":"m",'
             '"tolerance":0.5,"correction_allowed":true}]}',
+            '{"index":1,"name":"retreat_from_person","done_when":['
+            '"the UAV has made clear retreat progress from the person"],'
+            '"continue_when":["retreat progress is not yet supported"]}',
         ]
     )
     requests = []
@@ -648,13 +603,11 @@ def test_model_parser_drops_unsupported_metric_without_contract_repair(monkeypat
 
     result = parser.parse("Retreat from the person")
 
-    assert len(requests) == 2
-    assert result.plan.phases[0].metrics == []
+    assert len(requests) == 3
+    assert "metrics" not in result.plan.phases[0].to_dict()
     phase_trace = parser.last_parse_trace["phases"][0]
-    assert phase_trace["criteria_status"] == "normalized"
-    assert phase_trace["criteria_warnings"][0]["code"] == "unsupported_metric_numeric_source_removed"
-    assert phase_trace["criteria_warnings"][0]["metric"]["target"] == -3.0
-    assert parser.last_parse_trace["warnings"][0]["phase_name"] == "retreat_from_person"
+    assert phase_trace["criteria_status"] == "ok"
+    assert parser.last_parse_trace["warnings"] == []
 
 
 def test_phase_criteria_cannot_rewrite_structure_and_merge_preserves_goal():
@@ -676,7 +629,6 @@ def test_phase_criteria_cannot_rewrite_structure_and_merge_preserves_goal():
         "name": "align_to_person",
         "done_when": ["person is visible and roughly aligned"],
         "continue_when": ["person is absent or clearly misaligned"],
-        "metrics": [],
     }
 
     with pytest.raises(TaskParserContractError, match="unsupported fields"):
@@ -695,12 +647,6 @@ def test_phase_criteria_numeric_provenance_rejects_invented_thresholds_without_g
         "name": "hold_distance",
         "done_when": ["distance to the person is about 3.5 m"],
         "continue_when": ["requested distance is not yet supported"],
-        "metrics": [],
-    }
-    task_goal = {
-        "target": "person",
-        "target_attributes": {"distance_m": 3.5},
-        "final_state": "holding_distance",
     }
 
     with pytest.raises(TaskParserContractError, match="numbers absent"):
@@ -708,130 +654,46 @@ def test_phase_criteria_numeric_provenance_rejects_invented_thresholds_without_g
             {**base, "continue_when": ["distance is outside 2.5 to 4.5 m"]},
             phase,
             instruction="Move to a position 3.5 meters from the person",
-            task_goal=task_goal,
         )
     validated = validate_phase_criteria(
         base,
         phase,
         instruction="Move to a position 3.5 meters from the person",
-        task_goal=task_goal,
     )
-    assert validated["metrics"] == []
+    assert "metrics" not in validated
 
 
-def test_phase_criteria_metric_normalization_preserves_valid_and_malformed_metrics():
+def test_phase_criteria_rejects_removed_metrics_field():
     criteria = {
         "index": 1,
         "name": "retreat",
         "done_when": ["retreat is complete"],
         "continue_when": ["retreat remains incomplete"],
-        "metrics": [
-            {
-                "name": "forward_distance",
-                "target": -3.0,
-                "unit": "m",
-                "tolerance": 0.5,
-                "correction_allowed": True,
-            },
-            {
-                "name": "yaw_delta",
-                "target": "not-a-number",
-                "unit": "deg",
-                "tolerance": 5.0,
-                "correction_allowed": True,
-            },
-        ],
+        "metrics": [],
     }
 
-    normalized, warnings = normalize_phase_criteria_metrics(
-        criteria,
-        instruction="Retreat from the person",
-    )
-
-    assert [metric["name"] for metric in normalized["metrics"]] == ["yaw_delta"]
-    assert warnings == [
-        {
-            "code": "unsupported_metric_numeric_source_removed",
-            "metric_index": 0,
-            "metric": criteria["metrics"][0],
-        }
-    ]
-    with pytest.raises(TaskParserContractError, match="requires numeric target"):
+    with pytest.raises(TaskParserContractError, match="unsupported fields"):
         validate_phase_criteria(
-            normalized,
+            criteria,
             {"index": 1, "total": 1, "name": "retreat", "goal": "Retreat"},
-            instruction="Retreat from the person",
         )
-
-
-def test_phase_criteria_metric_normalization_keeps_signed_user_distance():
-    metric = {
-        "name": "forward_distance",
-        "target": -3.0,
-        "unit": "m",
-        "tolerance": 0.5,
-        "correction_allowed": True,
-    }
-
-    normalized, warnings = normalize_phase_criteria_metrics(
-        {"metrics": [metric]},
-        instruction="Retreat 3 meters from the person",
-    )
-
-    assert normalized["metrics"] == [metric]
-    assert warnings == []
 
 
 def test_structure_prompt_keeps_numeric_motion_out_of_target_attributes():
     prompt = Path("src/agent/semantic/prompts/task_parser_structure_system.txt").read_text(encoding="utf-8")
 
     assert '"distance_m"' not in prompt
-    assert "Preserve explicit distances and angles in the relevant phase goal" in prompt
-    assert "translation direction" in prompt
+    assert "Preserve qualitative and approximate precision" in prompt
+    assert "Do not add exactness" in prompt
+    assert "Image bearing, target-relative position, route relation, and UAV" in prompt
 
 
-def test_criteria_prompt_does_not_treat_movement_bearing_as_yaw():
+def test_criteria_prompt_keeps_numeric_relations_in_natural_language():
     prompt = Path("src/agent/semantic/prompts/task_parser_phase_criteria_system.txt").read_text(encoding="utf-8")
 
-    assert "path direction, not yaw_delta" in prompt
-    assert "unless the user separately asks" in prompt
-    assert "translate diagonally without changing heading" in prompt
-    assert "Otherwise remove yaw_delta" in prompt
-
-
-def test_phase_criteria_numeric_provenance_allows_metric_tolerance_and_bearing_decomposition():
-    phase = {"index": 1, "total": 1, "name": "diagonal_move", "goal": "Move on a bearing"}
-    criteria = {
-        "index": 1,
-        "name": "diagonal_move",
-        "done_when": ["the requested 5 meter movement at 30 degrees is complete"],
-        "continue_when": ["the requested movement remains incomplete"],
-        "metrics": [
-            {
-                "name": "forward_distance",
-                "target": 4.330127,
-                "unit": "m",
-                "tolerance": 1.0,
-                "correction_allowed": True,
-            },
-            {
-                "name": "right_distance",
-                "target": 2.5,
-                "unit": "m",
-                "tolerance": 1.0,
-                "correction_allowed": True,
-            },
-        ],
-    }
-
-    result = validate_phase_criteria(
-        criteria,
-        phase,
-        instruction="Move 5 meters at 30 degrees to the right",
-        task_goal={"target": "requested endpoint", "target_attributes": {}, "final_state": "moved"},
-    )
-
-    assert len(result["metrics"]) == 2
+    assert "Keep target-relative distance distinct from UAV self-motion" in prompt
+    assert "separate metric, tolerance, or motion contract" in prompt
+    assert '"metrics"' not in prompt
 
 
 def test_phase_criteria_does_not_apply_natural_language_precision_validation():
@@ -841,20 +703,17 @@ def test_phase_criteria_does_not_apply_natural_language_precision_validation():
         "name": "orient_to_target",
         "done_when": ["the target is clearly visible and centered in the camera frame"],
         "continue_when": ["the target is not visible or clearly misaligned"],
-        "metrics": [],
     }
 
     implicit = validate_phase_criteria(
         criteria,
         phase,
         instruction="Turn toward the target",
-        task_goal={},
     )
     explicit = validate_phase_criteria(
         criteria,
         phase,
         instruction="Center the target in the camera frame",
-        task_goal={},
     )
 
     assert "centered" in implicit["done_when"][0]
@@ -914,7 +773,6 @@ def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespa
                     "goal": "Move the UAV toward the trees on the front side using visual evidence.",
                     "done_when": ["trees are identifiable", "approach progress is visible"],
                     "continue_when": ["trees are unclear"],
-                    "metrics": [],
                 }
             ],
         }
@@ -935,7 +793,6 @@ def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespa
                     "goal": "Land by descending four meters and stabilizing.",
                     "done_when": ["the UAV has descended four meters", "the UAV is stable"],
                     "continue_when": ["the requested descent is incomplete"],
-                    "metrics": [{"name": "up_distance", "target": -4.0, "unit": "m", "tolerance": 0.5}],
                 }
             ],
         }
@@ -958,7 +815,6 @@ def test_semantic_validator_allows_natural_uav_sentence_but_rejects_tool_namespa
                         "goal": "Call uav.move_body toward the trees.",
                         "done_when": ["uav.move_body has been called"],
                         "continue_when": [],
-                        "metrics": [],
                     }
                 ],
             }

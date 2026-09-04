@@ -63,7 +63,6 @@ class FakeTaskParser:
                         "goal": "complete benchmark smoke",
                         "done_when": ["benchmark smoke task is complete"],
                         "continue_when": ["benchmark smoke task is incomplete"],
-                        "metrics": [],
                     }
                 ],
             }

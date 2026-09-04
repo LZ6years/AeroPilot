@@ -29,7 +29,6 @@ def make_plan() -> SemanticPlan:
                 goal="orbit the target",
                 done_when=["exact radius is confirmed"],
                 continue_when=["exact radius is not confirmed"],
-                metrics=[],
             )
         ],
     )
@@ -44,7 +43,6 @@ def test_semantic_plan_patch_updates_current_phase_contract():
                 "goal": "continue a conservative orbit around the target",
                 "done_when": ["target remains usable", "motion shows around-target progress"],
                 "continue_when": ["target evidence is missing"],
-                "metrics": [],
             }
         },
     )
@@ -66,7 +64,6 @@ def test_semantic_plan_patch_can_append_generic_recovery_phase():
                 "goal": "recover usable reference evidence",
                 "done_when": ["reference evidence is usable again"],
                 "continue_when": ["reference evidence is still missing"],
-                "metrics": [],
             },
         },
     )
@@ -105,23 +102,16 @@ def test_semantic_plan_update_rejects_invented_numeric_thresholds():
         validate_semantic_plan_patch_numeric_provenance(
             patch,
             instruction="Circle around the person at a radius of 3.0 meters",
-            current_phase={"goal": "orbit at a radius of 3.0 meters", "metrics": []},
+            current_phase={"goal": "orbit at a radius of 3.0 meters"},
         )
 
 
-def test_semantic_plan_update_can_reuse_instruction_and_current_contract_numbers():
+def test_semantic_plan_update_can_reuse_instruction_numbers_in_natural_language():
     patch = validate_semantic_plan_patch(
         {
             "phase": {
-                "done_when": ["the requested 3.0 meter relation is supported"],
-                "metrics": [
-                    {
-                        "name": "planar_distance",
-                        "target": 5.0,
-                        "unit": "m",
-                        "tolerance": 1.0,
-                        "correction_allowed": True,
-                    }
+                "done_when": [
+                    "the UAV is about 5 meters from its phase-start position while preserving the 3.0 meter relation"
                 ],
             }
         }
@@ -130,10 +120,15 @@ def test_semantic_plan_update_can_reuse_instruction_and_current_contract_numbers
     result = validate_semantic_plan_patch_numeric_provenance(
         patch,
         instruction="Move 5 meters while preserving a 3.0 meter relation",
-        current_phase={"metrics": [{"target": 5.0, "tolerance": 1.0}]},
+        current_phase={"goal": "preserve the requested 3.0 meter relation"},
     )
 
     assert result == patch
+
+
+def test_semantic_plan_update_rejects_removed_metrics_patch():
+    with pytest.raises(SemanticPlanValidationError, match="unsupported field"):
+        validate_semantic_plan_patch({"phase": {"metrics": []}})
 
 
 def test_semantic_plan_updater_messages_reuse_selected_core_skill_guidance():
@@ -168,17 +163,21 @@ def test_semantic_plan_updater_messages_reuse_selected_core_skill_guidance():
         "system",
         "system",
         "system",
+        "system",
+        "system",
         "user",
     ]
     assert messages[0]["content"] == updater.agent_rules
-    assert "route_traversal_and_passage" in messages[1]["content"]
-    assert "Use route progress evidence." in messages[1]["content"]
-    assert '"configured_evidence"' in messages[2]["content"]
-    assert "NOW RGB:" in messages[2]["content"]
-    assert messages[3]["content"] == updater.system_prompt
-    assert "selected_skill_guidance" not in messages[4]["content"]
-    assert "configured_evidence" not in messages[4]["content"]
-    assert "Pass the landmark" in messages[4]["content"]
+    assert messages[1]["content"] == updater.user_preferences
+    assert "route_traversal_and_passage" in messages[2]["content"]
+    assert "Use route progress evidence." in messages[2]["content"]
+    assert "Potential semantic evidence configured" in messages[3]["content"]
+    assert "NOW RGB:" in messages[3]["content"]
+    assert messages[4]["content"] == updater.done_when_rules
+    assert messages[5]["content"] == updater.system_prompt
+    assert "selected_skill_guidance" not in messages[6]["content"]
+    assert "configured_evidence" not in messages[6]["content"]
+    assert "Pass the landmark" in messages[6]["content"]
 
 
 class FakeUpdater:

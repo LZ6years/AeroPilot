@@ -19,9 +19,8 @@ Classify current evidence as target absent, weak candidate, directional target
 cue, or inspection-ready. A directional cue identifies the target and gives
 usable image bearing despite hidden nonessential detail. Clipping or imminent loss
 from view can invalidate bearing; incidental occlusion does not. Motion history
-can reveal oscillation but cannot create target-relative bearing. With a
-forward-facing camera, usable current image bearing is operational evidence of
-facing; a separate geometric heading measurement is not required.
+can reveal oscillation but cannot create target-relative bearing. Usable current
+image bearing is operational evidence for visual alignment.
 
 ## Decision Procedure
 

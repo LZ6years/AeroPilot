@@ -21,8 +21,8 @@ SEMANTIC_CRITERIA_SKILL_SELECTION_PROMPT = """You select UAV-Agent knowledge ski
 
 The phase structure already exists and is immutable. Select all and only the
 knowledge skills that are directly useful for defining this phase's observable
-completion conditions, continuation conditions, evidence sources, or valid
-metrics. Skills must not change the phase name, goal, order, or task meaning.
+completion conditions, continuation conditions, or evidence interpretation.
+Skills must not change the phase name, goal, order, or task meaning.
 
 Use active_instruction and semantic_goal to understand user intent. Use
 current_phase.name and current_phase.goal as the primary selection basis. There

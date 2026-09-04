@@ -524,7 +524,6 @@ def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
                         "goal": "identify the entrance candidate",
                         "done_when": ["entrance candidate is visible"],
                         "continue_when": ["entrance identity is unclear"],
-                        "metrics": [],
                     },
                     "phase_relevance": "可见建筑底层入口候选。",
                     "scene_summary": "建筑底层入口候选位于画面中景。",
@@ -576,7 +575,6 @@ def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
                 "goal": "identify the entrance candidate",
                 "done_when": ["entrance candidate is visible"],
                 "continue_when": ["entrance identity is unclear"],
-                "metrics": [],
             }
         ),
     ).to_dict()

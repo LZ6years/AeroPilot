@@ -21,12 +21,12 @@ repair supports circulation but must not replace it.
 
 ## Decision Procedure
 
-1. Establish a usable target relation and a plausible direction of circulation.
-2. Make a bounded tangential shift in the chosen direction.
-3. Re-align yaw only as needed to keep the reference usable, then re-observe.
-4. Continue tangential progress while keeping direction consistent. If the
-   radius becomes clearly unsuitable, make a brief radial repair and resume
-   circulation.
+Choose from alignment, tangential progress, or radial repair according to the
+current evidence; do not enforce a fixed maneuver sequence. Tangential movement
+requires a usable target relation and plausible circulation direction. Re-align
+yaw only when needed to keep the reference usable. Continue tangential progress
+while direction remains consistent; if radius becomes clearly unsuitable, use
+a brief radial repair without replacing circulation.
 
 Orbit direction controls the shift direction, not the yaw sign. Use the target's
 current image side when yaw is specifically for re-alignment.

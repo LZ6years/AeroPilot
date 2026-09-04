@@ -37,7 +37,6 @@ def make_parse_result() -> TaskParseResult:
                     "goal": "turn right and search for the target landmark",
                     "done_when": ["target landmark is visible"],
                     "continue_when": ["target landmark is not visible"],
-                    "metrics": [],
                 }
             ],
         }

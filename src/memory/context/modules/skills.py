@@ -115,7 +115,7 @@ def _selection_context(stage_context: StageContextInput, listings: list[dict[str
 def _compact_current_phase(phase: dict[str, Any] | None) -> dict[str, Any] | None:
     if not isinstance(phase, dict):
         return None
-    keys = ("name", "goal", "done_when", "continue_when", "metrics")
+    keys = ("name", "goal", "done_when", "continue_when")
     return {key: phase[key] for key in keys if key in phase}
 
 

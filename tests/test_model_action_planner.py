@@ -24,7 +24,12 @@ from src.agent.planning.tool_contract_validator import (
     ToolContractValidator,
 )
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK
-from src.agent.planning.schemas import CoupledActionPhasePlan, RuntimeControlAction, ShortHorizonPlan
+from src.agent.planning.schemas import (
+    CoupledActionPhasePlan,
+    PhaseStrategy,
+    RuntimeControlAction,
+    ShortHorizonPlan,
+)
 from src.agent.semantic.schemas import SemanticPhase
 from src.agent.semantic.task_parser import TaskParser
 from src.runtime.configs.model_config import ModelConfig
@@ -66,8 +71,11 @@ class StubModelActionPlanner(ModelActionPlanner):
         repair_planner=None,
     ) -> None:
         self.response = dict(response)
+        self.coupled_call_count = 0
         if not self.response.pop("_omit_action_window", False):
             self.response.setdefault("action_window", make_action_window())
+        if not self.response.pop("_omit_phase_strategy", False):
+            self.response.setdefault("phase_strategy", make_phase_strategy())
         if not self.response.pop("_omit_agent_messages", False):
             self.response.setdefault("agent_messages", make_agent_messages())
         super().__init__(
@@ -83,6 +91,7 @@ class StubModelActionPlanner(ModelActionPlanner):
         )
 
     def _call_coupled_action_phase_openai_compatible(self, context: dict):
+        self.coupled_call_count += 1
         response = dict(self.response)
         response.setdefault(
             "completion_assessment",
@@ -127,6 +136,16 @@ def make_action_window(**overrides) -> dict:
     return window
 
 
+def make_phase_strategy(**overrides) -> dict:
+    strategy = {
+        "stages": ["Continue safely until the current phase condition is observable"],
+        "active_stage": 0,
+        "reason": "The current phase still requires progress",
+    }
+    strategy.update(overrides)
+    return strategy
+
+
 def make_agent_messages(message_type: str = "progress", content: str = "我准备执行当前阶段的安全动作。") -> list[dict]:
     return [
         {
@@ -148,7 +167,6 @@ def make_state() -> MissionState:
         goal="orient toward the left-side entrance search area",
         done_when=["left-side entrance search area is visible"],
         continue_when=["left-side area is not yet visible"],
-        metrics=[],
     )
     state = MissionState("run_test", result.instruction, result.plan)
     state.record_observation({"source": "preflight", "modalities": ["rgb", "depth", "pose"]})
@@ -162,7 +180,6 @@ def make_context() -> dict:
             "goal": "orient toward the left-side entrance search area",
             "done_when": ["left-side entrance search area is visible"],
             "continue_when": ["left-side area is not yet visible"],
-            "metrics": [],
         },
         "observation_policy": {
             "mode": "automatic",
@@ -310,6 +327,43 @@ def test_model_action_request_success_does_not_retry(monkeypatch):
     assert len(calls) == 1
     assert planner.last_model_request_recovery["status"] == "not_needed"
     assert planner.last_model_request_recovery["attempt_count"] == 1
+
+
+def test_model_action_request_promotes_identity_and_user_language_to_system_messages(monkeypatch):
+    requests = []
+
+    def fake_urlopen(request, timeout):
+        requests.append(json.loads(request.data.decode("utf-8")))
+        return FakeHTTPResponse()
+
+    monkeypatch.setattr(
+        "src.agent.planning.model_action_planner.urllib.request.urlopen",
+        fake_urlopen,
+    )
+    planner = ModelActionPlanner(
+        ModelConfig(
+            task_parser_mode="model",
+            model_name="stub",
+            api_key="test-key",
+            base_url="https://example.test/v1",
+        )
+    )
+    context = make_context()
+    context["rules"] = {"text": "FlyAgent identity rules.", "source": "memory/FLYAGENT.md"}
+    context["user_preferences"] = {"text": "Human spatial-language rules.", "source": "memory/USER.md"}
+
+    assert planner._call_openai_compatible_json("coupled contract", context) == {}
+
+    messages = requests[0]["messages"]
+    assert [message["role"] for message in messages] == ["system", "system", "system", "user"]
+    assert [message["content"] for message in messages[:3]] == [
+        "FlyAgent identity rules.",
+        "Human spatial-language rules.",
+        "coupled contract",
+    ]
+    model_context = json.loads(messages[-1]["content"])
+    assert "rules" not in model_context
+    assert "user_preferences" not in model_context
 
 
 @pytest.mark.parametrize(
@@ -629,10 +683,7 @@ def test_model_user_content_strips_phase_judge_audit_fields():
             "goal": "face the person",
             "done_when": ["person is visible", "view is roughly aligned"],
             "continue_when": ["person is not confirmed"],
-            "metrics": [],
         },
-        "phase_metrics": [],
-        "phase_completion_evaluation": {"model_judged_count": 1},
         "phase_execution_summary": {"window_count": 1},
         "measurements": {"yaw_delta_deg": -5.0},
         "user_preferences": {"style": "concise"},
@@ -900,12 +951,15 @@ def test_model_action_planner_combines_coupled_prompt_fragments_in_order():
     planner = ModelActionPlanner(ModelConfig(model_name="stub", api_key="test-key"))
     prompt = planner.coupled_action_phase_system_prompt
 
-    overview_index = prompt.index("experimental coupled action-and-phase planner")
-    phase_index = prompt.index("--- Phase Decision Contract ---")
+    overview_index = prompt.index("coupled action, strategy, and phase planner")
+    phase_index = prompt.index("--- Phase Completion Contract ---")
+    strategy_index = prompt.index("--- Phase Strategy Contract ---")
     action_index = prompt.index("--- Action Planning Contract ---")
 
-    assert overview_index < phase_index < action_index
-    assert "Completion Contract" in prompt
+    assert overview_index < phase_index < strategy_index < action_index
+    assert "You are FlyAgent's semantic completion assessor" in prompt
+    assert "current-phase maneuver strategy planner" in prompt
+    assert "Missing ideal measurements" in prompt
     assert "Phase Decision Guide" not in prompt
     assert "Candidate Tools For Incomplete Assessments" in prompt
     assert (
@@ -978,6 +1032,47 @@ def test_coupled_action_phase_plan_round_trips_control_actions():
     assert plan.to_short_horizon_plan().to_dict().get("control_actions") is None
 
 
+def test_phase_strategy_round_trips_compact_contract():
+    strategy = PhaseStrategy.from_dict(
+        {
+            "stages": [
+                "Move laterally until the open route is centered",
+                "Move forward until the obstacle has been passed",
+            ],
+            "active_stage": 1,
+            "reason": "The lateral relation is already established",
+        }
+    )
+
+    assert strategy.active_stage == 1
+    assert strategy.to_dict()["stages"][0].startswith("Move laterally")
+
+
+@pytest.mark.parametrize(
+    "strategy, message",
+    [
+        ({"stages": [], "active_stage": 0, "reason": "empty"}, "1 to 4"),
+        (
+            {
+                "stages": ["one", "two", "three", "four", "five"],
+                "active_stage": 0,
+                "reason": "too many",
+            },
+            "1 to 4",
+        ),
+        ({"stages": ["one"], "active_stage": 1, "reason": "bad index"}, "existing stage"),
+        ({"stages": ["one"], "active_stage": 0, "reason": ""}, "non-empty string"),
+        (
+            {"stages": ["one"], "active_stage": 0, "reason": "ok", "revision": 2},
+            "unsupported fields",
+        ),
+    ],
+)
+def test_phase_strategy_rejects_invalid_contract(strategy: dict, message: str):
+    with pytest.raises(ValueError, match=message):
+        PhaseStrategy.from_dict(strategy)
+
+
 def test_short_horizon_plan_direct_constructor_has_no_planner_side_transition():
     plan = ShortHorizonPlan("orient_leftward", [])
 
@@ -1000,6 +1095,25 @@ def test_model_action_planner_missing_action_window_falls_back_to_hover():
     assert plan.phase_decision.decision == "continue_current_phase"
     assert plan.steps[0].tool == "uav.hover"
     assert planner.last_completion_result["fallback_reasons"] == ["continue_action_window_missing"]
+
+
+def test_model_action_planner_missing_phase_strategy_falls_back_to_hover():
+    planner = StubModelActionPlanner(
+        {
+            "_omit_phase_strategy": True,
+            "phase": "orient_leftward",
+            "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
+        }
+    )
+
+    plan = planner.plan_next_with_phase_decision(make_state(), make_context())
+
+    assert plan.phase_decision.decision == "continue_current_phase"
+    assert plan.steps[0].tool == "uav.hover"
+    assert plan.phase_strategy is None
+    assert planner.last_completion_result["fallback_reasons"] == [
+        "continue_phase_strategy_missing_or_invalid"
+    ]
 
 
 def test_model_action_planner_accepts_missing_agent_messages_as_empty():
@@ -1540,6 +1654,7 @@ def test_model_action_planner_coupled_continue_uses_tool_contract_validator():
     planner._call_coupled_action_phase_openai_compatible = lambda context: {
         "phase": "orient_leftward",
         "phase_decision": {"decision": "continue_current_phase", "reason": "need one more action"},
+        "phase_strategy": make_phase_strategy(),
         "action_window": make_action_window(),
         "agent_messages": make_agent_messages(),
         "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
@@ -1581,6 +1696,7 @@ def test_model_action_planner_coupled_continue_repairs_tool_contract_violation()
                 {"index": 0, "status": "unknown", "evidence": "fresh evidence is still needed"}
             ]
         },
+        "phase_strategy": make_phase_strategy(),
         "action_window": make_action_window(
             requires_intermediate_observation=True,
             expected_effect="bad multi-step plan asks for a mid-window observation",
@@ -1599,6 +1715,7 @@ def test_model_action_planner_coupled_continue_repairs_tool_contract_violation()
     assert len(plan.steps) == 1
     assert plan.steps[0].tool == "uav.hover"
     assert plan.action_window.requires_intermediate_observation is True
+    assert plan.phase_strategy == PhaseStrategy.from_dict(make_phase_strategy())
     assert planner.last_repair_result["status"] == "repaired"
     assert repair_planner.contexts[0].violation["code"] == "action_window_intermediate_observation_requires_single_step"
 
@@ -1633,6 +1750,7 @@ def test_model_action_planner_preserves_control_actions_after_tool_repair():
     assert plan.steps[0].tool == "uav.hover"
     assert plan.control_actions[0].name == "semantic_plan_update"
     assert plan.control_actions[0].payload == {"reason": "contract should be revisited"}
+    assert plan.phase_strategy == PhaseStrategy.from_dict(make_phase_strategy())
 
 
 def test_model_action_planner_supported_completion_discards_stale_steps_without_tool_repair():
@@ -1814,7 +1932,7 @@ def test_model_action_planner_completes_when_all_atomic_done_when_items_are_supp
     assert planner.last_completion_result["semantic_complete"] is True
 
 
-def test_model_action_planner_metric_gate_blocks_supported_semantic_completion():
+def test_model_action_planner_ignores_legacy_metric_gate_when_semantics_are_supported():
     context = make_context()
     context["current_phase"]["metrics"] = [
         {
@@ -1847,11 +1965,13 @@ def test_model_action_planner_metric_gate_blocks_supported_semantic_completion()
         }
     )
 
-    plan = planner.plan_next_with_phase_decision(make_state(), context)
+    state = make_state()
+    state.semantic_plan = replace(state.semantic_plan, phases=state.semantic_plan.phases[:1])
+    plan = planner.plan_next_with_phase_decision(state, context)
 
-    assert plan.phase_decision.decision == "continue_current_phase"
+    assert plan.phase_decision.decision == COMPLETE_TASK
     assert planner.last_completion_result["semantic_complete"] is True
-    assert planner.last_completion_result["metric_complete"] is False
+    assert "metric_complete" not in planner.last_completion_result
 
 
 @pytest.mark.parametrize(
@@ -1879,6 +1999,7 @@ def test_model_action_planner_invalid_completion_assessment_falls_back_to_hover(
 
     assert plan.phase_decision.decision == "continue_current_phase"
     assert len(plan.steps) == 1
+    assert planner.coupled_call_count == 1
     assert plan.steps[0].tool == "uav.hover"
     assert planner.last_completion_result["status"] == "fallback"
     assert planner.last_completion_result["fallback_reasons"][0].startswith(

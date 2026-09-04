@@ -74,7 +74,7 @@ def test_runtime_control_executor_phase_1_validates_without_execution():
         ),
         "semantic_plan_update": (
             "After multiple action-observation cycles, request when confidence is low that the current goal, "
-            "done_when, continue_when, or metrics still fit observed progress and user intent. Name the doubtful "
+            "done_when, or continue_when still fit observed progress and user intent. Name the doubtful "
             "fields and evidence; keep normal UAV steps if continuing."
         ),
     }
@@ -102,7 +102,7 @@ def test_runtime_control_executor_tracks_semantic_update_pending_status():
             ),
             "semantic_plan_update": (
                 "After multiple action-observation cycles, request when confidence is low that the current goal, "
-                "done_when, continue_when, or metrics still fit observed progress and user intent. Name the doubtful "
+                "done_when, or continue_when still fit observed progress and user intent. Name the doubtful "
                 "fields and evidence; keep normal UAV steps if continuing."
             ),
         },
@@ -127,7 +127,7 @@ def test_runtime_control_executor_only_emits_available_contracts():
     assert context["contracts"] == {
         "semantic_plan_update": (
             "After multiple action-observation cycles, request when confidence is low that the current goal, "
-            "done_when, continue_when, or metrics still fit observed progress and user intent. Name the doubtful "
+            "done_when, or continue_when still fit observed progress and user intent. Name the doubtful "
             "fields and evidence; keep normal UAV steps if continuing."
         )
     }

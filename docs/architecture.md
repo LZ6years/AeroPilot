@@ -9,12 +9,17 @@ FlyAgent 不让模型直接操作 UE、AirSim 或底层 SDK。模型只读取结
 ```mermaid
 flowchart TD
     U["User / CLI"] --> RT["TaskRuntime"]
-    RT --> TP["TaskParser"]
+    RT --> REG["Evidence Capability Registry<br/>enabled Context Modules"]
+    REG --> TP["TaskParser"]
+    ID["FLYAGENT.md<br/>identity"] --> TP
+    LANG["USER.md<br/>language conventions"] --> TP
     TP --> SP["SemanticPlan"]
     SP --> MS["MissionState"]
     MS --> CB["ObservationContextBuilder"]
     CB --> PC["PlannerContext"]
-    PC --> MAP["ModelActionPlanner"]
+    PC --> MAP["ModelActionPlanner<br/>single coupled call"]
+    MAP --> DEC["completion assessment<br/>phase strategy<br/>action window"]
+    DEC --> MS
     MAP --> TCV["ToolContractValidator"]
     TCV --> SS["SafetySupervisor"]
     SS --> TD["ToolDispatcher"]
@@ -24,19 +29,18 @@ flowchart TD
     SIM --> OBS["RGB / depth / pose"]
     OBS --> MEM["FlightMemory + memory/*.jsonl"]
     MEM --> CB
-    RT --> PTJ["Coupled planner/phase decision"]
-    PTJ --> MS
 ```
 
 核心边界：
 
-- `TaskParser` 把自然语言任务拆成语义阶段，不生成 UAV tool 序列。
+- `TaskParser` 把自然语言任务拆成语义阶段，不生成 UAV tool 序列；每次解析前，
+  Runtime 从当前启用的 Context Modules 重新聚合本次可能提供的语义证据。
 - `ObservationContextBuilder` 和 context modules 把记忆、规则、偏好、安全约束整理成 `PlannerContext`。
-- `ModelActionPlanner` 只做模型调用、JSON 解析和动作规划编排。
+- `ModelActionPlanner` 用一次模型调用完成语义完成判定、阶段内策略更新和动作规划编排。
 - `ToolContractValidator` 校验模型动作是否符合 `allowed_action_constraints`。
 - `SafetySupervisor` 做最后限幅、替换和安全拦截。
 - `ToolDispatcher` 才能真正调用 UAV primitive tools。
-- 阶段推进在动作执行和自动 observation 之后判断，不由 action plan 直接携带。
+- Runtime 根据结构化 completion assessment 派生阶段推进；`phase_strategy` 只指导未完成阶段的动作，不参与完成判定。
 
 ## 2. 地图与控制协议
 
@@ -106,14 +110,15 @@ primitive 可以安全执行。它们不携带 SSH、端口、executable、setti
 `TaskRuntime` 的主职责是组织闭环：
 
 ```text
-构建 PlannerContext
-调用 ModelActionPlanner 生成 tool-only 动作计划
+构建 PlannerContext（包含上一版 phase_strategy、最新观测和实际运动摘要）
+调用 ModelActionPlanner 一次，生成 completion assessment、phase_strategy 和 tool-only 动作计划
+Runtime 保存有效策略并维护 revision
 执行 ToolContractValidator
 执行 SafetySupervisor
 执行安全审查后的动作
 自动采集 RGB/depth/pose
-执行后调用模型判断 PhaseTransition
-应用阶段推进结果
+下一窗口把执行结果回灌给同一个 coupled planner
+Runtime 根据 completion assessment 应用阶段推进结果
 写入 run artifacts
 ```
 
@@ -142,24 +147,22 @@ sequenceDiagram
     participant SS as SafetySupervisor
     participant TD as ToolDispatcher
     participant ENV as EnvClient
-    participant J as PhaseTransition Judge
 
     RT->>CB: build PlannerContext
     CB-->>RT: latest_context.json
-    RT->>MAP: plan_next(state, context)
-    MAP->>MAP: call model and parse ShortHorizonPlan
+    RT->>MAP: plan_next_with_phase_decision(state, context)
+    MAP->>MAP: one model call: completion + strategy + actions
+    MAP-->>RT: CoupledActionPhasePlan
+    RT->>RT: persist valid phase strategy and derive transition
     MAP->>TCV: validate phase / tools / args
-    TCV-->>MAP: valid plan or structured violation
-    MAP-->>RT: validated tool-only ShortHorizonPlan
+    TCV-->>MAP: valid tool plan or structured violation
     RT->>SS: review(plan, state)
     SS-->>RT: safe plan + interventions
     RT->>TD: execute safe tool steps
     TD->>ENV: UAV primitive calls
     RT->>ENV: automatic observation
     ENV-->>RT: RGB / depth / pose
-    RT->>J: judge with new state + history + execution result
-    J-->>RT: PhaseTransition
-    RT->>RT: apply transition unless safety suppressed it
+    RT->>RT: next window receives strategy + actual result
 ```
 
 模型动作输出必须是 tool-only：
@@ -167,6 +170,18 @@ sequenceDiagram
 ```json
 {
   "phase": "copy current_phase.name",
+  "completion_assessment": {"done_when": []},
+  "phase_strategy": {
+    "stages": ["short intention until an observable cue"],
+    "active_stage": 0,
+    "reason": "why the current stage is active"
+  },
+  "action_window": {
+    "intent": "execute the active strategy stage",
+    "scope": "current_phase_only",
+    "requires_intermediate_observation": true,
+    "expected_effect": "observable progress for the active stage"
+  },
   "steps": [
     {
       "kind": "tool",
@@ -195,15 +210,19 @@ sequenceDiagram
 
 `FlightMemory` 是飞行历史 manifest，不是 prompt。完整历史保存在 `runs/<run_id>/memory/*.jsonl` 和 artifacts 中。
 
-`ContextModule` 按类别读取短窗口历史并输出 `ContextFragment`：
+`ContextModule` 按类别读取短窗口历史并输出 `ContextFragment`，同时通过
+`describe_output().semantic_evidence`声明本模块在启用时可能提供的证据：
 
 - `InstructionModule`：当前指令、历史指令、目标和 phase goal。
-- `ImageModule`：最新 RGB/depth metadata、artifact refs、图像可用性，以及最近 1 张真实 RGB 的 encoded image model input。
-- `PoseModule`：latest pose、最近 pose 窗口和 pose delta。
-- `ActionModule`：最近动作、执行结果、失败记录。
+- `ImageModule`：图像选择、时序角色、可选深度 overlay、provider-ready 图像输入。
+- `PoseModule`：模型侧只提供可选 AGL；完整 pose 与 delta 留在审计 metadata。
+- `ActionModule`：phase-relative 自身运动和短动作历史，并解释其不是目标相对测量。
 - `MapModule`：地图线索、召回过滤条件和 reconfirmation 风险。
 
-`ContextComposer` 只负责排序、裁剪、合并和加入规则/偏好/安全约束。它不直接读取完整 jsonl，不调用 UAV tool，也不创造新事实。
+`ContextModuleRegistry`只聚合已启用模块的短语义能力声明，去除空项和重复项；
+它不暴露模拟器协议、连接参数，也不把“可能提供”误写成“已经观察到”。
+`ContextComposer` 只负责排序、裁剪、合并和加入规则/偏好/安全约束。它不直接
+读取完整 jsonl，不调用 UAV tool，也不创造新事实。
 
 ## 7. 阶段推进
 
@@ -253,15 +272,19 @@ flowchart TD
 
 ## 9. 视觉输入边界
 
-RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image context module 保持轻量：不 caption、不调用模型，但会把最近 1 张真实 RGB 编码为 `ContextFragment.model_inputs[type=image]`，同时继续提供图像 metadata、artifact refs 和可用性。项目可以通过 custom image module 替换默认处理方式，例如融合多图、压缩、caption，或只输出文字摘要。
+RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image context module 保持轻量：不 caption、不调用模型；它选择当前帧和可选的不同 phase-start 帧，并按配置将当前 RGB 与对齐深度融合成 provider-ready 输入，同时继续保留图像 metadata、artifact refs 和可用性。项目可以通过 custom image module 替换默认处理方式，例如压缩、caption，或只输出文字摘要。
 
-第一版多模态接入遵守这些边界：
+默认多模态接入遵守这些边界：
 
-- `src/memory/context/modules/image.py` 默认选择最近 1 张真实 RGB 并编码为 provider-ready image input；mock、缺失或不可读图片只保留 metadata。
+- `src/memory/context/modules/image.py` 独占 PAST/NOW 语义、图像顺序和 overlay
+  说明。存在不同的 phase-start 帧和有效深度时，模型收到 `PAST raw RGB + NOW
+  RGB/depth overlay`；首窗口只收到 NOW；深度不可用时回退为 `PAST + NOW raw RGB`。
+- 有效 NOW overlay 会替代模型附件中的原始 NOW RGB，不重复发送同一当前画面；
+  原始 RGB 与 Depth artifact 仍分别保存，未被覆盖。
 - custom image module 负责读取、筛选、融合、caption 或压缩图片，并产出 planner-ready 信息；当前 `multimodal_image` 实现会把最近真实 RGB 转成 `visual_description` 文本。
 - `ModelActionPlanner` 不读取图片 path，不理解图片策略，只消费 `model_inputs` 中已经编码好的输入。
 - `ModelInputAssembler` 会把 `model_inputs` 转成 openai-compatible content parts，并在 JSON 文本里脱敏大块 encoded data；caption 模式下 planner 收到的是 text model input。
 - 视觉层不输出 `recommended_next_observation`、转向、扫描或移动建议。
 - 模型只有在实际收到图片，或 context 中存在明确视觉证据时，才能声称看到了目标。
 
-当前 custom caption 只处理最近 1 张真实 RGB，不传 depth 数组给视觉模型。Depth 仍作为 artifact 和 metadata 保留，后续再决定是否进入多模态请求或单独解释。
+当前 custom caption 只处理最近 1 张真实 RGB，不传 depth 数组给 caption 模型；默认 image module 则可直接生成当前 RGB/depth overlay。两条路径都保留原始 Depth artifact。

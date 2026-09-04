@@ -136,8 +136,8 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
     assert "directional target cue" in normalized_summary
     assert "inspection-ready" in normalized_summary
     assert "usable image bearing" in normalized_summary
-    assert "usable current image bearing is operational evidence of facing" in normalized_summary
-    assert "a separate geometric heading measurement is not required" in normalized_summary
+    assert "Usable current image bearing is operational evidence for visual alignment" in normalized_summary
+    assert "a separate geometric heading measurement is not required" not in normalized_summary
     assert "Moderate left or right offset is explicitly acceptable" in normalized_summary
     assert "exact centering is not required unless explicitly requested" in normalized_summary
     assert "Do not correct merely for lateral offset" in normalized_summary
@@ -291,7 +291,8 @@ def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_refe
     assert "shorten adjustments" in normalized
     assert "hover or use a smaller adjustment" in normalized
     assert "landing region" in normalized
-    assert "altitude or surface-related progress" in normalized
+    assert "vertical progress" in normalized
+    assert "available clearance or surface cues" in normalized
     assert "near a surface" in normalized
     assert "vertical error" in normalized
     assert "deviation from the vertical ascent/descent axis" in normalized
@@ -307,6 +308,7 @@ def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_refe
     assert "effective bounded progress" in normalized
     assert "reasonable tolerance" in normalized
     assert "decimal-level correction" in normalized
+    assert "contact sensor" not in normalized
     assert "hidden benchmark" not in normalized
     forbidden_terms = [
         "UAV-Flow",
@@ -337,6 +339,7 @@ def test_route_traversal_skill_keeps_completion_core_and_optional_examples():
     assert "first useful route view with the latest view" in normalized
     assert "cue as a destination" in normalized
     assert "exact geometric boundary" in normalized
+    assert "not a fixed maneuver sequence" in normalized
     assert "Yaw can inspect a route or change image bearing" in normalized
     assert "Cue absence alone is ambiguous" in normalized
     assert "Passage completion is a terminal route relation" in normalized
@@ -374,18 +377,19 @@ def test_approach_skill_stops_before_overshoot_and_excludes_route_references():
     assert "final held front/back/side position" in normalized
     assert "A side relation belongs here only when the UAV must stop or hold there" in normalized
     assert "target visibility can conflict with traversal" in normalized
-    assert "Target identity and target-relative range are independently assessable facts" in normalized
+    assert "Target identity and target-relative range are independently assessable facts" not in normalized
     assert "Treat the estimate as a range, not an exact point" in normalized
-    assert "Assess identity and range separately" in normalized
+    assert "Assess identity and range separately" not in normalized
     assert "representative target region and overall scene relation" in normalized
     assert "instead of requiring all target pixels to agree" in normalized
     assert "Yaw cannot reach a distance or side relation" in normalized
-    assert "apparent size, familiar scale, ground contact, geometry" in normalized
+    assert "familiar scale, ground contact" not in normalized
     assert "clearly place the UAV too far" in normalized
     assert "clearly place it too near" in normalized
-    assert "without moving along an unknown near/far direction" in normalized
-    assert "Completion requires credible target identity. Separately" in normalized
-    assert "broadly near the requested distance" in normalized
+    assert "before correcting distance" in normalized
+    assert "Completion requires credible target identity. Separately" not in normalized
+    assert "jointly place the UAV broadly near" in normalized
+    assert "broadly near the requested relation" in normalized
     assert "Minor distance differences and normal depth spread" in normalized
     assert "exact equality, point containment, or one uniform target depth is not required" in normalized
     assert "clearly show a substantial near/far mismatch" in normalized
@@ -437,10 +441,11 @@ def test_orbit_and_surround_skill_contains_orbit_guidance_without_runtime_intern
     assert "lateral or tangential translation" in normalized
     assert "Yaw alone is not orbit progress" in normalized
     assert "not displacement from the UAV's local origin" in normalized
-    assert "brief radial repair and resume circulation" in normalized
+    assert "brief radial repair without replacing circulation" in normalized
     assert "Orbit direction controls the shift direction, not the yaw sign" in normalized
     assert "Stop orbit movement" in normalized
     assert "repeated radial corrections" in normalized
+    assert "do not enforce a fixed maneuver sequence" in normalized
     assert "semantic phase" not in normalized
     assert "phase_decision" not in normalized
     assert "phase_progress_evidence" not in normalized
@@ -454,13 +459,14 @@ def test_orbit_and_surround_skill_contains_orbit_guidance_without_runtime_intern
 def test_flyagent_contains_visual_direction_basics_without_case_specific_terms():
     rules = Path("memory/FLYAGENT.md").read_text(encoding="utf-8")
 
-    assert "## Visual Direction And Action Consistency" in rules
-    assert "A cue on the left side of the image calls for a leftward alignment adjustment" in rules
-    assert "a cue on the right calls for a rightward alignment adjustment" in rules
+    assert "## Who You Are" in rules
+    assert "## Spatial And Action Consistency" in rules
+    assert "When a visible cue is on the left" in rules
+    assert "Apply the same rule in reverse" in rules
     assert "negative yaw means turn left" not in rules
     assert "positive yaw means turn right" not in rules
-    assert "it must not also say that turning right will center it" in rules
-    assert "## Spatial And Route Relations" in rules
+    assert "Do not turn away from a visible cue" in rules
+    assert "does not prove physical travel" in rules
     forbidden_terms = [
         "UAV-Flow",
         "case id",
@@ -524,8 +530,7 @@ def test_manual_selector_probe_builds_task_relevant_semantic_context():
     assert land.task_goal.target_attributes["relation"] == "right_side"
     assert land.phases[0].name == "controlled_landing_near_requested_region"
     assert "altitude or surface progress is insufficient" in land.phases[0].continue_when
-    assert land.phases[0].metrics[0]["name"] == "up_distance"
-    assert land.phases[0].metrics[0]["target"] < 0
+    assert "metrics" not in land.phases[0].to_dict()
 
     route = module._semantic_plan_for_instruction("Please navigate through the sun umbrella from the left side")
     assert route.intent == "route_traversal"
@@ -535,7 +540,7 @@ def test_manual_selector_probe_builds_task_relevant_semantic_context():
 
     descend = module._semantic_plan_for_instruction("Descend 9.0 meters at 30 degrees")
     assert descend.intent == "altitude_control"
-    assert descend.phases[0].metrics[0]["target"] == -9.0
+    assert "metrics" not in descend.phases[0].to_dict()
 
     fallback = module._semantic_plan_for_instruction("Hold this area conservatively")
     assert fallback.intent == "general_visual_navigation"
@@ -753,7 +758,6 @@ def test_skills_module_loads_only_requested_references_for_selected_skill():
                 "goal": "find the person candidate",
                 "done_when": ["person candidate is visible"],
                 "continue_when": ["person is not visible or ambiguous"],
-                "metrics": [],
             },
             semantic_goal={"target": "person"},
             phase_execution_summary={
@@ -809,7 +813,6 @@ def test_skills_module_selection_context_keeps_phase_only_policy_in_prompt_not_c
                 "goal": "Identify the landmark and approach the requested side while maintaining visual contact",
                 "done_when": ["landmark is visible and the requested side relation is plausible"],
                 "continue_when": ["landmark is not identified or the requested side is not yet plausible"],
-                "metrics": [],
             },
             semantic_goal={"target": "landmark", "final_state": "landing_on_requested_side"},
             phase_execution_summary={"window_count": 0, "measurements": {}, "tool_facts": {}},

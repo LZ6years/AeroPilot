@@ -191,7 +191,7 @@ def test_cli_narrative_panel_prints_steps_status_and_final(capsys):
     assert "运行记录：runs/interactive_cli_test" in out
 
 
-def test_cli_narrative_panel_prints_persistent_phase_completion(capsys):
+def test_cli_narrative_panel_does_not_render_removed_metric_completion(capsys):
     panel = CliNarrativePanel()
     panel({"kind": "instruction_started", "payload": {"phase_names": ["move_forward", "rotate_right"]}})
 
@@ -201,16 +201,6 @@ def test_cli_narrative_panel_prints_persistent_phase_completion(capsys):
             "payload": {
                 "phase": "move_forward",
                 "decision": "advance_to_next_phase",
-                "phase_completion_evaluation": {
-                    "evaluations": [
-                        {
-                            "criteria": {"unit": "m"},
-                            "target": 50.0,
-                            "actual": 49.841,
-                            "error": -0.159,
-                        }
-                    ]
-                },
             },
         }
     )
@@ -220,27 +210,15 @@ def test_cli_narrative_panel_prints_persistent_phase_completion(capsys):
             "payload": {
                 "phase": "rotate_right",
                 "decision": "complete_task",
-                "phase_completion_evaluation": {
-                    "evaluations": [
-                        {
-                            "criteria": {"unit": "deg"},
-                            "target": 90.0,
-                            "actual": 87.294,
-                            "error": -2.706,
-                        }
-                    ]
-                },
             },
         }
     )
 
     out = capsys.readouterr().out
-    assert "完成 1/2：向前飞行" in out
-    assert "完成 2/2：向右旋转" in out
-    assert "49.84/50 m" in out
-    assert "误差 -0.16m" in out
-    assert "87.29/90 deg" in out
-    assert "误差 -2.71deg" in out
+    assert cli_display._ZH["advance"] in out
+    assert cli_display._ZH["complete整理"] in out
+    assert "49.84" not in out
+    assert "87.29" not in out
 
 
 def test_cli_narrative_panel_truncates_tty_status_to_one_line(monkeypatch, capsys):

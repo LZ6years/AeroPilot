@@ -38,6 +38,8 @@ class MissionState:
     current_phase_window_count_value: int = 0
     max_phase_window_count: int = 40
     current_phase_origin_pose: dict[str, Any] = field(default_factory=dict)
+    current_phase_strategy: dict[str, Any] = field(default_factory=dict)
+    current_phase_strategy_revision: int = 0
     semantic_plan_version: int = 0
     completed: bool = False
     stopped: bool = False
@@ -80,6 +82,7 @@ class MissionState:
         self.current_phase_window_count_value = 0
         self.current_phase_progress = {}
         self.current_phase_origin_pose = {}
+        self.clear_current_phase_strategy()
         self.yaw_scan_offset_deg = 0.0
         self.yaw_scan_extent_deg = 0.0
         self.yaw_scan_turn_count = 0
@@ -116,6 +119,16 @@ class MissionState:
         latest_window_measurements: dict[str, Any] | None = None,
         tool_facts_delta: dict[str, Any] | None = None,
     ) -> None:
+        """Refresh current-phase progress without erasing prior window motion.
+
+        Runtime calls this both after an action window, when fresh window
+        measurements are available, and before the next planning call, when it
+        only needs to refresh cumulative progress. Absence of a new window
+        measurement therefore means "preserve the previous snapshot", not
+        "the UAV did not move". A real zero-motion window is still represented
+        by explicitly supplied zero measurements.
+        """
+
         self.ensure_current_phase_progress(self.latest_observation or latest_observation)
         latest_pose = _pose_from_observation(latest_observation)
         progress = copy.deepcopy(self.current_phase_progress)
@@ -125,7 +138,12 @@ class MissionState:
         window_measurements = last_window_measurements
         if window_measurements is None:
             window_measurements = latest_window_measurements
-        progress["last_window"] = _compact_measurements(window_measurements or {})
+        if window_measurements is not None:
+            progress["last_window"] = _compact_measurements(window_measurements)
+        elif "last_window" not in progress:
+            # Compatibility for externally restored progress snapshots that
+            # predate the compact last-window field.
+            progress["last_window"] = _compact_measurements({})
         measurements = pose_measurements(start_pose, latest_pose)
         progress["measurements"] = _compact_measurements(measurements)
         if tool_facts_delta:
@@ -143,11 +161,37 @@ class MissionState:
     def mark_completed(self) -> None:
         self.completed = True
 
+    def update_current_phase_strategy(self, strategy: dict[str, Any]) -> dict[str, Any]:
+        """Replace the live maneuver strategy and classify the model update.
+
+        Strategy revisions are Runtime-owned metadata. The model returns only
+        the compact strategy snapshot, while MissionState records whether that
+        snapshot initialized, kept, advanced, or replanned the current route.
+        """
+
+        previous = copy.deepcopy(self.current_phase_strategy)
+        current = copy.deepcopy(strategy)
+        update_kind = _phase_strategy_update_kind(previous, current)
+        self.current_phase_strategy = current
+        self.current_phase_strategy_revision += 1
+        return {
+            "revision": self.current_phase_strategy_revision,
+            "update_kind": update_kind,
+            "active_stage": current.get("active_stage"),
+        }
+
+    def clear_current_phase_strategy(self) -> None:
+        """Reset mutable maneuver state at a semantic contract boundary."""
+
+        self.current_phase_strategy = {}
+        self.current_phase_strategy_revision = 0
+
     def apply_semantic_plan_update(self, semantic_plan: SemanticPlan) -> None:
         """Replace the semantic plan after runtime validates a current-phase patch."""
 
         self.semantic_plan = semantic_plan
         self.semantic_plan_version += 1
+        self.clear_current_phase_strategy()
 
     def mark_stopped(self, reason: str, source: str = "runtime") -> None:
         # Stopped means the runtime hit an abnormal guard. It is intentionally
@@ -225,6 +269,8 @@ class MissionState:
             "errors": list(self.errors),
             "safety": {"hover_required": self.hover_required, "yaw_scan": yaw_scan},
             "current_phase_progress": copy.deepcopy(self.current_phase_progress),
+            "current_phase_strategy": copy.deepcopy(self.current_phase_strategy),
+            "current_phase_strategy_revision": self.current_phase_strategy_revision,
             "current_phase_window_count": self.current_phase_window_count,
             "max_phase_window_count": self.max_phase_window_count,
             "connected": self.connected,
@@ -246,6 +292,30 @@ def _clean_pose(pose: dict[str, Any]) -> dict[str, Any]:
     data = copy.deepcopy(pose) if isinstance(pose, dict) else {}
     data.pop("velocity", None)
     return data
+
+
+def _phase_strategy_update_kind(
+    previous: dict[str, Any],
+    current: dict[str, Any],
+) -> str:
+    """Infer audit metadata without asking the model to repeat it."""
+
+    if not previous:
+        return "initialize"
+    previous_stages = previous.get("stages")
+    current_stages = current.get("stages")
+    previous_active = previous.get("active_stage")
+    current_active = current.get("active_stage")
+    if previous_stages == current_stages and previous_active == current_active:
+        return "keep"
+    if (
+        previous_stages == current_stages
+        and isinstance(previous_active, int)
+        and isinstance(current_active, int)
+        and current_active > previous_active
+    ):
+        return "advance"
+    return "replan"
 
 
 def _clean_observation(observation: dict[str, Any]) -> dict[str, Any]:

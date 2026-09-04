@@ -25,12 +25,12 @@ but cannot place the UAV on a physical side or prove traversal.
 
 ## Decision Procedure
 
-1. Establish the route, requested side, or gap and usable free space.
-2. Prefer bounded translation through or past it over repeated centering.
-3. Compare the first useful route view with the latest view and accumulated
-   translation; use their agreement as route evidence.
-4. Reacquire only when identity, relation, or movement evidence is insufficient
-   or contradictory.
+Choose a bounded action from missing route evidence, not a fixed maneuver
+sequence. Establish route, side, or free space before translation.
+Once usable, prefer bounded translation through or past it over repeated
+centering. Compare the first useful route view with the latest view and
+accumulated translation. Reacquire only if that evidence is insufficient or
+contradictory.
 
 Request [route progress examples](references/route_progress_examples.md) when a
 complex side passage or disappearing cue needs more detailed interpretation.

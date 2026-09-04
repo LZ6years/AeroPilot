@@ -28,8 +28,8 @@ Land 回归前可以额外传入`--descend-m 0.10`。Backend 通过现有 Pose �
 `x/y/z/yaw`。历史批次不会补算 AGL，也不会被追溯改写。
 
 2026-08-20 的真实闭环中，四个阶段的自机 mask 像素数均为 0；随后 UAV-Flow canary
-`uav_flow_first_person_canary_20260820`完成 1 个真实 Turn case，Planner 请求包含当前
-RGB 和 NOW RGB/Depth overlay，抽查首帧、中间帧和末帧均未出现无人机机身。
+`uav_flow_first_person_canary_20260820`完成 1 个真实 Turn case，Planner 请求使用当前
+RGB/Depth overlay（深度不可用时才回退当前 raw RGB），抽查首帧、中间帧和末帧均未出现无人机机身。
 
 ## 2. 正式真实评测
 
@@ -176,11 +176,13 @@ stop_count    = 1
 2. Context Builder 只匹配同一个 `observation_id` 的当前 RGB 和 Depth。
 3. 两者尺寸不一致时拒绝构造 overlay，不缩放深度来制造伪对齐。
 4. 有效深度使用固定 `0–10m` 色标，以 `42%` 透明度叠加；无效深度像素保留原 RGB。
-5. 生成的带标题、米制图例 PNG 只作为额外模型输入，原始 artifact 保持不变。
+5. 生成的带标题、米制图例 PNG 替代模型附件中的当前原始 RGB；原始 artifact
+   仍保持不变。
 
-Planner 图片顺序为：可选 phase-start RGB、当前原始 RGB、当前 RGB/Depth overlay。
-因此启用 NOW depth 会改变 Planner 可用证据，但不会改变 reference path、nDTW 或
-评测真值。
+Planner 图片顺序为：可选 phase-start raw RGB、当前 RGB/Depth overlay。首窗口没有
+不同历史帧时只发送当前 overlay；Depth 失败时回退为可选 phase-start raw RGB +
+当前 raw RGB。因此启用 NOW depth 不再重复发送同一个当前画面，也不会改变
+reference path、nDTW 或评测真值。
 
 ## 5. Runtime 循环上限
 

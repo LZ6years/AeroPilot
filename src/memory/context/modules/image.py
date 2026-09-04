@@ -17,7 +17,8 @@ CURRENT_IMAGE_USAGE = "NOW | CURRENT OBSERVATION. Use for current visibility and
 PHASE_START_IMAGE_USAGE = "PAST | PHASE START. Comparison only."
 CURRENT_RGB_DEPTH_OVERLAY_USAGE = (
     "NOW | RGB + METRIC DEPTH OVERLAY. Same scene and pixels as NOW RGB; "
-    "false colors encode camera distance in meters using the fixed legend."
+    "false colors encode distance in meters from the UAV camera to visible "
+    "scene points, so colors on a visible target give its approximate range."
 )
 TEMPORAL_EVIDENCE_RULE = (
     "Current-state claims must use NOW only. PAST is only for comparing change. "
@@ -131,7 +132,10 @@ class DefaultImageContextModule(ContextModule):
             else None
         )
         if depth_overlay_input is not None:
-            model_inputs = _insert_current_depth_overlay_input(model_inputs, depth_overlay_input)
+            model_inputs = _replace_current_with_depth_overlay_input(
+                model_inputs,
+                depth_overlay_input,
+            )
         selected_frames = selected_frame_summaries(selected_rgb_frames)
         if current_depth is not None:
             selected_frames.extend(selected_frame_summaries([current_depth]))
@@ -185,7 +189,7 @@ class DefaultImageContextModule(ContextModule):
             )
         if bool(getattr(self, "include_current_depth", False)):
             semantic_evidence.append(
-                "NOW metric depth overlay: approximate camera distance at visible pixels."
+                "NOW metric depth overlay: approximate UAV-camera-to-scene distance at visible pixels; target pixels provide approximate UAV-to-target range."
             )
         return {
             "summary": "Selected RGB frame roles, attached image count, and visual evidence availability.",
@@ -198,16 +202,15 @@ class DefaultImageContextModule(ContextModule):
                 "visual_evidence": "Boolean availability summary such as has_rgb, has_depth, has_mock_frames, latest_observation_source, and interpretation_status.",
             },
             "model_inputs": (
-                "One current RGB image"
+                "One current image, using the pixel-aligned RGB-depth overlay when "
+                "configured and valid, otherwise raw RGB"
                 + (
-                    " plus a distinct phase-start reference"
+                    ", plus a distinct phase-start RGB reference"
                     if include_phase_start_reference
-                    else " without a phase-start reference"
+                    else ", without a phase-start reference"
                 )
-                + " and an optional pixel-aligned current RGB-depth overlay for planner "
-                "multimodal input. When both temporal RGB roles are attached, a concise "
-                "trailing temporal evidence rule is included. Mock, missing, unreadable, "
-                "or duplicate images are not attached."
+                + ". A concise temporal evidence rule accompanies two distinct temporal "
+                "roles. Mock, missing, unreadable, or duplicate images are not attached."
             ),
             "risk_fields": {
                 "visual_evidence_missing": "No recent RGB evidence is available.",
@@ -390,11 +393,29 @@ def rgb_model_inputs_from_frames(frames: list[dict[str, Any]]) -> list[dict[str,
     ]
 
 
-def _insert_current_depth_overlay_input(
+def _replace_current_with_depth_overlay_input(
     model_inputs: list[dict[str, Any]],
     depth_overlay_input: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    result = list(model_inputs)
+    """Replace raw current RGB with its aligned RGB-depth representation.
+
+    The overlay retains the current scene pixels, so attaching both copies asks
+    the model to compare duplicate current evidence and consumes an unnecessary
+    image slot. The phase-start RGB remains a separate historical anchor.
+    """
+
+    result: list[dict[str, Any]] = []
+    replaced_current = False
+    for item in model_inputs:
+        if item.get("role") == "current_observation":
+            if not replaced_current:
+                result.append(depth_overlay_input)
+                replaced_current = True
+            continue
+        result.append(item)
+    if replaced_current:
+        return result
+
     for index, item in enumerate(result):
         if item.get("role") == "temporal_evidence_rule":
             result.insert(index, depth_overlay_input)

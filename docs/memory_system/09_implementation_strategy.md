@@ -6,7 +6,10 @@
 
 ```mermaid
 flowchart TD
-    U["用户输入"] --> TP["TaskParser"]
+    U["用户输入"] --> RT["TaskRuntime"]
+    REG --> CAP["semantic_evidence capabilities"]
+    CAP --> TP["TaskParser"]
+    RT --> TP
     TP --> SP["SemanticPlan"]
     SP --> PH["CurrentPhase"]
     PH --> SI["StageContextInput"]
@@ -36,6 +39,7 @@ flowchart TD
 
     FR --> CC["ContextComposer"]
     RULES["FLYAGENT.md / USER.md"] --> CC
+    RULES --> TP
     SAFE["Safety + action constraints"] --> CC
     CC --> PC["PlannerContext"]
     PC --> MAP["ModelActionPlanner"]
@@ -51,7 +55,7 @@ flowchart TD
 - `context_schema` 已包含顶层字段和 module 字段说明。
 - `allowed_action_constraints` 已进入 context。
 - `observation_policy` 已声明 runtime 自动观察。
-- `phase_transition` 已进入 `ShortHorizonPlan`。
+- Coupled Planner 返回逐项 completion assessment 和短动作窗口；Runtime 私下组合阶段转换。
 - 模型不再输出 observe step。
 
 ## 3. 当前阶段：ToolContractValidator + Contract Repair
@@ -118,19 +122,23 @@ InstructionModule:
   当前指令、历史指令、当前 goal / phase goal
 
 ImageModule:
-  最近 3 轮 RGB/depth metadata、artifact refs、图像可用性
+  PAST/NOW选择、当前 RGB/depth overlay、artifact refs、图像可用性
 
 PoseModule:
   模型侧可选 AGL；完整 latest pose 和最近 pose delta 仅保留在 debug metadata
 
 ActionModule:
-  最近 3-5 个 action、动作结果、失败记录
+  phase-relative自身运动、最近 action及其字段语义
 
 MapModule:
   当前 map/scene 相关线索、requires_reconfirmation
 ```
 
 module 不做 phase completion、动作规划、安全判断或 UAV tool 调用。
+
+每个启用 module 还可声明短 `semantic_evidence`。Registry 在每次
+`TaskRuntime.run_task()`解析前重新聚合、去空和去重，然后只把能力描述注入
+criteria 生成；这不是当前窗口事实，也不包含 AirSim/UnrealCV 或连接配置。
 
 ## 7. ContextComposer 外壳
 
@@ -153,18 +161,10 @@ module 不做 phase completion、动作规划、安全判断或 UAV tool 调用�
 
 ## 8. Phase 推进策略
 
-当前不做独立 `PhaseCompletionEvaluator`。模型在同一次 action plan 中输出：
-
-```json
-{
-  "phase_transition": {
-    "decision": "continue_current_phase | advance_to_next_phase | complete_task",
-    "reason": "short reason"
-  }
-}
-```
-
-runtime 决定是否应用：
+当前 Coupled Planner 在同一模型请求中先对每个 `done_when`给出
+`supported | unknown | contradicted`，再给出短动作窗口。确定性 metric 对象和
+计算结果留在 Runtime 内部，不进入模型文本；Runtime 将语义判断与 metric gate
+组合为阶段转换，并决定是否应用：
 
 - 无 safety intervention 时按模型建议处理。
 - 有 safety intervention 时压制推进，继续当前 phase。

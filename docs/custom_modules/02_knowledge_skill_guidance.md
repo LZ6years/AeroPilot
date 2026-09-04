@@ -169,11 +169,11 @@ runs/plugin_system_real_probe_<timestamp>/
 
 ## 6. Task Parser 中的 Knowledge Skill
 
-同一份通用 knowledge skill 也可以参与 model task parser，但职责比 planner 注入更窄：它只帮助定义某个不可变 phase 的完成条件、继续条件、证据来源和合法 metric。
+同一份通用 knowledge skill 也可以参与 model task parser，但职责比 planner 注入更窄：它只帮助定义某个不可变 phase 的完成条件、继续条件和证据解释。
 
 ```text
 structure：不加载 skill，只生成 phase name 和 goal
-criteria：对每个 phase 单独选 skill，再生成 done_when / continue_when / metrics
+criteria：对每个 phase 单独选 skill，再生成 done_when / continue_when
 planner：运行时重新独立选择，不复用 parser 的选择结果
 ```
 

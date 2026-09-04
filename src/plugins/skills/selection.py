@@ -41,7 +41,7 @@ concerns. If several skills seem relevant, prefer the smallest set that prevents
 missing important guidance.
 
 Select skills for the current semantic phase only. Use current_phase.goal,
-current_phase.done_when, current_phase.continue_when, and current_phase.metrics
+current_phase.done_when, and current_phase.continue_when
 as the primary basis. Use active_instruction and semantic_goal only to understand
 the target, user intent, and final relation; do not preload skills for future
 phases whose concern is not active in the current phase.

@@ -85,6 +85,7 @@ class ObservationContextBuilder:
             allowed_action_constraints=self._allowed_action_constraints(),
             observation_policy=self._observation_policy(state),
             phase_execution_summary=state.current_phase_execution_summary,
+            phase_strategy=state.current_phase_strategy,
             metadata={
                 "run_id": state.run_id,
                 "current_phase_index": state.current_phase_index,

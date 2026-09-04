@@ -37,7 +37,6 @@ class SemanticPhase:
     goal: str
     done_when: list[str] = field(default_factory=list)
     continue_when: list[str] = field(default_factory=list)
-    metrics: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict[str, Any], index: int | None = None, total: int | None = None) -> "SemanticPhase":
@@ -50,7 +49,6 @@ class SemanticPhase:
             goal=str(data.get("goal", "")).strip(),
             done_when=_string_list(data.get("done_when")),
             continue_when=_string_list(data.get("continue_when")),
-            metrics=_dict_list(data.get("metrics")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -104,11 +102,3 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
-
-
-def _dict_list(value: Any) -> list[dict[str, Any]]:
-    if isinstance(value, list):
-        return [dict(item) for item in value if isinstance(item, dict)]
-    if isinstance(value, dict):
-        return [dict(value)]
-    return []

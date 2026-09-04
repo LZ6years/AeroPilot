@@ -2,8 +2,7 @@
 
 This module belongs to the multimodal image context plugin. It packages the
 current phase and the RGB frame for a caption model, but it does not own the
-semantic plan schema. It therefore forwards the lightweight phase fields as-is
-and uses `phase_metrics` only as optional deterministic context.
+semantic plan schema. It therefore forwards the lightweight phase fields as-is.
 """
 
 from __future__ import annotations
@@ -55,11 +54,9 @@ def build_visual_caption_payload(
     """Build an OpenAI-compatible multimodal request for phase-aware captioning."""
 
     current_phase = dict(stage_context.current_phase) if stage_context.current_phase else None
-    metrics = current_phase.get("metrics", []) if isinstance(current_phase, dict) else []
     user_context = {
         "active_instruction": stage_context.active_instruction,
         "current_phase": current_phase,
-        "phase_metrics": [dict(item) for item in metrics if isinstance(item, dict)],
         "expected_visual_description": {
             "schema_version": SCHEMA_VERSION,
             "strategy": STRATEGY,

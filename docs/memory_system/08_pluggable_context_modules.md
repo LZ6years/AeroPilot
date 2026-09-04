@@ -35,9 +35,9 @@ class ContextModule:
 | Module | 默认职责 |
 | --- | --- |
 | `InstructionModule` | 当前指令、历史指令、semantic goal、phase goal |
-| `ImageModule` | 最近 3 轮 RGB/depth metadata、artifact refs、图像可用性 |
-| `PoseModule` | latest pose、最近 pose、pose delta |
-| `ActionModule` | 最近 action、执行结果、失败记录 |
+| `ImageModule` | PAST/NOW 图像选择、可选 depth overlay、artifact refs |
+| `PoseModule` | 模型侧可选 AGL；绝对 pose 仅保留在审计 metadata |
+| `ActionModule` | phase 内自身运动、近期 action 与字段语义 |
 | `MapModule` | map/scene 相关线索、recall filter、reconfirmation risk |
 
 默认 module 输出不包含完整 jsonl 历史，也不暴露原始大文件。
@@ -79,13 +79,16 @@ def describe_output(self) -> dict:
 其中的事实已经成立。`ContextModuleRegistry` 只汇总启用 module 的声明，并按
 module 顺序去重和限制长度；它不会调用 `build()` 或启动场景。
 
-汇总结果只用于生成每个 phase 的 semantic criteria，以及后续异步 semantic
-update。Structure parser 不接收它，因为证据能力不能改变用户要求的 phase
-数量、顺序、名称或 goal。该清单也不会写入 `SemanticPlan`，不会成为普通
-planner context 字段，Validator 不解析其中的模态名称。
+`TaskRuntime.run_task()`在每次解析新指令之前重新请求这份汇总，因此同一个
+Runtime 在更换 module 配置后不会继续使用构造时的旧能力。汇总结果只用于生成
+每个 phase 的 semantic criteria，以及后续异步 semantic update。Structure parser
+不接收它，因为证据能力不能改变用户要求的 phase 数量、顺序、名称或 goal。
+该清单也不会写入 `SemanticPlan`，不会成为普通 planner context 字段，Validator
+不解析其中的模态名称。
 
 声明应采用“一项能力 + 一条关键限制”的形式。不要写当前 observation 的事实、
-动作策略、benchmark 经验、内部 debug 字段或冗长使用教程。
+动作策略、benchmark 经验、Backend 名称、host/port/camera/settings、内部 debug
+字段或冗长使用教程。
 
 ## 5. 自定义 Image Module 示例
 

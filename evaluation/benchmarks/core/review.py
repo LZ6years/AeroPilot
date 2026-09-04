@@ -588,7 +588,6 @@ def _planner_window(record: dict[str, Any]) -> str:
         "transition_reason": (
             decision.get("guard_reason") or decision.get("reason")
         ),
-        "phase_metrics": model_context.get("phase_metrics"),
         "phase_progress_evidence": _compact_progress(
             model_context.get("phase_progress_evidence")
         ),
@@ -665,7 +664,6 @@ def _completion_assessment(
         semantic_complete = all(item == "supported" for item in statuses)
     completion_summary = {
         "semantic_complete": semantic_complete,
-        "metric_complete": result.get("metric_complete", "not recorded"),
         "derived_decision": (
             result.get("derived_decision") or decision.get("decision")
         ),

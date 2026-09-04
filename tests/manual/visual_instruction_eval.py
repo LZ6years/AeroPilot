@@ -83,7 +83,6 @@ def cases_from_run_dir(run_dir: str | Path, limit: int = DEFAULT_LIMIT) -> list[
                     "goal": "extract visual facts relevant to the current phase from a real RGB frame",
                     "done_when": ["relevant visual facts are described"],
                     "continue_when": ["relevant visual facts are unclear"],
-                    "metrics": [],
                 },
                 "expected": {
                     "must_mention_any": ["building", "vehicle", "tree", "paving", "entrance"],
@@ -364,7 +363,6 @@ def _normalise_case(item: dict[str, Any], index: int) -> dict[str, Any]:
             "goal": "describe visual facts relevant to the current phase",
             "done_when": ["relevant visual facts are described"],
             "continue_when": ["relevant visual facts are unclear"],
-            "metrics": [],
         },
     )
     expected = dict(case.get("expected", {})) if isinstance(case.get("expected"), dict) else {}

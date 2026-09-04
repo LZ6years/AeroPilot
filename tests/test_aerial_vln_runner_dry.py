@@ -1042,7 +1042,6 @@ class FakeTaskParser:
                         "goal": "complete dry episode",
                         "done_when": ["dry episode complete"],
                         "continue_when": ["not complete"],
-                        "metrics": [],
                     }
                 ],
             }

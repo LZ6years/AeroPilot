@@ -302,7 +302,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             goal="Judge whether current visual evidence and recent progress are sufficient for the requested objective.",
             done_when=["current evidence supports completion or clearly shows more evidence is needed"],
             continue_when=["evidence is stale, ambiguous, or missing for the requested objective"],
-            metrics=[],
         )
         attributes = {"evidence_role": "completion_check"}
     elif _has_any(lower, ["land", "landing"]):
@@ -323,7 +322,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
                 "altitude or surface progress is insufficient",
                 "continuing descent would be unsafe",
             ],
-            metrics=_vertical_metric_from_instruction(lower, default_drop_m=4.0),
         )
         attributes = {"relation": _relation_from_instruction(lower)}
     elif _has_any(lower, ["descend", "ascend", "altitude"]):
@@ -337,7 +335,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             goal="Make bounded vertical progress toward the requested altitude change.",
             done_when=["requested altitude change is within tolerance", "UAV is stable after vertical movement"],
             continue_when=["altitude progress is insufficient", "vertical motion is overshooting or unsafe"],
-            metrics=_vertical_metric_from_instruction(lower),
         )
         attributes = {"path_angle_role": "vertical_path" if "degree" in lower else "unspecified"}
     elif _has_any(lower, ["through", "past", "between", "pass ", " passage", "route"]):
@@ -351,7 +348,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             goal="Identify the route cue or side relation and make bounded route progress.",
             done_when=["route cue is identified", "recent motion supports through, past, between, or side-route progress"],
             continue_when=["route cue is unclear", "only yaw or visual centering has occurred without route progress"],
-            metrics=[],
         )
         attributes = {"relation": _relation_from_instruction(lower)}
     elif _has_any(lower, ["search", "find", "locate", "look for", "missing", "hidden"]):
@@ -365,7 +361,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             goal="Search for and confirm the requested target or route cue.",
             done_when=["target or route cue is visible or strongly identifiable"],
             continue_when=["target or route cue is absent, ambiguous, or confused with similar candidates"],
-            metrics=[],
         )
         attributes = {}
     elif _has_any(lower, ["turn", "face", "look", "center", "view", "visible", "inspect"]):
@@ -379,7 +374,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             goal="Use current visual evidence to face, view, or confirm the requested target or region.",
             done_when=["target or region is visible", "view is roughly aligned with the visual objective"],
             continue_when=["visual target is unclear", "view is not plausibly aligned"],
-            metrics=[],
         )
         attributes = {}
     elif _has_any(lower, ["move", "approach", "follow", "near", "distance", "closer"]):
@@ -393,7 +387,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             goal="Confirm the target relation and move or hold toward the requested distance or relative position.",
             done_when=["target relation is identifiable", "requested distance or relative position is plausible"],
             continue_when=["target relation is unclear", "requested relative position is not yet plausible"],
-            metrics=[],
         )
         attributes = {"relation": _relation_from_instruction(lower)}
     else:
@@ -407,7 +400,6 @@ def _semantic_plan_for_instruction(instruction: str) -> SemanticPlan:
             goal="Understand the current visual navigation objective and choose conservative task-relevant progress.",
             done_when=["current evidence supports the requested objective"],
             continue_when=["objective evidence is unclear or movement progress is insufficient"],
-            metrics=[],
         )
         attributes = {}
     return SemanticPlan(
@@ -439,7 +431,6 @@ def _semantic_plan_from_hint(instruction: str, hint: dict[str, Any]) -> Semantic
         goal=str(hint.get("phase_goal", "")).strip() or final_state,
         done_when=[str(item).strip() for item in hint.get("done_when", []) if str(item).strip()],
         continue_when=[str(item).strip() for item in hint.get("continue_when", []) if str(item).strip()],
-        metrics=[dict(item) for item in hint.get("metrics", []) if isinstance(item, dict)],
     )
     return SemanticPlan(
         intent=str(hint.get("intent", "")).strip() or "hinted_task",
@@ -501,39 +492,6 @@ def _target_from_instruction(text: str) -> str:
     if "surface" in text or "ground" in text:
         return "landing surface"
     return "requested target or region"
-
-
-def _vertical_metric_from_instruction(text: str, default_drop_m: float | None = None) -> list[dict[str, Any]]:
-    amount = _first_number(text)
-    if amount is None:
-        amount = default_drop_m
-    if amount is None:
-        return []
-    sign = 1.0 if "ascend" in text else -1.0
-    return [
-        {
-            "name": "up_distance",
-            "target": sign * float(amount),
-            "unit": "m",
-            "tolerance": max(0.5, min(1.0, float(amount) * 0.1)),
-            "correction_allowed": True,
-        }
-    ]
-
-
-def _first_number(text: str) -> float | None:
-    current = []
-    for char in text:
-        if char.isdigit() or char == ".":
-            current.append(char)
-        elif current:
-            break
-    if not current:
-        return None
-    try:
-        return float("".join(current))
-    except ValueError:
-        return None
 
 
 def _stage_context(instruction: str, plan: SemanticPlan) -> StageContextInput:

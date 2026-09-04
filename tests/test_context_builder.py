@@ -12,7 +12,7 @@ from PIL import Image
 
 from src.agent.planning.model_inputs import build_model_user_content
 from src.agent.mission_state import MissionState
-from src.agent.semantic.schemas import SemanticPhase
+from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal
 from src.agent.semantic.task_parser import TaskParser
 from plugins.research.multimodal_image.context_modules import MultimodalImageContextModule
 from src.memory.context.registry import ContextModuleRegistry
@@ -60,15 +60,6 @@ def make_state() -> MissionState:
         goal="orient toward the left-side entrance search area",
         done_when=["left-side entrance search area is visible"],
         continue_when=["left-side area is not yet visible"],
-        metrics=[
-            {
-                "name": "yaw_delta",
-                "target": -30.0,
-                "unit": "deg",
-                "tolerance": 8.0,
-                "correction_allowed": True,
-            }
-        ],
     )
     return MissionState("run_test", result.instruction, result.plan)
 
@@ -136,7 +127,7 @@ def test_semantic_evidence_capabilities_follow_module_order_and_depth_config():
     assert capabilities[:3] == [
         "NOW RGB: current visible appearance and image-space relations.",
         "PAST RGB when distinct: phase-start comparison only; not current visibility.",
-        "NOW metric depth overlay: approximate camera distance at visible pixels.",
+        "NOW metric depth overlay: approximate UAV-camera-to-scene distance at visible pixels; target pixels provide approximate UAV-to-target range.",
     ]
     assert capabilities[3].startswith("UAV ground clearance")
     assert capabilities[4].startswith("Action history:")
@@ -241,15 +232,7 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     }
     assert "phase_transition_policy" not in context
     assert "phase_completion_criteria" not in context
-    assert context["current_phase"]["metrics"] == [
-        {
-            "name": "yaw_delta",
-            "target": -30.0,
-            "unit": "deg",
-            "tolerance": 8.0,
-            "correction_allowed": True,
-        }
-    ]
+    assert "metrics" not in context["current_phase"]
     assert context["phase_execution_summary"] == {}
     assert "phase_completion_criteria" not in context["context_schema"]["planner_context_fields"]
     assert "phase_execution_summary" in context["context_schema"]["planner_context_fields"]
@@ -342,7 +325,32 @@ def test_context_builder_handles_missing_observation(tmp_path):
     assert fragments["image"]["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
     assert "visual_processing" not in fragments["image"]["content"]
     assert fragments["action"]["content"]["motion_history_summary"]["recent_execution"] == []
+    assert "phase_strategy" not in fragments["action"]["content"]
     assert context["current_phase"]["name"] == "orient_leftward"
+
+
+def test_context_builder_injects_only_current_phase_strategy_snapshot(tmp_path):
+    state = make_state()
+    strategy = {
+        "stages": [
+            "Move laterally until the route is open",
+            "Move forward until the target has been passed",
+        ],
+        "active_stage": 1,
+        "reason": "The lateral relation is established",
+    }
+    state.update_current_phase_strategy(strategy)
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
+    action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
+
+    assert action["content"]["phase_strategy"] == strategy
+    assert "revision" not in action["content"]["phase_strategy"]
+    model_content = build_model_user_content(context)
+    model_text = model_content if isinstance(model_content, str) else model_content[-1]["text"]
+    model_context = json.loads(model_text)
+    model_action = next(fragment for fragment in model_context["fragments"] if fragment["name"] == "action")
+    assert model_action["content"]["phase_strategy"] == strategy
 
 
 def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_path):
@@ -537,14 +545,13 @@ def test_context_builder_optionally_attaches_aligned_current_rgb_depth_overlay(t
     image = {fragment["name"]: fragment for fragment in context["fragments"]}["image"]
     assert [item["role"] for item in image["model_inputs"]] == [
         "phase_start_reference",
-        "current_observation",
         "current_rgb_depth_overlay",
         "temporal_evidence_rule",
     ]
     assert image["content"]["visual_evidence"]["has_depth"] is True
     assert image["content"]["selected_frames"][-1]["role"] == "current_depth"
     assert image["metadata"]["current_depth_metadata"]["path"] == str(tmp_path / "depth_1.npy")
-    overlay_image = decode_data_url_image(image["model_inputs"][2]["data"])
+    overlay_image = decode_data_url_image(image["model_inputs"][1]["data"])
     assert overlay_image.width == 6
     assert overlay_image.height > 4
     overlay_scene_pixel = overlay_image.getpixel((3, _banner_height(6, 4) + 2))
@@ -558,15 +565,12 @@ def test_context_builder_optionally_attaches_aligned_current_rgb_depth_overlay(t
         "text",
         "image_url",
         "text",
-        "image_url",
-        "text",
     ]
-    assert model_content[4]["text"].startswith("NOW | RGB + METRIC DEPTH OVERLAY.")
+    assert model_content[2]["text"].startswith("NOW | RGB + METRIC DEPTH OVERLAY.")
     recovery_content = build_model_user_content(context, image_mode="current_only")
     assert isinstance(recovery_content, list)
     assert [part["type"] for part in recovery_content] == ["text", "image_url", "text"]
-    assert recovery_content[0]["text"].startswith("NOW | CURRENT OBSERVATION.")
-    assert "METRIC DEPTH" not in recovery_content[-1]["text"]
+    assert recovery_content[0]["text"].startswith("NOW | RGB + METRIC DEPTH OVERLAY.")
 
 
 def test_rgb_depth_overlay_uses_fixed_scale_not_per_frame_normalization(tmp_path):
@@ -968,6 +972,9 @@ def test_context_builder_includes_phase_execution_summary(tmp_path):
         {"pose": {"x": 1.25, "y": 0.0, "z": -2.0, "velocity": {"x": 8.0}}},
         last_window_measurements={"planar_displacement_m": 1.25},
     )
+    state.update_current_phase_progress(
+        {"pose": {"x": 1.5, "y": 0.0, "z": -2.0, "velocity": {"x": 7.0}}}
+    )
 
     context = ObservationContextBuilder().build(
         state,
@@ -977,7 +984,7 @@ def test_context_builder_includes_phase_execution_summary(tmp_path):
     assert context["phase_execution_summary"]["phase"] == "orient_leftward"
     assert context["phase_execution_summary"]["phase_key"] == "1:orient_leftward"
     assert context["phase_execution_summary"] == state.to_dict()["current_phase_progress"]
-    assert context["phase_execution_summary"]["measurements"]["planar_m"] == 1.25
+    assert context["phase_execution_summary"]["measurements"]["planar_m"] == 1.5
     assert context["phase_execution_summary"]["last_window"]["planar_m"] == 1.25
     assert "latest_window_measurements" not in context["phase_execution_summary"]
     assert "start_pose" not in context["phase_execution_summary"]
@@ -987,9 +994,63 @@ def test_context_builder_includes_phase_execution_summary(tmp_path):
     assert "velocity" not in state.to_dict()["latest_observation"]["pose"]
     action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
     summary = action["content"]["motion_history_summary"]
-    assert summary["phase_start_relative_uav_motion"]["planar_m"] == 1.25
+    assert summary["phase_start_relative_uav_motion"]["planar_m"] == 1.5
+    assert summary["last_window_uav_motion"] == {
+        "forward_m": 0.0,
+        "right_m": 0.0,
+        "up_m": 0.0,
+        "planar_m": 1.25,
+        "yaw_delta_deg": 0.0,
+    }
     assert "max_window_count" not in summary
     assert "tools_executed" not in summary
+
+
+def test_context_builder_preserves_measured_last_window_across_planning_refresh(tmp_path):
+    plan = SemanticPlan(
+        intent="inspect_view",
+        task_goal=TaskGoal(target="current view", final_state="inspection complete"),
+        phases=[
+            SemanticPhase(
+                index=1,
+                total=1,
+                name="inspect_view",
+                goal="inspect the current view",
+                done_when=["the current view is inspected"],
+                continue_when=["the current view is not yet inspected"],
+            )
+        ],
+    )
+    state = MissionState("run_motion_refresh", "inspect the current view", plan)
+    state.record_observation(
+        {"pose": {"position": {"x": 0.0, "y": 0.0, "z": -2.0}, "euler_rad": {"yaw": 0.0}}}
+    )
+    state.ensure_current_phase_progress(state.latest_observation)
+    state.update_current_phase_progress(
+        {"pose": {"position": {"x": 0.0, "y": -0.8, "z": -2.0}, "euler_rad": {"yaw": 0.0}}},
+        last_window_measurements={
+            "forward_displacement_m": 0.0,
+            "right_displacement_m": -0.8,
+            "up_displacement_m": 0.0,
+            "planar_displacement_m": 0.8,
+            "vertical_delta_m": 0.0,
+            "yaw_delta_deg": 0.0,
+        },
+    )
+    state.update_current_phase_progress(
+        {"pose": {"position": {"x": 0.0, "y": -0.8, "z": -2.0}, "euler_rad": {"yaw": 0.0}}}
+    )
+
+    context = ObservationContextBuilder().build(state, make_memory(tmp_path, state))
+    action = next(fragment for fragment in context["fragments"] if fragment["name"] == "action")
+
+    assert action["content"]["motion_history_summary"]["last_window_uav_motion"] == {
+        "forward_m": 0.0,
+        "right_m": -0.8,
+        "up_m": 0.0,
+        "planar_m": 0.8,
+        "yaw_delta_deg": 0.0,
+    }
 
 
 def test_context_builder_action_limits_come_from_safety_config(tmp_path):

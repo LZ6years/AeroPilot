@@ -183,7 +183,6 @@ def build_description_context(
             "goal": phase_meaning,
             "done_when": ["phase-relevant visual facts are described"],
             "continue_when": ["phase-relevant visual facts are unclear"],
-            "metrics": [],
         },
     )
     fragment = MultimodalImageContextModule(
@@ -201,9 +200,7 @@ def build_description_context(
             "goal": phase_meaning,
             "done_when": ["phase-relevant visual facts are described"],
             "continue_when": ["phase-relevant visual facts are unclear"],
-            "metrics": [],
         },
-        "phase_metrics": [],
         "semantic_goal": {"target": "phase_visual_summary_v1 probe"},
         "fragments": [fragment],
         "metadata": {"source_image": str(image_path), "case_index": case_index},

@@ -9,7 +9,7 @@ from typing import Any
 
 from src.agent.mission_state import MissionState
 from src.agent.messages import AgentMessage
-from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition, evaluate_phase_completion
+from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.safety import SafetySupervisor
@@ -89,10 +89,12 @@ class TaskRuntime:
             plugin_registry=self.plugin_registry,
             enable_model_skill_selection=getattr(self.planner, "planner_mode", "") == "model",
         )
-        self.semantic_evidence_capabilities = self._configured_semantic_evidence_capabilities()
-        configure_evidence = getattr(self.task_parser, "configure_evidence_capabilities", None)
-        if callable(configure_evidence):
-            configure_evidence(self.semantic_evidence_capabilities)
+        self.semantic_evidence_capabilities: list[str] = []
+        # Initialize compatibility for callers that provide an already-parsed
+        # plan, then refresh again before every model parse. Context builders
+        # may be reconfigured between tasks, so constructor-time discovery is
+        # not a durable source of truth for later instructions.
+        self._refresh_semantic_evidence_capabilities()
         self.phase_window_context_builder = PhaseWindowContextBuilder()
         self.tool_telemetry = ToolTelemetryMiddleware(self.tools, self._debug_event)
         self.memory_writer = MemoryEventWriter(self.recorder.run_dir)
@@ -119,6 +121,7 @@ class TaskRuntime:
         # Execute one short-horizon window per semantic phase.
         options = self._resolve_execution_options(execution_options)
         self._current_turn_agent_messages = []
+        self._refresh_semantic_evidence_capabilities()
         parse_result = self.task_parser.parse(instruction)
         parse_trace = getattr(self.task_parser, "last_parse_trace", {})
         if isinstance(parse_trace, dict) and parse_trace:
@@ -591,6 +594,23 @@ class TaskRuntime:
         if completion_result.get("fallback"):
             self._debug_event("phase_completion_contract_fallback", completion_payload)
         transition = coupled_plan.phase_decision
+        strategy_update: dict[str, Any] = {}
+        if (
+            transition.decision == CONTINUE_CURRENT_PHASE
+            and coupled_plan.phase_strategy is not None
+        ):
+            strategy_update = state.update_current_phase_strategy(
+                coupled_plan.phase_strategy.to_dict()
+            )
+            self._event(
+                "phase_strategy_updated",
+                {
+                    "phase": coupled_plan.phase,
+                    "phase_key": phase_key,
+                    "window_index": state.current_phase_window_count,
+                    **strategy_update,
+                },
+            )
         raw_plan = coupled_plan.to_short_horizon_plan()
         self._debug_event("model_action_planned", coupled_plan.to_dict())
         control_results = self.runtime_control.validate_all(coupled_plan.control_actions)
@@ -611,6 +631,7 @@ class TaskRuntime:
             "reason": transition.reason,
             "step_count": len(coupled_plan.steps),
             "planner_debug_ref": planner_debug_ref,
+            "phase_strategy_revision": state.current_phase_strategy_revision,
         }
         self._event("coupled_planner_phase_decided", decision_payload)
         self._agent_messages(coupled_plan.agent_messages, source="coupled_planner", phase=coupled_plan.phase)
@@ -734,6 +755,8 @@ class TaskRuntime:
             "observation_after": observation_after,
             "measurements": window_measurements,
             "safety_interventions": list(safety_decision.interventions),
+            "phase_strategy": dict(state.current_phase_strategy),
+            "phase_strategy_revision": state.current_phase_strategy_revision,
         }
         if visual_search_recharge is not None:
             window_record["visual_search_recharge"] = visual_search_recharge
@@ -752,6 +775,9 @@ class TaskRuntime:
             ],
             "measurements": window_measurements,
             "safety_intervention_count": len(safety_decision.interventions),
+            "phase_strategy_revision": state.current_phase_strategy_revision,
+            "phase_strategy_update_kind": strategy_update.get("update_kind"),
+            "phase_strategy_active_stage": state.current_phase_strategy.get("active_stage"),
             "debug_ref": window_ref,
         }
         self._event("phase_window_recorded", window_summary)
@@ -790,7 +816,6 @@ class TaskRuntime:
         safety_decision: SafetyDecision,
         transition: PhaseTransition,
     ) -> None:
-        metrics = self._current_phase_metrics(state)
         transition_source = "coupled_planner"
         payload = {
             "phase": plan.phase,
@@ -799,11 +824,6 @@ class TaskRuntime:
             "transition_source": transition_source,
             "current_phase_window_count": state.current_phase_window_count,
             "max_phase_window_count": state.max_phase_window_count,
-            "phase_metrics": metrics,
-            "phase_completion_evaluation": evaluate_phase_completion(
-                metrics,
-                state.current_phase_execution_summary,
-            ),
             "phase_progress_evidence": self._phase_progress_evidence(state),
         }
         self._agent_messages(transition.agent_messages, source=transition_source, phase=plan.phase)
@@ -886,9 +906,6 @@ class TaskRuntime:
         self._try_hover(scene, agent_id, state)
         state.mark_stopped("visual_search_budget_exhausted", source="safety_yaw_scan_budget")
 
-    def _current_phase_metrics(self, state: MissionState) -> list[dict[str, Any]]:
-        return self.phase_window_context_builder.current_phase_metrics(state)
-
     def _phase_progress_evidence(self, state: MissionState) -> dict[str, Any]:
         return self.phase_window_context_builder.phase_progress_evidence(state)
 
@@ -909,9 +926,6 @@ class TaskRuntime:
         payload: dict[str, Any],
         safety_decision: SafetyDecision,
     ) -> bool:
-        evaluation = payload.get("phase_completion_evaluation", {})
-        if not isinstance(evaluation, dict) or int(evaluation.get("model_judged_count", 0) or 0) <= 0:
-            return False
         return any(reason == "yaw_scan_budget_exceeded" for reason in self._safety_intervention_reasons(safety_decision))
 
     def _safety_intervention_summary(
@@ -1366,7 +1380,36 @@ class TaskRuntime:
             return []
         if not isinstance(capabilities, list):
             return []
-        return [item for item in capabilities if isinstance(item, str) and item.strip()]
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in capabilities:
+            if not isinstance(item, str):
+                continue
+            value = " ".join(item.split())
+            if not value or value in seen:
+                continue
+            normalized.append(value)
+            seen.add(value)
+        return normalized
+
+    def _refresh_semantic_evidence_capabilities(self) -> list[str]:
+        """Rediscover configured semantic evidence and update the parser.
+
+        The registry owns which enabled context modules can contribute model
+        evidence. Runtime only refreshes and forwards that bounded declaration;
+        it does not hardcode modality, simulator, or benchmark knowledge.
+        """
+
+        capabilities = self._configured_semantic_evidence_capabilities()
+        self.semantic_evidence_capabilities = capabilities
+        configure_evidence = getattr(
+            self.task_parser,
+            "configure_evidence_capabilities",
+            None,
+        )
+        if callable(configure_evidence):
+            configure_evidence(capabilities)
+        return list(capabilities)
 
     @staticmethod
     def _selected_semantic_update_guidance(planner_context: dict[str, Any]) -> list[dict[str, str]]:
@@ -1592,6 +1635,8 @@ class TaskRuntime:
             "connected": state.connected,
             "airborne": state.airborne,
             "phase_window_count": state.current_phase_window_count,
+            "phase_strategy_revision": state.current_phase_strategy_revision,
+            "phase_strategy_active_stage": state.current_phase_strategy.get("active_stage"),
         }
 
     @staticmethod

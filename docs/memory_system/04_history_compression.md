@@ -33,9 +33,9 @@ flowchart TD
 | Module | 默认窗口 | 输出重点 |
 | --- | --- | --- |
 | `InstructionModule` | 最近约 5 条指令 | active instruction、history summary、phase goal |
-| `ImageModule` | 最近 3 轮 RGB/depth metadata | artifact refs、图像可用性、mock 标记 |
-| `PoseModule` | 最近 2-3 个 pose | latest pose、pose delta、reset_epoch |
-| `ActionModule` | 最近 3-5 个 action | tool、args、ok/error、失败记录 |
+| `ImageModule` | 当前帧与可选 phase-start 帧 | provider-ready NOW、可选 PAST、artifact refs |
+| `PoseModule` | 最近 2-3 个 pose | 模型侧可选 AGL；绝对 pose/delta 仅审计 |
+| `ActionModule` | 最近 3-5 个 action | phase-relative自身运动、tool/args、失败记录 |
 | `MapModule` | 当前 map/scene 匹配线索 | recalled clues、requires_reconfirmation |
 
 这些窗口是 module 策略，不属于 `FlightMemory` 的职责。

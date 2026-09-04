@@ -21,7 +21,6 @@ def make_plan(**overrides):
                 "goal": "identify the black street lamp candidate",
                 "done_when": ["black street lamp or strong candidate is visible"],
                 "continue_when": ["target identity is unclear"],
-                "metrics": [],
             }
         ],
     }
@@ -67,6 +66,23 @@ def test_semantic_plan_ignores_legacy_action_bias_input():
     assert "action_bias" not in plan.to_dict()["phases"][0]
 
 
+def test_semantic_plan_drops_legacy_metrics_on_round_trip():
+    data = make_plan()
+    data["phases"][0]["metrics"] = [
+        {
+            "name": "forward_distance",
+            "target": 5.0,
+            "unit": "m",
+            "tolerance": 1.0,
+            "correction_allowed": True,
+        }
+    ]
+
+    plan = semantic_plan_from_dict(data)
+
+    assert "metrics" not in plan.to_dict()["phases"][0]
+
+
 def test_semantic_plan_accepts_free_model_phase_names():
     plan = semantic_plan_from_dict(
         make_plan(
@@ -78,7 +94,6 @@ def test_semantic_plan_accepts_free_model_phase_names():
                     "goal": "Use the user's right-turn clue as semantic context for later action planning.",
                     "done_when": ["right-side search area is visible"],
                     "continue_when": ["right-side search area is not in view"],
-                    "metrics": [],
                 },
                 {
                     "index": 2,
@@ -87,7 +102,6 @@ def test_semantic_plan_accepts_free_model_phase_names():
                     "goal": "Use observation context to identify candidate black streetlights.",
                     "done_when": ["black streetlight candidate is visible"],
                     "continue_when": ["candidate identity is unclear"],
-                    "metrics": [],
                 },
             ]
         )
@@ -109,7 +123,6 @@ def test_semantic_plan_canonicalizes_model_phase_total():
                     "goal": "semantic stage",
                     "done_when": ["semantic stage is done"],
                     "continue_when": ["semantic stage is not done"],
-                    "metrics": [],
                 }
             ]
         )
@@ -129,7 +142,6 @@ def test_semantic_plan_canonicalizes_model_phase_index():
                     "goal": "semantic stage",
                     "done_when": ["semantic stage is done"],
                     "continue_when": ["semantic stage is not done"],
-                    "metrics": [],
                 }
             ]
         )
@@ -177,7 +189,6 @@ def test_semantic_plan_rejects_primitive_action_tokens():
                         "goal": "turn_relative 30 degrees",
                         "done_when": ["uav.turn_relative finishes"],
                         "continue_when": [],
-                        "metrics": [],
                     }
                 ]
             )
@@ -200,7 +211,6 @@ def test_semantic_plan_rejects_env_observe_token():
                         "goal": "call env.observe",
                         "done_when": ["env.observe returns"],
                         "continue_when": [],
-                        "metrics": [],
                     }
                 ],
             )

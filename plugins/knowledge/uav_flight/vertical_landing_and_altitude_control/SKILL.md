@@ -15,8 +15,8 @@ command to keep descending.
 
 ## Evidence Model
 
-Use requested height change, vertical progress, available altitude or surface
-evidence, landing-region plausibility, and remaining clearance. For an angled
+Use requested height change, vertical progress, available clearance or surface
+cues, and region plausibility. No one evidence source is mandatory. For an angled
 path, interpret the angle as deviation from the vertical ascent/descent axis
 unless the user explicitly identifies yaw, heading, vehicle pitch, or camera
 angle. Request [angled motion details](references/angled_vertical_motion.md)
@@ -37,14 +37,14 @@ when the component ratio or formula is needed.
 For numeric altitude change, finish inside a reasonable tolerance instead of
 making decimal-level corrections. Stop descending when the requested drop is
 reached, the landing surface is near enough, little clearance appears to remain,
-or another descent would mainly increase risk or vertical error. Landmark
-visibility alone is not proof of landing; a landmark landing also needs
-plausible region and altitude or surface-related progress.
+or another descent would mainly increase risk or vertical error. A coherent
+combination of available vertical progress, clearance, and visual region cues
+is sufficient without requiring an additional ideal view.
 
 ## Recovery
 
-If height, surface, or landing-region evidence is uncertain, hover or use a
-smaller adjustment before continuing. Correct overshoot gently instead of
+If the available cues materially conflict about height or region, hover or use
+a smaller adjustment before continuing. Correct overshoot gently instead of
 oscillating. When already low or near a surface, avoid large downward steps. If
 an angled path is unsafe or temporarily unobservable, stabilize first and
 resume its intended relation only when evidence is usable.

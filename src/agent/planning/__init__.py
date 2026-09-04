@@ -7,7 +7,7 @@ from src.agent.planning.model_repair_planner import (
     RepairAttemptRecord,
     RepairContext,
 )
-from src.agent.planning.schemas import ActionWindow, CoupledActionPhasePlan, PlannedStep, ShortHorizonPlan
+from src.agent.planning.schemas import ActionWindow, CoupledActionPhasePlan, PhaseStrategy, PlannedStep, ShortHorizonPlan
 from src.agent.planning.tool_contract_validator import (
     ToolContractValidationError,
     ToolContractValidator,
@@ -21,6 +21,7 @@ __all__ = [
     "ModelRepairPlannerError",
     "ActionWindow",
     "CoupledActionPhasePlan",
+    "PhaseStrategy",
     "PlannedStep",
     "RepairAttemptRecord",
     "RepairContext",

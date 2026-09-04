@@ -1,10 +1,9 @@
 """Build the runtime evidence bundle for one phase-window model call.
 
 This module owns phase-window evidence that is broader than perception memory
-fragments but still model-facing: deterministic phase metrics, compact motion
-progress, and a cleaned summary of the latest observation. It deliberately does
-not execute actions or mutate MissionState; TaskRuntime remains responsible for
-the flight loop and state transitions.
+fragments, including compact motion progress retained for runtime audit. It
+deliberately does not execute actions or mutate MissionState; TaskRuntime
+remains responsible for the flight loop and state transitions.
 """
 
 from __future__ import annotations
@@ -13,7 +12,6 @@ from dataclasses import dataclass
 from typing import Any
 
 from src.agent.mission_state import MissionState
-from src.agent.phase import evaluate_phase_completion
 from src.agent.planning.model_inputs import sanitize_context_for_model_text
 from src.env_client import SceneCapabilities
 
@@ -24,8 +22,6 @@ class PhaseWindowContext:
 
     planner_payload: dict[str, Any]
     model_context: dict[str, Any]
-    phase_metrics: list[dict[str, Any]]
-    phase_completion_evaluation: dict[str, Any]
     phase_progress_evidence: dict[str, Any]
 
 
@@ -42,8 +38,6 @@ class PhaseWindowContextBuilder:
     ) -> PhaseWindowContext:
         """Return the complete model-facing context for the current phase window."""
 
-        metrics = self.current_phase_metrics(state)
-        completion = evaluate_phase_completion(metrics, state.current_phase_execution_summary)
         progress = self.phase_progress_evidence(state)
         planner_payload = dict(base_planner_context)
         self._filter_actions_by_scene_capabilities(
@@ -55,16 +49,15 @@ class PhaseWindowContextBuilder:
             planner_payload["runtime_control"] = runtime_control
         planner_payload.update(
             {
-                "phase_metrics": metrics,
-                "phase_completion_evaluation": completion,
                 "phase_progress_evidence": progress,
             }
         )
         return PhaseWindowContext(
             planner_payload=planner_payload,
-            model_context=sanitize_context_for_model_text(planner_payload),
-            phase_metrics=metrics,
-            phase_completion_evaluation=completion,
+            model_context=sanitize_context_for_model_text(
+                planner_payload,
+                include_memory_documents=False,
+            ),
             phase_progress_evidence=progress,
         )
 
@@ -122,14 +115,6 @@ class PhaseWindowContextBuilder:
                     or str(name) in supported_uav_tools
                 }
         planner_payload["allowed_action_constraints"] = constraints
-
-    @staticmethod
-    def current_phase_metrics(state: MissionState) -> list[dict[str, Any]]:
-        """Return metric contracts for the currently active semantic phase."""
-
-        if state.current_phase_index >= len(state.semantic_plan.phases):
-            return []
-        return [dict(item) for item in state.semantic_plan.phases[state.current_phase_index].metrics]
 
     def phase_progress_evidence(self, state: MissionState) -> dict[str, Any]:
         """Summarize model-facing motion facts for the current phase."""

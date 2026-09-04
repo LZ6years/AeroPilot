@@ -91,7 +91,7 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
     return {
         "planner_context_fields": {
             "active_instruction": "Current user instruction.",
-            "current_phase": "Current semantic phase with goal, done_when, continue_when, and metrics.",
+            "current_phase": "Current semantic phase with goal, done_when, and continue_when.",
             "phase_neighborhood": (
                 "Compact previous completed and next upcoming semantic phase summaries; "
                 "the current phase remains authoritative."
@@ -148,7 +148,8 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
             "field_semantics": "Meaning and evidence boundary for optional AGL.",
         },
         "action": {
-            "motion_history_summary": "Current-phase UAV self-motion and up to five successful actions ordered oldest to newest.",
+            "motion_history_summary": "Current-phase and last-window UAV self-motion plus up to five successful actions ordered oldest to newest.",
+            "phase_strategy": "Previous compact current-phase maneuver strategy when already initialized.",
             "field_semantics": "Meanings and evidence boundaries for self-motion fields.",
         },
         "map": {

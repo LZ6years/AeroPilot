@@ -95,7 +95,6 @@ def make_single_phase_parse_result(
                     goal="complete the single test phase",
                     done_when=["single test phase is complete"],
                     continue_when=["single test phase is not complete"],
-                    metrics=[],
                 )
             ],
         ),
@@ -123,7 +122,6 @@ def make_visual_target_parse_result(
                     goal="align the UAV view with the target",
                     done_when=["visible target is identifiable", "view is roughly aligned with the target"],
                     continue_when=["target is not visually confirmed"],
-                    metrics=[],
                 )
             ],
         ),
@@ -148,7 +146,6 @@ def make_approach_parse_result() -> TaskParseResult:
                         "UAV has moved meaningfully closer to sunshade than at phase start",
                     ],
                     continue_when=["UAV has not moved closer yet"],
-                    metrics=[],
                 )
             ],
         ),
@@ -170,7 +167,6 @@ def make_two_phase_parse_result() -> TaskParseResult:
                     goal="finish phase one",
                     done_when=["phase one is complete"],
                     continue_when=["phase one is not complete"],
-                    metrics=[],
                 ),
                 SemanticPhase(
                     index=2,
@@ -179,7 +175,6 @@ def make_two_phase_parse_result() -> TaskParseResult:
                     goal="finish phase two",
                     done_when=["phase two is complete"],
                     continue_when=["phase two is not complete"],
-                    metrics=[],
                 ),
             ],
         ),
@@ -273,6 +268,11 @@ class CoupledPlannerStub:
                             "requires_user_reply": False,
                         }
                     ],
+                    "phase_strategy": {
+                        "stages": ["Hold until the current phase evidence is refreshed"],
+                        "active_stage": 0,
+                        "reason": "The current phase still requires evidence",
+                    },
                     "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "hold"}],
                 },
                 require_agent_messages=True,
@@ -569,7 +569,7 @@ def test_task_runtime_validates_runtime_control_request_without_executing_it(tmp
     assert planner.contexts[0]["runtime_control"]["contracts"] == {
         "semantic_plan_update": (
             "After multiple action-observation cycles, request when confidence is low that the current goal, "
-            "done_when, continue_when, or metrics still fit observed progress and user intent. Name the doubtful "
+            "done_when, or continue_when still fit observed progress and user intent. Name the doubtful "
             "fields and evidence; keep normal UAV steps if continuing."
         )
     }
@@ -633,7 +633,7 @@ def test_task_runtime_loads_runtime_control_config_from_env(tmp_path, monkeypatc
     assert planner.contexts[0]["runtime_control"]["contracts"] == {
         "semantic_plan_update": (
             "After multiple action-observation cycles, request when confidence is low that the current goal, "
-            "done_when, continue_when, or metrics still fit observed progress and user intent. Name the doubtful "
+            "done_when, or continue_when still fit observed progress and user intent. Name the doubtful "
             "fields and evidence; keep normal UAV steps if continuing."
         )
     }
@@ -668,11 +668,11 @@ def test_task_runtime_recommends_semantic_contract_review_after_multiple_action_
     ]
     assert recommendation_contexts
     assert recommendation_contexts[0]["runtime_control"]["recommendations"] == {
-        "semantic_plan_update": (
-            "review_now: multiple action-observation cycles completed; request only if confidence in "
-            "goal/done_when/continue_when/metrics is now low"
-        )
-    }
+            "semantic_plan_update": (
+                "review_now: multiple action-observation cycles completed; request only if confidence in "
+                "goal/done_when/continue_when is now low"
+            )
+        }
 
 
 def test_task_runtime_applies_semantic_plan_update_on_later_boundary(tmp_path):
@@ -785,6 +785,59 @@ def test_task_runtime_applies_semantic_plan_update_on_later_boundary(tmp_path):
         and record["payload"].get("status") == "applied"
         for record in events
     )
+
+
+def test_run_task_refreshes_semantic_evidence_for_each_instruction(tmp_path):
+    class MutableEvidenceBuilder:
+        def __init__(self):
+            self.capabilities = ["visual evidence", "", "visual evidence"]
+
+        def semantic_evidence_capabilities(self):
+            return list(self.capabilities)
+
+    class RecordingParser:
+        def __init__(self):
+            self.configured_evidence = []
+            self.evidence_seen_at_parse = []
+            self.last_parse_trace = {}
+
+        def configure_evidence_capabilities(self, capabilities):
+            self.configured_evidence = list(capabilities)
+
+        def parse(self, instruction):
+            self.evidence_seen_at_parse.append(list(self.configured_evidence))
+            return make_single_phase_parse_result(instruction)
+
+    run_dir = tmp_path / "dynamic_evidence_refresh"
+    recorder = AsyncRunLogger(run_dir)
+    parser = RecordingParser()
+    context_builder = MutableEvidenceBuilder()
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        parser,
+        planner=CoupledPlannerStub([COMPLETE_TASK]),
+        context_builder=context_builder,
+        shutdown_policy="none",
+    )
+    # This test isolates the parse boundary: scene execution is covered by the
+    # surrounding Runtime tests and does not affect capability discovery.
+    runtime.run_parsed_task = lambda *args, **kwargs: args[1]
+
+    runtime.run_task("m1", "first instruction")
+    context_builder.capabilities = [
+        "action evidence",
+        "  optional   map evidence  ",
+        "action evidence",
+        None,
+    ]
+    runtime.run_task("m1", "second instruction")
+    recorder.close()
+
+    assert parser.evidence_seen_at_parse == [
+        ["visual evidence"],
+        ["action evidence", "optional map evidence"],
+    ]
 
 
 def test_task_runtime_discards_semantic_update_with_invented_numeric_threshold(tmp_path):
@@ -985,7 +1038,146 @@ def test_task_runtime_coupled_continue_executes_tool_and_observes(tmp_path):
     assert continued[0]["payload"]["transition_source"] == "coupled_planner"
     assert "phase_progress_evidence" in planner.contexts[0]
     assert "motion_progress" in planner.contexts[0]["phase_progress_evidence"]
+    first_action = next(fragment for fragment in planner.contexts[0]["fragments"] if fragment["name"] == "action")
+    second_action = next(fragment for fragment in planner.contexts[1]["fragments"] if fragment["name"] == "action")
+    assert "phase_strategy" not in first_action["content"]
+    assert second_action["content"]["phase_strategy"]["active_stage"] == 0
+    assert state.current_phase_strategy_revision == 1
+    assert state.current_phase_strategy["stages"] == [
+        "Hold until the current phase evidence is refreshed"
+    ]
+    assert "phase_strategy_updated" in event_names
+    strategy_event = next(record for record in events if record["event"] == "phase_strategy_updated")
+    assert strategy_event["payload"]["update_kind"] == "initialize"
+    phase_window = next(record for record in events if record["event"] == "phase_window_recorded")
+    assert phase_window["payload"]["phase_strategy_revision"] == 1
+    phase_window_record = json.loads(
+        (run_dir / phase_window["payload"]["debug_ref"]).read_text(encoding="utf-8")
+    )
+    assert phase_window_record["phase_strategy"]["active_stage"] == 0
     assert "model_phase_transition_judged" not in event_names
+
+
+def test_task_runtime_next_planner_context_receives_previous_window_motion(tmp_path):
+    class MoveThenCompletePlanner:
+        planner_mode = "model"
+
+        def __init__(self) -> None:
+            self.contexts = []
+
+        def plan_next_with_phase_decision(self, state, context=None):
+            self.contexts.append(context)
+            if len(self.contexts) == 1:
+                return CoupledActionPhasePlan.from_dict(
+                    {
+                        "phase": state.current_phase_name,
+                        "phase_decision": {
+                            "decision": CONTINUE_CURRENT_PHASE,
+                            "reason": "verify measured lateral motion in the next window",
+                        },
+                        "action_window": {
+                            "intent": "move laterally once",
+                            "scope": "current_phase_only",
+                            "requires_intermediate_observation": True,
+                            "expected_effect": "the next observation records leftward UAV motion",
+                        },
+                        "agent_messages": [],
+                        "phase_strategy": {
+                            "stages": ["Move laterally until the new viewpoint is established"],
+                            "active_stage": 0,
+                            "reason": "The new viewpoint has not yet been established",
+                        },
+                        "steps": [
+                            {
+                                "kind": "tool",
+                                "tool": "uav.move_body",
+                                "args": {"vx": 0.0, "vy": -1.0, "vz": 0.0, "duration": 1.0},
+                                "reason": "create a measurable lateral displacement",
+                            }
+                        ],
+                    },
+                    require_agent_messages=True,
+                )
+            return CoupledActionPhasePlan.from_dict(
+                {
+                    "phase": state.current_phase_name,
+                    "phase_decision": {"decision": COMPLETE_TASK, "reason": "motion context captured"},
+                    "agent_messages": [],
+                    "steps": [],
+                },
+                require_agent_messages=True,
+            )
+
+    run_dir = tmp_path / "last_window_motion_handoff"
+    recorder = AsyncRunLogger(run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
+    planner = MoveThenCompletePlanner()
+    runtime = TaskRuntime(
+        SimulatorEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+    # Build against the live compact semantic schema; this regression concerns
+    # Runtime motion handoff, not optional semantic metric fixtures.
+    parsed = TaskParseResult(
+        instruction="measure previous action window",
+        parser_mode="test",
+        plan=SemanticPlan(
+            intent="measure_window_motion",
+            task_goal=TaskGoal(target="new viewpoint", final_state="motion recorded"),
+            phases=[
+                SemanticPhase(
+                    index=1,
+                    total=1,
+                    name="measure_motion",
+                    goal="record one lateral action window",
+                    done_when=["the lateral action window is recorded"],
+                    continue_when=["the lateral action window has not been recorded"],
+                )
+            ],
+        ),
+    )
+    state = runtime.run_parsed_task("m1", parsed)
+    recorder.close()
+
+    assert state.completed
+    assert len(planner.contexts) == 2
+    first_action = next(
+        fragment for fragment in planner.contexts[0]["fragments"] if fragment["name"] == "action"
+    )
+    second_action = next(
+        fragment for fragment in planner.contexts[1]["fragments"] if fragment["name"] == "action"
+    )
+    assert first_action["content"]["motion_history_summary"]["last_window_uav_motion"] == {
+        "forward_m": 0.0,
+        "right_m": 0.0,
+        "up_m": 0.0,
+        "planar_m": 0.0,
+        "yaw_delta_deg": 0.0,
+    }
+    last_window = second_action["content"]["motion_history_summary"]["last_window_uav_motion"]
+    assert last_window == {
+        "forward_m": 0.0,
+        "right_m": -1.0,
+        "up_m": 0.0,
+        "planar_m": 1.0,
+        "yaw_delta_deg": 0.0,
+    }
+    assert second_action["content"]["motion_history_summary"]["recent_execution"][-1] == {
+        "tool": "uav.move_body",
+        "args": {"vx": 0.0, "vy": -1.0, "vz": 0.0, "duration": 1.0},
+    }
+
+    events = load_event_records(run_dir)
+    first_window = next(record for record in events if record["event"] == "phase_window_recorded")
+    first_window_record = json.loads(
+        (run_dir / first_window["payload"]["debug_ref"]).read_text(encoding="utf-8")
+    )
+    assert last_window["right_m"] == first_window_record["measurements"]["right_displacement_m"]
+    assert last_window["planar_m"] == first_window_record["measurements"]["planar_displacement_m"]
 
 
 def test_task_runtime_phase_progress_evidence_marks_yaw_only_approach_progress():
@@ -1347,7 +1539,8 @@ def test_task_runtime_records_agent_messages_before_and_after_execution(tmp_path
     assert any(event["kind"] == "phase_transition_applied" for event in live_events)
     transition_payload = next(event["payload"] for event in live_events if event["kind"] == "phase_transition_applied")
     transition_payload_text = json.dumps(transition_payload, ensure_ascii=False)
-    assert transition_payload["phase_completion_evaluation"]["metrics_count"] == 0
+    assert "phase_completion_evaluation" not in transition_payload
+    assert "phase_metrics" not in transition_payload
     assert "planner_context" not in transition_payload
     assert "data:image" not in transition_payload_text
     assert "base64" not in transition_payload_text
