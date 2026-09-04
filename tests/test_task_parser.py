@@ -157,11 +157,11 @@ def test_model_parser_prompts_split_structure_from_phase_criteria():
     assert "It is not one primitive action" in structure_prompt
     assert "Do not split only because movement mode or punctuation changes" in structure_prompt
     assert "Preserve all requested outcomes in order" in structure_prompt
-    assert "one minimum sufficient completed result" in criteria_prompt
-    assert "potential evidence capabilities as possible future evidence" in criteria_prompt
-    assert "not as separate terminal obligations" in criteria_prompt
-    assert "continue_when is a non-exhaustive clarification" in criteria_prompt
-    assert "Preserve numeric requirements inside the natural-language completed result" in criteria_prompt
+    assert "one minimum sufficient user-required terminal result" in criteria_prompt
+    assert "configured evidence capabilities only to avoid an inherently" in criteria_prompt
+    assert "terminal obligations" in criteria_prompt
+    assert "continue_when is a concise missing or contradicted user result" in criteria_prompt
+    assert "Preserve user-provided numeric requirements in natural language" in criteria_prompt
     assert '"metrics"' not in criteria_prompt
     assert "Keep target-relative distance distinct from UAV self-motion" in criteria_prompt
     assert "Do not output extra fields" in criteria_prompt
@@ -692,7 +692,7 @@ def test_criteria_prompt_keeps_numeric_relations_in_natural_language():
     prompt = Path("src/agent/semantic/prompts/task_parser_phase_criteria_system.txt").read_text(encoding="utf-8")
 
     assert "Keep target-relative distance distinct from UAV self-motion" in prompt
-    assert "separate metric, tolerance, or motion contract" in prompt
+    assert "metrics, tolerances, or motion contracts" in prompt
     assert '"metrics"' not in prompt
 
 

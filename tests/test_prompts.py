@@ -35,16 +35,18 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     assert '"metrics"' not in criteria_shape
     assert '"intent"' not in criteria_shape
     assert '"task_goal"' not in criteria_shape
-    assert "Preserve numeric requirements inside the natural-language completed result" in criteria
-    assert "potential evidence capabilities as possible future evidence" in criteria
-    assert "not as separate terminal obligations" in criteria
-    assert "continue_when is a non-exhaustive clarification" in criteria
+    assert "Preserve user-provided numeric requirements in natural language" in criteria
+    assert "configured evidence capabilities only to avoid an inherently" in criteria
+    assert "terminal obligations" in criteria
+    assert "continue_when is a concise missing or contradicted user result" in criteria
     assert "Keep target-relative distance distinct from UAV self-motion" in criteria
-    assert "minimum sufficient result" in done_when
-    assert "Evidence sources and alternative" in done_when
-    assert "Split conditions only when" in done_when
-    assert "invented object axes" in done_when
-    assert "must not gain a terminal heading" in done_when
+    assert "minimum sufficient user result" in done_when
+    assert "Never split by evidence source" in done_when
+    assert "Split only when" in done_when
+    assert "invented axes" in done_when
+    assert "Add a final heading only when" in done_when
+    assert '"as judged by"' in done_when
+    assert "Evidence is not part of the terminal state itself" in done_when
     for task_specific in ("Approach", "Retreat", "Pass", "Land", "Orbit", "Surround"):
         assert task_specific not in structure + criteria + done_when
     assert '"action_bias"' not in structure + criteria
@@ -156,8 +158,8 @@ def test_task_parser_keeps_general_spatial_roles_and_optional_agl_evidence():
     assert "Create an orientation result only when" in structure
     assert "side or route relation alone" in structure
     assert "does not create one" in structure
-    assert "potential evidence capabilities as possible future evidence" in compact_criteria
-    assert "not as facts already observed" in compact_criteria
+    assert "configured evidence capabilities only to avoid an inherently" in compact_criteria
+    assert "Capability names and anticipated observations must not appear" in compact_criteria
     assert "Do not output extra fields" in criteria
     assert "completion confidence" not in structure + criteria
     assert "single-frame" not in structure + criteria
@@ -298,9 +300,8 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "explicit either/or inside one done_when item" not in phase_prompt
     assert "Continuation descriptions are" in phase_prompt
     assert "not additional gates" in phase_prompt
-    assert "Residual possibility, lack of absolute certainty, or optional optimization" in phase_prompt
-    assert "returning unknown only for lack of a" in phase_prompt
-    assert "centroid, exact pixel, direct measurement, or tolerance" in phase_prompt
+    assert "Do not use unknown to request a better view" in phase_prompt
+    assert "Lack of a centroid, exact pixel, direct measurement, or tolerance" in phase_prompt
     assert "no calibrated measurement" not in phase_prompt
     assert "target-distance condition" not in phase_prompt
     assert "familiar target scale" not in phase_prompt
