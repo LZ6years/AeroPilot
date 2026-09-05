@@ -1493,7 +1493,7 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert not (run_dir / "state/final_answer.json").exists()
 
 
-def test_task_runtime_action_planner_debug_writes_redacted_context(tmp_path):
+def test_task_runtime_action_planner_debug_preserves_model_input_images(tmp_path):
     class OneTurnPlanner:
         planner_mode = "model"
         last_model_request_recovery = {
@@ -1513,6 +1513,24 @@ def test_task_runtime_action_planner_debug_writes_redacted_context(tmp_path):
         }
 
         def plan_next_with_phase_decision(self, state, context=None):
+            assert isinstance(context, dict)
+            context.setdefault("fragments", []).append(
+                {
+                    "name": "test_image",
+                    "model_inputs": [
+                        {
+                            "type": "image",
+                            "role": "current_observation",
+                            "encoding": "data_url",
+                            "data": (
+                                "data:image/png;base64,"
+                                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4n"
+                                "GNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+                            ),
+                        }
+                    ],
+                }
+            )
             plan = ShortHorizonPlan(
                 state.current_phase_name,
                 [PlannedStep.tool_step("uav.turn_relative", {"yaw_deg": 5.0}, "debug turn")],
@@ -1544,7 +1562,7 @@ def test_task_runtime_action_planner_debug_writes_redacted_context(tmp_path):
     assert "safety_decision" in payload
     assert payload["model_request_recovery"]["status"] == "recovered"
     assert payload["model_request_recovery"]["degraded_to_now_only"] is True
-    assert "data:image" not in debug_files[0].read_text(encoding="utf-8")
+    assert "data:image" in debug_files[0].read_text(encoding="utf-8")
     events = load_event_records(run_dir)
     recovered = [
         record

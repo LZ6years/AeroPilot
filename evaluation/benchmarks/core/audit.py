@@ -245,6 +245,14 @@ class BenchmarkAuditReader:
             planner_debug,
             events,
         )
+        planner_debug, phase_window_diagnostics = (
+            _associate_phase_window_execution(
+                planner_debug,
+                events,
+                run_dir,
+            )
+        )
+        diagnostics.extend(phase_window_diagnostics)
         return BenchmarkAuditLog(
             run_dir=str(run_dir),
             started_at=cursor.started_at,
@@ -499,6 +507,104 @@ def _associate_phase_completion(
                     break
         enriched.append(item)
     return enriched
+
+
+def _associate_phase_window_execution(
+    planner_records: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    run_dir: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Attach Runtime-recorded execution outcomes to matching planner windows.
+
+    Planner debug captures the model proposal and safety-reviewed plan. Runtime
+    writes the authoritative per-window ``executed_steps`` separately after
+    tool execution. The benchmark review needs both views side by side, but
+    this reader keeps the join read-only and bounded to the frozen episode.
+    """
+
+    executions: dict[tuple[str, int], dict[str, Any]] = {}
+    diagnostics: list[dict[str, Any]] = []
+    for event in events:
+        if (event.get("event") or event.get("kind")) != (
+            "phase_window_recorded"
+        ):
+            continue
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        window_index = payload.get("window_index")
+        debug_ref = payload.get("debug_ref")
+        if not isinstance(window_index, int) or not isinstance(debug_ref, str):
+            continue
+        execution = _read_phase_window_execution(
+            run_dir,
+            debug_ref,
+            diagnostics,
+        )
+        if execution is None:
+            continue
+        for phase in (payload.get("phase_key"), payload.get("phase")):
+            if phase not in (None, ""):
+                executions[(str(phase), window_index)] = execution
+
+    enriched: list[dict[str, Any]] = []
+    for record in planner_records:
+        item = dict(record)
+        window_index = item.get("window_index")
+        if isinstance(window_index, int):
+            for phase in (item.get("phase_key"), item.get("phase")):
+                execution = executions.get((str(phase), window_index))
+                if execution is not None:
+                    item["_phase_window_execution"] = execution
+                    break
+        enriched.append(item)
+    return enriched, diagnostics
+
+
+def _read_phase_window_execution(
+    run_dir: Path,
+    debug_ref: str,
+    diagnostics: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Read only the execution fields review needs from a Runtime debug file."""
+
+    root = run_dir.resolve()
+    candidate = (root / debug_ref).resolve()
+    if root != candidate and root not in candidate.parents:
+        diagnostics.append(
+            {
+                "stage": "phase_window_execution_read",
+                "debug_ref": debug_ref,
+                "reason": "debug_ref_outside_run_dir",
+            }
+        )
+        return None
+    try:
+        payload = json.loads(candidate.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        diagnostics.append(
+            {
+                "stage": "phase_window_execution_read",
+                "debug_ref": debug_ref,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+        )
+        return None
+    if not isinstance(payload, dict):
+        diagnostics.append(
+            {
+                "stage": "phase_window_execution_read",
+                "debug_ref": debug_ref,
+                "reason": "payload_not_object",
+            }
+        )
+        return None
+    return {
+        "debug_ref": debug_ref,
+        "executed_steps": payload.get("executed_steps"),
+        "safety_interventions": payload.get("safety_interventions"),
+    }
 
 
 def _formal_planner_actions(

@@ -26,8 +26,7 @@ def build_model_user_content(
     and the two-image temporal rule while preserving the normal model context.
     """
 
-    if image_mode not in {"all", "current_only"}:
-        raise ValueError(f"unsupported image_mode: {image_mode}")
+    _validate_image_mode(image_mode)
 
     sanitized_context = sanitize_context_for_model_text(
         context,
@@ -56,11 +55,16 @@ def _model_input_parts(
     media_parts: list[dict[str, Any]] = []
     supplemental_text_parts: list[dict[str, Any]] = []
     model_inputs = list(_iter_model_inputs(context))
-    current_recovery_role = _current_recovery_role(model_inputs)
+    selected_images = {
+        id(item) for item in select_model_image_inputs(
+            context,
+            image_mode=image_mode,
+        )
+    }
     for item in model_inputs:
         input_type = item.get("type")
         if input_type == "image":
-            if image_mode == "current_only" and item.get("role") != current_recovery_role:
+            if id(item) not in selected_images:
                 continue
             part = _image_part(item)
             if part is not None:
@@ -77,6 +81,38 @@ def _model_input_parts(
         else:
             part = None
     return media_parts, supplemental_text_parts
+
+
+def select_model_image_inputs(
+    context: dict[str, Any],
+    *,
+    image_mode: str = "all",
+) -> list[dict[str, Any]]:
+    """Return exactly the valid image inputs sent for one request mode.
+
+    The action planner uses this selector immediately before provider-message
+    assembly.  Human review reuses it to materialize the same successful
+    request images without inferring them from observation history.
+    """
+
+    _validate_image_mode(image_mode)
+    model_inputs = list(_iter_model_inputs(context))
+    current_recovery_role = _current_recovery_role(model_inputs)
+    return [
+        item
+        for item in model_inputs
+        if item.get("type") == "image"
+        and (
+            image_mode == "all"
+            or item.get("role") == current_recovery_role
+        )
+        and _image_part(item) is not None
+    ]
+
+
+def _validate_image_mode(image_mode: str) -> None:
+    if image_mode not in {"all", "current_only"}:
+        raise ValueError(f"unsupported image_mode: {image_mode}")
 
 
 def _current_recovery_role(model_inputs: list[dict[str, Any]]) -> str:

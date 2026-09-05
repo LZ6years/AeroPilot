@@ -1707,7 +1707,12 @@ class TaskRuntime:
             "phase": state.current_phase_name,
             "phase_key": state.current_phase_key,
             "window_index": state.current_phase_window_count,
-            "planner_context": _redact_model_input_data(planner_context),
+            # Action-planner debug is a local, opt-in replay artifact.  Keep
+            # the provider-ready image data so a later offline review can
+            # display exactly the images from the successful model request.
+            # The HTML renderer redacts this binary data everywhere except
+            # its separately materialized local image assets.
+            "planner_context": _copy_model_input_context(planner_context),
             "model_context": model_context,
             "raw_plan": raw_plan.to_dict(),
             "safe_plan": safe_plan.to_dict(),
@@ -1842,15 +1847,14 @@ def _clean_observation_for_semantic_update(observation: dict[str, Any]) -> dict[
     return data
 
 
-def _redact_model_input_data(value: Any) -> Any:
+def _copy_model_input_context(value: Any) -> Any:
+    """Copy opt-in planner debug context without losing model input images."""
+
     if isinstance(value, dict):
-        redacted = {}
+        copied = {}
         for key, item in value.items():
-            if key == "data" and isinstance(item, str) and item.startswith("data:image/"):
-                redacted[key] = f"<omitted encoded image data: {len(item)} chars>"
-            else:
-                redacted[key] = _redact_model_input_data(item)
-        return redacted
+            copied[key] = _copy_model_input_context(item)
+        return copied
     if isinstance(value, list):
-        return [_redact_model_input_data(item) for item in value]
+        return [_copy_model_input_context(item) for item in value]
     return value

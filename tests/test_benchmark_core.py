@@ -581,9 +581,230 @@ def test_core_review_correlates_completion_and_renders_planner_window(
     assert "Runtime Applied Phase State" in case_html
     assert "coupled_planner" in case_html
     assert "Model-Facing Context" in case_html
+    assert "planner_context_not_saved" in case_html
     assert "yaw-only so far" in case_html
     assert "data:image/png;base64" not in case_html
     assert "&lt;binary payload omitted&gt;" in case_html
+
+
+def test_core_review_renders_exact_successful_model_images_and_steps(tmp_path):
+    run_dir = tmp_path / "run"
+    write_audit_fixture(run_dir)
+    debug_dir = run_dir / "debug" / "action_planner"
+    phase_windows_dir = run_dir / "debug" / "phase_windows"
+    debug_dir.mkdir(parents=True)
+    phase_windows_dir.mkdir(parents=True)
+    image_data = "data:image/png;base64," + base64.b64encode(
+        _png_bytes()
+    ).decode("ascii")
+
+    def planner_context() -> dict:
+        return {
+            "active_instruction": "Pass the trees on the left",
+            "current_phase": {"name": "pass", "done_when": []},
+            "fragments": [
+                {
+                    "name": "image",
+                    "model_inputs": [
+                        {
+                            "type": "image",
+                            "input_id": "past",
+                            "role": "phase_start_reference",
+                            "usage": "PAST image.",
+                            "encoding": "data_url",
+                            "data": image_data,
+                        },
+                        {
+                            "type": "image",
+                            "input_id": "now",
+                            "role": "current_observation",
+                            "usage": "NOW image.",
+                            "encoding": "data_url",
+                            "data": image_data,
+                        },
+                        {
+                            "type": "image",
+                            "input_id": "overlay",
+                            "role": "current_rgb_depth_overlay",
+                            "usage": "NOW RGB-depth overlay.",
+                            "encoding": "data_url",
+                            "data": image_data,
+                        },
+                        {
+                            "type": "image",
+                            "input_id": "missing",
+                            "role": "auxiliary_view",
+                            "usage": "Auxiliary image.",
+                            "encoding": "data_url",
+                            "data": "data:image/png;base64,not-base64",
+                        },
+                    ],
+                }
+            ],
+        }
+
+    for window_index, recovery in (
+        (
+            1,
+            {
+                "attempts": [
+                    {"attempt": 1, "image_mode": "all", "status": "error"},
+                    {
+                        "attempt": 2,
+                        "image_mode": "current_only",
+                        "status": "ok",
+                    },
+                ]
+            },
+        ),
+        (
+            2,
+            {"attempts": [{"attempt": 1, "image_mode": "all", "status": "ok"}]},
+        ),
+    ):
+        (debug_dir / f"phase_window_{window_index:03d}.json").write_text(
+            json.dumps(
+                {
+                    "phase": "pass",
+                    "phase_key": "0:pass",
+                    "window_index": window_index,
+                    "planner_context": planner_context(),
+                    "model_context": {
+                        "active_instruction": "Pass the trees on the left",
+                        "current_phase": {"name": "pass", "done_when": []},
+                        "fragments": [],
+                    },
+                    "raw_plan": {
+                        "steps": [
+                            {
+                                "tool": "uav.move_body",
+                                "args": {"vy": -1.0},
+                                "reason": "Establish the left side.",
+                                "modalities": ["rgb", "depth"],
+                            }
+                        ]
+                    },
+                    "safe_plan": {
+                        "steps": [
+                            {
+                                "tool": "uav.move_body",
+                                "args": {"vy": -0.5},
+                                "reason": "Safety-limited left movement.",
+                                "modalities": ["rgb", "depth"],
+                            }
+                        ]
+                    },
+                    "coupled_phase_decision": {
+                        "decision": "continue_current_phase",
+                        "reason": "continue",
+                    },
+                    "model_request_recovery": recovery,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        (phase_windows_dir / f"pass_window_{window_index:03d}.json").write_text(
+            json.dumps(
+                {
+                    "executed_steps": [
+                        {
+                            "phase": "pass",
+                            "step_index": 0,
+                            "step": {
+                                "tool": "uav.move_body",
+                                "args": {"vy": -0.5},
+                                "reason": "Safety-limited left movement.",
+                                "modalities": ["rgb", "depth"],
+                            },
+                            "result": {
+                                "ok": window_index == 1,
+                                "message": (
+                                    "moved left"
+                                    if window_index == 1
+                                    else "blocked by obstacle"
+                                ),
+                            },
+                            "stabilization": {
+                                "status": "completed",
+                                "reason": "velocity settled",
+                            },
+                        }
+                    ],
+                    "safety_interventions": ["limited lateral velocity"],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        append_jsonl(
+            run_dir / "events.jsonl",
+            {
+                "timestamp": f"2026-01-01T00:00:0{window_index + 3}+00:00",
+                "event": "phase_window_recorded",
+                "payload": {
+                    "phase": "pass",
+                    "phase_key": "0:pass",
+                    "window_index": window_index,
+                    "debug_ref": (
+                        f"debug/phase_windows/pass_window_{window_index:03d}.json"
+                    ),
+                },
+            },
+        )
+
+    audit = BenchmarkAuditReader().read(EpisodeAuditCursor.freeze(run_dir))
+    assert all(
+        record.get("_phase_window_execution", {}).get("executed_steps")
+        for record in audit.planner_debug
+    )
+
+    eval_dir = tmp_path / "eval"
+    case_review = BenchmarkCaseReview(
+        case_id="planner",
+        benchmark_name="Test",
+        protocol_variant="test.v1",
+        instruction="Pass the trees on the left",
+        outcome={"status": "ok"},
+        metrics={},
+        audit=audit,
+        frame_assets=(),
+    )
+    renderer = BenchmarkReviewRenderer()
+    renderer.write(
+        eval_dir,
+        BenchmarkSummaryReview(
+            benchmark_name="Test",
+            protocol_variant="test.v1",
+            metrics={},
+            cases=({"case_id": "planner", "status": "ok", "metrics": {}},),
+        ),
+        (case_review,),
+    )
+
+    case_dir = eval_dir / "cases" / "planner"
+    case_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    assets = sorted((case_dir / "review_assets" / "planner_inputs").glob("*.png"))
+    assert len(assets) == 4
+    assert [item.name for item in assets if item.name.startswith("window_001")] == [
+        "window_001_01_overlay.png"
+    ]
+    assert len([item for item in assets if item.name.startswith("window_002")]) == 3
+    assert "Model Input Images" in case_html
+    assert "image_mode=current_only" in case_html
+    assert "image_mode=all" in case_html
+    assert "Steps" in case_html
+    assert "model output" in case_html
+    assert "safety-reviewed" in case_html
+    assert "actual execution" in case_html
+    assert "Safety-limited left movement." in case_html
+    assert "success" in case_html
+    assert "failed" in case_html
+    assert "stabilization: completed (velocity settled)" in case_html
+    assert "Unavailable: #4 auxiliary_view: invalid_model_image_data_url" in case_html
+    assert "data:image/png;base64" not in case_html
+    renderer.write_case(eval_dir, case_review)
+    assert sorted((case_dir / "review_assets" / "planner_inputs").glob("*.png")) == assets
 
 
 def make_episode(

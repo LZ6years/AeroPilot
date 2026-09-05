@@ -7,6 +7,8 @@ sections; they never need to parse Runtime memory or inject arbitrary HTML.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import html
 import json
 import os
@@ -19,7 +21,10 @@ from evaluation.benchmarks.core.audit import (
     ResolvedFrameAsset,
 )
 from evaluation.benchmarks.core.report_io import atomic_write_text
-from src.agent.planning.model_inputs import build_model_user_content
+from src.agent.planning.model_inputs import (
+    build_model_user_content,
+    select_model_image_inputs,
+)
 
 
 @dataclass(frozen=True)
@@ -179,6 +184,10 @@ class BenchmarkReviewRenderer:
         case_dir: Path,
         style_path: Path,
     ) -> str:
+        planner_input_assets = _materialize_planner_input_assets(
+            case.audit,
+            case_dir,
+        )
         gallery = _frame_gallery(
             case.audit,
             case.frame_assets,
@@ -221,7 +230,7 @@ class BenchmarkReviewRenderer:
                 )
                 + "</section>"
                 "<section><h2>Planner Windows</h2>"
-                f"{_planner_review(case.audit)}</section>"
+                f"{_planner_review(case.audit, case_dir, planner_input_assets)}</section>"
                 "<section><h2>Runtime Applied Phase State</h2>"
                 f"{_phase_event_table(case.audit.events)}</section>"
                 + "".join(
@@ -468,7 +477,147 @@ def _frame_association(
     return f"after {action.get('tool') or action.get('id')} (time-associated)"
 
 
-def _planner_review(audit: BenchmarkAuditLog) -> str:
+def _materialize_planner_input_assets(
+    audit: BenchmarkAuditLog,
+    case_dir: Path,
+) -> dict[str, list[dict[str, Any]]]:
+    """Copy the exact successful-request images into portable review assets.
+
+    Planner contexts retain provider-ready data URLs for debug reproducibility.
+    This renderer converts only the image inputs selected for the successful
+    attempt into local files. It deliberately does not substitute a similar
+    observation frame when a historical record lacks the original input.
+    """
+
+    destination = case_dir / "review_assets" / "planner_inputs"
+    assets_by_record: dict[str, list[dict[str, Any]]] = {}
+    for record in audit.planner_debug:
+        record_key = _planner_record_key(record)
+        context = _dict(record.get("planner_context"))
+        image_mode, attempt = _successful_image_request(record)
+        if not context:
+            assets_by_record[record_key] = [
+                {"unavailable_reason": "planner_context_not_saved"}
+            ]
+            continue
+        try:
+            images = select_model_image_inputs(
+                context,
+                image_mode=image_mode,
+            )
+        except ValueError as exc:
+            assets_by_record[record_key] = [
+                {"unavailable_reason": f"image_selection_error:{exc}"}
+            ]
+            continue
+        if not images:
+            assets_by_record[record_key] = [
+                {"unavailable_reason": "no_valid_model_images"}
+            ]
+            continue
+
+        assets: list[dict[str, Any]] = []
+        for order, image in enumerate(images, start=1):
+            payload = _decode_model_image_data_url(image.get("data"))
+            input_id = str(image.get("input_id") or f"image_{order}")
+            if payload is None:
+                assets.append(
+                    {
+                        "order": order,
+                        "input_id": input_id,
+                        "role": image.get("role"),
+                        "usage": image.get("usage"),
+                        "image_mode": image_mode,
+                        "attempt": attempt,
+                        "unavailable_reason": "invalid_model_image_data_url",
+                    }
+                )
+                continue
+            bytes_value, suffix = payload
+            safe_input_id = _safe_asset_name(input_id)
+            target = destination / (
+                f"window_{int(record.get('window_index') or 0):03d}_"
+                f"{order:02d}_{safe_input_id}{suffix}"
+            )
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(bytes_value)
+            assets.append(
+                {
+                    "path": str(target),
+                    "order": order,
+                    "input_id": input_id,
+                    "role": image.get("role"),
+                    "usage": image.get("usage"),
+                    "image_mode": image_mode,
+                    "attempt": attempt,
+                }
+            )
+        assets_by_record[record_key] = assets
+    return assets_by_record
+
+
+def _successful_image_request(record: dict[str, Any]) -> tuple[str, int | None]:
+    """Return the image mode from the final successful model request attempt."""
+
+    recovery = _dict(record.get("model_request_recovery"))
+    attempts = recovery.get("attempts")
+    if isinstance(attempts, list):
+        for item in reversed(attempts):
+            if not isinstance(item, dict) or item.get("status") != "ok":
+                continue
+            image_mode = item.get("image_mode")
+            if image_mode in {"all", "current_only"}:
+                attempt = item.get("attempt")
+                return image_mode, attempt if isinstance(attempt, int) else None
+    # Legacy planner debug did not persist request recovery. Its historical
+    # behavior was the ordinary all-images request mode.
+    return "all", None
+
+
+def _decode_model_image_data_url(value: Any) -> tuple[bytes, str] | None:
+    if not isinstance(value, str) or not value.startswith("data:image/"):
+        return None
+    try:
+        header, encoded = value.split(",", 1)
+    except ValueError:
+        return None
+    if ";base64" not in header.lower():
+        return None
+    mime_type = header[5:].split(";", 1)[0].lower()
+    suffix = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+    }.get(mime_type)
+    if suffix is None:
+        return None
+    try:
+        payload = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return (payload, suffix) if payload else None
+
+
+def _safe_asset_name(value: str) -> str:
+    return "".join(
+        character if character.isalnum() or character in {"-", "_"} else "_"
+        for character in value
+    ).strip("_") or "image"
+
+
+def _planner_record_key(record: dict[str, Any]) -> str:
+    return str(
+        record.get("path")
+        or f"{record.get('phase_key') or record.get('phase')}:{record.get('window_index')}"
+    )
+
+
+def _planner_review(
+    audit: BenchmarkAuditLog,
+    case_dir: Path,
+    planner_input_assets: dict[str, list[dict[str, Any]]],
+) -> str:
     records = list(audit.planner_debug)
     if not records:
         return (
@@ -479,7 +628,14 @@ def _planner_review(audit: BenchmarkAuditLog) -> str:
     stats = _planner_stats(records, audit.actions)
     summary = _key_value_table(stats)
     timeline = _planner_timeline(records)
-    details = "".join(_planner_window(record) for record in records)
+    details = "".join(
+        _planner_window(
+            record,
+            case_dir,
+            planner_input_assets.get(_planner_record_key(record), []),
+        )
+        for record in records
+    )
     return (
         "<h3>Decision Summary</h3>"
         + summary
@@ -556,7 +712,11 @@ def _planner_timeline(records: list[dict[str, Any]]) -> str:
     )
 
 
-def _planner_window(record: dict[str, Any]) -> str:
+def _planner_window(
+    record: dict[str, Any],
+    case_dir: Path,
+    model_input_assets: list[dict[str, Any]],
+) -> str:
     model_context = _dict(
         record.get("model_context") or record.get("planner_context")
     )
@@ -568,6 +728,7 @@ def _planner_window(record: dict[str, Any]) -> str:
     coupled_plan = _dict(record.get("coupled_plan"))
     completion = _dict(coupled_plan.get("completion_assessment"))
     completion_result = _dict(record.get("_phase_completion_result"))
+    execution = _dict(record.get("_phase_window_execution"))
     if not completion:
         completion = _dict(completion_result.get("assessment"))
     structured = bool(completion)
@@ -607,6 +768,8 @@ def _planner_window(record: dict[str, Any]) -> str:
         + "</summary>"
         + f'<p class="muted">{_e(note)}</p>'
         + _key_value_table(summary)
+        + _model_input_images(model_input_assets, case_dir)
+        + _steps_comparison(raw_plan, safe_plan, execution)
         + _completion_assessment(
             completion,
             completion_result,
@@ -624,6 +787,155 @@ def _planner_window(record: dict[str, Any]) -> str:
         + _json_details(record, "Complete debug record")
         + "</details>"
     )
+
+
+def _model_input_images(
+    assets: list[dict[str, Any]],
+    case_dir: Path,
+) -> str:
+    """Render the exact images sent in this window's successful request."""
+
+    if not assets:
+        return (
+            "<h4>Model Input Images</h4>"
+            '<p class="empty">No saved model input image record.</p>'
+        )
+    available = [item for item in assets if item.get("path")]
+    unavailable = [item for item in assets if item.get("unavailable_reason")]
+    content = ""
+    if available:
+        cards = []
+        for asset in available:
+            role = asset.get("role") or "image"
+            label = f"#{asset.get('order')} · {role}"
+            metadata = [
+                f"input_id={asset.get('input_id')}",
+                f"image_mode={asset.get('image_mode')}",
+            ]
+            if asset.get("attempt") is not None:
+                metadata.append(f"attempt={asset.get('attempt')}")
+            if asset.get("usage"):
+                metadata.append(str(asset["usage"]))
+            cards.append(
+                {
+                    "path": asset["path"],
+                    "label": label,
+                    "description": " · ".join(metadata),
+                }
+            )
+        content += _image_group(cards, case_dir)
+    if unavailable:
+        reasons = "; ".join(
+            f"#{item.get('order', '?')} {item.get('role', 'image')}: "
+            f"{item.get('unavailable_reason')}"
+            for item in unavailable
+        )
+        content += f'<p class="empty">Unavailable: {_e(reasons)}</p>'
+    return "<h4>Model Input Images</h4>" + content
+
+
+def _steps_comparison(
+    raw_plan: dict[str, Any],
+    safe_plan: dict[str, Any],
+    execution: dict[str, Any],
+) -> str:
+    """Render proposal, safety result, and Runtime outcome by step index."""
+
+    raw_steps = _plan_steps(raw_plan)
+    safe_steps = _plan_steps(safe_plan)
+    executed_steps = _executed_steps_by_index(execution)
+    row_count = max(
+        len(raw_steps),
+        len(safe_steps),
+        (max(executed_steps) + 1) if executed_steps else 0,
+    )
+    if row_count == 0:
+        return (
+            "<h4>Steps</h4>"
+            '<p class="empty">No tool steps were planned for this window.</p>'
+        )
+    rows = []
+    for index in range(row_count):
+        rows.append(
+            "<tr>"
+            f"<td>{index}</td>"
+            f"<td>{_step_cell(raw_steps[index] if index < len(raw_steps) else None)}</td>"
+            f"<td>{_step_cell(safe_steps[index] if index < len(safe_steps) else None)}</td>"
+            f"<td>{_execution_cell(executed_steps.get(index))}</td>"
+            "</tr>"
+        )
+    return (
+        "<h4>Steps</h4>"
+        '<table class="step-comparison"><thead><tr>'
+        "<th>index</th><th>model output</th><th>safety-reviewed</th>"
+        "<th>actual execution</th></tr></thead><tbody>"
+        + "".join(rows)
+        + "</tbody></table>"
+    )
+
+
+def _plan_steps(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    steps = plan.get("steps")
+    return [item for item in steps if isinstance(item, dict)] if isinstance(steps, list) else []
+
+
+def _executed_steps_by_index(execution: dict[str, Any]) -> dict[int, dict[str, Any]]:
+    values = execution.get("executed_steps")
+    if not isinstance(values, list):
+        return {}
+    indexed: dict[int, dict[str, Any]] = {}
+    for fallback_index, item in enumerate(values):
+        if not isinstance(item, dict):
+            continue
+        index = item.get("step_index")
+        indexed[index if isinstance(index, int) and index >= 0 else fallback_index] = item
+    return indexed
+
+
+def _step_cell(step: dict[str, Any] | None) -> str:
+    if not step:
+        return '<span class="muted">not present</span>'
+    values = [f"<code>{_e(step.get('tool') or step.get('kind') or 'step')}</code>"]
+    args = step.get("args")
+    if isinstance(args, dict):
+        values.append(f"<br><code>{_e(json.dumps(args, ensure_ascii=False))}</code>")
+    if step.get("reason"):
+        values.append(f"<br>{_e(step['reason'])}")
+    modalities = step.get("modalities")
+    if isinstance(modalities, list) and modalities:
+        values.append(f"<br><span class=\"muted\">modalities: {_e(', '.join(map(str, modalities)))}</span>")
+    return "".join(values)
+
+
+def _execution_cell(executed: dict[str, Any] | None) -> str:
+    if not executed:
+        return '<span class="muted">execution record unavailable</span>'
+    actual_step = _dict(executed.get("step"))
+    result = _dict(executed.get("result"))
+    ok = result.get("ok")
+    if ok is True:
+        status = "success"
+    elif ok is False:
+        status = "failed"
+    else:
+        status = "unknown"
+    values = []
+    if actual_step:
+        values.append(_step_cell(actual_step) + "<br>")
+    values.append(f"<strong>{_e(status)}</strong>")
+    if result.get("message"):
+        values.append(f"<br>{_e(result['message'])}")
+    stabilization = _dict(executed.get("stabilization"))
+    if stabilization:
+        label = stabilization.get("status") or "recorded"
+        reason = stabilization.get("reason")
+        values.append(
+            "<br><span class=\"muted\">stabilization: "
+            + _e(label)
+            + (f" ({_e(reason)})" if reason else "")
+            + "</span>"
+        )
+    return "".join(values)
 
 
 def _completion_assessment(
@@ -1082,6 +1394,7 @@ code, pre { font-family: Consolas, monospace; white-space: pre-wrap;
 details { margin-top: 12px; }
 details.planner-window { border: 1px solid #d9e2ec; border-radius: 8px;
   padding: 10px 12px; }
+.step-comparison td { min-width: 200px; }
 details > summary { cursor: pointer; color: #243b53; font-weight: 600; }
 a { color: #1367d1; }
 """
