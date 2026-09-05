@@ -21,8 +21,14 @@ CURRENT_RGB_DEPTH_OVERLAY_USAGE = (
     "scene points, so colors on a visible target give its approximate range."
 )
 TEMPORAL_EVIDENCE_RULE = (
-    "Current-state claims must use NOW only. PAST is only for comparing change. "
-    "An object visible only in PAST is not currently visible."
+    "TEMPORAL ROLE RULE: PAST is historical comparison evidence only. "
+    "Current visibility, image position, approximate range, and the next action "
+    "must be judged from NOW. An object visible only in PAST is not currently visible."
+)
+CURRENT_STATE_DECISION_REMINDER = (
+    "CURRENT-STATE CHECK: The immediately preceding NOW image is the current "
+    "observation. Base current visibility, bearing, approximate range, and the "
+    "next action on that NOW image."
 )
 
 _CURRENT_IMAGE_BANNER = "NOW | CURRENT OBSERVATION"
@@ -209,8 +215,10 @@ class DefaultImageContextModule(ContextModule):
                     if include_phase_start_reference
                     else ", without a phase-start reference"
                 )
-                + ". A concise temporal evidence rule accompanies two distinct temporal "
-                "roles. Mock, missing, unreadable, or duplicate images are not attached."
+                + ". A temporal rule precedes two distinct roles, and a current-state "
+                "reminder immediately follows NOW. Single-image inputs keep only the "
+                "NOW role and reminder. Mock, missing, unreadable, or duplicate images "
+                "are not attached."
             ),
             "risk_fields": {
                 "visual_evidence_missing": "No recent RGB evidence is available.",
@@ -369,6 +377,14 @@ def frame_debug_metadata(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def rgb_model_inputs_from_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Build provider inputs with temporal instructions adjacent to images.
+
+    Temporal meaning belongs to this module, so the generic provider assembler
+    must not infer whether an image is PAST or NOW. For a two-image window the
+    rule precedes both images and the current-state reminder immediately follows
+    NOW. A first-window/current-only input has no synthetic PAST rule.
+    """
+
     encoded_by_role: dict[str, dict[str, Any]] = {}
     for frame in frames[:2]:
         for item in latest_rgb_model_inputs_from_frame(frame):
@@ -381,14 +397,26 @@ def rgb_model_inputs_from_frames(frames: list[dict[str, Any]]) -> list[dict[str,
         return []
     phase_start = encoded_by_role.get("phase_start_reference")
     if phase_start is None:
-        return [current]
+        return [
+            current,
+            {
+                "type": "text",
+                "role": "current_state_decision_reminder",
+                "text": CURRENT_STATE_DECISION_REMINDER,
+            },
+        ]
     return [
-        phase_start,
-        current,
         {
             "type": "text",
             "role": "temporal_evidence_rule",
             "text": TEMPORAL_EVIDENCE_RULE,
+        },
+        phase_start,
+        current,
+        {
+            "type": "text",
+            "role": "current_state_decision_reminder",
+            "text": CURRENT_STATE_DECISION_REMINDER,
         },
     ]
 

@@ -80,6 +80,7 @@ class MemorySourceBundle:
 class PlannerContext:
     active_instruction: str
     current_phase: dict[str, Any] | None
+    phase_strategy: dict[str, Any]
     phase_neighborhood: dict[str, Any]
     semantic_goal: dict[str, Any]
     fragments: list[ContextFragment]
@@ -94,9 +95,10 @@ class PlannerContext:
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        data = {
             "active_instruction": self.active_instruction,
             "current_phase": self.current_phase,
+            "phase_strategy": dict(self.phase_strategy),
             "phase_neighborhood": self.phase_neighborhood,
             "semantic_goal": self.semantic_goal,
             "fragments": [fragment.to_dict() for fragment in self.fragments],
@@ -110,3 +112,8 @@ class PlannerContext:
             "phase_execution_summary": dict(self.phase_execution_summary),
             "metadata": dict(self.metadata),
         }
+        # Absence at phase entry is meaningful: it requests initialization
+        # instead of presenting an empty strategy as prior evidence.
+        if not data["phase_strategy"]:
+            data.pop("phase_strategy")
+        return data

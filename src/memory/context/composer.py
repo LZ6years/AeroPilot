@@ -42,6 +42,7 @@ class ContextComposer:
         context = PlannerContext(
             active_instruction=stage_context.active_instruction,
             current_phase=stage_context.current_phase,
+            phase_strategy=_model_facing_phase_strategy(stage_context.phase_strategy),
             phase_neighborhood=dict(stage_context.phase_neighborhood),
             semantic_goal=dict(stage_context.semantic_goal),
             fragments=fragments,
@@ -92,6 +93,10 @@ def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]
         "planner_context_fields": {
             "active_instruction": "Current user instruction.",
             "current_phase": "Current semantic phase with goal, done_when, and continue_when.",
+            "phase_strategy": (
+                "Previous compact current-phase maneuver strategy. previous_reason "
+                "records the prior window's rationale and is not current evidence."
+            ),
             "phase_neighborhood": (
                 "Compact previous completed and next upcoming semantic phase summaries; "
                 "the current phase remains authoritative."
@@ -149,7 +154,6 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
         },
         "action": {
             "motion_history_summary": "Current-phase and last-window UAV self-motion plus up to five successful actions ordered oldest to newest.",
-            "phase_strategy": "Previous compact current-phase maneuver strategy when already initialized.",
             "field_semantics": "Meanings and evidence boundaries for self-motion fields.",
         },
         "map": {
@@ -157,6 +161,28 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
             "recall_filter": "Map recall filter.",
         },
     }
+
+
+def _model_facing_phase_strategy(strategy: dict[str, Any] | None) -> dict[str, Any]:
+    """Convert Runtime strategy state into a prior-window planner snapshot.
+
+    MissionState and audit artifacts retain the output contract's ``reason``.
+    Renaming only this model-facing copy to ``previous_reason`` prevents a
+    historical explanation from masquerading as current-window evidence.
+    """
+
+    if not isinstance(strategy, dict) or not strategy:
+        return {}
+    result: dict[str, Any] = {}
+    stages = strategy.get("stages")
+    if isinstance(stages, list):
+        result["stages"] = list(stages)
+    if "active_stage" in strategy:
+        result["active_stage"] = strategy.get("active_stage")
+    reason = strategy.get("reason")
+    if isinstance(reason, str) and reason.strip():
+        result["previous_reason"] = reason.strip()
+    return result
 
 
 def _budget_metadata(fragments: list[ContextFragment]) -> dict[str, Any]:

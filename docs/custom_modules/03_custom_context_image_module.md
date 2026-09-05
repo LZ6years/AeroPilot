@@ -178,6 +178,11 @@ plugins/research/my_image_processor/context_modules/image.py
 
 如果你希望 planner 直接收到图片或额外文本，用 `model_inputs`。
 
+`model_inputs`是有序序列。通用组装器会保持 module 提供的文本与图片交错顺序，
+并在这些输入之后追加结构化 JSON Context；它不会理解或重新排列自定义角色。
+因此，若一段文字用于约束紧随其后的图片，应把文字放在图片之前；若用于提醒
+如何使用刚发送的图片，应放在图片之后。
+
 文本输入示例：
 
 ```python

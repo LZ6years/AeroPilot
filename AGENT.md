@@ -144,7 +144,9 @@ sign conventions.
 
 Phase strategy is mutable Runtime state, not part of `SemanticPlan` and not a
 phase-completion authority. Runtime owns its revision and update classification;
-the model sees only the latest compact snapshot through the action context.
+the model sees only the latest compact snapshot as a top-level `PlannerContext`
+field immediately after `current_phase`. The prior output `reason` is exposed
+there as `previous_reason`, so it cannot masquerade as current-window evidence.
 An intermediate strategy stage may advance while phase completion remains
 unknown. Strategy updates must assess the active stage's own observable cue
 before selecting the next action; they must not use the final `done_when` result

@@ -110,7 +110,7 @@ primitive 可以安全执行。它们不携带 SSH、端口、executable、setti
 `TaskRuntime` 的主职责是组织闭环：
 
 ```text
-构建 PlannerContext（包含上一版 phase_strategy、最新观测和实际运动摘要）
+构建 PlannerContext（current_phase 后紧跟上一版 phase_strategy、最新观测和实际运动摘要）
 调用 ModelActionPlanner 一次，生成 completion assessment、phase_strategy 和 tool-only 动作计划
 Runtime 保存有效策略并维护 revision
 执行 ToolContractValidator
@@ -279,11 +279,15 @@ RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image conte
 - `src/memory/context/modules/image.py` 独占 PAST/NOW 语义、图像顺序和 overlay
   说明。存在不同的 phase-start 帧和有效深度时，模型收到 `PAST raw RGB + NOW
   RGB/depth overlay`；首窗口只收到 NOW；深度不可用时回退为 `PAST + NOW raw RGB`。
+- 两帧输入严格按“时间角色规则 → PAST 标签/图片 → NOW 标签/图片 → 当前状态提醒
+  → JSON Context”排列；时间规则必须在 PAST 前，当前状态提醒必须紧跟 NOW。
 - 有效 NOW overlay 会替代模型附件中的原始 NOW RGB，不重复发送同一当前画面；
   原始 RGB 与 Depth artifact 仍分别保存，未被覆盖。
 - custom image module 负责读取、筛选、融合、caption 或压缩图片，并产出 planner-ready 信息；当前 `multimodal_image` 实现会把最近真实 RGB 转成 `visual_description` 文本。
 - `ModelActionPlanner` 不读取图片 path，不理解图片策略，只消费 `model_inputs` 中已经编码好的输入。
-- `ModelInputAssembler` 会把 `model_inputs` 转成 openai-compatible content parts，并在 JSON 文本里脱敏大块 encoded data；caption 模式下 planner 收到的是 text model input。
+- `ModelInputAssembler` 按 module 给出的交错顺序把 `model_inputs` 转成
+  openai-compatible content parts，最后追加脱敏后的 JSON Context；它不解释
+  PAST/NOW。caption 模式下 planner 收到的是 text model input。
 - 视觉层不输出 `recommended_next_observation`、转向、扫描或移动建议。
 - 模型只有在实际收到图片，或 context 中存在明确视觉证据时，才能声称看到了目标。
 

@@ -5,11 +5,15 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import base64
 
 from src.agent.planning.model_inputs import build_model_user_content
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TINY_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+)
 
 
 def load_eval_module():
@@ -89,6 +93,46 @@ def test_run_dir_can_generate_ad_hoc_visual_cases(tmp_path):
     assert len(cases) == 1
     assert cases[0]["image"] == str(rgb_dir / "frame_000001.png")
     assert cases[0]["phase"]["name"] == "real_engine_visual_check"
+
+
+def test_explicit_past_now_pair_uses_temporal_contract_order(tmp_path):
+    module = load_eval_module()
+    past = tmp_path / "past.png"
+    now = tmp_path / "now.png"
+    past.write_bytes(TINY_PNG)
+    now.write_bytes(TINY_PNG)
+    case = module.case_from_image_pair(
+        past,
+        now,
+        instruction="Describe only what is currently visible.",
+    )
+
+    context = module.build_case_context(case, work_dir=tmp_path / "pair")
+    image = next(
+        fragment for fragment in context["fragments"]
+        if fragment["name"] == "image"
+    )
+    assert [item["role"] for item in image["model_inputs"]] == [
+        "temporal_evidence_rule",
+        "phase_start_reference",
+        "current_observation",
+        "current_state_decision_reminder",
+    ]
+
+    content = build_model_user_content(context)
+    assert isinstance(content, list)
+    assert [item["type"] for item in content] == [
+        "text",
+        "text",
+        "image_url",
+        "text",
+        "image_url",
+        "text",
+        "text",
+    ]
+    assert content[0]["text"].startswith("TEMPORAL ROLE RULE:")
+    assert content[5]["text"].startswith("CURRENT-STATE CHECK:")
+    assert json.loads(content[6]["text"])["active_instruction"] == case["instruction"]
 
 
 def test_summary_counts_structural_passes():

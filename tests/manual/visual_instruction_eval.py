@@ -9,6 +9,14 @@ PowerShell:
     $env:PYTHONIOENCODING='utf-8'
     python tests/manual/visual_instruction_eval.py --cases tests/fixtures/visual_instruction_cases.json
 
+To inspect one temporal pair with the same PAST/NOW contract used by the
+planner (still without a model call by default):
+
+    python tests/manual/visual_instruction_eval.py `
+      --past-image path/to/phase_start.png `
+      --now-image path/to/current.png `
+      --instruction "Describe what is currently visible."
+
 Add ``--call-model`` to make a real OpenAI-compatible multimodal request using
 the configured FLYAGENT model. The default path only inspects the assembled
 planner payload, so it is safe for normal local checks.
@@ -49,6 +57,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Evaluate default image model_inputs with visual instruction cases.")
     parser.add_argument("--cases", default=str(DEFAULT_CASES))
     parser.add_argument("--run-dir", default="", help="Optional run directory; uses artifacts/rgb/*.png as ad hoc cases.")
+    parser.add_argument("--past-image", default="", help="Optional phase-start RGB for one explicit temporal-pair case.")
+    parser.add_argument("--now-image", default="", help="Current RGB paired with --past-image.")
+    parser.add_argument(
+        "--instruction",
+        default="Describe visual facts that are true in the current view. Do not treat the historical view as current.",
+        help="Instruction used with --past-image/--now-image.",
+    )
     parser.add_argument("--context-config", default=str(DEFAULT_CONTEXT_CONFIG))
     parser.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR))
     parser.add_argument("--env-path", default=".env")
@@ -96,13 +111,38 @@ def cases_from_run_dir(run_dir: str | Path, limit: int = DEFAULT_LIMIT) -> list[
     ]
 
 
+def case_from_image_pair(
+    past_image: str | Path,
+    now_image: str | Path,
+    *,
+    instruction: str,
+) -> dict[str, Any]:
+    """Create one generic temporal-evidence case from explicit image paths.
+
+    PAST establishes the phase-start anchor and NOW becomes the latest
+    observation. The helper performs no image interpretation and makes no
+    network or simulator calls.
+    """
+
+    if not str(past_image).strip() or not str(now_image).strip():
+        raise ValueError("both past_image and now_image are required")
+    return _normalise_case(
+        {
+            "id": "explicit_past_now_pair",
+            "past_image": str(_repo_path(past_image)),
+            "image": str(_repo_path(now_image)),
+            "instruction": instruction,
+        },
+        1,
+    )
+
+
 def build_case_context(
     case: dict[str, Any],
     *,
     context_config: str | Path = DEFAULT_CONTEXT_CONFIG,
     work_dir: str | Path,
 ) -> dict[str, Any]:
-    image_path = _repo_path(case["image"])
     run_dir = Path(work_dir)
     writer = MemoryEventWriter(run_dir)
     reader = MemoryRecordReader(run_dir)
@@ -118,15 +158,24 @@ def build_case_context(
         writer.write_instruction(str(case["instruction"]), {"phase": case.get("phase", {})}),
         str(case["instruction"]),
     )
-    observation_write = writer.write_observation(
-        {
-            "source": "visual_instruction_eval",
-            "modalities": ["rgb"],
-            "frames": {"rgb": {"path": str(image_path), "mock": False}},
-        }
+    past_image = case.get("past_image")
+    if isinstance(past_image, str) and past_image.strip():
+        past_write = _write_rgb_observation(
+            writer,
+            _repo_path(past_image),
+            source="visual_instruction_eval_phase_start",
+        )
+        memory.append_observation_ref(past_write["observation_ref"])
+        memory.append_frame_refs(past_write["frame_refs"])
+        memory.set_observation_anchor("phase_start", past_write["observation_ref"])
+
+    now_write = _write_rgb_observation(
+        writer,
+        _repo_path(case["image"]),
+        source="visual_instruction_eval_current",
     )
-    memory.append_observation_ref(observation_write["observation_ref"])
-    memory.append_frame_refs(observation_write["frame_refs"])
+    memory.append_observation_ref(now_write["observation_ref"])
+    memory.append_frame_refs(now_write["frame_refs"])
     stage_context = StageContextInput(
         active_instruction=str(case["instruction"]),
         current_phase=dict(case.get("phase", {})),
@@ -134,6 +183,23 @@ def build_case_context(
     )
     registry = ContextModuleRegistry.from_config(_repo_path(context_config))
     return ContextComposer(registry).compose(MemorySourceBundle(memory, MapMemoryStore()), stage_context)
+
+
+def _write_rgb_observation(
+    writer: MemoryEventWriter,
+    image_path: Path,
+    *,
+    source: str,
+) -> dict[str, Any]:
+    """Write one real RGB observation record for local payload inspection."""
+
+    return writer.write_observation(
+        {
+            "source": source,
+            "modalities": ["rgb"],
+            "frames": {"rgb": {"path": str(image_path), "mock": False}},
+        }
+    )
 
 
 def evaluate_case_context(
@@ -177,6 +243,11 @@ def evaluate_case_context(
     return {
         "case_id": case["id"],
         "image": str(_repo_path(case["image"])),
+        "past_image": (
+            str(_repo_path(case["past_image"]))
+            if isinstance(case.get("past_image"), str) and case["past_image"].strip()
+            else None
+        ),
         "instruction": case["instruction"],
         "phase": dict(case.get("phase", {})),
         "metrics": metrics,
@@ -302,7 +373,19 @@ def summarize_results(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def main() -> None:
     args = build_parser().parse_args()
-    cases = cases_from_run_dir(args.run_dir, args.limit) if args.run_dir else load_cases(args.cases)[: args.limit]
+    pair_requested = bool(args.past_image or args.now_image)
+    if pair_requested:
+        if args.run_dir:
+            raise ValueError("--run-dir cannot be combined with --past-image/--now-image")
+        cases = [
+            case_from_image_pair(
+                args.past_image,
+                args.now_image,
+                instruction=args.instruction,
+            )
+        ]
+    else:
+        cases = cases_from_run_dir(args.run_dir, args.limit) if args.run_dir else load_cases(args.cases)[: args.limit]
     output_dir = Path(args.output_dir)
     work_root = output_dir / "memory_cases"
     model_config = load_model_config(args.env_path) if args.call_model else None
@@ -353,8 +436,10 @@ def _normalise_case(item: dict[str, Any], index: int) -> dict[str, Any]:
         raise ValueError(f"case #{index} must be an object")
     case = dict(item)
     case.setdefault("id", f"case_{index:03d}")
+    if "image" not in case and "now_image" in case:
+        case["image"] = case["now_image"]
     if "image" not in case:
-        raise ValueError(f"case {case['id']} missing image")
+        raise ValueError(f"case {case['id']} missing current image")
     case.setdefault("instruction", "Describe visual facts relevant to the current phase. Do not output movement advice.")
     case.setdefault(
         "phase",
@@ -462,6 +547,11 @@ def _redacted_payload_summary(
     return {
         "case_id": case["id"],
         "image": str(_repo_path(case["image"])),
+        "past_image": (
+            str(_repo_path(case["past_image"]))
+            if isinstance(case.get("past_image"), str) and case["past_image"].strip()
+            else None
+        ),
         "fragment_count": len(context.get("fragments", [])),
         "user_content_type": "parts" if isinstance(user_content, list) else "text",
         "part_types": [item.get("type") for item in user_content] if isinstance(user_content, list) else [],
@@ -489,11 +579,21 @@ def _markdown_report(summary: dict[str, Any], results: list[dict[str, Any]]) -> 
     for item in results:
         metrics = item["metrics"]
         image = Path(item["image"]).resolve().as_posix()
+        past_image = item.get("past_image")
+        if past_image:
+            past_uri = Path(past_image).resolve().as_posix()
+            image_lines = [
+                f"PAST: ![{item['case_id']} PAST]({past_uri})",
+                "",
+                f"NOW: ![{item['case_id']} NOW]({image})",
+            ]
+        else:
+            image_lines = [f"![{item['case_id']}]({image})"]
         lines.extend(
             [
                 f"## {item['case_id']}",
                 "",
-                f"![{item['case_id']}]({image})",
+                *image_lines,
                 "",
                 f"- instruction: {item['instruction']}",
                 f"- image_input: {metrics['has_image_model_input']}",

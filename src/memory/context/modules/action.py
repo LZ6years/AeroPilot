@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
@@ -55,11 +54,6 @@ class DefaultActionContextModule(ContextModule):
                 ),
             },
         }
-        # Omit this field at phase entry so absence clearly requests strategy
-        # initialization instead of presenting an empty prior strategy.
-        if stage_context.phase_strategy:
-            content["phase_strategy"] = copy.deepcopy(stage_context.phase_strategy)
-
         return ContextFragment(
             name=self.name,
             enabled=True,
@@ -91,9 +85,6 @@ class DefaultActionContextModule(ContextModule):
                     "Current-phase UAV displacement and up to five "
                     "recent successful actions ordered oldest to newest. It is self-motion history, not "
                     "the current plan or target distance."
-                ),
-                "phase_strategy": (
-                    "Previous compact current-phase maneuver strategy, omitted before initialization."
                 ),
                 "field_semantics": "Compact meanings for ambiguous self-motion fields.",
             },

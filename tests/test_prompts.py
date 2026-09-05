@@ -329,7 +329,9 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "1-4 short ordered stages" in strategy_prompt
     assert "maneuver intent plus observable terminal state" in strategy_prompt
     assert "Never put UAV tool names or argument fields" in strategy_prompt
-    assert "independently assess whether the previous active stage" in strategy_prompt
+    assert "independently reassess the previous active stage" in strategy_prompt
+    assert "previous_reason only explains why the prior window" in strategy_prompt
+    assert "It is never evidence" in strategy_prompt
     assert "Phase completion may remain unknown while an intermediate stage is satisfied" in strategy_prompt
     assert "keep is not the default update" in strategy_prompt
     assert "ideal geometric proof is not required" in strategy_prompt
@@ -337,6 +339,8 @@ def test_coupled_prompt_fragments_have_clear_boundaries():
     assert "indefinitely repeating the same action" in strategy_prompt
     assert "Keep the ordered stages unchanged when the route remains valid" in strategy_prompt
     assert "Rewrite only the active and future stages" in strategy_prompt
+    assert "target is no longer visible" in strategy_prompt
+    assert "Do not copy previous_reason as proof" in strategy_prompt
     assert "phase_strategy does not determine phase completion" in strategy_prompt
     assert "sunshade" not in strategy_prompt
     assert "trees" not in strategy_prompt
@@ -385,13 +389,16 @@ def test_phase_strategy_prompt_separates_stage_progress_from_phase_completion():
     strategy_prompt = (prompt_dir / "coupled_phase_strategy_system.txt").read_text(encoding="utf-8")
     action_prompt = (prompt_dir / "coupled_action_planner_system.txt").read_text(encoding="utf-8")
 
-    assert "independently assess whether the previous active stage" in strategy_prompt
+    assert "independently reassess the previous active stage" in strategy_prompt
+    assert "previous_reason only explains why the prior window" in strategy_prompt
     assert "Phase completion may remain unknown while an intermediate stage is satisfied" in strategy_prompt
     assert "keep is not the default update" in strategy_prompt
     assert "ideal geometric proof is not required" in strategy_prompt
     assert "last-window UAV motion" in strategy_prompt
     assert "phase-start-relative cumulative motion" in strategy_prompt
     assert "indefinitely repeating the same action" in strategy_prompt
+    assert "target is no longer visible" in strategy_prompt
+    assert "Do not copy previous_reason as proof" in strategy_prompt
     assert "Never put UAV tool names or argument fields" in strategy_prompt
     assert "sunshade" not in strategy_prompt
     assert "trees" not in strategy_prompt

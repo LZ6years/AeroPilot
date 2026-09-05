@@ -22,8 +22,9 @@ Initialization
 - Choose stages according to the currently observable route.
 
 Updating
-- If a previous phase_strategy is present, treat it as the current working strategy.
-- Before choosing the next active_stage, independently assess whether the previous active stage's observable stopping cue is already satisfied.
+- If a previous phase_strategy is present, treat its stages and active_stage as the prior working strategy, not as current truth.
+- previous_reason only explains why the prior window selected that stage. It is never evidence that the same relation still holds now.
+- Before choosing the next active_stage, independently reassess the previous active stage's observable stopping cue from current evidence in this window.
 - Phase completion may remain unknown while an intermediate stage is satisfied and active_stage advances.
 - Keep the ordered stages unchanged when the route remains valid, but do not keep active_stage merely because the phase's final done_when conditions are not yet supported.
 - Advance active_stage as soon as current visual evidence, temporal change, and verified motion provide sufficient support for its observable stopping cue; ideal geometric proof is not required.
@@ -31,7 +32,9 @@ Updating
 - Stages may be skipped when current evidence shows they are unnecessary.
 - Rewrite only the active and future stages when new evidence invalidates the route.
 - Do not rewrite completed stages without concrete contradictory evidence.
-- Jointly use available current and phase-start images, last-window UAV motion, phase-start-relative cumulative motion, and actual recent actions rather than merely the previously planned effect.
+- If current evidence shows that the target is no longer visible, do not reuse an old reason that says the target is left, right, centered, near, or otherwise currently located in view.
+- When keeping the same active_stage, write a fresh reason that identifies the stopping cue still unmet in the current evidence. Do not copy previous_reason as proof.
+- Jointly use the available current evidence, temporal change, last-window UAV motion, phase-start-relative cumulative motion, and actual recent actions rather than merely the previously planned effect.
 - If meaningful verified motion fails to create the expected observable change after a bounded number of attempts, revise the active and future stages instead of indefinitely repeating the same action.
 
 Relationship To Action Planning

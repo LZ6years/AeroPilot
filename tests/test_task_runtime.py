@@ -1140,7 +1140,13 @@ def test_task_runtime_coupled_continue_executes_tool_and_observes(tmp_path):
     first_action = next(fragment for fragment in planner.contexts[0]["fragments"] if fragment["name"] == "action")
     second_action = next(fragment for fragment in planner.contexts[1]["fragments"] if fragment["name"] == "action")
     assert "phase_strategy" not in first_action["content"]
-    assert second_action["content"]["phase_strategy"]["active_stage"] == 0
+    assert "phase_strategy" not in second_action["content"]
+    assert "phase_strategy" not in planner.contexts[0]
+    assert planner.contexts[1]["phase_strategy"] == {
+        "stages": ["Hold until the current phase evidence is refreshed"],
+        "active_stage": 0,
+        "previous_reason": "The current phase still requires evidence",
+    }
     assert state.current_phase_strategy_revision == 1
     assert state.current_phase_strategy["stages"] == [
         "Hold until the current phase evidence is refreshed"

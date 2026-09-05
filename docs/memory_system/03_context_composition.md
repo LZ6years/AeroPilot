@@ -99,7 +99,7 @@ flowchart TD
 - `InstructionModule`：当前指令、历史指令、semantic goal、phase goal。
 - `ImageModule`：当前/phase-start 图像选择、可选 depth overlay、artifact refs。
 - `PoseModule`：模型侧可选 AGL；绝对 pose 和 delta 留在审计 metadata。
-- `ActionModule`：当前阶段策略、phase-relative 自身运动、上一窗口位移、最近动作和必要字段语义。
+- `ActionModule`：phase-relative 自身运动、上一窗口位移、最近动作和必要字段语义。
 - `MapModule`：当前 map/scene 相关线索、recall filter、requires_reconfirmation。
 
 module 不做：
@@ -116,12 +116,18 @@ module 不做：
 
 ```json
 {
-  "context_schema": {},
   "active_instruction": "",
   "current_phase": {},
+  "phase_strategy": {
+    "stages": [],
+    "active_stage": 0,
+    "previous_reason": ""
+  },
+  "phase_neighborhood": {},
   "semantic_goal": {},
   "fragments": [],
   "disabled_fragments": [],
+  "context_schema": {},
   "rules": {},
   "user_preferences": {},
   "allowed_action_constraints": {},
@@ -143,9 +149,13 @@ module 不做：
 - `observation_policy` 告诉模型观察由 runtime 自动完成。
 - `phase_transition_policy` 告诉模型 action plan 不输出 `phase_transition`，阶段推进在执行后判断。
 - `phase_execution_summary` 保留为 runtime/debug 的原始 phase 进展来源，不直接发送给模型。
-- planner 只读取 action fragment 中的当前 `phase_strategy`（首次进入 phase 时省略）和
-  `motion_history_summary`：phase-start-relative UAV motion、上一窗口 UAV motion，
-  以及按从旧到新排列的最近成功动作。策略 revision 和完整历史仅保留在 Runtime/debug。
+- planner 在 `current_phase` 后读取顶层 `phase_strategy`；首次进入 phase 时该字段
+  省略。它只包含 `stages`、`active_stage` 和标记为历史理由的 `previous_reason`。
+  Action Fragment 只包含 `motion_history_summary`：phase-start-relative UAV motion、
+  上一窗口 UAV motion，以及按从旧到新排列的最近成功动作。输出策略的原始
+  `reason`、revision 和完整历史仅保留在 Runtime/debug。
+- Image Module 的 `model_inputs`顺序是“时间角色规则 → PAST → NOW → 当前状态
+  提醒”；通用组装器保持文本/图片交错顺序，并在最后追加 JSON Context。
 - `last_window_uav_motion` 来自紧邻本轮规划前、已完成动作窗口的前后位姿差。规划前仅刷新
   累计进展时必须保留该快照；只有显式测得的零运动窗口才会把它更新为零。
 - 模型先判断上一版 active stage 自身的可观察停止条件，再决定保持、推进或重规划；整个

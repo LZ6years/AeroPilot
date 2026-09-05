@@ -33,27 +33,24 @@ def build_model_user_content(
         include_memory_documents=include_memory_documents,
     )
     text = json.dumps(sanitized_context, ensure_ascii=False)
-    media_parts, supplemental_text_parts = _model_input_parts(
+    input_parts = _model_input_parts(
         context,
         image_mode=image_mode,
     )
-    if not media_parts and not supplemental_text_parts:
+    if not input_parts:
         return text
-    if not media_parts:
-        return [{"type": "text", "text": text}, *supplemental_text_parts]
-    trailing_text = text
-    if supplemental_text_parts:
-        trailing_text += "\n\n" + "\n".join(part["text"] for part in supplemental_text_parts)
-    return [*media_parts, {"type": "text", "text": trailing_text}]
+    # Context modules deliberately interleave semantic instructions and media.
+    # Preserve that order exactly and append the structured JSON only after the
+    # module-owned sequence. The assembler does not interpret temporal roles.
+    return [*input_parts, {"type": "text", "text": text}]
 
 
 def _model_input_parts(
     context: dict[str, Any],
     *,
     image_mode: str,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    media_parts: list[dict[str, Any]] = []
-    supplemental_text_parts: list[dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    parts: list[dict[str, Any]] = []
     model_inputs = list(_iter_model_inputs(context))
     selected_images = {
         id(item) for item in select_model_image_inputs(
@@ -70,17 +67,15 @@ def _model_input_parts(
             if part is not None:
                 label = _input_label_part(item)
                 if label is not None:
-                    media_parts.append(label)
-                media_parts.append(part)
+                    parts.append(label)
+                parts.append(part)
         elif input_type == "text":
             if image_mode == "current_only" and item.get("role") == "temporal_evidence_rule":
                 continue
             part = _text_part(item)
             if part is not None:
-                supplemental_text_parts.append(part)
-        else:
-            part = None
-    return media_parts, supplemental_text_parts
+                parts.append(part)
+    return parts
 
 
 def select_model_image_inputs(
@@ -319,14 +314,15 @@ def _order_model_text_context(context: dict[str, Any]) -> dict[str, Any]:
     """Put global flight rules before task-specific fragments in model text."""
 
     preferred_order = (
-        "rules",
         "active_instruction",
         "current_phase",
+        "phase_strategy",
         "phase_neighborhood",
         "semantic_goal",
         "runtime_control",
         "fragments",
         "allowed_action_constraints",
+        "rules",
         "user_preferences",
     )
     ordered: dict[str, Any] = {}

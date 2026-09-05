@@ -218,6 +218,14 @@ def make_multimodal_context() -> dict:
             "name": "image",
             "model_inputs": [
                 {
+                    "type": "text",
+                    "role": "temporal_evidence_rule",
+                    "text": (
+                        "TEMPORAL ROLE RULE: PAST is historical comparison evidence only. "
+                        "Current visibility and action decisions must use NOW."
+                    ),
+                },
+                {
                     "type": "image",
                     "role": "phase_start_reference",
                     "usage": "PAST | PHASE START. Comparison only.",
@@ -233,11 +241,8 @@ def make_multimodal_context() -> dict:
                 },
                 {
                     "type": "text",
-                    "role": "temporal_evidence_rule",
-                    "text": (
-                        "Current-state claims must use NOW only. "
-                        "PAST is only for comparing change."
-                    ),
+                    "role": "current_state_decision_reminder",
+                    "text": "CURRENT-STATE CHECK: Judge the current state from the preceding NOW image.",
                 },
             ],
         }
@@ -484,7 +489,8 @@ def test_model_action_request_degrades_image_url_error_to_now_only(monkeypatch):
         part["text"] for part in final_content if part["type"] == "text"
     )
     assert "PAST | PHASE START" not in final_text
-    assert "PAST is only for comparing change" not in final_text
+    assert "PAST is historical comparison evidence only" not in final_text
+    assert "CURRENT-STATE CHECK" in final_text
     recovery = planner.last_model_request_recovery
     assert recovery["status"] == "recovered"
     assert recovery["attempt_count"] == 3
@@ -494,7 +500,7 @@ def test_model_action_request_degrades_image_url_error_to_now_only(monkeypatch):
 
 def test_model_action_request_does_not_retry_image_url_error_with_invalid_local_data(monkeypatch):
     context = make_multimodal_context()
-    context["fragments"][0]["model_inputs"][0]["data"] = "data:image/png;base64,not-valid"
+    context["fragments"][0]["model_inputs"][1]["data"] = "data:image/png;base64,not-valid"
     calls = []
     provider_body = (
         '{"error":{"message":"The provided URL does not appear to be valid.",'
@@ -615,7 +621,7 @@ def test_model_user_content_strips_legacy_move_direction_shorthand():
     }
 
 
-def test_model_user_content_puts_flyagent_rules_before_task_fragments():
+def test_model_user_content_puts_task_and_strategy_before_supporting_context():
     context = make_context()
     context.update(
         {
@@ -654,13 +660,13 @@ def test_model_user_content_puts_flyagent_rules_before_task_fragments():
     assert isinstance(content, str)
     text_context = json.loads(content)
     assert list(text_context)[:8] == [
-        "rules",
         "active_instruction",
         "current_phase",
         "semantic_goal",
         "runtime_control",
         "fragments",
         "allowed_action_constraints",
+        "rules",
         "user_preferences",
     ]
     assert "phase_progress_evidence" not in text_context
@@ -938,8 +944,8 @@ def test_model_user_content_adds_text_model_inputs():
     content = build_model_user_content(context)
 
     assert isinstance(content, list)
-    assert json.loads(content[0]["text"])["current_phase"]["name"] == "orient_leftward"
-    assert content[1] == {"type": "text", "text": "画面中疑似入口位于右前方。"}
+    assert content[0] == {"type": "text", "text": "画面中疑似入口位于右前方。"}
+    assert json.loads(content[1]["text"])["current_phase"]["name"] == "orient_leftward"
 
 
 def test_model_action_planner_rejects_legacy_action_prompt_override():
