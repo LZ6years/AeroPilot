@@ -23,7 +23,7 @@ from src.agent.semantic.task_parser import (
     _normalize_configured_evidence,
 )
 from src.agent.semantic.validator import SemanticPlanValidationError, validate_semantic_plan_patch
-from src.runtime.configs.model_config import ModelConfig, load_model_config
+from src.runtime.configs.model_config import ModelConfig
 
 
 class SemanticPlanUpdaterConfigError(RuntimeError):
@@ -35,11 +35,14 @@ class SemanticPlanUpdater:
 
     def __init__(
         self,
-        model_config: ModelConfig | None = None,
+        model_config: ModelConfig,
         prompt_path: str | None = None,
         agent_rules_path: str | None = None,
     ) -> None:
-        self.model_config = model_config or load_model_config()
+        # Model configuration belongs to the application composition root.
+        # Reading .env here would make background updates depend on cwd, which
+        # differs for Git worktrees and remote runners.
+        self.model_config = model_config
         self.agent_rules = self._load_agent_rules(agent_rules_path)
         self.user_preferences = self._load_required_text(
             DEFAULT_USER_PREFERENCES_PATH,

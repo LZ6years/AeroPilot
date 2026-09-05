@@ -66,6 +66,7 @@ from src.memory.context.modules import DefaultImageContextModule
 from src.memory.context.registry import ContextModuleRegistry
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
+from src.plugins.skills import ModelSkillSelector
 from src.runtime.configs import load_map_config
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.model_config import load_model_config
@@ -779,6 +780,7 @@ class UavFlowBenchmarkRunner:
             runtime_loop_guard_windows=self.config.runtime_loop_guard_windows,
             enable_action_planner_debug=self.config.enable_action_planner_debug,
             context_builder=context_builder,
+            model_config=self.model_config,
         )
 
     def _make_simulation_server(self, run_dir: str | Path) -> SimulationServer:
@@ -881,11 +883,17 @@ class UavFlowBenchmarkRunner:
         include_stmr = self.config.stmr_mode != "off"
         if not include_depth and not include_stmr:
             return None, None
+        model_selection_enabled = (
+            getattr(planner, "planner_mode", "") == "model"
+        )
+        skill_selector = (
+            ModelSkillSelector(self.model_config)
+            if model_selection_enabled
+            else ModelSkillSelector(enabled=False)
+        )
         default_registry = ContextModuleRegistry.default(
             plugin_registry=self.plugin_registry,
-            enable_model_skill_selection=(
-                getattr(planner, "planner_mode", "") == "model"
-            ),
+            skill_selector=skill_selector,
         )
         modules = dict(default_registry.modules)
         if include_depth:
@@ -913,9 +921,6 @@ class UavFlowBenchmarkRunner:
                 safety_config=self.safety_config,
                 registry=registry,
                 plugin_registry=self.plugin_registry,
-                enable_model_skill_selection=(
-                    getattr(planner, "planner_mode", "") == "model"
-                ),
             ),
             stmr_module,
         )

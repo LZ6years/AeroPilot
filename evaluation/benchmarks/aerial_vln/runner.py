@@ -61,6 +61,7 @@ from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
+from src.plugins.skills import ModelSkillSelector
 from src.runtime.configs import load_map_config
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.model_config import load_model_config
@@ -821,6 +822,7 @@ class AerialVlnBenchmarkRunner:
                 self.config.enable_action_planner_debug
             ),
             context_builder=context_builder,
+            model_config=model_config,
         )
 
     def _planner_context_builder(
@@ -834,11 +836,17 @@ class AerialVlnBenchmarkRunner:
 
         if self.config.stmr_mode != "planner":
             return None, None
+        model_selection_enabled = (
+            getattr(planner, "planner_mode", "") == "model"
+        )
+        skill_selector = (
+            ModelSkillSelector(self._model_config())
+            if model_selection_enabled
+            else ModelSkillSelector(enabled=False)
+        )
         default_registry = ContextModuleRegistry.default(
             plugin_registry=self.plugin_registry,
-            enable_model_skill_selection=(
-                getattr(planner, "planner_mode", "") == "model"
-            ),
+            skill_selector=skill_selector,
         )
         modules = dict(default_registry.modules)
         image_module = DefaultImageContextModule(
@@ -871,9 +879,6 @@ class AerialVlnBenchmarkRunner:
                 safety_config=self.safety_config,
                 registry=registry,
                 plugin_registry=self.plugin_registry,
-                enable_model_skill_selection=(
-                    getattr(planner, "planner_mode", "") == "model"
-                ),
             ),
             stmr_module,
         )

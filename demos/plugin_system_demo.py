@@ -48,6 +48,7 @@ from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
 from src.plugins.skills import ModelSkillSelector, SkillContentLoader
 from src.plugins.skills.selection import SkillSelectionResult
+from src.runtime.configs.model_config import ModelConfig, load_model_config
 from src.tools.dispatcher import ToolDispatcher
 
 
@@ -99,7 +100,15 @@ class DemoEnvClient:
 def main() -> None:
     args = _build_parser().parse_args()
     run_dir = _make_run_dir(Path(args.output_root))
-    result = run_demo(run_dir, args.instruction, args.selector)
+    model_config = (
+        load_model_config(args.env_path) if args.selector == "real" else None
+    )
+    result = run_demo(
+        run_dir,
+        args.instruction,
+        args.selector,
+        model_config=model_config,
+    )
     write_demo_outputs(result)
     print(json.dumps(_console_summary(result), ensure_ascii=False, indent=2))
 
@@ -109,10 +118,21 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--instruction", default=DEFAULT_INSTRUCTION)
     parser.add_argument("--output-root", default="runs")
     parser.add_argument("--selector", choices=["demo", "real"], default="demo")
+    parser.add_argument(
+        "--env-path",
+        default=".env",
+        help="Model configuration used only with --selector real.",
+    )
     return parser
 
 
-def run_demo(run_dir: Path, instruction: str, selector_mode: str) -> DemoResult:
+def run_demo(
+    run_dir: Path,
+    instruction: str,
+    selector_mode: str,
+    *,
+    model_config: ModelConfig | None = None,
+) -> DemoResult:
     rgb_path = _write_probe_rgb(run_dir)
     plan = _semantic_plan_for_instruction(instruction)
     plugin_registry = PluginRegistry.from_config()
@@ -121,7 +141,7 @@ def run_demo(run_dir: Path, instruction: str, selector_mode: str) -> DemoResult:
 
     skills_module = DefaultSkillsContextModule(
         plugin_registry=plugin_registry,
-        skill_selector=_skill_selector(selector_mode),
+        skill_selector=_skill_selector(selector_mode, model_config),
         content_loader=SkillContentLoader(max_skill_chars=900, max_reference_chars=900),
     )
     registry = ContextModuleRegistry(
@@ -158,9 +178,12 @@ def run_demo(run_dir: Path, instruction: str, selector_mode: str) -> DemoResult:
     )
 
 
-def _skill_selector(selector_mode: str):
+def _skill_selector(
+    selector_mode: str,
+    model_config: ModelConfig | None,
+):
     if selector_mode == "real":
-        return ModelSkillSelector()
+        return ModelSkillSelector(model_config)
     return DemoSkillSelector(DEFAULT_SELECTED_SKILLS)
 
 

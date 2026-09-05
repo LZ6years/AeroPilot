@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import threading
+
 from src.agent.planning.schemas import RuntimeControlAction
 from src.runtime.configs.runtime_control_config import RuntimeControlActionConfig, RuntimeControlConfig
 from src.runtime.control import RuntimeControlExecutor
@@ -12,7 +14,12 @@ from src.runtime.control.recommendations import (
 )
 
 
-def make_executor(*, enabled: bool = True, exposed: bool = True) -> RuntimeControlExecutor:
+def make_executor(
+    *,
+    enabled: bool = True,
+    exposed: bool = True,
+    semantic_plan_updater=None,
+) -> RuntimeControlExecutor:
     return RuntimeControlExecutor(
         RuntimeControlConfig(
             enabled=enabled,
@@ -20,7 +27,8 @@ def make_executor(*, enabled: bool = True, exposed: bool = True) -> RuntimeContr
                 "ask_user": RuntimeControlActionConfig(enabled=True, exposed=exposed),
                 "semantic_plan_update": RuntimeControlActionConfig(enabled=True, exposed=exposed),
             },
-        )
+        ),
+        semantic_plan_updater=semantic_plan_updater,
     )
 
 
@@ -81,7 +89,18 @@ def test_runtime_control_executor_phase_1_validates_without_execution():
 
 
 def test_runtime_control_executor_tracks_semantic_update_pending_status():
-    executor = make_executor()
+    class BlockingUpdater:
+        def __init__(self) -> None:
+            self.started = threading.Event()
+            self.release = threading.Event()
+
+        def update(self, context):
+            self.started.set()
+            self.release.wait(timeout=2.0)
+            return {}
+
+    updater = BlockingUpdater()
+    executor = make_executor(semantic_plan_updater=updater)
     job = SemanticPlanUpdateJob(
         run_id="run",
         phase_key="1:phase",
@@ -93,6 +112,7 @@ def test_runtime_control_executor_tracks_semantic_update_pending_status():
     result = executor.submit_semantic_plan_update(job)
 
     assert result.status == "pending"
+    assert updater.started.wait(timeout=1.0)
     assert executor.model_context() == {
         "available": ["ask_user", "semantic_plan_update"],
         "contracts": {
@@ -108,6 +128,23 @@ def test_runtime_control_executor_tracks_semantic_update_pending_status():
         },
         "status": {"semantic_plan_update": "pending"},
     }
+    updater.release.set()
+
+
+def test_runtime_control_executor_rejects_unconfigured_semantic_updater():
+    executor = make_executor()
+    job = SemanticPlanUpdateJob(
+        run_id="run",
+        phase_key="1:phase",
+        semantic_plan_version=0,
+        request_payload={"reason": "too strict"},
+        updater_context={"current_phase": {"name": "phase"}},
+    )
+
+    result = executor.submit_semantic_plan_update(job)
+
+    assert result.status == "rejected"
+    assert result.reason == "semantic_plan_updater_unconfigured"
 
 
 def test_runtime_control_executor_only_emits_available_contracts():

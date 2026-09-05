@@ -29,6 +29,8 @@ from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MapMemoryStore, MemoryEventWriter, MemoryRecordReader, RunMemoryStore
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
+from src.plugins.skills import ModelSkillSelector
+from src.runtime.configs.model_config import ModelConfig, load_model_config
 
 
 DEFAULT_INSTRUCTIONS = [
@@ -51,6 +53,11 @@ def main() -> None:
     parser.add_argument("--output-root", default="runs", help="Directory where probe artifacts are written.")
     parser.add_argument("--eval-id", default="uav_flow_eval_20260605_plugin_mvp_real_smoke")
     parser.add_argument("--cases", default=str(DEFAULT_CASES_PATH), help="JSON skill-selection case fixture.")
+    parser.add_argument(
+        "--env-path",
+        default=".env",
+        help="Explicit model .env path; useful when the probe runs from a Git worktree.",
+    )
     parser.add_argument("--run-uav-flow", action="store_true", help="Also run a small real UnrealCV UAV-Flow smoke.")
     args = parser.parse_args()
 
@@ -58,8 +65,17 @@ def main() -> None:
     rgb_path = _write_probe_rgb(run_dir)
     print(f"plugin_system_probe_dir={run_dir}")
 
-    selector_results = _run_real_skill_selection(run_dir, Path(args.cases))
-    context_result = _run_context_injection(run_dir, rgb_path)
+    model_config = load_model_config(args.env_path)
+    selector_results = _run_real_skill_selection(
+        run_dir,
+        Path(args.cases),
+        model_config,
+    )
+    context_result = _run_context_injection(
+        run_dir,
+        rgb_path,
+        model_config,
+    )
     research_result = _run_research_image_plugin(run_dir, rgb_path)
     uav_flow_result = _run_uav_flow_smoke(args.eval_id) if args.run_uav_flow else {"status": "skipped"}
 
@@ -89,9 +105,16 @@ def _write_probe_rgb(run_dir: Path) -> Path:
     return path
 
 
-def _run_real_skill_selection(run_dir: Path, cases_path: Path) -> dict[str, Any]:
+def _run_real_skill_selection(
+    run_dir: Path,
+    cases_path: Path,
+    model_config: ModelConfig,
+) -> dict[str, Any]:
     registry = PluginRegistry.from_config()
-    module = DefaultSkillsContextModule(plugin_registry=registry)
+    module = DefaultSkillsContextModule(
+        plugin_registry=registry,
+        skill_selector=ModelSkillSelector(model_config),
+    )
     cases = _load_selection_cases(cases_path)
     results = []
     for case in cases:
@@ -147,12 +170,16 @@ def _run_real_skill_selection(run_dir: Path, cases_path: Path) -> dict[str, Any]
     return payload
 
 
-def _run_context_injection(run_dir: Path, rgb_path: Path) -> dict[str, Any]:
+def _run_context_injection(
+    run_dir: Path,
+    rgb_path: Path,
+    model_config: ModelConfig,
+) -> dict[str, Any]:
     instruction = "Approach the person and keep a safe distance."
     plan = _semantic_plan_for_instruction(instruction)
     memory, state = _memory_and_state_with_observation(run_dir, instruction, plan, rgb_path)
     builder = ObservationContextBuilder(
-        enable_model_skill_selection=True,
+        skill_selector=ModelSkillSelector(model_config),
         map_memory=MapMemoryStore(),
         run_memory=RunMemoryStore(),
     )
@@ -199,7 +226,6 @@ def _run_research_image_plugin(run_dir: Path, rgb_path: Path) -> dict[str, Any]:
     registry = ContextModuleRegistry.from_dict(
         data,
         plugin_registry=plugin_registry,
-        enable_model_skill_selection=False,
     )
     instruction = "Approach the person and keep a safe distance."
     plan = _semantic_plan_for_instruction(instruction)
@@ -207,7 +233,6 @@ def _run_research_image_plugin(run_dir: Path, rgb_path: Path) -> dict[str, Any]:
     builder = ObservationContextBuilder(
         registry=registry,
         plugin_registry=plugin_registry,
-        enable_model_skill_selection=False,
         map_memory=MapMemoryStore(),
         run_memory=RunMemoryStore(),
     )

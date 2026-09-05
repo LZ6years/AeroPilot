@@ -15,7 +15,10 @@ from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.safety import SafetySupervisor
 from src.agent.safety import SafetyDecision
 from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
-from src.agent.semantic.plan_updater import validate_semantic_plan_patch_numeric_provenance
+from src.agent.semantic.plan_updater import (
+    SemanticPlanUpdater,
+    validate_semantic_plan_patch_numeric_provenance,
+)
 from src.agent.semantic.schemas import TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.agent.semantic.validator import apply_semantic_plan_patch
@@ -24,10 +27,12 @@ from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
+from src.plugins.skills import ModelSkillSelector
 from src.perception.raw_observation import RawObservation
 from src.runtime.control import RuntimeControlExecutor, UavStabilizer
 from src.runtime.control.actions import SemanticPlanUpdateJob
 from src.runtime.configs.action_config import UavActionConfig
+from src.runtime.configs.model_config import ModelConfig
 from src.runtime.configs.runtime_control_config import RuntimeControlConfig, load_runtime_control_config
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.configs.task_execution_options import InitialPose, TaskExecutionOptions
@@ -57,6 +62,7 @@ class TaskRuntime:
         runtime_loop_guard_windows: int = 40,
         enable_action_planner_debug: bool = False,
         context_builder: ObservationContextBuilder | None = None,
+        model_config: ModelConfig | None = None,
     ) -> None:
         if shutdown_policy not in self.SHUTDOWN_POLICIES:
             raise ValueError(f"Unsupported shutdown policy: {shutdown_policy}")
@@ -65,7 +71,13 @@ class TaskRuntime:
         self.env_client = env_client
         self.recorder = recorder
         self.task_parser = task_parser
-        self.planner = planner or ModelActionPlanner()
+        if planner is None and model_config is None:
+            raise ValueError(
+                "TaskRuntime requires planner or explicit model_config; "
+                "runtime components do not load .env implicitly"
+            )
+        self.planner = planner or ModelActionPlanner(model_config)
+        self.model_config = model_config
         self.safety = safety or SafetySupervisor()
         self.shutdown_policy = shutdown_policy
         self.runtime_loop_guard_windows = int(runtime_loop_guard_windows)
@@ -73,8 +85,36 @@ class TaskRuntime:
         self.plugin_registry = PluginRegistry.from_config()
         self.tools = ToolDispatcher(env_client, plugin_registry=self.plugin_registry)
         self.stabilizer = UavStabilizer(self.tools, recorder, stabilization_config)
+        resolved_runtime_control_config = (
+            runtime_control_config or load_runtime_control_config()
+        )
+        actual_model_planner = isinstance(self.planner, ModelActionPlanner)
+        model_planner_enabled = (
+            actual_model_planner
+            and getattr(self.planner, "planner_mode", "") == "model"
+        )
+        self._model_planner_enabled = model_planner_enabled
+        if model_planner_enabled:
+            if self.model_config is None:
+                raise ValueError(
+                    "Model-backed TaskRuntime requires explicit model_config"
+                )
+            if not self.model_config.api_key:
+                raise ValueError(
+                    "Model-backed TaskRuntime requires model_config.api_key"
+                )
+        if (
+            semantic_plan_updater is None
+            and resolved_runtime_control_config.is_enabled("semantic_plan_update")
+        ):
+            if self.model_config is not None and self.model_config.api_key:
+                semantic_plan_updater = SemanticPlanUpdater(self.model_config)
+            elif model_planner_enabled:
+                raise ValueError(
+                    "Enabled semantic_plan_update requires explicit model_config with api_key"
+                )
         self.runtime_control = RuntimeControlExecutor(
-            runtime_control_config or load_runtime_control_config(),
+            resolved_runtime_control_config,
             semantic_plan_updater=semantic_plan_updater,
         )
         # Optional synchronous stream for CLI/TUI frontends. The recorder remains
@@ -87,7 +127,11 @@ class TaskRuntime:
             action_config=action_config,
             safety_config=self.safety.safety_config,
             plugin_registry=self.plugin_registry,
-            enable_model_skill_selection=getattr(self.planner, "planner_mode", "") == "model",
+            skill_selector=(
+                ModelSkillSelector(self.model_config)
+                if model_planner_enabled
+                else ModelSkillSelector(enabled=False)
+            ),
         )
         self.semantic_evidence_capabilities: list[str] = []
         # Initialize compatibility for callers that provide an already-parsed
@@ -107,6 +151,7 @@ class TaskRuntime:
         # events are still written for history, but CLI/TUI summaries should not
         # depend on the async logger flushing before they can show the final reply.
         self._current_turn_agent_messages: list[dict] = []
+        self._pending_task_parser_trace: dict[str, Any] = {}
 
     def run_task(
         self,
@@ -124,17 +169,21 @@ class TaskRuntime:
         self._refresh_semantic_evidence_capabilities()
         parse_result = self.task_parser.parse(instruction)
         parse_trace = getattr(self.task_parser, "last_parse_trace", {})
-        if isinstance(parse_trace, dict) and parse_trace:
-            self._debug_event("task_parser_phase_skill_trace", parse_trace)
-        return self.run_parsed_task(
-            map_id,
-            parse_result,
-            agent_id=agent_id,
-            scene_policy=scene_policy,
-            stop_scene_on_finish=stop_scene_on_finish,
-            scene_id=scene_id,
-            execution_options=options,
+        self._pending_task_parser_trace = (
+            dict(parse_trace) if isinstance(parse_trace, dict) else {}
         )
+        try:
+            return self.run_parsed_task(
+                map_id,
+                parse_result,
+                agent_id=agent_id,
+                scene_policy=scene_policy,
+                stop_scene_on_finish=stop_scene_on_finish,
+                scene_id=scene_id,
+                execution_options=options,
+            )
+        finally:
+            self._pending_task_parser_trace = {}
 
     def run_parsed_task(
         self,
@@ -154,6 +203,16 @@ class TaskRuntime:
         self._debug_event("task_execution_options_resolved", options.to_dict())
         self.recorder.write_json("state/semantic_plan.json", parse_result.to_dict())
         self._debug_event("task_parsed", parse_result.to_dict())
+        self._debug_event(
+            "model_dependency_status",
+            self._model_dependency_status(),
+        )
+        if self._pending_task_parser_trace:
+            self._debug_event(
+                "task_parser_phase_skill_trace",
+                self._pending_task_parser_trace,
+            )
+            self._pending_task_parser_trace = {}
         self._event(
             "instruction_started",
             {
@@ -555,6 +614,17 @@ class TaskRuntime:
         state.ensure_current_phase_progress(observation_before)
         state.update_current_phase_progress(observation_before)
         context = self.context_builder.build(state, self._memory_for_state(state))
+        skill_trace = self._planner_skill_selection_trace(context)
+        if skill_trace:
+            self._debug_event(
+                "planner_phase_skill_trace",
+                {
+                    "phase": phase_name,
+                    "phase_key": phase_key,
+                    "window_index": state.current_phase_window_count,
+                    **skill_trace,
+                },
+            )
         runtime_control_context = self.runtime_control.model_context(
             self._runtime_control_recommendation_context(state)
         )
@@ -1436,6 +1506,34 @@ class TaskRuntime:
                 seen.add(name)
         return selected
 
+    @staticmethod
+    def _planner_skill_selection_trace(planner_context: dict[str, Any]) -> dict[str, Any]:
+        """Extract a compact, non-secret Skill audit record from context."""
+
+        fragments = planner_context.get("fragments", []) if isinstance(planner_context, dict) else []
+        if not isinstance(fragments, list):
+            return {}
+        for fragment in fragments:
+            if not isinstance(fragment, dict) or fragment.get("name") != "skills":
+                continue
+            metadata = fragment.get("metadata", {})
+            selection = metadata.get("selection", {}) if isinstance(metadata, dict) else {}
+            content = fragment.get("content", {})
+            loaded = content.get("selected_skills", []) if isinstance(content, dict) else []
+            loaded_names = [
+                str(item.get("name", "")).strip()
+                for item in loaded
+                if isinstance(item, dict) and str(item.get("name", "")).strip()
+            ] if isinstance(loaded, list) else []
+            return {
+                "selection_status": selection.get("status"),
+                "requested_skills": list(selection.get("requested_skill_names", [])),
+                "accepted_skills": list(selection.get("accepted_skill_names", [])),
+                "loaded_skills": loaded_names,
+                "selection_source": metadata.get("selection_source"),
+            }
+        return {}
+
     def _record_runtime_control_results(self, actions, results) -> None:
         for action, result in zip(actions, results):
             request_payload = {
@@ -1473,6 +1571,49 @@ class TaskRuntime:
             debug_event(event, payload)
         else:
             self.recorder.event(event, payload)
+
+    def _model_dependency_status(self) -> dict[str, Any]:
+        """Return redacted wiring facts for human audit.
+
+        This deliberately reports dependency identity rather than credential
+        values or filesystem paths.  It makes a worktree configuration split
+        visible without leaking secrets into planner context or run artifacts.
+        """
+
+        composer = getattr(self.context_builder, "composer", None)
+        registry = getattr(composer, "registry", None)
+        modules = getattr(registry, "modules", {})
+        skills_module = modules.get("skills") if isinstance(modules, dict) else None
+        selector = getattr(skills_module, "skill_selector", None)
+        updater = self.runtime_control.semantic_plan_update_manager.updater
+        return {
+            "model_config_source": (
+                "task_runtime_injected" if self.model_config is not None else "none"
+            ),
+            "model_config_has_api_key": bool(
+                self.model_config and self.model_config.api_key
+            ),
+            "model_provider": (
+                self.model_config.provider if self.model_config is not None else None
+            ),
+            "model_name": (
+                self.model_config.model_name if self.model_config is not None else None
+            ),
+            "planner_skill_selection_enabled": bool(
+                selector is not None and getattr(selector, "enabled", False)
+            ),
+            "planner_skill_selector_uses_runtime_config": bool(
+                selector is not None
+                and self.model_config is not None
+                and getattr(selector, "model_config", None) is self.model_config
+            ),
+            "semantic_updater_configured": updater is not None,
+            "semantic_updater_uses_runtime_config": bool(
+                updater is not None
+                and self.model_config is not None
+                and getattr(updater, "model_config", None) is self.model_config
+            ),
+        }
 
     def _agent_messages(self, messages: list[AgentMessage], *, source: str, phase: str | None = None) -> None:
         for message in messages:

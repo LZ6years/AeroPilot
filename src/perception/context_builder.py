@@ -12,6 +12,7 @@ from src.memory.context.registry import ContextModuleRegistry
 from src.memory.context.schemas import MemorySourceBundle, StageContextInput
 from src.memory.stores import MapMemoryStore, RunMemoryStore
 from src.plugins import PluginRegistry
+from src.plugins.skills import ModelSkillSelector
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
 from src.uav.commands import MOVE_BODY_ARGUMENT_SEMANTICS
@@ -41,7 +42,7 @@ class ObservationContextBuilder:
         safety_config: UavSafetyConfig | None = None,
         registry: ContextModuleRegistry | None = None,
         plugin_registry: PluginRegistry | None = None,
-        enable_model_skill_selection: bool = False,
+        skill_selector: ModelSkillSelector | None = None,
         map_memory: MapMemoryStore | None = None,
         map_memory_path: str | Path = DEFAULT_MAP_MEMORY_PATH,
         run_memory: RunMemoryStore | None = None,
@@ -53,7 +54,7 @@ class ObservationContextBuilder:
             registry
             or ContextModuleRegistry.from_config(
                 plugin_registry=self.plugin_registry,
-                enable_model_skill_selection=enable_model_skill_selection,
+                skill_selector=skill_selector,
             )
         )
         self.map_memory = map_memory if map_memory is not None else MapMemoryStore.from_file(map_memory_path)

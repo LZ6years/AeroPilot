@@ -26,6 +26,8 @@ from src.runtime.configs.safety_config import UavSafetyConfig
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.configs.task_execution_options import InitialPose, TaskExecutionOptions
 from src.runtime.context import PhaseWindowContextBuilder
+from src.perception.context_builder import ObservationContextBuilder
+from src.plugins.skills.selection import ModelSkillSelector
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.configs.model_config import ModelConfig
 from src.uav import pose_measurements
@@ -57,6 +59,102 @@ def test_task_runtime_default_loop_guard_is_40():
     parameter = inspect.signature(TaskRuntime.__init__).parameters["runtime_loop_guard_windows"]
 
     assert parameter.default == 40
+
+
+def test_task_runtime_injects_one_model_config_into_planner_dependencies(tmp_path):
+    config = ModelConfig(
+        task_parser_mode="model",
+        model_name="stub",
+        api_key="test-key",
+        base_url="https://example.test/v1",
+    )
+    run_dir = tmp_path / "model_dependency_wiring"
+    recorder = AsyncRunLogger(run_dir)
+    server = SimulationServer([make_package()], run_dir=run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(server),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=ModelActionPlanner(config),
+        model_config=config,
+        shutdown_policy="none",
+        runtime_control_config=RuntimeControlConfig(
+            enabled=True,
+            actions={
+                "semantic_plan_update": RuntimeControlActionConfig(
+                    enabled=True,
+                    exposed=True,
+                )
+            },
+        ),
+    )
+
+    status = runtime._model_dependency_status()
+    recorder.close()
+
+    assert status["model_config_source"] == "task_runtime_injected"
+    assert status["model_config_has_api_key"] is True
+    assert status["planner_skill_selection_enabled"] is True
+    assert status["planner_skill_selector_uses_runtime_config"] is True
+    assert status["semantic_updater_configured"] is True
+    assert status["semantic_updater_uses_runtime_config"] is True
+    assert "test-key" not in json.dumps(status)
+
+
+def test_task_runtime_rejects_model_planner_without_explicit_model_config(tmp_path):
+    config = ModelConfig(
+        task_parser_mode="model",
+        model_name="stub",
+        api_key="test-key",
+        base_url="https://example.test/v1",
+    )
+    recorder = AsyncRunLogger(tmp_path / "missing_model_config")
+    server = SimulationServer([make_package()], run_dir=tmp_path)
+
+    with pytest.raises(ValueError, match="explicit model_config"):
+        TaskRuntime(
+            SimulatorEnvClient(server),
+            recorder,
+            TaskParser(mode="rule_based"),
+            planner=ModelActionPlanner(config),
+            shutdown_policy="none",
+        )
+
+    recorder.close()
+
+
+def test_task_runtime_planner_skill_trace_is_compact_and_auditable():
+    trace = TaskRuntime._planner_skill_selection_trace(
+        {
+            "fragments": [
+                {
+                    "name": "skills",
+                    "content": {
+                        "selected_skills": [
+                            {"name": "approach_and_standoff", "skill_text": "hidden body"}
+                        ]
+                    },
+                    "metadata": {
+                        "selection_source": "phase_cache",
+                        "selection": {
+                            "status": "selected",
+                            "requested_skill_names": ["approach_and_standoff"],
+                            "accepted_skill_names": ["approach_and_standoff"],
+                        },
+                    },
+                }
+            ]
+        }
+    )
+
+    assert trace == {
+        "selection_status": "selected",
+        "requested_skills": ["approach_and_standoff"],
+        "accepted_skills": ["approach_and_standoff"],
+        "loaded_skills": ["approach_and_standoff"],
+        "selection_source": "phase_cache",
+    }
+    assert "skill_text" not in json.dumps(trace)
 
 
 def make_package() -> MapPackage:
@@ -555,6 +653,7 @@ def test_task_runtime_validates_runtime_control_request_without_executing_it(tmp
                 "semantic_plan_update": RuntimeControlActionConfig(enabled=True, exposed=True),
             },
         ),
+        semantic_plan_updater=FakeSemanticPlanUpdater({}),
     )
     state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
     recorder.close()
@@ -1780,6 +1879,10 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
         TaskParser(mode="rule_based"),
         planner=planner,
         shutdown_policy="none",
+        model_config=planner.model_config,
+        context_builder=ObservationContextBuilder(
+            skill_selector=ModelSkillSelector(enabled=False)
+        ),
     )
 
     state = None
@@ -1845,6 +1948,7 @@ def test_task_runtime_recharges_yaw_scan_only_after_verified_translation(
         SimulatorEnvClient(server),
         recorder,
         TaskParser(mode="rule_based"),
+        planner=HoverOnlyPlanner(),
         safety=SafetySupervisor(
             UavSafetyConfig(yaw_scan_recharge_distance_m=0.5)
         ),

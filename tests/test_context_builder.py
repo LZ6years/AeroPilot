@@ -29,6 +29,7 @@ from src.memory.context.modules.pose import DefaultPoseContextModule
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
+from src.plugins.skills.selection import ModelSkillSelector
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.model_config import ModelConfig
 from src.runtime.configs.safety_config import UavSafetyConfig
@@ -49,6 +50,21 @@ def write_test_png(path, color=(12, 34, 56), size=(320, 240)) -> None:
 def decode_data_url_image(data_url: str) -> Image.Image:
     encoded = data_url.split(",", 1)[1]
     return Image.open(BytesIO(base64.b64decode(encoded))).convert("RGB")
+
+
+def test_context_registry_preserves_explicit_skill_selector_identity():
+    config = ModelConfig(
+        model_name="test-model",
+        api_key="secret",
+        base_url="https://example.test/v1",
+    )
+    selector = ModelSkillSelector(config)
+
+    registry = ContextModuleRegistry.default(skill_selector=selector)
+    builder = ObservationContextBuilder(skill_selector=selector)
+
+    assert registry.modules["skills"].skill_selector is selector
+    assert builder.composer.registry.modules["skills"].skill_selector is selector
 
 
 def make_state() -> MissionState:

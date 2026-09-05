@@ -333,6 +333,7 @@ def make_runtime(args: argparse.Namespace, client, recorder, model_config, actio
         safety=SafetySupervisor(safety_config),
         shutdown_policy=args.shutdown_policy,
         action_config=action_config,
+        model_config=model_config,
     )
 
 

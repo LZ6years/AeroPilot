@@ -14,6 +14,12 @@ class DefaultSkillsContextModule(ContextModule):
     name = "skills"
     priority = 95
     max_items = 8
+    _CACHEABLE_SELECTION_STATUSES = {
+        "selected",
+        "none_selected",
+        "disabled",
+        "empty_catalog",
+    }
 
     def __init__(
         self,
@@ -23,7 +29,10 @@ class DefaultSkillsContextModule(ContextModule):
         content_loader: SkillContentLoader | None = None,
     ) -> None:
         self.plugin_registry = plugin_registry or PluginRegistry.from_config()
-        self.skill_selector = skill_selector or ModelSkillSelector()
+        # Context modules never discover model credentials.  A composition
+        # root must inject an enabled selector; otherwise skill selection is
+        # intentionally disabled and remains free of network side effects.
+        self.skill_selector = skill_selector or ModelSkillSelector(enabled=False)
         self.content_loader = content_loader or SkillContentLoader()
         self._phase_selection_cache: dict[tuple[str, str, str], SkillSelectionResult] = {}
 
@@ -36,7 +45,10 @@ class DefaultSkillsContextModule(ContextModule):
         selection_source = "phase_cache" if cached_selection is not None else "fresh"
         if cached_selection is None:
             selection = self.skill_selector.select(selection_context, catalog)
-            self._phase_selection_cache[cache_key] = selection
+            # Provider/network failures may be transient.  Caching those
+            # results would silently remove skill guidance for the whole phase.
+            if selection.status in self._CACHEABLE_SELECTION_STATUSES:
+                self._phase_selection_cache[cache_key] = selection
         else:
             selection = cached_selection
         accepted, rejected = catalog.validate_selection(selection.accepted_skill_names)

@@ -269,6 +269,7 @@ def run_task(args: argparse.Namespace) -> None:
             safety=SafetySupervisor(safety_config),
             shutdown_policy=args.shutdown_policy,
             action_config=action_config,
+            model_config=model_config,
         )
         state = runtime.run_task(
             map_id,
@@ -363,6 +364,7 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
         shutdown_policy=args.shutdown_policy,
         action_config=action_config,
         event_sink=live_printer,
+        model_config=model_config,
     )
     return InteractiveTaskSession(
         runtime,

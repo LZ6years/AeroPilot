@@ -2,6 +2,13 @@
 
 Status: Experimental
 
+> Historical result warning: the `20260904` A/B/C canary outputs were produced
+> before explicit model dependency injection. Planner-time Skill selection was
+> skipped in all three runs, and C's adaptive updater had no usable API key.
+> Keep those outputs for diagnosis only; do not use them to select a flow.
+> The replacement real-engine runs are intentionally deferred until the prompt
+> changes are finalized.
+
 The A, B, and C branches change only when phase completion criteria are
 created or revised. All real canaries must use the same five case IDs, model
 configuration, Depth NOW profile, 40-window phase limit, action scale, and

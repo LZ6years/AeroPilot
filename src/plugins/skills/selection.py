@@ -10,7 +10,7 @@ from typing import Any
 
 from src.agent.semantic.task_parser import _loads_json_object
 from src.plugins.skills.catalog import SkillCatalog
-from src.runtime.configs.model_config import ModelConfig, load_model_config
+from src.runtime.configs.model_config import ModelConfig
 
 
 SKILL_SELECTION_SYSTEM_PROMPT = """You select UAV-Agent knowledge skills.
@@ -117,8 +117,16 @@ class ModelSkillSelector:
         enabled: bool = True,
         system_prompt: str | None = None,
     ) -> None:
-        self.model_config = model_config or load_model_config()
         self.enabled = bool(enabled)
+        if self.enabled and model_config is None:
+            raise ValueError(
+                "Enabled ModelSkillSelector requires an explicit ModelConfig; "
+                "load it once at the application entry point"
+            )
+        # A disabled selector is a deliberate no-I/O dependency used by
+        # rule-based runtimes and tests.  It must not search the current working
+        # directory for a .env file as a hidden side effect.
+        self.model_config = model_config or ModelConfig()
         self.system_prompt = system_prompt or SKILL_SELECTION_SYSTEM_PROMPT
 
     def select(self, selection_context: dict[str, Any], catalog: SkillCatalog) -> SkillSelectionResult:

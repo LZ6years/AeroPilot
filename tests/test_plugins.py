@@ -6,6 +6,8 @@ import json
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 from src.agent.semantic.task_parser import TaskParser
 from src.memory.context.modules.skills import DefaultSkillsContextModule
 from src.memory.context.schemas import MemorySourceBundle, StageContextInput
@@ -580,6 +582,59 @@ def test_skills_module_handles_no_model_selection():
     assert fragment["metadata"]["available_skill_names"]
     assert fragment["metadata"]["selection"]["status"] == "disabled"
     assert fragment["facts"] == []
+
+
+def test_enabled_model_skill_selector_requires_explicit_config():
+    with pytest.raises(ValueError, match="explicit ModelConfig"):
+        ModelSkillSelector()
+
+    config = ModelConfig(
+        model_name="test-model",
+        api_key="secret",
+        base_url="https://example.test/v1",
+    )
+    selector = ModelSkillSelector(config)
+
+    assert selector.model_config is config
+
+
+def test_skills_module_does_not_cache_transient_selector_errors():
+    class TransientSelector:
+        def __init__(self):
+            self.calls = 0
+
+        def select(self, selection_context, catalog):
+            self.calls += 1
+            if self.calls == 1:
+                return SkillSelectionResult(
+                    status="model_error",
+                    warnings=["skill_selection_failed:temporary"],
+                )
+            return SkillSelectionResult(
+                requested_skill_names=["visual_target_task_reasoning"],
+                accepted_skill_names=["visual_target_task_reasoning"],
+                status="selected",
+            )
+
+    result = TaskParser(mode="rule_based").parse("观察右侧区域，不确定时问我。")
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", active_instruction=result.instruction)
+    selector = TransientSelector()
+    module = DefaultSkillsContextModule(
+        plugin_registry=_uav_flight_registry(),
+        skill_selector=selector,
+    )
+    stage_context = make_stage_context(result)
+
+    first = module.build(MemorySourceBundle(memory), stage_context).to_dict()
+    second = module.build(MemorySourceBundle(memory), stage_context).to_dict()
+    third = module.build(MemorySourceBundle(memory), stage_context).to_dict()
+
+    assert selector.calls == 2
+    assert first["metadata"]["selection"]["status"] == "model_error"
+    assert first["metadata"]["selection_source"] == "fresh"
+    assert second["metadata"]["selection"]["status"] == "selected"
+    assert second["metadata"]["selection_source"] == "fresh"
+    assert third["metadata"]["selection_source"] == "phase_cache"
 
 
 def test_model_skill_selector_retries_invalid_json_once():

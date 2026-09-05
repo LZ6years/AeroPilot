@@ -45,6 +45,30 @@ PluginRegistry discovers enabled skills
   -> selected skill content enters skills fragment
 ```
 
+## 模型配置的唯一来源
+
+模型配置只允许在应用入口通过 `--env-path` 加载一次，然后以同一个
+`ModelConfig` 实例显式注入各个模型消费者：
+
+```text
+--env-path
+  -> load_model_config()
+  -> TaskParser
+  -> ModelActionPlanner
+  -> ModelSkillSelector
+  -> SemanticPlanUpdater
+```
+
+`ModelSkillSelector` 和 `SemanticPlanUpdater` 不读取当前工作目录中的
+`.env`。启用模型 Skill 选择时，如果没有显式的 `ModelConfig`，构造阶段
+立即报错；模型 Runtime 缺少 API key 时会在场景启动前报错。关闭 Skill
+选择时则使用无网络副作用的 disabled selector。这样从 Git worktree、CLI
+或 Benchmark 启动时不会因 cwd 不同而得到不同的模型依赖。
+
+Parser-time Skill 与 Planner-time Skill 是两条独立选择链：前者帮助生成
+语义 criteria，后者为当前 phase 的动作规划加载知识。两者独立选择，但
+共享入口加载的同一个 `ModelConfig`。
+
 planner 没有通用 `read_file` 能力。runtime 只允许读取被选中 skill 目录内、且由 selector 显式请求的受限资源。核心 knowledge 正文遵守 2400 字符写作预算；reference 用于公式、长示例和可选动作细节，不能承载 parser criteria 必需的完成语义。
 
 ## Skills Fragment
@@ -64,6 +88,14 @@ skill 是 guidance，不是当前观察事实，也不是 benchmark truth。
 
 ```powershell
 python tests/manual/plugin_system_real_probe.py --cases tests/fixtures/uav_knowledge_skill_selection_cases.json
+```
+
+从 worktree 运行时应显式指向主工作区的环境文件：
+
+```powershell
+python tests/manual/plugin_system_real_probe.py `
+  --env-path F:\UAV-Agent\.env `
+  --cases tests/fixtures/uav_knowledge_skill_selection_cases.json
 ```
 
 输出：

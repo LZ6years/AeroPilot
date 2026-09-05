@@ -21,6 +21,24 @@
 - 读取评测专用数据或隐藏答案。
 - 给某个样例写专门完成条件。
 
+### 模型依赖注入
+
+`SemanticPlanUpdater` 不自行搜索或读取 `.env`。应用入口通过
+`--env-path` 加载唯一的 `ModelConfig`，TaskRuntime 再把同一实例注入
+Planner Skill Selector 和 Updater：
+
+```text
+application entry
+  -> ModelConfig
+  -> TaskRuntime
+     -> ModelSkillSelector
+     -> SemanticPlanUpdater
+```
+
+启用 `semantic_plan_update` 但未配置 updater 时，请求会以
+`semantic_plan_updater_unconfigured` 被拒绝，不会启动一个注定失败的后台
+任务。模型 Runtime 若缺少显式配置或 API key，会在场景启动前失败。
+
 ## 2. Capability Contract
 
 稳定契约：

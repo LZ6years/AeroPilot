@@ -12,9 +12,6 @@ import threading
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.agent.semantic.plan_updater import SemanticPlanUpdater
-
-
 @dataclass(frozen=True)
 class SemanticPlanUpdateJob:
     """One queued semantic update request."""
@@ -50,7 +47,9 @@ class SemanticPlanUpdateManager:
     """Single-worker manager for semantic plan update jobs."""
 
     def __init__(self, updater: Any | None = None) -> None:
-        self.updater = updater or SemanticPlanUpdater()
+        # Runtime composition must inject the updater.  Keeping None is useful
+        # for disabled control planes and avoids a hidden cwd-based .env read.
+        self.updater = updater
         self._queue: queue.Queue[SemanticPlanUpdateJob | None] = queue.Queue()
         self._lock = threading.Lock()
         self._worker: threading.Thread | None = None
@@ -64,6 +63,8 @@ class SemanticPlanUpdateManager:
         return {}
 
     def submit(self, job: SemanticPlanUpdateJob) -> tuple[bool, str]:
+        if self.updater is None:
+            return False, "semantic_plan_updater_unconfigured"
         with self._lock:
             if self._pending_job is not None:
                 return False, "semantic_plan_update_already_pending"
