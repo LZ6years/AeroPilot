@@ -132,13 +132,132 @@ def test_native_planner_replays_tool_result_in_full_transcript(tmp_path):
     [
         (response_with_calls(("call_1", "unknown_tool", {})), "unknown provider tool"),
         (response_with_calls(("same", "uav_hover", {}), ("same", "uav_hover", {})), "unique ids"),
-        (response_with_calls(("call_1", "uav_hover", {}), content=None), "public intent"),
         ({"choices": [{"message": {"content": "no tools"}}]}, "must call a tool"),
     ],
 )
 def test_native_planner_rejects_invalid_provider_turn(tmp_path, response, error):
-    with pytest.raises(AgentProtocolError, match=error):
+    with pytest.raises(AgentProtocolError, match=error) as raised:
         StubPlanner(response).plan_turn(make_transcript(tmp_path), default_registry())
+
+    assert raised.value.rejected_turn["error"]
+    assert "reasoning_content" not in json.dumps(raised.value.rejected_turn)
+
+
+def test_native_planner_accepts_null_content_with_read_only_fallback(tmp_path):
+    planner = StubPlanner(
+        response_with_calls(
+            (
+                "call_pose",
+                "uav_get_pose",
+                {"observation_id": "obs_0001"},
+            ),
+            content=None,
+        )
+    )
+
+    turn = planner.plan_turn(make_transcript(tmp_path), default_registry())
+
+    assert turn.public_intent_source == "tool_arguments_fallback"
+    assert turn.public_intent == "Request uav.get_pose for observation obs_0001."
+
+
+def test_native_planner_uses_action_window_intent_for_null_content(tmp_path):
+    planner = StubPlanner(
+        response_with_calls(
+            (
+                "call_commit",
+                "runtime_commit_phase_turn",
+                {
+                    "phase": "approach",
+                    "action_window": {
+                        "intent": "move closer to the visible target",
+                        "expected_effect": "the target appears larger",
+                    },
+                },
+            ),
+            ("call_move", "uav_move_body", {"vx": 1.0}),
+            content=None,
+        )
+    )
+
+    turn = planner.plan_turn(make_transcript(tmp_path), default_registry())
+
+    assert turn.public_intent_source == "tool_arguments_fallback"
+    assert turn.public_intent == "move closer to the visible target"
+
+
+def test_native_planner_uses_phase_commit_fallback_for_null_content(tmp_path):
+    planner = StubPlanner(
+        response_with_calls(
+            (
+                "call_commit",
+                "runtime_commit_phase_turn",
+                {"phase": "land"},
+            ),
+            content=None,
+        )
+    )
+
+    turn = planner.plan_turn(make_transcript(tmp_path), default_registry())
+
+    assert turn.public_intent_source == "tool_arguments_fallback"
+    assert turn.public_intent == "Commit phase decision for land."
+
+
+def test_native_planner_rejection_snapshot_keeps_wire_attempt_only(tmp_path):
+    response = response_with_calls(("call_1", "unknown_tool", {"value": 1}))
+    response["choices"][0]["finish_reason"] = "tool_calls"
+    response["choices"][0]["message"]["reasoning_content"] = "private chain"
+
+    with pytest.raises(AgentProtocolError) as raised:
+        StubPlanner(response).plan_turn(make_transcript(tmp_path), default_registry())
+
+    snapshot = raised.value.rejected_turn
+    assert snapshot["finish_reason"] == "tool_calls"
+    assert snapshot["tool_calls"] == [
+        {
+            "tool_call_id": "call_1",
+            "type": "function",
+            "wire_name": "unknown_tool",
+            "arguments": {"value": 1},
+            "arguments_status": "parsed",
+        }
+    ]
+    assert "private chain" not in json.dumps(snapshot)
+
+
+def test_native_planner_rejection_snapshot_keeps_invalid_argument_text(tmp_path):
+    response = {
+        "choices": [
+            {
+                "finish_reason": "tool_calls",
+                "message": {
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_bad_json",
+                            "type": "function",
+                            "function": {
+                                "name": "uav_hover",
+                                "arguments": "{not-json",
+                            },
+                        }
+                    ],
+                },
+            }
+        ]
+    }
+
+    with pytest.raises(AgentProtocolError, match="not valid JSON") as raised:
+        StubPlanner(response).plan_turn(make_transcript(tmp_path), default_registry())
+
+    assert raised.value.rejected_turn["tool_calls"][0] == {
+        "tool_call_id": "call_bad_json",
+        "type": "function",
+        "wire_name": "uav_hover",
+        "arguments": "{not-json",
+        "arguments_status": "invalid",
+    }
 
 
 def test_native_planner_requires_api_key(tmp_path):

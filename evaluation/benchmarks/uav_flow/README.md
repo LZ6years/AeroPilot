@@ -56,9 +56,10 @@ python tests/manual/model_native_tool_loop_smoke.py --env-path .env
 
 该探针会验证多模态输入、read-only ToolCall、ToolResult 回放，以及下一轮
 `runtime.commit_phase_turn + UAV action`。它不会执行物理动作，完整的脱敏请求摘要
-和 `agent_transcript.jsonl` 保存在打印出的 `runs/` 目录中。模型第一次遗漏
-`public_intent` 等可修复协议字段时，探针会使用与 Runtime 相同的 transcript
-feedback 循环重试，并保留该过程供审计。
+和 `agent_transcript.jsonl` 保存在打印出的 `runs/` 目录中。Provider 省略
+assistant content 时，合法 ToolCall 会执行并标记为参数派生 intent；真正无法
+规范化的响应才进入与 Runtime 相同的 transcript feedback 修正循环，并保留
+`provider_turn_rejected` 供审计。
 
 DowntownWest 的真实运行沿用旧 UAV-Flow Blueprint 视觉契约：
 
@@ -106,6 +107,19 @@ DowntownWest 的真实运行沿用旧 UAV-Flow Blueprint 视觉契约：
 - `summary.json`、`summary.md`、case 指标和评测真值文件。
 
 不再生成 case 级 Markdown review；Core HTML 是唯一的可视化审计页面。
+
+可在真实评测结束后运行只读 Native ToolCall 审计器。它检查 ToolCall/ToolResult
+闭合、两层循环协议、每批一次 observation、实际动作回放和 HTML 便携图片，
+不会重新调用模型或模拟器：
+
+```powershell
+python tests/manual/native_tool_loop_real_audit.py `
+  --eval-dir H:/UAV-Agent-Evaluation/uav_flow/outputs/<eval-id> `
+  --output H:/UAV-Agent-Evaluation/uav_flow/outputs/<eval-id>/native_tool_audit.json `
+  --strict
+```
+
+报告中的数量只表示测试覆盖；有效性由逐条 transcript 违规项决定。
 
 HTML gallery 默认只渲染 RGB。Depth 仍按 ObservationProfile 采集，并保留在
 `audit.json` 和便携审计资产中，不进入页面图片列表。

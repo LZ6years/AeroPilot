@@ -13,7 +13,12 @@ import urllib.error
 import urllib.request
 from typing import TYPE_CHECKING, Any
 
-from src.agent.transcript import AgentToolCall, AgentTranscript, AssistantTurn
+from src.agent.transcript import (
+    AgentToolCall,
+    AgentTranscript,
+    AssistantTurn,
+    PublicIntentSource,
+)
 from src.runtime.configs.model_config import ModelConfig, load_model_config
 
 if TYPE_CHECKING:
@@ -25,7 +30,21 @@ class ModelActionPlannerConfigError(RuntimeError):
 
 
 class AgentProtocolError(ValueError):
-    """Raised when a provider response cannot be represented canonically."""
+    """Raised when a provider response cannot be represented canonically.
+
+    ``rejected_turn`` contains only the safe response fields needed to audit
+    what the provider attempted. It intentionally excludes private reasoning
+    fields and arbitrary provider metadata.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        rejected_turn: dict[str, Any] | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.rejected_turn = dict(rejected_turn or {})
 
 
 class ModelActionPlanner:
@@ -90,10 +109,24 @@ class ModelActionPlanner:
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise AgentProtocolError("provider response missing choices[0].message") from exc
+            error = "provider response missing choices[0].message"
+            raise AgentProtocolError(
+                error,
+                rejected_turn=_provider_rejection_snapshot(data, error),
+            ) from exc
         if not isinstance(message, dict):
-            raise AgentProtocolError("provider choices[0].message must be an object")
-        return _parse_assistant_turn(message, registry)
+            error = "provider choices[0].message must be an object"
+            raise AgentProtocolError(
+                error,
+                rejected_turn=_provider_rejection_snapshot(data, error),
+            )
+        try:
+            return _parse_assistant_turn(message, registry)
+        except AgentProtocolError as exc:
+            raise AgentProtocolError(
+                str(exc),
+                rejected_turn=_provider_rejection_snapshot(data, str(exc)),
+            ) from exc
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
         request = urllib.request.Request(
@@ -160,16 +193,111 @@ def _parse_assistant_turn(message: dict[str, Any], registry: "ToolRegistry") -> 
         calls.append(AgentToolCall(call_id, spec.name, args))
     content = message.get("content")
     public_intent = content.strip() if isinstance(content, str) else ""
-    if calls and not public_intent:
-        raise AgentProtocolError(
-            "assistant must include a concise public intent with tool calls"
-        )
     if not calls:
         raise AgentProtocolError(
             "mission assistant turn must call a tool; use runtime.commit_phase_turn to finish a phase"
         )
+    public_intent_source: PublicIntentSource = "provider_content"
+    if not public_intent:
+        public_intent = _fallback_public_intent(calls)
+        public_intent_source = "tool_arguments_fallback"
     turn_id = str(message.get("id") or f"assistant_{calls[0].tool_call_id}")
-    return AssistantTurn(turn_id=turn_id, public_intent=public_intent, tool_calls=calls)
+    return AssistantTurn(
+        turn_id=turn_id,
+        public_intent=public_intent,
+        tool_calls=calls,
+        public_intent_source=public_intent_source,
+    )
+
+
+def _fallback_public_intent(calls: list[AgentToolCall]) -> str:
+    """Describe model-authored Tool arguments without inventing reasoning."""
+
+    commit = next(
+        (call for call in calls if call.tool_name == "runtime.commit_phase_turn"),
+        None,
+    )
+    if commit is not None:
+        action_window = commit.args.get("action_window")
+        if isinstance(action_window, dict):
+            intent = action_window.get("intent")
+            if isinstance(intent, str) and intent.strip():
+                return intent.strip()
+        phase = commit.args.get("phase")
+        phase_label = (
+            phase.strip()
+            if isinstance(phase, str) and phase.strip()
+            else "current"
+        )
+        return f"Commit phase decision for {phase_label}."
+
+    if len(calls) == 1:
+        observation_id = calls[0].args.get("observation_id")
+        if isinstance(observation_id, str) and observation_id.strip():
+            return f"Request {calls[0].tool_name} for observation {observation_id.strip()}."
+    names = ", ".join(call.tool_name for call in calls)
+    return f"Request tool call(s): {names}."
+
+
+def _provider_rejection_snapshot(
+    response: dict[str, Any], error: str
+) -> dict[str, Any]:
+    """Extract auditable wire evidence without persisting hidden reasoning."""
+
+    choices = response.get("choices")
+    choices = choices if isinstance(choices, list) else []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    message = choice.get("message")
+    message = message if isinstance(message, dict) else {}
+    content = message.get("content")
+    raw_calls = message.get("tool_calls")
+    raw_calls = raw_calls if isinstance(raw_calls, list) else []
+    tool_calls = []
+    for raw in raw_calls:
+        raw = raw if isinstance(raw, dict) else {}
+        function = raw.get("function")
+        function = function if isinstance(function, dict) else {}
+        arguments = function.get("arguments")
+        parsed_arguments: Any = arguments
+        arguments_status = "missing"
+        if arguments is not None:
+            try:
+                parsed_arguments = (
+                    json.loads(arguments)
+                    if isinstance(arguments, str)
+                    else arguments
+                )
+                arguments_status = (
+                    "parsed" if isinstance(parsed_arguments, dict) else "invalid"
+                )
+            except (json.JSONDecodeError, TypeError):
+                arguments_status = "invalid"
+        tool_calls.append(
+            {
+                "tool_call_id": str(raw.get("id") or ""),
+                "type": raw.get("type"),
+                "wire_name": str(function.get("name") or ""),
+                "arguments": _redact_provider_value(parsed_arguments),
+                "arguments_status": arguments_status,
+            }
+        )
+    return {
+        "error": error,
+        "finish_reason": choice.get("finish_reason"),
+        "content_present": bool(content.strip()) if isinstance(content, str) else False,
+        "content": _redact_provider_value(content) if isinstance(content, str) else None,
+        "tool_calls": tool_calls,
+    }
+
+
+def _redact_provider_value(value: Any) -> Any:
+    if isinstance(value, str) and value.startswith("data:image/"):
+        return "[image_data_url]"
+    if isinstance(value, list):
+        return [_redact_provider_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _redact_provider_value(item) for key, item in value.items()}
+    return value
 
 
 def _memory_system_messages(context: dict[str, Any]) -> list[dict[str, str]]:

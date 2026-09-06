@@ -1002,6 +1002,10 @@ class TaskRuntime:
                     allowed_tool_names=allowed_names,
                 )
             except AgentProtocolError as exc:
+                if exc.rejected_turn:
+                    self.agent_transcript.append_provider_rejection(
+                        exc.rejected_turn
+                    )
                 self.agent_transcript.append_protocol_feedback(
                     f"Protocol error: {exc}. Return a corrected native tool-call turn."
                 )

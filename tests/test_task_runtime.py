@@ -2051,6 +2051,159 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
     } <= result_ids
 
 
+def test_native_runtime_audits_provider_rejection_and_executes_null_content_turns(
+    tmp_path,
+):
+    """A missing explanation cannot block otherwise valid physical ToolCalls."""
+
+    def response(*calls):
+        return {
+            "choices": [
+                {
+                    "finish_reason": "tool_calls",
+                    "message": {
+                        "content": None,
+                        "reasoning_content": "must never enter the transcript",
+                        "tool_calls": [
+                            {
+                                "id": call_id,
+                                "type": "function",
+                                "function": {
+                                    "name": wire_name,
+                                    "arguments": json.dumps(args),
+                                },
+                            }
+                            for call_id, wire_name, args in calls
+                        ],
+                    },
+                }
+            ]
+        }
+
+    class ProviderSequencePlanner(ModelActionPlanner):
+        def __init__(self) -> None:
+            super().__init__(
+                ModelConfig(
+                    model_name="stub",
+                    api_key="test-key",
+                    base_url="https://example.test/v1",
+                )
+            )
+            self.responses = [
+                response(("bad_call", "unknown_tool", {"value": 1})),
+                response(
+                    (
+                        "commit_move",
+                        "runtime_commit_phase_turn",
+                        {
+                            "phase": "final_phase",
+                            "completion_assessment": {
+                                "done_when": [
+                                    {
+                                        "index": 0,
+                                        "status": "unknown",
+                                        "evidence": "No action has executed yet.",
+                                    }
+                                ]
+                            },
+                            "phase_strategy": {
+                                "stages": ["hover once"],
+                                "active_stage": 0,
+                                "reason": "A bounded action is still required.",
+                            },
+                            "action_window": {
+                                "intent": "hover once before reassessing",
+                                "expected_effect": "the UAV remains stable",
+                            },
+                        },
+                    ),
+                    ("hover_once", "uav_hover", {}),
+                ),
+                response(
+                    (
+                        "commit_done",
+                        "runtime_commit_phase_turn",
+                        {
+                            "phase": "final_phase",
+                            "completion_assessment": {
+                                "done_when": [
+                                    {
+                                        "index": 0,
+                                        "status": "supported",
+                                        "evidence": "The post-action observation is available.",
+                                    }
+                                ]
+                            },
+                        },
+                    )
+                ),
+            ]
+            self.payloads = []
+
+        def _request(self, payload):
+            self.payloads.append(payload)
+            return self.responses.pop(0)
+
+    run_dir = tmp_path / "native_null_content"
+    recorder = AsyncRunLogger(run_dir)
+    planner = ProviderSequencePlanner()
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+        model_config=planner.model_config,
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    transcript = [
+        json.loads(line)
+        for line in (run_dir / "memory" / "agent_transcript.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    kinds = [item["kind"] for item in transcript]
+    rejected_index = kinds.index("provider_turn_rejected")
+    assert state.completed
+    assert kinds[rejected_index + 1] == "protocol_feedback"
+    assert transcript[rejected_index]["payload"]["tool_calls"][0]["wire_name"] == (
+        "unknown_tool"
+    )
+    assert "must never enter" not in json.dumps(transcript)
+    accepted = [item for item in transcript if item["kind"] == "assistant_turn"]
+    assert [item["payload"]["public_intent_source"] for item in accepted] == [
+        "tool_arguments_fallback",
+        "tool_arguments_fallback",
+    ]
+    assert accepted[0]["payload"]["public_intent"] == (
+        "hover once before reassessing"
+    )
+    actions = [
+        json.loads(line)
+        for line in (run_dir / "memory" / "actions.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    hover_result = next(
+        item
+        for item in transcript
+        if item["kind"] == "tool_result"
+        and item["payload"].get("tool_call_id") == "hover_once"
+    )
+    assert hover_result["payload"]["status"] == "ok"
+    action_index = int(hover_result["payload"]["result_ref"].rsplit("#", 1)[1]) - 1
+    assert actions[action_index]["tool"] == "uav.hover"
+    replayed_assistant = [
+        item
+        for item in planner.payloads[-1]["messages"]
+        if item.get("role") == "assistant"
+    ]
+    assert replayed_assistant[-1]["content"] is None
+
+
 def test_task_runtime_normalizes_yaw_wraparound_delta(tmp_path):
     recorder = AsyncRunLogger(tmp_path / "yaw_wrap")
     server = SimulationServer([make_package()], run_dir=tmp_path / "yaw_wrap")

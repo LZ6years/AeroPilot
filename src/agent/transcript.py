@@ -11,7 +11,7 @@ import copy
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 
 from src.agent.planning.model_inputs import build_model_user_content
 
@@ -34,16 +34,29 @@ class AgentToolCall:
         }
 
 
+PublicIntentSource = Literal["provider_content", "tool_arguments_fallback"]
+
+
 @dataclass(frozen=True)
 class AssistantTurn:
+    """One canonical provider turn with an auditable intent summary.
+
+    ``public_intent`` is the text Runtime may use for user-facing action
+    reasons. ``public_intent_source`` distinguishes provider-authored content
+    from the deterministic compatibility summary used when a provider emits
+    valid ToolCalls with ``content=null``.
+    """
+
     turn_id: str
     public_intent: str
     tool_calls: list[AgentToolCall] = field(default_factory=list)
+    public_intent_source: PublicIntentSource = "provider_content"
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "turn_id": self.turn_id,
             "public_intent": self.public_intent,
+            "public_intent_source": self.public_intent_source,
             "tool_calls": [call.to_dict() for call in self.tool_calls],
         }
 
@@ -115,6 +128,11 @@ class AgentTranscript:
     def append_protocol_feedback(self, message: str) -> None:
         self._append("protocol_feedback", {"message": message})
 
+    def append_provider_rejection(self, rejected_turn: dict[str, Any]) -> None:
+        """Persist an unexecutable provider turn for audit, never replay."""
+
+        self._append("provider_turn_rejected", copy.deepcopy(rejected_turn))
+
     def latest_context(self) -> dict[str, Any]:
         for item in reversed(self.items):
             if item.kind == "state_checkpoint":
@@ -177,7 +195,14 @@ class AgentTranscript:
                     )
                 message: dict[str, Any] = {
                     "role": "assistant",
-                    "content": turn.public_intent or None,
+                    # A fallback intent helps Runtime and reviewers, but it was
+                    # not emitted by the provider and must not be fabricated
+                    # in the provider conversation history.
+                    "content": (
+                        turn.public_intent or None
+                        if turn.public_intent_source == "provider_content"
+                        else None
+                    ),
                 }
                 if tool_calls:
                     message["tool_calls"] = tool_calls
@@ -195,6 +220,9 @@ class AgentTranscript:
                 continue
             if item.kind == "protocol_feedback":
                 messages.append({"role": "user", "content": item.payload["message"]})
+            # provider_turn_rejected is audit-only. Replaying malformed or
+            # unknown ToolCalls without ToolResults can itself violate the
+            # provider protocol; the following feedback is the repair input.
         return messages
 
     def to_dict(self) -> dict[str, Any]:

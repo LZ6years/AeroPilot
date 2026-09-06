@@ -140,3 +140,61 @@ def test_transcript_sends_each_identified_image_once_at_its_first_checkpoint(tmp
 
     assert rendered.count("data:image/png;base64,PAST") == 1
     assert rendered.count("data:image/png;base64,NOW") == 1
+
+
+def test_fallback_intent_is_audited_but_not_fabricated_for_provider(tmp_path):
+    transcript = AgentTranscript(MemoryEventWriter(tmp_path))
+    transcript.start_instruction("inspect", "inst_0001")
+    transcript.append_assistant(
+        AssistantTurn(
+            "assistant_1",
+            "Request uav.get_pose for observation obs_0001.",
+            [AgentToolCall("call_pose", "uav.get_pose", {})],
+            public_intent_source="tool_arguments_fallback",
+        )
+    )
+    transcript.append_tool_result(
+        ToolResult("call_pose", "uav.get_pose", "ok", "pose read")
+    )
+
+    messages = transcript.provider_messages(default_registry())
+    assistant = next(item for item in messages if item["role"] == "assistant")
+
+    assert assistant["content"] is None
+    assert transcript.to_dict()["items"][1]["payload"] == {
+        "turn_id": "assistant_1",
+        "public_intent": "Request uav.get_pose for observation obs_0001.",
+        "public_intent_source": "tool_arguments_fallback",
+        "tool_calls": [
+            {"tool_call_id": "call_pose", "tool_name": "uav.get_pose", "args": {}}
+        ],
+    }
+
+
+def test_provider_rejection_is_persisted_but_omitted_from_provider_projection(tmp_path):
+    transcript = AgentTranscript(MemoryEventWriter(tmp_path))
+    transcript.start_instruction("inspect", "inst_0001")
+    transcript.append_provider_rejection(
+        {
+            "error": "unknown provider tool",
+            "finish_reason": "tool_calls",
+            "content_present": False,
+            "content": None,
+            "tool_calls": [
+                {
+                    "tool_call_id": "bad_call",
+                    "wire_name": "unknown_tool",
+                    "arguments": {},
+                    "arguments_status": "parsed",
+                }
+            ],
+        }
+    )
+    transcript.append_protocol_feedback("Return a corrected ToolCall.")
+
+    messages = transcript.provider_messages(default_registry())
+    records = transcript.to_dict()["items"]
+
+    assert [item["role"] for item in messages] == ["user", "user"]
+    assert messages[-1]["content"] == "Return a corrected ToolCall."
+    assert records[1]["kind"] == "provider_turn_rejected"

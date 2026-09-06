@@ -651,6 +651,7 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
     html = (case_dir / "review.html").read_text(encoding="utf-8")
     assert "Agent Tool Transcript" in html
     assert "Find &lt;person&gt; and turn safely." in html
+    assert "Provider public intent" in html
     assert "Confirm &lt;candidate&gt; before moving." in html
     assert "call_detect_bad" in html and "rejected" in html
     assert "Use the latest observation_id." in html
@@ -725,6 +726,80 @@ def test_core_review_reports_unclosed_duplicate_and_orphan_tool_records(
     assert "duplicate ToolCall id: duplicate" in html
     assert "ToolCall has no terminal ToolResult: open" in html
     assert "orphan ToolResult: orphan" in html
+
+
+def test_core_review_labels_fallback_intent_and_provider_rejection(tmp_path):
+    transcript = (
+        _transcript_event(
+            "provider_turn_rejected",
+            {
+                "error": "unknown provider tool: unsafe_<tool>",
+                "finish_reason": "tool_calls",
+                "content_present": False,
+                "content": None,
+                "tool_calls": [
+                    {
+                        "tool_call_id": "bad_<id>",
+                        "wire_name": "unsafe_<tool>",
+                        "arguments": {"payload": "<script>bad()</script>"},
+                        "arguments_status": "parsed",
+                    }
+                ],
+            },
+            1,
+        ),
+        _transcript_event(
+            "protocol_feedback",
+            {"message": "Use an exposed tool."},
+            2,
+        ),
+        _transcript_event(
+            "assistant_turn",
+            {
+                "turn_id": "assistant_fixed",
+                "public_intent": "Commit phase decision for inspect.",
+                "public_intent_source": "tool_arguments_fallback",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "commit_fixed",
+                        "tool_name": "runtime.commit_phase_turn",
+                        "args": {"phase": "inspect"},
+                    }
+                ],
+            },
+            3,
+        ),
+        _tool_result_event(
+            "commit_fixed", "runtime.commit_phase_turn", 4
+        ),
+    )
+    audit = BenchmarkAuditLog(
+        run_dir=str(tmp_path / "run"),
+        started_at=None,
+        ended_at="2026-01-01T00:00:04+00:00",
+        task_initial_observation_ref=None,
+        observations=(),
+        frames=(),
+        poses=(),
+        actions=(),
+        agent_messages=(),
+        events=(),
+        debug_events=(),
+        planner_debug=(),
+        agent_transcript=transcript,
+    )
+
+    _write_case_review(tmp_path / "eval", audit, ())
+
+    html = (
+        tmp_path / "eval" / "cases" / "transcript" / "review.html"
+    ).read_text(encoding="utf-8")
+    assert "Provider Turn Rejected" in html
+    assert "Not executed; audit only." in html
+    assert "Intent reconstructed from Tool arguments" in html
+    assert "unsafe_&lt;tool&gt;" in html
+    assert "&lt;script&gt;bad()&lt;/script&gt;" in html
+    assert "ToolCall has no terminal ToolResult: bad_&lt;id&gt;" not in html
 
 
 def test_core_review_correlates_completion_and_renders_planner_window(

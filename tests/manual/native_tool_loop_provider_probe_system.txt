@@ -1,6 +1,7 @@
 You are running a two-turn FlyAgent provider protocol probe. Follow the exact
-stage indicated by the chronological transcript and always include a short
-public intent in assistant content.
+stage indicated by the chronological transcript. Include a short public intent
+when the provider emits assistant content; valid ToolCalls remain authoritative
+when assistant content is omitted.
 
 Before any ToolResult exists, call only skill_person_detector_detect with the
 exact observation_id shown by the current image. Do not commit or call a UAV

@@ -1,9 +1,11 @@
 """Exercise FlyAgent's real multimodal native tool loop without a simulator.
 
 The probe uses the production ``ModelActionPlanner``, canonical ``ToolRegistry``,
-and ``AgentTranscript`` provider projection. It performs two paid model calls:
-one read-only person-detector request, followed by one phase commit plus a UAV
-turn request after a synthetic detector ToolResult. No UAV command is executed.
+and ``AgentTranscript`` provider projection. It normally performs two paid
+model calls: one read-only person-detector request, followed by one phase commit
+plus a UAV turn request after a synthetic detector ToolResult. A genuinely
+invalid provider response may add a bounded repair round. No UAV command is
+executed.
 
 PowerShell example:
 
@@ -139,7 +141,7 @@ def main() -> None:
     _assert_provider_requests(
         first_request,
         second_request,
-        detector_call.tool_call_id,
+        first_turn,
     )
     _assert_closed_transcript(transcript.to_dict())
     summary = {
@@ -286,11 +288,11 @@ def _plan_with_protocol_repair(
                     "status": "protocol_rejected",
                     "error": str(exc),
                     "request": copy.deepcopy(planner.last_request),
-                    "response": _provider_response_summary(
-                        planner.last_response
-                    ),
+                    "response": copy.deepcopy(exc.rejected_turn),
                 }
             )
+            if exc.rejected_turn:
+                transcript.append_provider_rejection(exc.rejected_turn)
             transcript.append_protocol_feedback(
                 f"Protocol error: {exc}. Return a corrected native tool-call turn."
             )
@@ -306,32 +308,6 @@ def _plan_with_protocol_repair(
     raise RuntimeError(
         f"Provider did not produce a valid {stage} turn within {max_rounds} rounds"
     )
-
-
-def _provider_response_summary(response: dict[str, Any]) -> dict[str, Any]:
-    """Keep protocol evidence without persisting provider-private reasoning."""
-
-    choices = response.get("choices")
-    choices = choices if isinstance(choices, list) else []
-    message = choices[0].get("message", {}) if choices else {}
-    message = message if isinstance(message, dict) else {}
-    raw_calls = message.get("tool_calls")
-    raw_calls = raw_calls if isinstance(raw_calls, list) else []
-    return {
-        "response_keys": sorted(response),
-        "finish_reason": (
-            choices[0].get("finish_reason")
-            if choices and isinstance(choices[0], dict)
-            else None
-        ),
-        "assistant_content_present": bool(message.get("content")),
-        "tool_names": [
-            call.get("function", {}).get("name")
-            for call in raw_calls
-            if isinstance(call, dict)
-            and isinstance(call.get("function"), dict)
-        ],
-    }
 
 
 def _assert_first_turn(turn) -> None:
@@ -367,7 +343,7 @@ def _assert_second_turn(turn, registry) -> None:
 def _assert_provider_requests(
     first_request: dict[str, Any],
     second_request: dict[str, Any],
-    detector_call_id: str,
+    first_turn,
 ) -> None:
     if "response_format" in first_request or "response_format" in second_request:
         raise RuntimeError("Native tool-loop request unexpectedly used response_format")
@@ -379,10 +355,34 @@ def _assert_provider_requests(
         if isinstance(item, dict) and item.get("role") == "tool"
     ]
     if not any(
-        item.get("tool_call_id") == detector_call_id for item in tool_messages
+        item.get("tool_call_id") == first_turn.tool_calls[0].tool_call_id
+        for item in tool_messages
     ):
         raise RuntimeError(
             "Second provider request did not replay the first ToolResult"
+        )
+    assistant_messages = [
+        item
+        for item in second_request.get("messages", [])
+        if isinstance(item, dict)
+        and item.get("role") == "assistant"
+        and any(
+            call.get("id") == first_turn.tool_calls[0].tool_call_id
+            for call in item.get("tool_calls", [])
+            if isinstance(call, dict)
+        )
+    ]
+    if len(assistant_messages) != 1:
+        raise RuntimeError("Second provider request did not replay the first AssistantTurn")
+    expected_content = (
+        first_turn.public_intent
+        if first_turn.public_intent_source == "provider_content"
+        else None
+    )
+    if assistant_messages[0].get("content") != expected_content:
+        raise RuntimeError(
+            "Provider history fabricated or dropped AssistantTurn content: "
+            f"source={first_turn.public_intent_source!r}"
         )
 
 
@@ -428,6 +428,8 @@ def _terminal_summary(summary: dict[str, Any], output_dir: Path) -> dict[str, An
         "second_turn_tools": [
             call["tool_name"] for call in summary["second_turn"]["tool_calls"]
         ],
+        "first_turn_intent_source": summary["first_turn"]["public_intent_source"],
+        "second_turn_intent_source": summary["second_turn"]["public_intent_source"],
         "response_format_present": False,
         "tool_result_replayed": True,
         "output_dir": str(output_dir),

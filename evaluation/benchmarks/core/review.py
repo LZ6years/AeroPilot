@@ -486,9 +486,11 @@ def _agent_tool_transcript(
 ) -> str:
     """Render the canonical model/tool exchange without inventing reasoning.
 
-    ``public_intent`` is the model's explicit explanation. The report pairs
-    calls and results by provider ``tool_call_id`` and keeps physical telemetry
-    in the separate Action Timeline below.
+    ``public_intent_source`` distinguishes provider-authored text from the
+    deterministic summary reconstructed from ToolCall arguments when a
+    provider emits ``content=null``. The report pairs canonical calls and
+    results by provider ``tool_call_id`` and keeps physical telemetry in the
+    separate Action Timeline below.
     """
 
     records = list(audit.agent_transcript)
@@ -677,14 +679,53 @@ def _transcript_record_body(
                     ),
                 }
             )
+        intent_source = str(
+            payload.get("public_intent_source") or "provider_content"
+        )
+        intent_label = (
+            "Intent reconstructed from Tool arguments"
+            if intent_source == "tool_arguments_fallback"
+            else "Provider public intent"
+        )
         intent = (
-            '<p class="transcript-intent"><strong>Public intent:</strong> '
-            f'{_e(payload.get("public_intent"))}</p>'
+            '<p class="transcript-intent"><strong>'
+            f'{_e(intent_label)}:</strong> {_e(payload.get("public_intent"))}</p>'
         )
         return intent + _record_table(
             rows,
             ("tool_call_id", "tool", "args", "result_status", "pairing"),
             empty_message="This assistant turn did not contain ToolCalls.",
+        )
+    if kind == "provider_turn_rejected":
+        raw_calls = payload.get("tool_calls")
+        raw_calls = raw_calls if isinstance(raw_calls, list) else []
+        rows = []
+        for raw_call in raw_calls:
+            call = raw_call if isinstance(raw_call, dict) else {}
+            rows.append(
+                {
+                    "tool_call_id": call.get("tool_call_id"),
+                    "wire_name": call.get("wire_name"),
+                    "arguments": call.get("arguments"),
+                    "arguments_status": call.get("arguments_status"),
+                }
+            )
+        summary = {
+            "error": payload.get("error"),
+            "finish_reason": payload.get("finish_reason"),
+            "content_present": payload.get("content_present"),
+            "content": payload.get("content"),
+        }
+        return (
+            '<p class="transcript-feedback"><strong>Not executed; audit only.</strong> '
+            "This provider response could not be represented as a canonical "
+            "AssistantTurn.</p>"
+            + _key_value_table(summary)
+            + _record_table(
+                rows,
+                ("tool_call_id", "wire_name", "arguments", "arguments_status"),
+                empty_message="The rejected provider response contained no ToolCalls.",
+            )
         )
     if kind == "tool_result":
         call_id = str(payload.get("tool_call_id") or "")
