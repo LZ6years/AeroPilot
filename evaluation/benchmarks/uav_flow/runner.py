@@ -25,6 +25,7 @@ from evaluation.benchmarks.uav_flow.adapter import (
     validate_uav_flow_profile,
 )
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase, load_cases
+from evaluation.benchmarks.uav_flow.campaign import write_run_manifest
 from evaluation.benchmarks.uav_flow.config import UavFlowEvalConfig
 from evaluation.benchmarks.uav_flow.metric_suite import UavFlowMetricSuite
 from evaluation.benchmarks.uav_flow.postprocess import (
@@ -146,10 +147,19 @@ class UavFlowBenchmarkRunner:
         # evaluation-local and must never leak case pages or errors across IDs.
         self._case_reviews.clear()
         self._report_errors.clear()
-        self._prepare_stmr()
         eval_dir = create_eval_dir(self.config.output_dir, eval_id)
         console_lines = [f"uav_flow_eval: output={eval_dir}"]
         cases = self.load_cases()
+        # Freeze the selected roster and effective, redacted configuration
+        # before any simulator side effect. Continuation tooling treats this
+        # manifest as the reproducibility boundary between evaluation segments.
+        write_run_manifest(
+            eval_dir,
+            config=self.config,
+            model_config=self.model_config,
+            cases=cases,
+        )
+        self._prepare_stmr()
         results: list[dict[str, Any]] = []
         summary_paths: dict[str, str] = {}
         active_case_id: str | None = None

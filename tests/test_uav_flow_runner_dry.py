@@ -191,7 +191,16 @@ def test_runner_run_reuses_one_scene_for_multiple_cases(tmp_path, monkeypatch):
             Path(result["eval_dir"]) / "scene_session.json"
         ).read_text(encoding="utf-8")
     )
+    run_manifest = json.loads(
+        (Path(result["eval_dir"]) / "run_manifest.json").read_text(
+            encoding="utf-8"
+        )
+    )
     assert len(result["results"]) == 2
+    assert run_manifest["schema_version"] == "uav_flow_run_manifest_v1"
+    assert run_manifest["selected_case_ids"] == ["case_a", "case_b"]
+    assert run_manifest["resolved_config"]["parser_mode"] == "fake"
+    assert "api_key" not in json.dumps(run_manifest)
     assert manifest["status"] == "closed"
     assert manifest["start_count"] == 1
     assert manifest["restart_count"] == 0

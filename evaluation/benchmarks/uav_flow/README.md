@@ -121,6 +121,25 @@ python tests/manual/native_tool_loop_real_audit.py `
 
 报告中的数量只表示测试覆盖；有效性由逐条 transcript 违规项决定。
 
+长批评测会在场景启动前写入根目录 `run_manifest.json`。该文件冻结实际生效的
+评测配置、模型名称、Git 状态、选中案例顺序和完整数据集 hash，但不会读取或写入
+API Key。主批发生进程级中断时，可用只读 Campaign 审计器合并主批和 continuation，
+并生成保持数据集原始顺序的缺失案例列表：
+
+```powershell
+python tests/manual/uav_flow_full_campaign_audit.py `
+  --config evaluation/benchmarks/uav_flow/configs/uav_flow_full_273.local `
+  --eval-dir H:/UAV-Agent-Evaluation/uav_flow/outputs/<main-id> `
+  --eval-dir H:/UAV-Agent-Evaluation/uav_flow/outputs/<continuation-id> `
+  --expected-loop-guard-windows 50 `
+  --output-dir H:/UAV-Agent-Evaluation/uav_flow/outputs/<campaign-id> `
+  --strict
+```
+
+该命令只读取各 segment 已落盘的 `case.json`、`audit.json`、session 和 manifest；
+它不会调用模型或 UnrealCV，也不会把已经 finalized 的错误行为重新列为续跑案例。
+输出包括统一 JSON/Markdown/HTML 报告以及 `remaining_case_ids.txt/.json`。
+
 HTML gallery 默认只渲染 RGB。Depth 仍按 ObservationProfile 采集，并保留在
 `audit.json` 和便携审计资产中，不进入页面图片列表。
 
