@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-import urllib.error
-import urllib.request
 from typing import TYPE_CHECKING, Any
 
+from src.agent.provider_http import request_openai_compatible_json
 from src.agent.transcript import (
     AgentToolCall,
     AgentTranscript,
@@ -129,27 +128,11 @@ class ModelActionPlanner:
             ) from exc
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
-        request = urllib.request.Request(
-            self.model_config.chat_completions_url(),
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.model_config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
+        return request_openai_compatible_json(
+            self.model_config,
+            payload,
+            error_prefix="Native tool-call request failed",
         )
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self.model_config.timeout_sec
-            ) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"Native tool-call request failed: HTTP {exc.code} {exc.reason}; body={body}"
-            ) from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise RuntimeError(f"Native tool-call request failed: {exc}") from exc
 
     @staticmethod
     def _load_system_prompt(prompt_path: str | None) -> str:

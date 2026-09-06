@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from src.agent.provider_http import request_openai_compatible_json
 from src.agent.semantic.parser_contracts import (
     SemanticPlanStructure,
     merge_semantic_plan,
@@ -300,32 +299,17 @@ class TaskParser:
             return validator(_loads_json_object(second_content))
 
     def _request_model_content(self, messages: list[dict[str, str]]) -> str:
-        endpoint = self.model_config.chat_completions_url()
         payload = {
             "model": self.model_config.model_name,
             "messages": messages,
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
-        request = urllib.request.Request(
-            endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.model_config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
+        data = request_openai_compatible_json(
+            self.model_config,
+            payload,
+            error_prefix="Model task parser request failed",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.model_config.timeout_sec) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"Model task parser request failed: HTTP {exc.code} {exc.reason}; body={body}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Model task parser request failed: {exc}") from exc
         content = data["choices"][0]["message"]["content"]
         return str(content)
 

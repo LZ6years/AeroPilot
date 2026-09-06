@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
+from src.agent.provider_http import request_openai_compatible_json
 from src.agent.semantic.task_parser import (
     DEFAULT_AGENT_RULES_PATH,
     DEFAULT_DONE_WHEN_RULES_PATH,
@@ -68,32 +67,17 @@ class SemanticPlanUpdater:
         )
 
     def _call_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
-        endpoint = self.model_config.chat_completions_url()
         payload = {
             "model": self.model_config.model_name,
             "messages": self._build_messages(context),
             "temperature": 0,
             "response_format": {"type": "json_object"},
         }
-        request = urllib.request.Request(
-            endpoint,
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.model_config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
+        data = request_openai_compatible_json(
+            self.model_config,
+            payload,
+            error_prefix="Semantic plan updater request failed",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.model_config.timeout_sec) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"Semantic plan updater request failed: HTTP {exc.code} {exc.reason}; body={body}"
-            ) from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Semantic plan updater request failed: {exc}") from exc
         content = data["choices"][0]["message"]["content"]
         return _loads_json_object(content)
 
