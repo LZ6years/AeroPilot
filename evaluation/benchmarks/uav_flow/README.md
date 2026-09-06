@@ -59,12 +59,16 @@ DowntownWest 的真实运行沿用旧 UAV-Flow Blueprint 视觉契约：
 - 当前 DowntownWest 二进制使用 `camera_follow=standard_pose` 将 camera 0 的
   world pose 同步到受控 Actor。旧 batch 的 `vbp 0 set_cam` 把 camera id 错当成
   Actor id 且忽略了错误返回；当前实现不会复刻该无效成功。
+- `activate_viewport=true` 在连接初始化时执行
+  `vbp BP_Drone01_2 set_viewport`，让可见 UE 窗口与受控无人机一致；模型观测仍
+  由同步后的 camera 0 提供，视口选择不会改变 Planner 输入来源。
 - `camera_validation` 在同步后读取 camera pose；位置或 yaw 超出地图容差时，
   episode 在错误 RGB 进入 Planner 前失败。DowntownWest camera 0 使用地图级
   `position_mode=max_distance`：碰撞避让允许 camera 在 Actor 周围 `1.5m` 内
   改变安装偏移，同时 yaw 仍必须在 `1°` 内一致。
-- startup normalization 只隐藏其他默认 Pawn，不整 Actor 隐藏 camera-owning
-  `BP_Drone01_2`。
+- startup normalization 隐藏其他默认 Pawn，并隐藏 camera-owning
+  `BP_Drone01_2` 的网格以避免自机遮挡第一视角；隐藏网格不会改变 Actor 位姿
+  控制、Blueprint camera 或 viewport 归属。
 
 这些约束只作用于 UAV-Flow 的场景布置与 DowntownWest MapPackage；飞行、Turn
 计算和观测生命周期仍由通用 TaskRuntime 与 UnrealCV Backend 负责。

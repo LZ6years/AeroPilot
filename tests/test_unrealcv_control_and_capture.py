@@ -129,6 +129,17 @@ class HideFailureClient(FakeUnrealCvClient):
         return super().request(command, timeout)
 
 
+class ViewportFailureClient(FakeUnrealCvClient):
+    """Return an explicit Blueprint error while activating the viewport."""
+
+    def request(self, command, timeout=5):
+        if command == "vbp BP_Drone set_viewport":
+            self.commands.append(command)
+            self.requests.append((command, int(timeout)))
+            return b"error viewport activation failed"
+        return super().request(command, timeout)
+
+
 class StuckStandardCameraClient(FakeUnrealCvClient):
     """Acknowledge camera pose writes while leaving its pose unchanged."""
 
@@ -208,6 +219,7 @@ def _actor_config(**overrides) -> ActorControlConfig:
         "yaw_offset_deg": -180.0,
         "rotation_method": "blueprint_yaw",
         "camera_follow": "blueprint_pose",
+        "activate_viewport": False,
         "camera_validation_enabled": False,
         "camera_position_mode": "expected_body_offset",
         "camera_expected_body_offset_m": (0.0, 0.0, 0.0),
@@ -239,6 +251,7 @@ def _package(control_target: str = "actor") -> MapPackage:
             "yaw_offset_deg": -180.0,
             "rotation_method": "blueprint_yaw",
             "camera_follow": "blueprint_pose",
+            "activate_viewport": False,
             "camera_validation": {
                 "enabled": False,
                 "position_mode": "expected_body_offset",
@@ -528,6 +541,57 @@ def test_actor_prepare_normalizes_scene_before_camera_sync() -> None:
     )
 
 
+def test_standard_pose_activates_actor_viewport_once_during_prepare() -> None:
+    client = FakeUnrealCvClient()
+    control = ActorPoseControl(
+        client,
+        _actor_config(
+            camera_follow="standard_pose",
+            activate_viewport=True,
+        ),
+    )
+
+    control.prepare()
+    control.sync_camera()
+
+    physics_command = "vbp BP_Drone set_phy 0"
+    viewport_command = "vbp BP_Drone set_viewport"
+    first_camera_sync = next(
+        index
+        for index, command in enumerate(client.commands)
+        if command.startswith("vset /camera/0/location ")
+    )
+    assert client.commands.count(viewport_command) == 1
+    assert client.commands.index(physics_command) < client.commands.index(
+        viewport_command
+    ) < first_camera_sync
+
+
+def test_standard_pose_does_not_activate_viewport_without_opt_in() -> None:
+    client = FakeUnrealCvClient()
+    control = ActorPoseControl(
+        client,
+        _actor_config(camera_follow="standard_pose"),
+    )
+
+    control.prepare()
+
+    assert "vbp BP_Drone set_viewport" not in client.commands
+
+
+def test_actor_prepare_reports_viewport_activation_failure() -> None:
+    control = ActorPoseControl(
+        ViewportFailureClient(),
+        _actor_config(
+            camera_follow="standard_pose",
+            activate_viewport=True,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="viewport activation failed"):
+        control.prepare()
+
+
 def test_hidden_controlled_actor_remains_pose_controllable() -> None:
     """Hiding the UAV mesh must not turn Actor control into camera-only motion."""
 
@@ -653,6 +717,7 @@ def test_map_package_validates_actor_control_and_capabilities() -> None:
     assert actor_package.unrealcv["actor"]["units_per_meter"] == 100.0
     assert actor_package.unrealcv["actor"]["landed_origin_z_m"] == 0.35
     assert actor_package.unrealcv["actor"]["scale"] == [0.1, 0.1, 0.1]
+    assert actor_package.unrealcv["actor"]["activate_viewport"] is False
     assert actor_package.unrealcv["startup"]["hide_objects"] == [
         "BP_Character",
         "BP_Animal",
@@ -732,6 +797,13 @@ def test_unrealcv_camera_pose_does_not_inherit_actor_agl_calibration() -> None:
                 "actor": {"name": "drone", "camera_follow": "magic"},
             },
             "camera_follow",
+        ),
+        (
+            {
+                "control_target": "actor",
+                "actor": {"name": "drone", "activate_viewport": "yes"},
+            },
+            "activate_viewport",
         ),
         (
             {

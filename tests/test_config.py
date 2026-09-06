@@ -114,6 +114,8 @@ def test_unrealcv_actor_example_uses_verified_first_person_camera_contract():
     assert actor["name"] in maps[0].unrealcv["startup"]["hide_objects"]
     assert actor["rotation_method"] == "blueprint_yaw"
     assert actor["camera_follow"] == "standard_pose"
+    assert actor["activate_viewport"] is True
+    assert actor["disable_physics"] is True
     assert actor["camera_validation"] == {
         "enabled": True,
         "position_mode": "max_distance",

@@ -42,6 +42,7 @@
           "yaw_offset_deg": -180.0,
           "rotation_method": "blueprint_yaw",
           "camera_follow": "standard_pose",
+          "activate_viewport": true,
           "camera_validation": {
             "enabled": true,
             "position_mode": "max_distance",

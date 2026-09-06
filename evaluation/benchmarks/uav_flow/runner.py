@@ -539,6 +539,9 @@ class UavFlowBenchmarkRunner:
             scenario_contract.update(
                 {
                     "camera_follow": actor_config.get("camera_follow"),
+                    "activate_viewport": actor_config.get(
+                        "activate_viewport", False
+                    ),
                     "rotation_method": actor_config.get("rotation_method"),
                     "yaw_offset_deg": actor_config.get("yaw_offset_deg"),
                     "camera_validation": actor_config.get(
@@ -549,6 +552,14 @@ class UavFlowBenchmarkRunner:
                     ),
                 }
             )
+            if actor_config.get("activate_viewport", False):
+                scenario_contract.update(
+                    {
+                        "viewport_actor": actor_config.get("name"),
+                        "viewport_activation": "prepare",
+                        "viewport_method": "set_viewport",
+                    }
+                )
             if actor_config.get("camera_follow") == "blueprint_pose":
                 scenario_contract.update(
                     {

@@ -177,6 +177,13 @@ class MapPackage:
                         f"{camera_follow}"
                     )
                 actor["camera_follow"] = camera_follow
+                activate_viewport = actor.get("activate_viewport", False)
+                if not isinstance(activate_viewport, bool):
+                    raise ValueError(
+                        f"MapPackage {data['map_id']} requires "
+                        "unrealcv.actor.activate_viewport to be boolean"
+                    )
+                actor["activate_viewport"] = activate_viewport
                 camera_validation = actor.get("camera_validation", {})
                 if not isinstance(camera_validation, dict):
                     raise ValueError(

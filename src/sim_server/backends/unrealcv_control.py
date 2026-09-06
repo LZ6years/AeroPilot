@@ -49,6 +49,7 @@ class ActorControlConfig:
     yaw_offset_deg: float
     rotation_method: str
     camera_follow: str
+    activate_viewport: bool
     camera_validation_enabled: bool
     camera_position_mode: str
     camera_expected_body_offset_m: tuple[float, float, float]
@@ -83,6 +84,7 @@ class ActorControlConfig:
             yaw_offset_deg=float(actor.get("yaw_offset_deg", 0.0)),
             rotation_method=str(actor.get("rotation_method", "standard_pose")),
             camera_follow=str(actor.get("camera_follow", "none")),
+            activate_viewport=bool(actor.get("activate_viewport", False)),
             camera_validation_enabled=bool(
                 camera_validation.get("enabled", False)
             ),
@@ -207,11 +209,28 @@ class ActorPoseControl:
             _check_command_responses(
                 [command], [self.client.request(command)]
             )
+        if self.config.activate_viewport:
+            self._activate_viewport()
         # The packaged map's default Actor pose may place the camera against
         # arbitrary geometry before an episode initial pose is applied. Sync
         # now so the scene is normalized, but validate only once Runtime calls
         # episode set_pose (and again before every capture).
         self._sync_camera(validate=False)
+
+    def _activate_viewport(self) -> None:
+        """Bind the visible packaged-game viewport to the controlled Actor.
+
+        Camera synchronization and viewport ownership are separate in
+        UnrealCV.  In particular, ``standard_pose`` can correctly feed camera
+        0 to perception while the game window remains attached to a default
+        character Pawn.  Maps opt into this Blueprint command explicitly so
+        generic deployments without a compatible Actor remain unchanged.
+        """
+
+        command = f"vbp {self.config.name} set_viewport"
+        _check_command_responses(
+            [command], [self.client.request(command)]
+        )
 
     def _hide_startup_objects(self) -> None:
         """Hide explicitly declared packaged-map meshes before capture.
@@ -406,8 +425,11 @@ class ActorPoseControl:
                     f"{location[0]} {location[1]} {location[2]} "
                     f"{roll_deg} {pitch_deg} {yaw_deg}"
                 ),
-                f"vbp {self.config.name} set_viewport",
             ]
+            # Preserve the historical blueprint_pose contract for maps that
+            # have not opted into one-time viewport activation during prepare.
+            if not self.config.activate_viewport:
+                commands.append(f"vbp {self.config.name} set_viewport")
             _check_command_responses(
                 commands, [self.client.request(command) for command in commands]
             )
