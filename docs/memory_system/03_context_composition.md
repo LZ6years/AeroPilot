@@ -43,8 +43,8 @@ flowchart TD
     USER["memory/USER.md"] --> CC
     SAFE["Safety constraints"] --> CC
     CC --> PC["PlannerContext"]
-    PC --> MAPL["ModelActionPlanner"]
-    MAPL --> TCV["ToolContractValidator"]
+    PC --> TR["AgentTranscript StateCheckpoint"]
+    TR --> MAPL["ModelActionPlanner native tool calls"]
 ```
 
 关键边界：
@@ -52,9 +52,9 @@ flowchart TD
 - `FlightMemory` 是 manifest，不生成 `ContextFragment`。
 - `ContextModule` 只处理本类别信息。
 - `ContextComposer` 只合并、排序、裁剪和加入规则。
-- `ModelActionPlanner` 只消费 `PlannerContext` 并输出 tool-only action plan。
-- `ToolContractValidator` 根据 `PlannerContext.allowed_action_constraints` 校验模型动作。
-- 阶段推进由 coupled planner 在同一次模型调用中和动作计划一起判断。
+- `ModelActionPlanner` 消费完整 active-task transcript 和 provider `tools`。
+- provider tool schema 是模型动作契约的唯一来源；debug PlannerContext 可保留旧约束字段，但 provider projection 会移除它。
+- 阶段推进由 `runtime.commit_phase_turn` 的 completion assessment 派生。
 
 ## 3. ContextFragment 外壳
 
@@ -145,15 +145,14 @@ module 不做：
 - 不包含完整 `memory/*.jsonl` 原始历史。
 - 不让 planner 直接读 run artifacts。
 - `context_schema` 解释顶层字段和各 module 输出字段。
-- `allowed_action_constraints` 是 `ToolContractValidator` 的动作契约来源。
+- `allowed_action_constraints` 只为 debug/legacy planner 保留，不进入原生 tool-loop 的 provider 状态 JSON。
 - `observation_policy` 告诉模型观察由 runtime 自动完成。
 - `phase_transition_policy` 告诉模型 action plan 不输出 `phase_transition`，阶段推进在执行后判断。
 - `phase_execution_summary` 保留为 runtime/debug 的原始 phase 进展来源，不直接发送给模型。
 - planner 在 `current_phase` 后读取顶层 `phase_strategy`；首次进入 phase 时该字段
   省略。它只包含 `stages`、`active_stage` 和标记为历史理由的 `previous_reason`。
-  Action Fragment 只包含 `motion_history_summary`：phase-start-relative UAV motion、
-  上一窗口 UAV motion，以及按从旧到新排列的最近成功动作。输出策略的原始
-  `reason`、revision 和完整历史仅保留在 Runtime/debug。
+  Action Fragment 只包含 `motion_history_summary`：phase-start-relative UAV motion 和
+  上一窗口 UAV motion。模型意图、调用和结果的完整历史由 AgentTranscript 提供。
 - Image Module 的 `model_inputs`顺序是“时间角色规则 → PAST → NOW → 当前状态
   提醒”；通用组装器保持文本/图片交错顺序，并在最后追加 JSON Context。
 - `last_window_uav_motion` 来自紧邻本轮规划前、已完成动作窗口的前后位姿差。规划前仅刷新
@@ -176,10 +175,10 @@ ContextComposer:
   合并、排序、裁剪，不创造新事实
 
 ModelActionPlanner:
-  一次调用完成 completion assessment、phase strategy 更新和 tool-only action plan
+  在同一 transcript 上执行 read-tool rounds，并提交 completion assessment 与 physical batch
 
 TaskRuntime:
-  构造 coupled planner context，执行动作并自动观察
+  构造 StateCheckpoint，执行动作批次并在批次后自动观察一次
 
 TaskRuntime:
   根据 completion assessment 派生 continue / advance / complete

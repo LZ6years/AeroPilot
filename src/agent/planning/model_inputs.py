@@ -160,12 +160,20 @@ def _input_label_part(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _input_label_text(item: dict[str, Any]) -> str:
-    usage = item.get("usage")
-    if isinstance(usage, str) and usage.strip():
-        return usage.strip()
+    identity = []
+    for key in ("observation_id", "frame_id"):
+        value = item.get(key)
+        if isinstance(value, str) and value.strip():
+            identity.append(f"{key}={value.strip()}")
     role = item.get("role")
     if isinstance(role, str) and role.strip():
-        return f"Image role: {role.strip()}."
+        identity.insert(0, f"role={role.strip()}")
+    identity_text = f"Image {'; '.join(identity)}. " if identity else ""
+    usage = item.get("usage")
+    if isinstance(usage, str) and usage.strip():
+        return f"{identity_text}{usage.strip()}".strip()
+    if isinstance(role, str) and role.strip():
+        return identity_text.strip()
     return ""
 
 

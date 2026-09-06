@@ -360,8 +360,10 @@ def test_stmr_media_follows_rgb_and_precedes_context_json(tmp_path):
 
     assert isinstance(content, list)
     assert [part["type"] for part in content] == ["text", "image_url", "text", "image_url", "text"]
-    assert content[0]["text"] == "NOW | CURRENT OBSERVATION."
-    assert content[2]["text"] == STMR_MAP_USAGE
+    assert content[0]["text"] == (
+        "Image role=current_observation. NOW | CURRENT OBSERVATION."
+    )
+    assert content[2]["text"] == f"Image role=stmr_semantic_map. {STMR_MAP_USAGE}"
     assert content[1]["image_url"]["url"] == rgb_data
     assert content[3]["image_url"]["url"] == map_data
     assert map_data not in content[-1]["text"]

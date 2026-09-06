@@ -54,7 +54,8 @@ class MemoryEventWriter:
         if isinstance(frames, dict):
             for modality, frame in frames.items():
                 if isinstance(frame, dict):
-                    frame_refs.append(self.write_frame(obs_id, modality, frame, timestamp=timestamp))
+                    frame_ref = self.write_frame(obs_id, modality, frame, timestamp=timestamp)
+                    frame_refs.append({**frame_ref, "modality": str(modality)})
 
         observation_ref = self._append_with_id(
             "observations.jsonl",
@@ -132,6 +133,24 @@ class MemoryEventWriter:
                 "source": source,
                 "phase": phase,
                 "message": dict(message),
+            },
+        )
+
+    def write_transcript_event(
+        self,
+        instruction_id: str | None,
+        kind: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Append one canonical model/tool/state exchange event."""
+
+        return self._append(
+            "agent_transcript.jsonl",
+            "turn",
+            {
+                "instruction_id": instruction_id,
+                "kind": kind,
+                "payload": dict(payload),
             },
         )
 

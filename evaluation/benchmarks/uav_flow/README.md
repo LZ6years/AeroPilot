@@ -48,6 +48,18 @@ python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
 `enable_action_planner_debug=true`；manual runner 会自动补齐这两个选项。
 UAV-Flow 不再提供静态 Parser 或固定动作的真实 probe。
 
+首次使用新的原生 ToolCall 循环前，先运行不连接模拟器的真实 provider 探针：
+
+```powershell
+python tests/manual/model_native_tool_loop_smoke.py --env-path .env
+```
+
+该探针会验证多模态输入、read-only ToolCall、ToolResult 回放，以及下一轮
+`runtime.commit_phase_turn + UAV action`。它不会执行物理动作，完整的脱敏请求摘要
+和 `agent_transcript.jsonl` 保存在打印出的 `runs/` 目录中。模型第一次遗漏
+`public_intent` 等可修复协议字段时，探针会使用与 Runtime 相同的 transcript
+feedback 循环重试，并保留该过程供审计。
+
 DowntownWest 的真实运行沿用旧 UAV-Flow Blueprint 视觉契约：
 
 - controlled object 外观必须使用 `vbp <object> set_app <id>`，不回退到
@@ -78,9 +90,11 @@ DowntownWest 的真实运行沿用旧 UAV-Flow Blueprint 视觉契约：
 输出位于 `evaluation/benchmarks/uav_flow/outputs/<eval_id>/`：
 
 - `review.html`：评测级概览；
-- `cases/<case_id>/review.html`：图片、Planner 窗口、phase 状态、动作诊断、
-  STMR 和轨迹；
-- `cases/<case_id>/audit.json`：冻结后的通用 episode 审计；
+- `cases/<case_id>/review.html`：图片、Agent Tool Transcript、实际动作、Planner
+  窗口、phase 状态、动作诊断、STMR 和轨迹；Transcript 通过
+  `tool_call_id` 配对调用与结果，并通过 `observation_id` 关联当时画面；
+- `cases/<case_id>/audit.json`：冻结后的通用 episode 审计，包含向后兼容的
+  `agent_transcript` 数组；旧 audit 没有该字段时仍可重新生成页面；
 - `cases/<case_id>/case.json`：包含 `review_html` 和紧凑的
   `audit_summary`（RGB、动作和 Agent message 数量）；
 - `cases/<case_id>/review_assets/`：可直接通过 `file://` 打开的便携图片；

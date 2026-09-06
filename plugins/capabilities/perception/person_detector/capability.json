@@ -1,14 +1,19 @@
 {
   "call_name": "skill.person_detector.detect",
+  "wire_name": "skill_person_detector_detect",
   "description": "Detect whether a person is visible in the latest RGB frame.",
   "input_schema": {
     "type": "object",
-    "required": ["image_source"],
+    "required": ["observation_id"],
     "additionalProperties": false,
     "properties": {
       "image_source": {
         "type": "string",
         "enum": ["latest_rgb"]
+      },
+      "observation_id": {
+        "type": "string",
+        "description": "Exact observation_id shown on the model-visible image label."
       },
       "min_confidence": {
         "type": "number",
@@ -16,6 +21,12 @@
         "maximum": 1
       }
     }
+  },
+  "runtime": {
+    "effect": "read_only",
+    "result_timing": "immediate",
+    "batching": "parallel_safe",
+    "model_exposed": true
   },
   "handler": "scripts/detect_person.py",
   "mock": true

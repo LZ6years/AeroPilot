@@ -11,10 +11,10 @@ import pytest
 from src.agent.mission_state import MissionState
 from src.agent.messages import AgentMessage
 from src.agent.planning.model_action_planner import ModelActionPlanner
-from src.agent.planning.model_repair_planner import ModelRepairPlannerError
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.schemas import CoupledActionPhasePlan, PlannedStep, ShortHorizonPlan
 from src.agent.safety import SafetyDecision, SafetySupervisor
+from src.agent.transcript import AgentToolCall, AssistantTurn
 from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal, TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter, PrimitiveResult
@@ -27,6 +27,7 @@ from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.configs.task_execution_options import InitialPose, TaskExecutionOptions
 from src.runtime.context import PhaseWindowContextBuilder
 from src.perception.context_builder import ObservationContextBuilder
+from src.plugins import PluginRegistry
 from src.plugins.skills.selection import ModelSkillSelector
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.configs.model_config import ModelConfig
@@ -392,34 +393,6 @@ class CoupledPlannerStub:
             },
             require_agent_messages=True,
         )
-
-
-class CoupledPlannerWithRepairEvent(CoupledPlannerStub):
-    def __init__(self) -> None:
-        super().__init__([CONTINUE_CURRENT_PHASE, COMPLETE_TASK])
-        self._repair_event_available = True
-        self.last_repair_attempts = [
-            {
-                "attempt": 1,
-                "status": "repaired",
-                "repair_context": {
-                    "phase": "final_phase",
-                    "violation": {"code": "action_window_intermediate_observation_requires_single_step"},
-                },
-                "repaired_plan": {
-                    "phase": "final_phase",
-                    "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}, "reason": "repaired"}],
-                },
-            }
-        ]
-
-    def plan_next_with_phase_decision(self, state, context=None):
-        result = super().plan_next_with_phase_decision(state, context)
-        if self._repair_event_available:
-            self._repair_event_available = False
-        else:
-            self.last_repair_attempts = []
-        return result
 
 
 class RuntimeControlRequestPlanner(CoupledPlannerStub):
@@ -1271,10 +1244,7 @@ def test_task_runtime_next_planner_context_receives_previous_window_motion(tmp_p
         "planar_m": 1.0,
         "yaw_delta_deg": 0.0,
     }
-    assert second_action["content"]["motion_history_summary"]["recent_execution"][-1] == {
-        "tool": "uav.move_body",
-        "args": {"vx": 0.0, "vy": -1.0, "vz": 0.0, "duration": 1.0},
-    }
+    assert "recent_execution" not in second_action["content"]["motion_history_summary"]
 
     events = load_event_records(run_dir)
     first_window = next(record for record in events if record["event"] == "phase_window_recorded")
@@ -1356,31 +1326,6 @@ def test_task_runtime_phase_progress_evidence_marks_translation_progress():
     assert progress["tools_executed"] == {"uav.move_body": 1}
     assert "done_when_support" not in evidence
     assert "model_guidance" not in evidence
-
-
-def test_task_runtime_coupled_records_contract_repair_events(tmp_path):
-    run_dir = tmp_path / "coupled_repair_event_run"
-    recorder = AsyncRunLogger(run_dir)
-    server = SimulationServer([make_package()], run_dir=run_dir)
-    planner = CoupledPlannerWithRepairEvent()
-    runtime = TaskRuntime(
-        SimulatorEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=planner,
-        shutdown_policy="none",
-    )
-
-    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
-    recorder.close()
-
-    events = load_event_records(run_dir)
-    event_names = [record["event"] for record in events]
-
-    assert state.completed
-    assert "model_action_contract_repair_requested" in event_names
-    assert "model_action_contract_repaired" in event_names
-    assert "model_phase_transition_judged" not in event_names
 
 
 def test_task_runtime_default_mode_uses_coupled_planner_decision(tmp_path):
@@ -1502,21 +1447,6 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
 def test_task_runtime_action_planner_debug_preserves_model_input_images(tmp_path):
     class OneTurnPlanner:
         planner_mode = "model"
-        last_model_request_recovery = {
-            "status": "recovered",
-            "attempt_count": 3,
-            "degraded_to_now_only": True,
-            "attempts": [
-                {"attempt": 1, "status": "failed", "image_mode": "all", "image_count": 2},
-                {"attempt": 2, "status": "failed", "image_mode": "all", "image_count": 2},
-                {
-                    "attempt": 3,
-                    "status": "ok",
-                    "image_mode": "current_only",
-                    "image_count": 1,
-                },
-            ],
-        }
 
         def plan_next_with_phase_decision(self, state, context=None):
             assert isinstance(context, dict)
@@ -1566,17 +1496,8 @@ def test_task_runtime_action_planner_debug_preserves_model_input_images(tmp_path
     assert payload["raw_plan"]["steps"][0]["tool"] == "uav.turn_relative"
     assert payload["safe_plan"]["steps"][0]["tool"] == "uav.turn_relative"
     assert "safety_decision" in payload
-    assert payload["model_request_recovery"]["status"] == "recovered"
-    assert payload["model_request_recovery"]["degraded_to_now_only"] is True
+    assert "model_request_recovery" not in payload
     assert "data:image" in debug_files[0].read_text(encoding="utf-8")
-    events = load_event_records(run_dir)
-    recovered = [
-        record
-        for record in events
-        if record["event"] == "model_action_request_recovered"
-    ]
-    assert len(recovered) == 1
-    assert recovered[0]["payload"]["attempt_count"] == 3
     assert state.completed or state.stopped
 
 
@@ -1853,11 +1774,19 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
                 )
             )
 
-        def _call_coupled_action_phase_openai_compatible(self, context: dict):
+        def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
+            context = transcript.latest_context()
             self.contexts.append(context)
-            return {
-                "phase": context["current_phase"]["name"],
-                "completion_assessment": {
+            call_index = len(self.contexts)
+            return AssistantTurn(
+                turn_id=f"assistant_{call_index}",
+                public_intent="The context verification phase is complete.",
+                tool_calls=[AgentToolCall(
+                    f"commit_{call_index}",
+                    "runtime.commit_phase_turn",
+                    {
+                        "phase": context["current_phase"]["name"],
+                        "completion_assessment": {
                     "done_when": [
                         {
                             "index": index,
@@ -1866,18 +1795,10 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
                         }
                         for index, _ in enumerate(context["current_phase"]["done_when"])
                     ]
-                },
-                "agent_messages": [
-                    {
-                        "type": "progress",
-                        "content": "The context verification phase is complete.",
-                        "evidence_refs": [],
-                        "confidence": "medium",
-                        "requires_user_reply": False,
-                    }
-                ],
-                "steps": [],
-            }
+                        },
+                    },
+                )],
+            )
 
     instructions = [
         "右转寻找黑色路灯",
@@ -1933,9 +1854,8 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     assert [item["instruction"] for item in instruction_history] == instructions[-6:-1]
     assert all(item["id"] != flight_memory["active_instruction_id"] for item in instruction_history)
     motion_history = fragments["action"]["content"]["motion_history_summary"]
-    assert 1 <= len(motion_history["recent_execution"]) <= 5
-    assert motion_history["recent_execution_order"] == "oldest_to_newest"
-    assert all("ok" not in item for item in motion_history["recent_execution"])
+    assert "recent_execution" not in motion_history
+    assert "recent_execution_order" not in motion_history
     assert fragments["pose"]["metadata"]["pose_history_count"] <= 3
     assert fragments["image"]["metadata"]["observation_count"] <= 3
     assert fragments["image"]["artifact_refs"]
@@ -1946,6 +1866,189 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     event_names = [record["event"] for record in events]
     assert "phase_completion_assessed" in event_names
     assert "model_action_planned" in event_names
+
+
+def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_calls(tmp_path):
+    class NativeSequencePlanner:
+        planner_mode = "model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+            self.allowed_names = []
+            self.observation_ids = []
+            self.provider_roles = []
+
+        def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
+            self.calls += 1
+            self.allowed_names.append(set(allowed_tool_names or set()))
+            self.observation_ids.append(transcript.latest_observation_id())
+            self.provider_roles.append(
+                [message["role"] for message in transcript.provider_messages(registry)]
+            )
+            observation_id = transcript.latest_observation_id()
+            if self.calls == 1:
+                return AssistantTurn(
+                    "assistant_detect",
+                    "I will confirm the person in the current observation.",
+                    [
+                        AgentToolCall(
+                            "call_detect",
+                            "skill.person_detector.detect",
+                            {"observation_id": observation_id, "min_confidence": 0.5},
+                        )
+                    ],
+                )
+            if self.calls == 2:
+                tool_results = [
+                    item.payload
+                    for item in transcript.items
+                    if item.kind == "tool_result"
+                ]
+                detector_result = next(
+                    result for result in tool_results if result.tool_call_id == "call_detect"
+                )
+                assert detector_result.status == "ok"
+                assert detector_result.data["observation_id"] == observation_id
+                assert detector_result.data["frame_id"]
+                assert detector_result.artifact_refs
+                return AssistantTurn(
+                    "assistant_move",
+                    "The detector confirmed a person, so I will turn and approach in one window.",
+                    [
+                        AgentToolCall(
+                            "call_commit_move",
+                            "runtime.commit_phase_turn",
+                            {
+                                "phase": "final_phase",
+                                "completion_assessment": {
+                                    "done_when": [
+                                        {
+                                            "index": 0,
+                                            "status": "unknown",
+                                            "evidence": "The person is detected but the movement is not yet observed.",
+                                        }
+                                    ]
+                                },
+                                "phase_strategy": {
+                                    "stages": ["confirm person", "turn and approach"],
+                                    "active_stage": 1,
+                                    "reason": "Detection supports a bounded approach.",
+                                },
+                                "action_window": {
+                                    "intent": "turn and approach the detected person",
+                                    "expected_effect": "the UAV changes bearing and translates forward",
+                                },
+                            },
+                        ),
+                        AgentToolCall(
+                            "call_turn",
+                            "uav.turn_relative",
+                            {"yaw_deg": 5.0},
+                        ),
+                        AgentToolCall(
+                            "call_move",
+                            "uav.move_body",
+                            {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 0.5},
+                        ),
+                    ],
+                )
+            return AssistantTurn(
+                "assistant_complete",
+                "The observed action window completed the requested phase.",
+                [
+                    AgentToolCall(
+                        "call_commit_done",
+                        "runtime.commit_phase_turn",
+                        {
+                            "phase": "final_phase",
+                            "completion_assessment": {
+                                "done_when": [
+                                    {
+                                        "index": 0,
+                                        "status": "supported",
+                                        "evidence": "The post-action checkpoint confirms the completed window.",
+                                    }
+                                ]
+                            },
+                        },
+                    )
+                ],
+            )
+
+    plugin_registry = PluginRegistry.discover(
+        {
+            "plugins": {
+                "roots": ["plugins/capabilities"],
+                "enabled": ["capabilities.perception"],
+            }
+        }
+    )
+    run_dir = tmp_path / "native_tool_loop"
+    recorder = AsyncRunLogger(run_dir)
+    planner = NativeSequencePlanner()
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        shutdown_policy="none",
+        plugin_registry=plugin_registry,
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    transcript_records = [
+        json.loads(line)
+        for line in (run_dir / "memory" / "agent_transcript.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    action_records = [
+        json.loads(line)
+        for line in (run_dir / "memory" / "actions.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    observation_records = [
+        json.loads(line)
+        for line in (run_dir / "memory" / "observations.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+
+    assert state.completed
+    assert state.current_phase_window_count == 1
+    assert planner.calls == 3
+    assert all(
+        "skill.person_detector.detect" in names
+        and "runtime.commit_phase_turn" in names
+        for names in planner.allowed_names
+    )
+    assert planner.observation_ids[0] == planner.observation_ids[1]
+    assert planner.observation_ids[2] != planner.observation_ids[1]
+    assert planner.provider_roles[1][-2:] == ["assistant", "tool"]
+    assert [record["tool"] for record in action_records].count(
+        "skill.person_detector.detect"
+    ) == 1
+    assert [record["tool"] for record in action_records].count("uav.turn_relative") == 1
+    assert [record["tool"] for record in action_records].count("uav.move_body") == 1
+    assert len(observation_records) == 2
+    assert [record["kind"] for record in transcript_records].count(
+        "state_checkpoint"
+    ) == 2
+    result_ids = {
+        record["payload"]["tool_call_id"]
+        for record in transcript_records
+        if record["kind"] == "tool_result"
+    }
+    assert {
+        "call_detect",
+        "call_commit_move",
+        "call_turn",
+        "call_move",
+        "call_commit_done",
+    } <= result_ids
 
 
 def test_task_runtime_normalizes_yaw_wraparound_delta(tmp_path):
@@ -2078,70 +2181,6 @@ def test_task_runtime_continue_transition_window_limit_stops_without_advancing_p
     assert "current_phase_window_count" in mission_state
 
 
-def test_task_runtime_logs_contract_repair_success_and_continues_to_safety(tmp_path):
-    class RepairSuccessPlanner:
-        planner_mode = "model"
-
-        def __init__(self) -> None:
-            self.last_repair_attempts = []
-            self.calls = 0
-
-        def plan_next_with_phase_decision(self, state, context=None):
-            self.calls += 1
-            if self.calls > 1:
-                self.last_repair_attempts = []
-                return CoupledActionPhasePlan(
-                    state.current_phase_name,
-                    PhaseTransition(COMPLETE_TASK, "repair path verified"),
-                    [],
-                )
-            self.last_repair_attempts = [
-                {
-                    "attempt": 1,
-                    "status": "failed",
-                    "repair_context": {"attempt": 1, "violation": {"code": "forbidden_tool"}},
-                    "repaired_plan": {"phase": state.current_phase_name, "steps": [{"kind": "observe"}]},
-                    "violation": {"code": "observe_managed_by_runtime"},
-                },
-                {
-                    "attempt": 2,
-                    "status": "repaired",
-                    "repair_context": {"attempt": 2, "violation": {"code": "observe_managed_by_runtime"}},
-                    "repaired_plan": {
-                        "phase": state.current_phase_name,
-                        "steps": [{"kind": "tool", "tool": "uav.hover", "args": {}}],
-                    },
-                },
-            ]
-            plan = ShortHorizonPlan(
-                state.current_phase_name,
-                [PlannedStep.tool_step("uav.hover", {}, "repaired safe hover")],
-            )
-            return coupled_continue_from_short_plan(plan, "execute repaired action once")
-
-    run_dir = tmp_path / "repair_success"
-    recorder = AsyncRunLogger(run_dir)
-    server = SimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(
-        SimulatorEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=RepairSuccessPlanner(),
-        shutdown_policy="none",
-    )
-
-    state = runtime.run_parsed_task("m1", make_single_phase_parse_result("repair succeeds", "final_phase"))
-    recorder.close()
-
-    event_names = [record["event"] for record in load_event_records(run_dir)]
-    assert state.completed
-    assert event_names.count("model_action_contract_repair_requested") == 2
-    assert "model_action_contract_repair_failed" in event_names
-    assert "model_action_contract_repaired" in event_names
-    assert "short_horizon_planned" in event_names
-    assert "automatic_observation_updated" in event_names
-
-
 def test_task_runtime_stabilizes_after_each_motion_step_before_observation(tmp_path):
     class MultiMotionPlanner:
         planner_mode = "test"
@@ -2198,51 +2237,6 @@ def test_task_runtime_stabilizes_after_each_motion_step_before_observation(tmp_p
     assert phase_record["executed_steps"][0]["stabilization"]["tool"] == "uav.move_body"
     assert phase_record["executed_steps"][1]["stabilization"]["tool"] == "uav.turn_relative"
     assert max(stabilization_events) < automatic_observation_index
-
-
-def test_task_runtime_logs_contract_repair_failure_then_best_effort_hover(tmp_path):
-    class RepairFailPlanner:
-        planner_mode = "model"
-
-        def plan_next_with_phase_decision(self, state, context=None):
-            attempts = [
-                {
-                    "attempt": 1,
-                    "status": "failed",
-                    "repair_context": {"attempt": 1, "violation": {"code": "forbidden_tool"}},
-                    "violation": {"code": "observe_managed_by_runtime"},
-                }
-            ]
-            raise ModelRepairPlannerError(
-                "repair failed",
-                initial_plan={"phase": state.current_phase_name, "steps": []},
-                final_plan={"phase": state.current_phase_name, "steps": [{"kind": "observe"}]},
-                repair_attempts=attempts,
-                violations=[{"code": "forbidden_tool"}, {"code": "observe_managed_by_runtime"}],
-                max_repair_attempts=3,
-                reason="max_repair_attempts_exhausted",
-            )
-
-    run_dir = tmp_path / "repair_failure"
-    recorder = AsyncRunLogger(run_dir)
-    server = SimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(
-        SimulatorEnvClient(server),
-        recorder,
-        TaskParser(mode="rule_based"),
-        planner=RepairFailPlanner(),
-        shutdown_policy="none",
-    )
-
-    with pytest.raises(ModelRepairPlannerError):
-        runtime.run_task("m1", LAMP_TASK)
-    recorder.close()
-
-    event_names = [record["event"] for record in load_event_records(run_dir)]
-    assert "model_action_contract_repair_requested" in event_names
-    assert "model_action_contract_repair_failed" in event_names
-    assert "task_failed" in event_names
-    assert "safety_hover_completed" in event_names
 
 
 def test_task_runtime_applies_initial_pose_before_first_configured_observation(tmp_path):

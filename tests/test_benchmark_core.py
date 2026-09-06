@@ -220,6 +220,16 @@ def test_audit_cursor_bounds_frames_actions_messages_and_shutdown(tmp_path):
     write_audit_fixture(tmp_path)
     cursor = EpisodeAuditCursor.freeze(tmp_path)
     append_jsonl(
+        tmp_path / "memory" / "agent_transcript.jsonl",
+        {
+            "id": "turn_after_freeze",
+            "timestamp": "2026-01-01T00:00:04+00:00",
+            "instruction_id": "inst_1",
+            "kind": "protocol_feedback",
+            "payload": {"message": "must not enter frozen audit"},
+        },
+    )
+    append_jsonl(
         tmp_path / "memory" / "actions.jsonl",
         {
             "id": "act_shutdown",
@@ -246,6 +256,10 @@ def test_audit_cursor_bounds_frames_actions_messages_and_shutdown(tmp_path):
     ]
     assert [item["id"] for item in audit.frames] == ["frame_0001"]
     assert [item["id"] for item in audit.agent_messages] == ["msg_0001"]
+    assert [item["kind"] for item in audit.agent_transcript] == [
+        "user_instruction",
+        "state_checkpoint",
+    ]
     assert audit.observation_anchors["task_initial"]["id"] == "obs_0001"
 
 
@@ -408,6 +422,7 @@ def test_core_review_writes_portable_case_index_and_audit(tmp_path):
     assert "download raw asset" not in case_html
     assert "frame_depth" in audit_text
     assert "depth.npy" in audit_text
+    assert '"agent_transcript": []' in audit_text
     assert "portable review" in case_html
     assert "uav.hover" in case_html
     assert "No agent messages were emitted for this episode." in case_html
@@ -428,6 +443,288 @@ def test_core_review_writes_portable_case_index_and_audit(tmp_path):
     opted_in_html = (case_dir / "review.html").read_text(encoding="utf-8")
     assert "review_assets/frames/depth.npy" in opted_in_html
     assert "download raw asset" in opted_in_html
+
+
+def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
+    case_dir = tmp_path / "eval" / "cases" / "transcript"
+    image_1 = case_dir / "review_assets" / "frames" / "obs_1.png"
+    image_2 = case_dir / "review_assets" / "frames" / "obs_2.png"
+    image_1.parent.mkdir(parents=True)
+    image_1.write_bytes(_png_bytes())
+    image_2.write_bytes(_png_bytes())
+    assets = (
+        ResolvedFrameAsset(
+            frame_id="frame_1",
+            observation_id="obs_1",
+            modality="rgb",
+            timestamp="2026-01-01T00:00:01+00:00",
+            display_path=str(image_1),
+            raw_path=str(image_1),
+            source="artifact_path",
+            unavailable_reason=None,
+        ),
+        ResolvedFrameAsset(
+            frame_id="frame_2",
+            observation_id="obs_2",
+            modality="rgb",
+            timestamp="2026-01-01T00:00:05+00:00",
+            display_path=str(image_2),
+            raw_path=str(image_2),
+            source="artifact_path",
+            unavailable_reason=None,
+        ),
+    )
+    transcript = (
+        _transcript_event(
+            "user_instruction",
+            {"instruction": "Find <person> and turn safely."},
+            1,
+        ),
+        _transcript_event(
+            "state_checkpoint",
+            {
+                "observation_id": "obs_1",
+                "context": {
+                    "current_phase": {"name": "inspect"},
+                    "fragments": [],
+                },
+            },
+            2,
+        ),
+        _transcript_event(
+            "assistant_turn",
+            {
+                "turn_id": "assistant_detect",
+                "public_intent": "Confirm <candidate> before moving.",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "call_detect_bad",
+                        "tool_name": "skill.person_detector.detect",
+                        "args": {"observation_id": "stale"},
+                    }
+                ],
+            },
+            3,
+        ),
+        _transcript_event(
+            "tool_result",
+            {
+                "tool_call_id": "call_detect_bad",
+                "tool_name": "skill.person_detector.detect",
+                "status": "rejected",
+                "message": "stale observation",
+                "requested_args": {"observation_id": "stale"},
+                "executed_args": {},
+                "safety_interventions": [],
+                "artifact_refs": [],
+                "data": {},
+            },
+            4,
+        ),
+        _transcript_event(
+            "protocol_feedback",
+            {"message": "Use the latest observation_id."},
+            5,
+        ),
+        _transcript_event(
+            "assistant_turn",
+            {
+                "turn_id": "assistant_detect_fixed",
+                "public_intent": "Retry against the current frame.",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "call_detect",
+                        "tool_name": "skill.person_detector.detect",
+                        "args": {"observation_id": "obs_1"},
+                    }
+                ],
+            },
+            6,
+        ),
+        _transcript_event(
+            "tool_result",
+            {
+                "tool_call_id": "call_detect",
+                "tool_name": "skill.person_detector.detect",
+                "status": "ok",
+                "message": "person detected",
+                "requested_args": {"observation_id": "obs_1"},
+                "executed_args": {"observation_id": "obs_1"},
+                "safety_interventions": [],
+                "artifact_refs": ["frame_1", "../../not-linked.txt"],
+                "data": {"confidence": 0.91},
+            },
+            7,
+        ),
+        _transcript_event(
+            "assistant_turn",
+            {
+                "turn_id": "assistant_move",
+                "public_intent": "Turn and advance in one action window.",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "call_commit",
+                        "tool_name": "runtime.commit_phase_turn",
+                        "args": {"phase": "inspect"},
+                    },
+                    {
+                        "tool_call_id": "call_turn",
+                        "tool_name": "uav.turn_relative",
+                        "args": {"yaw_deg": 25.0},
+                    },
+                    {
+                        "tool_call_id": "call_move",
+                        "tool_name": "uav.move_body",
+                        "args": {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 1.0},
+                    },
+                ],
+            },
+            8,
+        ),
+        _tool_result_event("call_commit", "runtime.commit_phase_turn", 9),
+        _transcript_event(
+            "tool_result",
+            {
+                "tool_call_id": "call_turn",
+                "tool_name": "uav.turn_relative",
+                "status": "ok",
+                "message": "turn complete",
+                "requested_args": {"yaw_deg": 25.0},
+                "executed_args": {"yaw_deg": 20.0},
+                "safety_interventions": [
+                    {"field": "yaw_deg", "requested": 25.0, "executed": 20.0}
+                ],
+                "artifact_refs": [],
+                "data": {},
+            },
+            10,
+        ),
+        _tool_result_event("call_move", "uav.move_body", 11),
+        _transcript_event(
+            "state_checkpoint",
+            {
+                "observation_id": "obs_2",
+                "context": {
+                    "current_phase": {"name": "inspect"},
+                    "completed": False,
+                    "fragments": [],
+                },
+            },
+            12,
+        ),
+        _transcript_event(
+            "assistant_turn",
+            {
+                "turn_id": "assistant_complete",
+                "public_intent": "The requested state is now satisfied.",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "call_complete",
+                        "tool_name": "runtime.commit_phase_turn",
+                        "args": {"phase": "inspect"},
+                    }
+                ],
+            },
+            13,
+        ),
+        _tool_result_event(
+            "call_complete", "runtime.commit_phase_turn", 14
+        ),
+    )
+    audit = BenchmarkAuditLog(
+        run_dir=str(tmp_path / "run"),
+        started_at=None,
+        ended_at="2026-01-01T00:00:14+00:00",
+        task_initial_observation_ref=None,
+        observations=(),
+        frames=(),
+        poses=(),
+        actions=(),
+        agent_messages=(),
+        events=(),
+        debug_events=(),
+        planner_debug=(),
+        agent_transcript=transcript,
+    )
+    _write_case_review(tmp_path / "eval", audit, assets)
+
+    html = (case_dir / "review.html").read_text(encoding="utf-8")
+    assert "Agent Tool Transcript" in html
+    assert "Find &lt;person&gt; and turn safely." in html
+    assert "Confirm &lt;candidate&gt; before moving." in html
+    assert "call_detect_bad" in html and "rejected" in html
+    assert "Use the latest observation_id." in html
+    assert "call_commit" in html and "call_turn" in html and "call_move" in html
+    assert "requested_args" in html and "executed_args" in html
+    assert "safety_interventions" in html
+    assert "review_assets/frames/obs_1.png" in html
+    assert "review_assets/frames/obs_2.png" in html
+    assert '<a href="../../not-linked.txt"' not in html
+    assert "Transcript audit issues" not in html
+
+
+def test_core_review_reports_unclosed_duplicate_and_orphan_tool_records(
+    tmp_path,
+):
+    transcript = (
+        _transcript_event(
+            "assistant_turn",
+            {
+                "public_intent": "First",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "duplicate",
+                        "tool_name": "uav.hover",
+                        "args": {},
+                    },
+                    {
+                        "tool_call_id": "open",
+                        "tool_name": "uav.hover",
+                        "args": {},
+                    },
+                ],
+            },
+            1,
+        ),
+        _transcript_event(
+            "assistant_turn",
+            {
+                "public_intent": "Second",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "duplicate",
+                        "tool_name": "uav.turn_relative",
+                        "args": {"yaw_deg": 5},
+                    }
+                ],
+            },
+            2,
+        ),
+        _tool_result_event("orphan", "uav.hover", 3),
+    )
+    audit = BenchmarkAuditLog(
+        run_dir=str(tmp_path / "run"),
+        started_at=None,
+        ended_at="2026-01-01T00:00:03+00:00",
+        task_initial_observation_ref=None,
+        observations=(),
+        frames=(),
+        poses=(),
+        actions=(),
+        agent_messages=(),
+        events=(),
+        debug_events=(),
+        planner_debug=(),
+        agent_transcript=transcript,
+    )
+    _write_case_review(tmp_path / "eval", audit, ())
+
+    html = (
+        tmp_path / "eval" / "cases" / "transcript" / "review.html"
+    ).read_text(encoding="utf-8")
+    assert "duplicate ToolCall id: duplicate" in html
+    assert "ToolCall has no terminal ToolResult: open" in html
+    assert "orphan ToolResult: orphan" in html
 
 
 def test_core_review_correlates_completion_and_renders_planner_window(
@@ -1138,6 +1435,29 @@ def write_audit_fixture(run_dir: Path) -> None:
             "message": {"content": "turning"},
         },
     )
+    append_jsonl(
+        memory / "agent_transcript.jsonl",
+        {
+            "id": "turn_0001",
+            "timestamp": "2026-01-01T00:00:00.500000+00:00",
+            "instruction_id": "inst_1",
+            "kind": "user_instruction",
+            "payload": {"instruction": "Turn toward the target."},
+        },
+    )
+    append_jsonl(
+        memory / "agent_transcript.jsonl",
+        {
+            "id": "turn_0002",
+            "timestamp": "2026-01-01T00:00:01.100000+00:00",
+            "instruction_id": "inst_1",
+            "kind": "state_checkpoint",
+            "payload": {
+                "observation_id": "obs_0001",
+                "context": {"current_phase": {"name": "align"}},
+            },
+        },
+    )
     (state / "flight_memory.json").write_text(
         json.dumps(
             {
@@ -1158,4 +1478,56 @@ def _png_bytes() -> bytes:
     return base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR4n"
         "GNgYAAAAAMAASsJTYQAAAAASUVORK5CYII="
+    )
+
+
+def _transcript_event(kind: str, payload: dict, index: int) -> dict:
+    return {
+        "id": f"turn_{index:04d}",
+        "timestamp": f"2026-01-01T00:00:{index:02d}+00:00",
+        "instruction_id": "inst_transcript",
+        "kind": kind,
+        "payload": payload,
+    }
+
+
+def _tool_result_event(
+    call_id: str,
+    tool_name: str,
+    index: int,
+) -> dict:
+    return _transcript_event(
+        "tool_result",
+        {
+            "tool_call_id": call_id,
+            "tool_name": tool_name,
+            "status": "ok",
+            "message": "completed",
+            "requested_args": {},
+            "executed_args": {},
+            "safety_interventions": [],
+            "artifact_refs": [],
+            "data": {},
+        },
+        index,
+    )
+
+
+def _write_case_review(
+    eval_dir: Path,
+    audit: BenchmarkAuditLog,
+    assets: tuple[ResolvedFrameAsset, ...],
+) -> None:
+    BenchmarkReviewRenderer().write_case(
+        eval_dir,
+        BenchmarkCaseReview(
+            case_id="transcript",
+            benchmark_name="Test",
+            protocol_variant="test.v1",
+            instruction="Inspect and move",
+            outcome={"status": "ok"},
+            metrics={},
+            audit=audit,
+            frame_assets=assets,
+        ),
     )

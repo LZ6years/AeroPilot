@@ -7,7 +7,9 @@
 - 内置工具仍然是系统 tool，例如 `uav.turn_relative / uav.move_body / uav.hover`。
 - 自定义外接能力放在 `plugins/capabilities/` 下。
 - 如果某个 skill 目录里有 `capability.json`，runtime 会把它注册成 planner 可调用的 `skill.*` 能力。
-- planner 只能调用已经 enabled 且出现在 `allowed_action_constraints.planner_tools` 里的 `skill.*`。
+- `capability.json` 必须声明 provider `wire_name` 和完整 `runtime` 属性。
+- planner 只能调用已启用且实际出现在 provider `tools` 数组中的能力。
+- read-only 能力的结果会以原生 ToolResult 回到同一个 transcript，再由模型决定是否飞行。
 
 先读：
 

@@ -146,7 +146,7 @@ def test_semantic_evidence_capabilities_follow_module_order_and_depth_config():
         "NOW metric depth overlay: approximate UAV-camera-to-scene distance at visible pixels; target pixels provide approximate UAV-to-target range.",
     ]
     assert capabilities[3].startswith("UAV ground clearance")
-    assert capabilities[4].startswith("Action history:")
+    assert capabilities[4].startswith("Measured phase-relative UAV self-motion")
     assert capabilities[5].startswith("Map memory:")
     assert ObservationContextBuilder(registry=registry).semantic_evidence_capabilities() == capabilities
 
@@ -281,8 +281,7 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
     assert "previous" not in image_schema
     assert "history_anchor" not in image_schema
     assert "motion_history_summary" in context["context_schema"]["module_content_fields"]["action"]
-    recent_execution = fragments["action"]["content"]["motion_history_summary"]["recent_execution"]
-    assert recent_execution[-1] == {"tool": "uav.hover", "args": {}}
+    assert "recent_execution" not in fragments["action"]["content"]["motion_history_summary"]
 
 
 def test_context_builder_exposes_only_compact_adjacent_phase_semantics(tmp_path):
@@ -340,7 +339,7 @@ def test_context_builder_handles_missing_observation(tmp_path):
     assert fragments["image"]["model_inputs"] == []
     assert fragments["image"]["content"]["visual_evidence"]["interpretation_status"] == "metadata_only_not_interpreted"
     assert "visual_processing" not in fragments["image"]["content"]
-    assert fragments["action"]["content"]["motion_history_summary"]["recent_execution"] == []
+    assert "recent_execution" not in fragments["action"]["content"]["motion_history_summary"]
     assert "phase_strategy" not in fragments["action"]["content"]
     assert context["current_phase"]["name"] == "orient_leftward"
 
@@ -411,7 +410,9 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     assert image["model_inputs"][0]["role"] == "current_observation"
     assert image["model_inputs"][0]["usage"] == "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
     assert image["model_inputs"][0]["encoding"] == "data_url"
-    assert set(image["model_inputs"][0]) == {"type", "input_id", "role", "usage", "mime_type", "encoding", "data"}
+    assert image["model_inputs"][0]["observation_id"] == "obs_0001"
+    assert image["model_inputs"][0]["frame_id"] == "frame_0001"
+    assert image["model_inputs"][0]["artifact_ref"] == str(rgb_path)
     assert "visual_processing" not in image["content"]
     assert "visual_description" not in image["content"]
 
@@ -476,8 +477,12 @@ def test_context_builder_default_image_attaches_key_rgb_frames(tmp_path):
         "text", "text", "image_url", "text", "image_url", "text", "text"
     ]
     assert model_content[0]["text"].startswith("TEMPORAL ROLE RULE:")
-    assert model_content[1]["text"] == "PAST | PHASE START. Comparison only."
-    assert model_content[3]["text"] == "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
+    assert "observation_id=obs_0001" in model_content[1]["text"]
+    assert model_content[1]["text"].endswith("PAST | PHASE START. Comparison only.")
+    assert "observation_id=obs_0006" in model_content[3]["text"]
+    assert model_content[3]["text"].endswith(
+        "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
+    )
     assert model_content[5]["text"].startswith("CURRENT-STATE CHECK:")
     text_context = json.loads(model_content[6]["text"])
     assert not any(fragment.get("name") == "image" for fragment in text_context.get("fragments", []))
@@ -605,12 +610,13 @@ def test_context_builder_optionally_attaches_aligned_current_rgb_depth_overlay(t
         "text",
     ]
     assert model_content[0]["text"].startswith("TEMPORAL ROLE RULE:")
-    assert model_content[3]["text"].startswith("NOW | RGB + METRIC DEPTH OVERLAY.")
+    assert "observation_id=obs_0002" in model_content[3]["text"]
+    assert "NOW | RGB + METRIC DEPTH OVERLAY." in model_content[3]["text"]
     assert model_content[5]["text"].startswith("CURRENT-STATE CHECK:")
     recovery_content = build_model_user_content(context, image_mode="current_only")
     assert isinstance(recovery_content, list)
     assert [part["type"] for part in recovery_content] == ["text", "image_url", "text", "text"]
-    assert recovery_content[0]["text"].startswith("NOW | RGB + METRIC DEPTH OVERLAY.")
+    assert "NOW | RGB + METRIC DEPTH OVERLAY." in recovery_content[0]["text"]
     assert recovery_content[2]["text"].startswith("CURRENT-STATE CHECK:")
 
 
@@ -690,7 +696,8 @@ def test_model_user_content_current_only_omits_past_and_temporal_rule(tmp_path):
 
     assert isinstance(model_content, list)
     assert [part["type"] for part in model_content] == ["text", "image_url", "text", "text"]
-    assert model_content[0]["text"] == (
+    assert "observation_id=obs_0002" in model_content[0]["text"]
+    assert model_content[0]["text"].endswith(
         "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
     )
     combined_text = "\n".join(
@@ -860,7 +867,7 @@ def test_model_user_content_omits_fragment_debug_metadata(tmp_path):
     assert '"direction"' not in text
 
 
-def test_context_builder_motion_history_preserves_recent_execution_order(tmp_path):
+def test_context_builder_action_module_does_not_duplicate_transcript_history(tmp_path):
     state = make_state()
     actions = [
         {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}, "result": {"ok": True}},
@@ -872,7 +879,7 @@ def test_context_builder_motion_history_preserves_recent_execution_order(tmp_pat
 
     action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
     summary = action["content"]["motion_history_summary"]
-    assert summary["recent_execution_order"] == "oldest_to_newest"
+    assert "recent_execution_order" not in summary
     assert action["metadata"]["visual_search_progress"] == {
         "scope": "current_stationary_viewpoint",
         "yaw_offset_deg": 0.0,
@@ -882,16 +889,12 @@ def test_context_builder_motion_history_preserves_recent_execution_order(tmp_pat
         "recharge_count": 0,
         "recharge_distance_m": 0.5,
     }
-    assert summary["recent_execution"] == [
-        {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}},
-        {"tool": "uav.turn_relative", "args": {"yaw_deg": -5}},
-        {"tool": "uav.turn_relative", "args": {"yaw_deg": 5}},
-    ]
+    assert "recent_execution" not in summary
     assert "action_trend" not in action["content"]
     assert "recent_actions" not in action["content"]
 
 
-def test_context_builder_motion_history_keeps_only_five_successful_actions(tmp_path):
+def test_context_builder_action_module_does_not_proxy_success_or_failure_records(tmp_path):
     state = make_state()
     actions = [
         {"tool": "uav.turn_relative", "args": {"yaw_deg": value}, "result": {"ok": True}}
@@ -903,18 +906,11 @@ def test_context_builder_motion_history_keeps_only_five_successful_actions(tmp_p
 
     action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
     summary = action["content"]["motion_history_summary"]
-    assert [item["args"]["yaw_deg"] for item in summary["recent_execution"]] == [10, 15, 20, 25, 30]
-    assert all("ok" not in item for item in summary["recent_execution"])
-    assert action["risks"] == [
-        {
-            "type": "recent_action_failure",
-            "value": {"tool": "uav.turn_relative", "args": {"yaw_deg": 99}},
-            "source": "DefaultActionContextModule",
-        }
-    ]
+    assert "recent_execution" not in summary
+    assert action["risks"] == []
 
 
-def test_context_builder_action_history_hides_legacy_move_direction(tmp_path):
+def test_context_builder_action_module_omits_legacy_action_arguments(tmp_path):
     state = make_state()
     actions = [
         {"tool": "uav.move_body", "args": {"direction": "forward", "duration": 0.3}, "result": {"ok": True}},
@@ -924,14 +920,7 @@ def test_context_builder_action_history_hides_legacy_move_direction(tmp_path):
     context = ObservationContextBuilder().build(state, make_memory(tmp_path, state, actions=actions))
 
     action = {fragment["name"]: fragment for fragment in context["fragments"]}["action"]
-    recent_args = [
-        item["args"]
-        for item in action["content"]["motion_history_summary"]["recent_execution"]
-    ]
-    assert recent_args == [
-        {"duration": 0.3, "legacy_named_motion": True},
-        {"duration": 0.3, "legacy_named_motion": True},
-    ]
+    assert "recent_execution" not in action["content"]["motion_history_summary"]
     assert "direction" not in json.dumps(action["content"], ensure_ascii=False)
 
 

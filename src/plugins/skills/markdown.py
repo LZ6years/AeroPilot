@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from src.plugins.contracts.skill import Skill, SkillCapability
+from src.tools.schemas import ToolRuntimePolicy
 
 
 class SkillMarkdownError(ValueError):
@@ -47,12 +48,19 @@ def _capability(skill_dir: Path) -> SkillCapability | None:
     call_name = str(data.get("call_name", "")).strip()
     if not call_name.startswith("skill."):
         raise SkillMarkdownError(f"Capability call_name must start with 'skill.': {path}")
+    wire_name = str(data.get("wire_name", "")).strip()
+    if not wire_name:
+        raise SkillMarkdownError(f"Capability missing wire_name: {path}")
     description = str(data.get("description", "")).strip()
     if not description:
         raise SkillMarkdownError(f"Capability missing description: {path}")
     input_schema = data.get("input_schema")
     if not isinstance(input_schema, dict):
         raise SkillMarkdownError(f"Capability input_schema must be an object: {path}")
+    try:
+        runtime = ToolRuntimePolicy.from_dict(data.get("runtime"))
+    except ValueError as exc:
+        raise SkillMarkdownError(f"Capability runtime is invalid in {path}: {exc}") from exc
     handler = str(data.get("handler", "")).strip()
     if not handler:
         raise SkillMarkdownError(f"Capability missing handler: {path}")
@@ -66,8 +74,10 @@ def _capability(skill_dir: Path) -> SkillCapability | None:
         raise SkillMarkdownError(f"Capability handler does not exist: {handler_path}")
     return SkillCapability(
         call_name=call_name,
+        wire_name=wire_name,
         description=description,
         input_schema=dict(input_schema),
+        runtime=runtime,
         handler=handler,
         handler_path=handler_path,
         mock=bool(data.get("mock", False)),

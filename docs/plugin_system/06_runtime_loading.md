@@ -65,22 +65,22 @@ ObservationContextBuilder.build(state, flight_memory)
 
 ```text
 SkillCapabilityCatalog
-  -> allowed_action_constraints.planner_tools += skill.* call names
-  -> allowed_action_constraints.action_schemas += input_schema
+  -> validates call_name + wire_name + input_schema + runtime policy
   -> ToolRegistry registers kind=skill_capability
+  -> provider tools includes capabilities whose model_exposed policy is true
 ```
 
-planner 可以像调用内置 tool 一样输出 `kind="tool"`，但只有出现在 `planner_tools` 中的 `skill.*` 才合法。
+planner 像调用内置 tool 一样发出原生 tool call，但只有本轮 provider `tools` 中出现的能力才合法。
 
 ## 执行链路
 
 ```text
 ModelActionPlanner
-  -> ToolContractValidator
-  -> SafetySupervisor
+  -> native schema/protocol validation
   -> ToolDispatcher
     -> uav.*: EnvClient
     -> skill.*: SkillCapabilityDispatcher
+  -> ToolResult appended to AgentTranscript
 ```
 
 内置 UAV tools 不作为 skill。外接能力才作为 callable skill。
@@ -91,5 +91,5 @@ ModelActionPlanner
 - `capability.json` 无效：跳过该 skill 并记录 warning。
 - handler 不在 skill 目录内：拒绝加载。
 - 模型选择不存在的 skill：拒绝并记录 warning。
-- 模型调用未注册的 `skill.*`：validator 拒绝。
+- 模型调用未注册或未暴露的 tool：Runtime 追加 rejected ToolResult，并让同一模型修正。
 - handler 执行失败：dispatcher 返回失败 ActionResult，runtime 按普通 action failure 处理。

@@ -1,4 +1,6 @@
-# 04 Runtime Control 全阶段实施路线
+# 04 Runtime Control 全阶段实施路线（历史）
+
+> 此计划记录原 JSON planner 阶段，已由 [原生 Tool-Call 执行计划](../agent_tool_loop_execution_plan.md) 取代。
 
 本文档是 Runtime Control Actions 的实现主路线图。它把能力从“只存在于文档里的设计”拆成四个可验收阶段：先建立契约和边界，再实现语义计划异步更新，再实现用户澄清交互，最后做边界加固和测试收敛。
 

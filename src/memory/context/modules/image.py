@@ -583,6 +583,9 @@ def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> lis
             "input_id": input_id,
             "role": role,
             "usage": usage,
+            "observation_id": latest_rgb.get("observation_id"),
+            "frame_id": latest_rgb.get("id"),
+            "artifact_ref": latest_rgb.get("artifact_ref") or latest_rgb.get("path"),
             "mime_type": "image/png",
             "encoding": "data_url",
             "data": data_url,
@@ -620,6 +623,14 @@ def current_rgb_depth_overlay_model_input(
         "input_id": "image_current_rgb_depth_overlay",
         "role": "current_rgb_depth_overlay",
         "usage": CURRENT_RGB_DEPTH_OVERLAY_USAGE,
+        "observation_id": current_rgb.get("observation_id"),
+        "frame_id": current_rgb.get("id"),
+        "source_frame_ids": [
+            value
+            for value in (current_rgb.get("id"), current_depth.get("id"))
+            if value
+        ],
+        "artifact_ref": current_rgb.get("artifact_ref") or current_rgb.get("path"),
         "mime_type": "image/png",
         "encoding": "data_url",
         "data": data_url,

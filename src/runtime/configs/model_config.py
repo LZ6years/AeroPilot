@@ -15,10 +15,17 @@ class ModelConfig:
     api_key: str = ""
     base_url: str = ""
     timeout_sec: float = 60.0
+    max_tool_rounds: int = 6
     task_parser_prompt_path: str = ""
     task_parser_structure_prompt_path: str = ""
     task_parser_criteria_prompt_path: str = ""
     action_planner_prompt_path: str = ""
+
+    def __post_init__(self) -> None:
+        if self.timeout_sec <= 0:
+            raise ValueError("timeout_sec must be positive")
+        if self.max_tool_rounds <= 0:
+            raise ValueError("max_tool_rounds must be positive")
 
     @classmethod
     def from_env(cls, env: dict[str, str]) -> "ModelConfig":
@@ -30,6 +37,7 @@ class ModelConfig:
             api_key=env.get("FLYAGENT_MODEL_API_KEY", "").strip(),
             base_url=env.get("FLYAGENT_MODEL_BASE_URL", "").strip(),
             timeout_sec=float(env.get("FLYAGENT_MODEL_TIMEOUT_SEC", "60")),
+            max_tool_rounds=int(env.get("FLYAGENT_AGENT_MAX_TOOL_ROUNDS", "6")),
             task_parser_prompt_path=env.get("FLYAGENT_TASK_PARSER_PROMPT_PATH", "").strip(),
             task_parser_structure_prompt_path=env.get(
                 "FLYAGENT_TASK_PARSER_STRUCTURE_PROMPT_PATH", ""
@@ -48,6 +56,7 @@ class ModelConfig:
             "base_url": self.base_url,
             "has_api_key": bool(self.api_key),
             "timeout_sec": self.timeout_sec,
+            "max_tool_rounds": self.max_tool_rounds,
             "task_parser_prompt_path": self.task_parser_prompt_path,
             "task_parser_structure_prompt_path": self.task_parser_structure_prompt_path,
             "task_parser_criteria_prompt_path": self.task_parser_criteria_prompt_path,

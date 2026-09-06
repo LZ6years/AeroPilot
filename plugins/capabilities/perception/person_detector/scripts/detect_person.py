@@ -10,11 +10,20 @@ def handle(payload: dict) -> dict:
     frames = latest_observation.get("frames") if isinstance(latest_observation, dict) else {}
     rgb = frames.get("rgb") if isinstance(frames, dict) else None
     has_rgb = isinstance(rgb, dict)
+    observation_id = str(latest_observation.get("observation_id") or "")
+    requested_observation_id = str(args.get("observation_id") or "")
+    if requested_observation_id != observation_id:
+        raise ValueError(
+            "person detector only accepts the latest observation_id; "
+            f"requested={requested_observation_id!r}, latest={observation_id!r}"
+        )
     min_confidence = float(args.get("min_confidence", 0.5))
     confidence = max(min_confidence, 0.51) if has_rgb else 0.0
     return {
         "mock": True,
-        "image_source": args.get("image_source"),
+        "image_source": args.get("image_source", "latest_rgb"),
+        "observation_id": observation_id,
+        "frame_id": rgb.get("id") if has_rgb else None,
         "has_rgb": has_rgb,
         "rgb_metadata": dict(rgb) if has_rgb else None,
         "detections": [

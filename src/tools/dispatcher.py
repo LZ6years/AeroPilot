@@ -32,12 +32,14 @@ class ToolDispatcher:
     ) -> ActionResult:
         # Validate and route a primitive tool action to EnvClient.
         spec = self.registry.get(tool_name)
-        self._validate_required_args(spec.required_args, args)
         if spec.kind == "skill_capability":
+            self._validate_input_schema(spec.input_schema, args)
             return self.skill_capabilities.call(scene_instance_id, agent_id, tool_name, args, runtime_context)
         if spec.kind != "uav_primitive":
             raise ValueError(f"Tool {tool_name} is not an action tool")
-        action = tool_name.removeprefix("uav.")
+        action = spec.metadata.get("backend_action")
+        if not isinstance(action, str) or not action:
+            raise ValueError(f"Tool {tool_name} has no backend_action binding")
         return self.env_client.execute_action(scene_instance_id, agent_id, action, args)
 
     def observe(
@@ -48,8 +50,21 @@ class ToolDispatcher:
         return self.env_client.get_observation(scene_instance_id, agent_id, modalities)
 
     @staticmethod
-    def _validate_required_args(required_args: tuple[str, ...], args: dict) -> None:
-        # Ensure required tool arguments are present before dispatch.
+    def _validate_input_schema(schema: dict, args: dict) -> None:
+        """Enforce the common required/additional-properties contract.
+
+        Full numeric and enum validation is performed before a model-requested
+        batch is accepted. Dispatcher keeps this final defensive boundary for
+        direct callers and lifecycle tools.
+        """
+
+        required_args = schema.get("required", []) if isinstance(schema, dict) else []
         missing = [name for name in required_args if name not in args]
         if missing:
             raise ValueError(f"Missing required tool args: {', '.join(missing)}")
+        if isinstance(schema, dict) and schema.get("additionalProperties") is False:
+            properties = schema.get("properties", {})
+            allowed = set(properties) if isinstance(properties, dict) else set()
+            extra = sorted(set(args) - allowed)
+            if extra:
+                raise ValueError(f"Unsupported tool args: {', '.join(extra)}")

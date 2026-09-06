@@ -15,9 +15,12 @@ logic.
 - `src/agent/planning/prompts/*.txt` defines general planner and judge
   contracts. Prompts may describe how to use available evidence, but should not
   duplicate module internals or become a case-specific controller.
-- `coupled_phase_strategy_system.txt` owns the compact, revisable maneuver
-  strategy between immutable phase semantics and one-window tool actions. It
-  must not redefine completion or contain benchmark-specific routes.
+- `src/agent/transcript.py` owns chronological model intent, native tool calls,
+  tool results, protocol feedback, and state checkpoints for the active
+  instruction. Context modules must not duplicate that history.
+- `agent_tool_loop_system.txt` owns the native tool-loop protocol, phase commit,
+  and compact revisable maneuver strategy. It must not duplicate provider tool
+  schemas or contain benchmark-specific routes.
 - `memory/FLYAGENT.md` owns only the shared embodied Agent identity, general
   work cycle, direction consistency, and safety/reporting baseline. It must not
   enumerate configured sensors, temporal image roles, task-specific completion
@@ -65,14 +68,22 @@ capability, do not make it in the shared runtime, prompts, or knowledge base.
 
 ## Model-Facing vs Human-Facing Data
 
-Model-facing context should be small, current, and decision useful:
+Model-facing state checkpoints should be current and decision useful:
 - current instruction and semantic phase;
 - one current observation image, preferring the aligned RGB-depth overlay when
   configured and valid;
 - one raw phase-start reference image when distinct;
-- one compact motion history summary containing phase-start-relative UAV motion
-  and a short oldest-to-newest successful-action sequence;
+- one compact motion summary containing only measured phase-start-relative and
+  last-window UAV self-motion;
 - compact phase completion evidence.
+
+The provider receives every checkpoint together with the complete active-task
+assistant/tool transcript in chronological order. Each image label carries its
+`observation_id` and `frame_id`; tool results pair to calls through
+`tool_call_id`. Tool availability, argument schemas, runtime effects, result
+timing, and batching come from `ToolSpec` plus the provider `tools` array, not
+from duplicate context fields or name-prefix inference. Version 1 performs no
+application-level token budgeting, summarization, or silent history truncation.
 
 Human/debug/review data may be larger and more detailed:
 - raw planner context and raw model outputs;
@@ -124,8 +135,9 @@ must not infer AND/OR semantics from natural-language connective words such as
 observable contracts rather than exact long prompt sentences that duplicate
 knowledge or preserve contradictory wording.
 
-Phase-start-relative cumulative motion describes the whole phase; a short
-recent-action tail must not override it. The coupled model classifies every
+Phase-start-relative cumulative motion describes the whole phase; exact action
+history is read from the transcript rather than reconstructed by a context
+module. The model classifies every
 `done_when` item as `supported`, `unknown`, or `contradicted`; those judgments
 alone derive the semantic phase transition. Numeric requirements stay in the
 natural-language condition and are judged from the evidence available at the
@@ -133,14 +145,17 @@ requested precision. Free-text evidence is explanatory and must not be parsed
 as control logic. The phase-decision prompt must not duplicate separate visual,
 route, orbit, or landing tutorials.
 
-Within coupled planning, the phase-decision prompt owns only completion-evidence
-classification. The phase-strategy prompt owns the current phase's short
-ordered maneuver stages and active stage. The action prompt owns tool choice,
-signed argument use, action-window consistency, and runtime-control output.
-Stable primitive argument
-semantics belong to the canonical UAV tool contract and enter model context
-through action schemas; prompts and knowledge skills must not maintain duplicate
-sign conventions.
+Within native tool-loop planning, `runtime.commit_phase_turn` carries the
+completion assessment, current short maneuver strategy, and physical-window
+intent. Stable primitive argument semantics belong to canonical `ToolSpec`
+schemas and enter the provider request through `tools`; prompts, state
+checkpoints, and knowledge skills must not maintain duplicate sign conventions.
+
+The runtime uses two loops. The inner loop may execute immediate read-only tools
+and feed their results back without consuming a flight window. A valid commit
+ends the inner loop. The outer phase loop sends an ordered batch of one to three
+physical calls through Safety and ToolDispatcher, waits for stabilization,
+observes once after the batch, and then creates the next state checkpoint.
 
 Phase strategy is mutable Runtime state, not part of `SemanticPlan` and not a
 phase-completion authority. Runtime owns its revision and update classification;

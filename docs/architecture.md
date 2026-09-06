@@ -1,6 +1,6 @@
 # FlyAgent 架构说明
 
-> Update: Runtime stop now distinguishes semantic completion from abnormal loop-guard stop. A task normally ends when the coupled phase decision returns `complete_task`, or when all semantic phases naturally advance. If a phase exceeds the runtime loop guard, runtime writes `runtime_loop_guard_reached`, hovers, and marks the mission `stopped/incomplete`; it does not auto-advance the phase. `SafetySupervisor` remains a hard safety layer for tool whitelist, yaw/velocity/duration clipping, and yaw scan budget, not a semantic stop rule.
+> Update: 模型动作链路已经迁移到原生 tool calling 与完整 active-task transcript。Runtime stop 仍区分语义完成和异常 loop guard；`SafetySupervisor` 仍只负责硬安全。
 
 ## 1. 总体思路
 
@@ -17,11 +17,11 @@ flowchart TD
     SP --> MS["MissionState"]
     MS --> CB["ObservationContextBuilder"]
     CB --> PC["PlannerContext"]
-    PC --> MAP["ModelActionPlanner<br/>single coupled call"]
-    MAP --> DEC["completion assessment<br/>phase strategy<br/>action window"]
+    PC --> TR["AgentTranscript<br/>state checkpoint"]
+    TR --> MAP["ModelActionPlanner<br/>native tool calls"]
+    MAP --> DEC["read tools or phase commit<br/>plus physical batch"]
     DEC --> MS
-    MAP --> TCV["ToolContractValidator"]
-    TCV --> SS["SafetySupervisor"]
+    DEC --> SS["SafetySupervisor"]
     SS --> TD["ToolDispatcher"]
     TD --> EC["EnvClient"]
     EC --> SIM["SimulationServer"]
@@ -29,15 +29,18 @@ flowchart TD
     SIM --> OBS["RGB / depth / pose"]
     OBS --> MEM["FlightMemory + memory/*.jsonl"]
     MEM --> CB
+    DEC --> TR
+    OBS --> TR
 ```
 
 核心边界：
 
 - `TaskParser` 把自然语言任务拆成语义阶段，不生成 UAV tool 序列；每次解析前，
   Runtime 从当前启用的 Context Modules 重新聚合本次可能提供的语义证据。
-- `ObservationContextBuilder` 和 context modules 把记忆、规则、偏好、安全约束整理成 `PlannerContext`。
-- `ModelActionPlanner` 用一次模型调用完成语义完成判定、阶段内策略更新和动作规划编排。
-- `ToolContractValidator` 校验模型动作是否符合 `allowed_action_constraints`。
+- `ObservationContextBuilder` 和 context modules 只把源数据加工为当前状态，不代理动作历史。
+- `AgentTranscript` 按时间保存 instruction、state checkpoint、assistant tool calls 和 ToolResult。
+- `ModelActionPlanner` 只使用 provider 原生 `tools/tool_calls`；无 JSON action-plan fallback。
+- `ToolSpec` 同时定义 provider schema 与显式 Runtime 属性；执行层不通过名称前缀猜副作用。
 - `SafetySupervisor` 做最后限幅、替换和安全拦截。
 - `ToolDispatcher` 才能真正调用 UAV primitive tools。
 - Runtime 根据结构化 completion assessment 派生阶段推进；`phase_strategy` 只指导未完成阶段的动作，不参与完成判定。
@@ -110,14 +113,15 @@ primitive 可以安全执行。它们不携带 SSH、端口、executable、setti
 `TaskRuntime` 的主职责是组织闭环：
 
 ```text
-构建 PlannerContext（current_phase 后紧跟上一版 phase_strategy、最新观测和实际运动摘要）
-调用 ModelActionPlanner 一次，生成 completion assessment、phase_strategy 和 tool-only 动作计划
-Runtime 保存有效策略并维护 revision
-执行 ToolContractValidator
-执行 SafetySupervisor
-执行安全审查后的动作
-自动采集 RGB/depth/pose
-下一窗口把执行结果回灌给同一个 coupled planner
+构建当前 PlannerContext，并追加带 observation_id 的 StateCheckpoint
+进入内层 tool loop：模型可调用 read-only tool，Runtime 立即回写 ToolResult
+模型调用 runtime.commit_phase_turn 结束当前决策
+未完成时，同一 assistant turn 可附带 1-3 个有序 physical tool calls
+执行 SafetySupervisor 和安全审查后的动作批次
+整批动作后只自动采集一次 RGB/depth/pose
+下一外层窗口追加新 StateCheckpoint，完整历史继续发给同一模型
+完成时只提交 runtime.commit_phase_turn，不再执行物理动作
+```
 Runtime 根据 completion assessment 应用阶段推进结果
 写入 run artifacts
 ```
@@ -142,58 +146,51 @@ Runtime 根据 completion assessment 应用阶段推进结果
 sequenceDiagram
     participant RT as TaskRuntime
     participant CB as ObservationContextBuilder
+    participant TR as AgentTranscript
     participant MAP as ModelActionPlanner
-    participant TCV as ToolContractValidator
     participant SS as SafetySupervisor
     participant TD as ToolDispatcher
     participant ENV as EnvClient
 
     RT->>CB: build PlannerContext
-    CB-->>RT: latest_context.json
-    RT->>MAP: plan_next_with_phase_decision(state, context)
-    MAP->>MAP: one model call: completion + strategy + actions
-    MAP-->>RT: CoupledActionPhasePlan
-    RT->>RT: persist valid phase strategy and derive transition
-    MAP->>TCV: validate phase / tools / args
-    TCV-->>MAP: valid tool plan or structured violation
+    CB-->>RT: current state checkpoint
+    RT->>TR: append StateCheckpoint(observation_id)
+    TR->>MAP: full messages + provider tools
+    MAP-->>TR: assistant tool_calls
+    alt read-only tool
+        RT->>TD: execute immediately
+        TD-->>TR: ToolResult
+        TR->>MAP: same observation, result visible
+    else commit + physical batch
+        RT->>RT: validate ToolSpec policy and schema
+    end
     RT->>SS: review(plan, state)
     SS-->>RT: safe plan + interventions
-    RT->>TD: execute safe tool steps
+    RT->>TD: execute 1-3 ordered physical calls
     TD->>ENV: UAV primitive calls
-    RT->>ENV: automatic observation
+    RT->>ENV: one automatic observation after the batch
     ENV-->>RT: RGB / depth / pose
-    RT->>RT: next window receives strategy + actual result
+    RT->>TR: ToolResults + next StateCheckpoint
 ```
 
-模型动作输出必须是 tool-only：
+模型输出 provider 原生 tool calls。未完成阶段的终止 turn 形态如下：
 
 ```json
 {
-  "phase": "copy current_phase.name",
-  "completion_assessment": {"done_when": []},
-  "phase_strategy": {
-    "stages": ["short intention until an observable cue"],
-    "active_stage": 0,
-    "reason": "why the current stage is active"
-  },
-  "action_window": {
-    "intent": "execute the active strategy stage",
-    "scope": "current_phase_only",
-    "requires_intermediate_observation": true,
-    "expected_effect": "observable progress for the active stage"
-  },
-  "steps": [
+  "role": "assistant",
+  "content": "public intent",
+  "tool_calls": [
     {
-      "kind": "tool",
-      "tool": "uav.hover",
-      "args": {},
-      "reason": "hold position while waiting for automatic observation"
-    }
+      "id": "call_commit",
+      "function": {"name": "runtime_commit_phase_turn", "arguments": "{...}"}
+    },
+    {"id": "call_turn", "function": {"name": "uav_turn_relative", "arguments": "{...}"}},
+    {"id": "call_move", "function": {"name": "uav_move_body", "arguments": "{...}"}}
   ]
 }
 ```
 
-模型动作计划不能输出：
+只有本轮 provider `tools` 中的工具可调用。lifecycle 和普通 observation 仍由 Runtime 管理，默认不向模型暴露：
 
 - `kind="observe"`
 - `env.observe`
@@ -204,7 +201,7 @@ sequenceDiagram
 - `uav.get_pose`
 - `uav.get_frames`
 
-观察由 runtime 根据 `observation_policy` 自动完成。
+每个 call 都通过 `tool_call_id` 获得 ToolResult。参数或组合非法时结果为 `rejected`，模型在同一 transcript 中自行修正。物理批次后由 Runtime 自动观察。
 
 ## 6. Context 与 Memory 边界
 
@@ -216,7 +213,7 @@ sequenceDiagram
 - `InstructionModule`：当前指令、历史指令、目标和 phase goal。
 - `ImageModule`：图像选择、时序角色、可选深度 overlay、provider-ready 图像输入。
 - `PoseModule`：模型侧只提供可选 AGL；完整 pose 与 delta 留在审计 metadata。
-- `ActionModule`：phase-relative 自身运动和短动作历史，并解释其不是目标相对测量。
+- `ActionModule`：phase-relative 与 last-window 自身运动；精确动作历史由 transcript 表达。
 - `MapModule`：地图线索、召回过滤条件和 reconfirmation 风险。
 
 `ContextModuleRegistry`只聚合已启用模块的短语义能力声明，去除空项和重复项；
@@ -226,9 +223,9 @@ sequenceDiagram
 
 ## 7. 阶段推进
 
-当前不单独实现 `PhaseCompletionEvaluator`。阶段推进判断复用 planning 目录里的 `PhaseTransition` schema，但触发时机从 action plan 内移动到动作执行后。
+当前不单独实现 `PhaseCompletionEvaluator`。模型在 `runtime.commit_phase_turn` 参数中提交覆盖全部 `done_when` 的 `completion_assessment`；Runtime 由这些结构化状态派生 `PhaseTransition`。
 
-执行后判断输入包含：
+每次提交可依据的 transcript 包含：
 
 - 当前 instruction / semantic goal / current phase。
 - 执行前 latest pose。
@@ -237,38 +234,42 @@ sequenceDiagram
 - 当前 phase 起点 observation、累计 pose delta、累计 planar displacement、归一化累计 yaw delta。
 - 当前 phase 内累计执行过的 tool facts，例如成功 yaw 总量、move duration 总量和每个 direction 的 duration。
 - executed steps、action results、Safety interventions。
-- recent action / observation history 摘要。
-- phase window count / max window count。
+- 原样 assistant tool calls、ToolResult、Safety requested/executed args。
+- 按 observation ID 排列的历史 StateCheckpoint。
 
-模型只输出：
+commit 的核心参数是：
 
 ```json
 {
-  "decision": "continue_current_phase | advance_to_next_phase | complete_task",
-  "reason": "short reason"
+  "phase": "current phase name",
+  "completion_assessment": {
+    "done_when": [
+      {"index": 0, "status": "supported | unknown | contradicted", "evidence": "..."}
+    ]
+  }
 }
 ```
 
-runtime 才能真正修改 `MissionState`。如果 `SafetySupervisor` 有 intervention，runtime 会压制阶段推进判断并继续当前 phase。`complete_task` 只在最后一个 semantic phase 生效；如果模型在中间 phase 误报 `complete_task`，runtime 会记录降级事件并推进到下一 phase。若同一 phase 连续执行超过窗口上限，runtime 触发 loop guard，安全 hover 后标记 `stopped/incomplete`，不会自动推进下一 phase。
+只有 Runtime 能修改 `MissionState`。所有条件为 `supported` 时，最后阶段完成、非最后阶段推进；否则继续当前阶段并要求同一 assistant turn 提交 physical batch。若同一 phase 连续执行超过窗口上限，Runtime 触发 loop guard，安全 hover 后标记 `stopped/incomplete`，不会自动推进下一 phase。
 
-## 8. Plan-Execute-Repair
+## 8. Tool-Call Self-Repair
 
-当前支持 contract repair v1：当 `ToolContractValidator` 拒绝模型动作计划时，`ModelActionPlanner` 构建结构化 `RepairContext`，调用 `ModelRepairPlanner` 最多修正 3 次。任意一次修正通过后，计划继续进入 `SafetySupervisor`；3 次都失败时，runtime 走当前失败路径并 best-effort hover。
+生产模型路径不再调用独立 `ModelRepairPlanner`。provider 响应、tool 参数或调用组合不合法时，Runtime 把每个 call 标为 `rejected`，并把结构化错误作为 transcript feedback 回灌给同一模型。模型在同一个观察状态上重新调用工具，不消耗飞行动作窗口。
 
 ```mermaid
 flowchart TD
-    MAP["ModelActionPlanner"] --> TCV["ToolContractValidator"]
-    TCV -->|valid| SS["SafetySupervisor"]
-    TCV -->|invalid violation| RP["ModelRepairPlanner<br/>max 3 attempts"]
-    RP --> TCV
+    MAP["ModelActionPlanner"] --> V["ToolSpec schema + turn protocol"]
+    V -->|invalid| TR["Rejected ToolResult + protocol feedback"]
+    TR --> MAP
+    V -->|read-only| R["Immediate ToolResult"]
+    R --> MAP
+    V -->|phase commit + physical batch| SS["SafetySupervisor"]
     SS --> TD["ToolDispatcher"]
-    TD --> OBS["Automatic observation"]
-    OBS --> J["Coupled planner/phase decision"]
+    TD --> OBS["One automatic observation after batch"]
+    OBS --> MAP
 ```
 
-`ToolContractViolation` 保留结构化错误信息，例如 `code`、`message`、`step_index`、`tool`、`field`、`expected`、`actual`。repair planner 消费这些结构化信息，而不是解析自然语言错误。
-
-当前 repair 只修 contract violation，不修执行失败、视觉失败或 safety intervention。
+`max_tool_rounds`（默认 6）只是单个状态上的协议安全阀，不是 token budget。当前版本不做 transcript 摘要、裁剪或静默降级；provider 超限应显式报错。
 
 ## 9. 视觉输入边界
 
@@ -279,6 +280,8 @@ RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image conte
 - `src/memory/context/modules/image.py` 独占 PAST/NOW 语义、图像顺序和 overlay
   说明。存在不同的 phase-start 帧和有效深度时，模型收到 `PAST raw RGB + NOW
   RGB/depth overlay`；首窗口只收到 NOW；深度不可用时回退为 `PAST + NOW raw RGB`。
+- 每个图片标签都包含 `observation_id`、`frame_id` 和 artifact reference，使后续
+  tool call/result 能明确指向同一画面；ID 本身不会让 VLM 自动记住未再次发送的图片。
 - 两帧输入严格按“时间角色规则 → PAST 标签/图片 → NOW 标签/图片 → 当前状态提醒
   → JSON Context”排列；时间规则必须在 PAST 前，当前状态提醒必须紧跟 NOW。
 - 有效 NOW overlay 会替代模型附件中的原始 NOW RGB，不重复发送同一当前画面；

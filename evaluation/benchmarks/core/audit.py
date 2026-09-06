@@ -24,6 +24,7 @@ _AUDIT_FILES = (
     "memory/observations.jsonl",
     "memory/frames.jsonl",
     "memory/agent_messages.jsonl",
+    "memory/agent_transcript.jsonl",
     "events.jsonl",
     "debug/debug_events.jsonl",
 )
@@ -113,6 +114,9 @@ class BenchmarkAuditLog:
         default_factory=dict
     )
     diagnostics: tuple[dict[str, Any], ...] = ()
+    # Appended after existing optional fields to preserve positional-call
+    # compatibility for external BenchmarkAuditLog constructors.
+    agent_transcript: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -137,6 +141,9 @@ class BenchmarkAuditLog:
             "debug_events": [dict(item) for item in self.debug_events],
             "planner_debug": [
                 dict(item) for item in self.planner_debug
+            ],
+            "agent_transcript": [
+                dict(item) for item in self.agent_transcript
             ],
             "diagnostics": [dict(item) for item in self.diagnostics],
         }
@@ -231,6 +238,11 @@ class BenchmarkAuditReader:
             cursor.started_at,
             cursor.ended_at,
         )
+        transcript = _active_instruction_transcript(
+            records["memory/agent_transcript.jsonl"],
+            cursor.started_at,
+            cursor.ended_at,
+        )
         events = _timestamp_slice(
             records["events.jsonl"], cursor.started_at, cursor.ended_at
         )
@@ -268,6 +280,7 @@ class BenchmarkAuditReader:
             events=tuple(events),
             debug_events=tuple(debug_events),
             planner_debug=tuple(planner_debug),
+            agent_transcript=tuple(transcript),
             observation_anchors={
                 key: dict(value)
                 for key, value in cursor.observation_anchors.items()
@@ -763,6 +776,54 @@ def _timestamp_slice(
         for item in records
         if started_at <= _timestamp(item) <= ended_at
     ]
+
+
+def _active_instruction_transcript(
+    records: list[dict[str, Any]],
+    started_at: str | None,
+    ended_at: str,
+) -> list[dict[str, Any]]:
+    """Return the transcript owning the bounded episode.
+
+    Runtime starts the transcript before it captures the task-initial
+    observation, so a plain timestamp slice would drop the user instruction.
+    The first transcript record at or after the observation boundary identifies
+    the active ``instruction_id``; all bounded records with that ID are kept.
+    Legacy records without IDs fall back to the last user-instruction boundary.
+    The cursor's line limits have already excluded anything appended after
+    freeze, independently of its timestamp.
+    """
+
+    bounded = [item for item in records if _timestamp(item) <= ended_at]
+    if not bounded:
+        return []
+    candidates = [
+        item
+        for item in bounded
+        if started_at is None or _timestamp(item) >= started_at
+    ]
+    instruction_id = next(
+        (
+            str(item.get("instruction_id"))
+            for item in candidates
+            if item.get("instruction_id") not in (None, "")
+        ),
+        None,
+    )
+    if instruction_id is not None:
+        return [
+            item
+            for item in bounded
+            if str(item.get("instruction_id") or "") == instruction_id
+        ]
+
+    boundary = 0
+    for index, item in enumerate(bounded):
+        if item.get("kind") != "user_instruction":
+            continue
+        if started_at is None or _timestamp(item) <= started_at:
+            boundary = index
+    return bounded[boundary:]
 
 
 def _in_time_window(

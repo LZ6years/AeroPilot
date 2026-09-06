@@ -1,4 +1,6 @@
-# 01 Runtime Control Actions 架构
+# 01 Runtime Control Actions 架构（旧 JSON 设计记录）
+
+> 当前生产模型路径已迁移到统一原生 tool calling。本文中的 `control_actions` 和 `runtime_control.available` 仅用于理解旧实现；现行契约见 [原生 Tool-Call 执行计划](../agent_tool_loop_execution_plan.md)。
 
 Runtime Control Actions 是 FlyAgent 的运行时控制面。它处理“不直接驱动无人机，但会影响任务执行流程”的动作，例如主动询问用户、语义计划更新、暂停任务、等待确认等。
 

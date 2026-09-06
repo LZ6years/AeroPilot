@@ -6,12 +6,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from src.tools.schemas import ToolRuntimePolicy
+
 
 @dataclass(frozen=True)
 class SkillCapability:
     call_name: str
+    wire_name: str
     description: str
     input_schema: dict[str, Any]
+    runtime: ToolRuntimePolicy
     handler: str
     handler_path: Path
     mock: bool = False
@@ -19,8 +23,10 @@ class SkillCapability:
     def listing(self) -> dict[str, Any]:
         return {
             "call_name": self.call_name,
+            "wire_name": self.wire_name,
             "description": self.description,
             "input_schema": dict(self.input_schema),
+            "runtime": self.runtime.to_dict(),
             "handler": self.handler,
             "mock": self.mock,
         }

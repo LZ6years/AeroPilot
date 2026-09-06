@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
 from src.runtime.configs.safety_config import UavSafetyConfig
+
+if TYPE_CHECKING:
+    from src.tools.registry import ToolRegistry
 
 
 class SafetyViolation(ValueError):
@@ -45,14 +48,20 @@ class SafetySupervisor:
     def __init__(self, safety_config: UavSafetyConfig | None = None) -> None:
         self.safety_config = safety_config or UavSafetyConfig()
 
-    def review(self, plan: ShortHorizonPlan, state: Any | None = None) -> SafetyDecision:
+    def review(
+        self,
+        plan: ShortHorizonPlan,
+        state: Any | None = None,
+        *,
+        registry: "ToolRegistry | None" = None,
+    ) -> SafetyDecision:
         safe_steps: list[PlannedStep] = []
         interventions: list[dict] = []
         yaw_scan_offset = float(getattr(state, "yaw_scan_offset_deg", 0.0) or 0.0)
         yaw_scan_extent = float(getattr(state, "yaw_scan_extent_deg", 0.0) or 0.0)
         for step in plan.steps:
             if step.kind == "tool" and step.tool == "uav.turn_relative":
-                safe_step, intervention = self._review_step(step)
+                safe_step, intervention = self._review_step(step, registry)
                 safe_yaw = float(safe_step.args.get("yaw_deg", 0.0))
                 projected_offset = yaw_scan_offset + safe_yaw
                 projected_extent = max(yaw_scan_extent, abs(projected_offset))
@@ -85,7 +94,7 @@ class SafetySupervisor:
                 if intervention:
                     interventions.append(intervention)
                 continue
-            safe_step, intervention = self._review_step(step)
+            safe_step, intervention = self._review_step(step, registry)
             safe_steps.append(safe_step)
             if intervention:
                 interventions.append(intervention)
@@ -99,14 +108,22 @@ class SafetySupervisor:
             interventions,
         )
 
-    def _review_step(self, step: PlannedStep) -> tuple[PlannedStep, dict | None]:
+    def _review_step(
+        self,
+        step: PlannedStep,
+        registry: "ToolRegistry | None",
+    ) -> tuple[PlannedStep, dict | None]:
         if step.kind == "observe":
             return step, None
         if step.kind != "tool" or not step.tool:
             raise SafetyViolation(f"Unsupported planned step kind: {step.kind}")
-        if step.tool.startswith("skill."):
-            return step, None
-        if step.tool not in self.ALLOWED_TOOLS:
+        if registry is not None:
+            spec = registry.get(step.tool)
+            if spec.runtime.effect != "physical":
+                raise SafetyViolation(
+                    f"Non-physical tool reached physical safety review: {step.tool}"
+                )
+        elif step.tool not in self.ALLOWED_TOOLS:
             raise SafetyViolation(f"Tool is not allowed in short-horizon plan: {step.tool}")
         if step.tool == "uav.turn_relative":
             return self._clip_turn(step)

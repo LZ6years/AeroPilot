@@ -379,7 +379,7 @@ def test_action_module_reads_jsonl_refs_and_outputs_unified_motion_history(tmp_p
     action = _fragment(context, "action")
 
     summary = action["content"]["motion_history_summary"]
-    assert summary["window_count"] == 7
+    assert "window_count" not in summary
     assert summary["phase_start_relative_uav_motion"] == {
         "forward_m": 0.0,
         "right_m": 0.0,
@@ -396,14 +396,11 @@ def test_action_module_reads_jsonl_refs_and_outputs_unified_motion_history(tmp_p
         "recharge_count": 0,
         "recharge_distance_m": 0.0,
     }
-    assert summary["recent_execution_order"] == "oldest_to_newest"
-    assert len(summary["recent_execution"]) == 5
-    assert summary["recent_execution"][-1] == {"tool": "uav.hover", "args": {}}
-    assert all("ok" not in item for item in summary["recent_execution"])
+    assert "recent_execution_order" not in summary
+    assert "recent_execution" not in summary
     assert "motion_history_summary_sources" in action["metadata"]
     assert "recent_actions" not in action["content"]
     assert "action_trend" not in action["content"]
-    assert "result" not in summary["recent_execution"][-1]
     assert "action_effect_summaries" not in action["content"]
     assert action["facts"] == []
     assert action["inferences"] == []
@@ -461,7 +458,9 @@ def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
     assert model_input["encoding"] == "data_url"
     assert model_input["data"].startswith("data:image/png;base64,")
     assert model_input["data"] != "data:image/png;base64," + base64.b64encode(rgb_path.read_bytes()).decode("ascii")
-    assert set(model_input) == {"type", "input_id", "role", "usage", "mime_type", "encoding", "data"}
+    assert model_input["observation_id"] == "obs_0001"
+    assert model_input["frame_id"] == "frame_0001"
+    assert model_input["artifact_ref"] == str(rgb_path)
     assert image["content"]["selected_frames"][0]["input_id"] == model_input["input_id"]
     assert image["content"]["selected_frames"][0]["role"] == "current_observation"
     assert image["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)

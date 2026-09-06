@@ -32,10 +32,38 @@ def test_recover_existing_evaluation_writes_partial_html_idempotently(
     image.parent.mkdir(parents=True)
     image.write_bytes(b"not-a-decoded-image-but-a-stable-report-asset")
     _write_json(complete / "case.json", _case_payload("case_complete"))
-    _write_json(
-        complete / "audit.json",
-        _audit_payload("case_complete", display_path=image),
-    )
+    audit_payload = _audit_payload("case_complete", display_path=image)
+    audit_payload["agent_transcript"] = [
+        {
+            "id": "turn_0001",
+            "timestamp": "2026-08-17T00:00:00+00:00",
+            "instruction_id": "inst_complete",
+            "kind": "assistant_turn",
+            "payload": {
+                "public_intent": "Recover the saved transcript.",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "call_recovered",
+                        "tool_name": "runtime.commit_phase_turn",
+                        "args": {"phase": "turn"},
+                    }
+                ],
+            },
+        },
+        {
+            "id": "turn_0002",
+            "timestamp": "2026-08-17T00:00:01+00:00",
+            "instruction_id": "inst_complete",
+            "kind": "tool_result",
+            "payload": {
+                "tool_call_id": "call_recovered",
+                "tool_name": "runtime.commit_phase_turn",
+                "status": "ok",
+                "message": "recovered",
+            },
+        },
+    ]
+    _write_json(complete / "audit.json", audit_payload)
 
     first = recover_existing_evaluation(
         eval_dir,
@@ -56,13 +84,41 @@ def test_recover_existing_evaluation_writes_partial_html_idempotently(
     assert (complete / "review.html").is_file()
     assert not (incomplete / "review.html").exists()
     root_html = (eval_dir / "review.html").read_text(encoding="utf-8")
+    case_html = (complete / "review.html").read_text(encoding="utf-8")
     assert "Evaluation State: INTERRUPTED" in root_html
     assert "case_complete" in root_html
+    assert "Recover the saved transcript." in case_html
+    assert "call_recovered" in case_html
     summary = json.loads((eval_dir / "summary.json").read_text("utf-8"))
     assert summary["run_status"] == "interrupted"
     assert summary["expected_case_count"] == 2
     assert summary["finalized_case_count"] == 1
     assert summary["metrics"]["case_count"] == 1
+
+
+def test_recovery_accepts_legacy_audit_without_agent_transcript(
+    tmp_path: Path,
+) -> None:
+    case_dir = tmp_path / "legacy" / "cases" / "legacy_case"
+    case_dir.mkdir(parents=True)
+    image = case_dir / "review_assets" / "frames" / "rgb.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"legacy-report-asset")
+    _write_json(case_dir / "case.json", _case_payload("legacy_case"))
+    payload = _audit_payload("legacy_case", display_path=image)
+    assert "agent_transcript" not in payload
+    _write_json(case_dir / "audit.json", payload)
+
+    result = recover_existing_evaluation(
+        tmp_path / "legacy",
+        run_status="completed",
+        expected_case_count=1,
+        strict=True,
+    )
+
+    assert result["finalized_case_count"] == 1
+    html = (case_dir / "review.html").read_text(encoding="utf-8")
+    assert "No agent tool transcript was recorded for this episode." in html
 
 
 def test_strict_recovery_rejects_missing_declared_asset(tmp_path: Path) -> None:
@@ -198,6 +254,8 @@ def _audit_payload(case_id: str, *, display_path: Path) -> dict:
         "poses": [],
         "actions": [],
         "agent_messages": [],
+        # Historical audits omit agent_transcript. Offline recovery must keep
+        # accepting that additive-schema predecessor.
         "events": [],
         "debug_events": [],
         "planner_debug": [],

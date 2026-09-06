@@ -1,4 +1,6 @@
-# semantic_plan_update 语义计划更新
+# semantic_plan_update 语义计划更新（旧 JSON 契约记录）
+
+> 当前模型侧名称为 `runtime.semantic_plan_update`，通过 provider 原生 tool call 暴露；本文中的 `control_actions` 示例仅供迁移追溯。
 
 `semantic_plan_update` 是异步 runtime control action。它允许 planner 在当前 semantic phase 合约明显不再适合已有证据时，请求一个更贴合当前任务进展的语义计划 patch。
 

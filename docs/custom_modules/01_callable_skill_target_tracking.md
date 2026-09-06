@@ -79,12 +79,14 @@ Do not treat this skill text as evidence. Only the returned capability result is
 ```json
 {
   "call_name": "skill.target_tracker.track",
+  "wire_name": "skill_target_tracker_track",
   "description": "Track a target in the latest RGB frame and return its current image-space position.",
   "input_schema": {
     "type": "object",
-    "required": ["image_source", "target_hint"],
+    "required": ["observation_id", "target_hint"],
     "additionalProperties": false,
     "properties": {
+      "observation_id": {"type": "string"},
       "image_source": {
         "type": "string",
         "enum": ["latest_rgb"]
@@ -102,6 +104,12 @@ Do not treat this skill text as evidence. Only the returned capability result is
       }
     }
   },
+  "runtime": {
+    "effect": "read_only",
+    "result_timing": "immediate",
+    "batching": "parallel_safe",
+    "model_exposed": true
+  },
   "handler": "scripts/track_target.py",
   "mock": true
 }
@@ -110,9 +118,11 @@ Do not treat this skill text as evidence. Only the returned capability result is
 规则：
 
 - `call_name` 必须以 `skill.` 开头。
+- `wire_name` 必须是 provider 可接受且全局唯一的函数名。
 - `handler` 必须在当前 skill 目录内。
-- `input_schema` 会自动进入 `allowed_action_constraints.action_schemas`。
-- planner 只有在 `skill.target_tracker.track` 出现在 `planner_tools` 时才能调用。
+- `input_schema` 会直接生成 provider tool schema。
+- `runtime` 显式决定副作用、结果时机、批处理方式和是否默认暴露，不能省略。
+- planner 只有在本轮 provider `tools` 中看到该能力时才能调用。
 
 ## 4. handler：执行你的跟踪逻辑
 
@@ -142,6 +152,7 @@ def handle(payload: dict) -> dict:
         "status": "tracked",
         "track_found": True,
         "track_id": args.get("previous_track_id") or "track_person_001",
+        "observation_id": args.get("observation_id"),
         "target_hint": args.get("target_hint"),
         "image_source": args.get("image_source"),
         "rgb_metadata": rgb,
@@ -185,42 +196,32 @@ runtime 会传入：
 
 ## 5. planner 会如何调用
 
-插件启用后，planner context 中会自动出现：
+插件启用后，provider 请求的 `tools` 中会出现：
 
 ```json
 {
-  "allowed_action_constraints": {
-    "planner_tools": [
-      "uav.hover",
-      "uav.turn_relative",
-      "uav.move_body",
-      "skill.target_tracker.track"
-    ],
-    "action_schemas": {
-      "skill.target_tracker.track": {
-        "source": "skill_capability",
-        "input_schema": {
-          "type": "object",
-          "required": ["image_source", "target_hint"]
-        }
-      }
+  "type": "function",
+  "function": {
+    "name": "skill_target_tracker_track",
+    "description": "Track a target in the latest RGB frame and return its current image-space position.",
+    "parameters": {
+      "type": "object",
+      "required": ["observation_id", "target_hint"]
     }
   }
 }
 ```
 
-planner 可以输出：
+planner 通过原生 tool call 输出：
 
 ```json
 {
-  "kind": "tool",
-  "tool": "skill.target_tracker.track",
-  "args": {
-    "image_source": "latest_rgb",
-    "target_hint": "person",
-    "min_confidence": 0.5
-  },
-  "reason": "Track the person before deciding the next movement."
+  "id": "call_track_1",
+  "type": "function",
+  "function": {
+    "name": "skill_target_tracker_track",
+    "arguments": "{\"observation_id\":\"obs_0004\",\"target_hint\":\"person\",\"min_confidence\":0.5}"
+  }
 }
 ```
 
@@ -228,12 +229,11 @@ planner 可以输出：
 
 ```text
 ModelActionPlanner
-  -> ToolContractValidator validates input_schema
-  -> SafetySupervisor passes through skill.* tool
+  -> native tool-call schema/protocol validation
   -> ToolDispatcher routes to SkillCapabilityDispatcher
   -> handler returns result
-  -> runtime writes result to memory/actions.jsonl
-  -> next context can see the recent action result
+  -> Runtime writes ToolResult to AgentTranscript and memory/actions.jsonl
+  -> the same model sees the exact result before choosing a physical batch
 ```
 
 ## 6. 如何验证是否接入成功
@@ -256,8 +256,9 @@ runs/plugin_system_demo_<timestamp>/
 你应该看到：
 
 - `02_discovered_skills.json` 中有 `target_tracker`
-- `05_latest_context.json.allowed_action_constraints.planner_tools` 中有 `skill.target_tracker.track`
-- `05_latest_context.json.allowed_action_constraints.action_schemas` 中有它的 schema
+- capability listing 中有 canonical `call_name`、provider `wire_name` 和 `runtime`
+- ModelActionPlanner 的 provider payload `tools` 中有 `skill_target_tracker_track`
+- 调用完成后 `memory/agent_transcript.jsonl` 中有配对的 assistant call 与 ToolResult
 
 如果你写了专门测试，可以参考：
 
@@ -270,16 +271,16 @@ python -m pytest tests/test_skill_tools.py -q
 | 问题 | 原因 | 处理 |
 | --- | --- | --- |
 | skill 没出现 | plugin package 没 enabled，或目录层级不对 | 检查 `plugins/capabilities/<domain>/<skill>/SKILL.md` 和 `configs/plugins.json` |
-| capability 没进 planner_tools | 缺少 `capability.json`，或 `call_name` 不以 `skill.` 开头 | 修正 `capability.json` |
+| capability 没进 provider tools | 缺少/写错 `capability.json`，未 enabled，或 `model_exposed=false` | 修正插件配置与 runtime policy |
 | handler 加载失败 | `handler` 路径不存在，或不在 skill 目录内 | 放到当前 skill 的 `scripts/` 下 |
-| planner 调用被拒绝 | args 不符合 `input_schema` | 看 `ToolContractValidator` 报错 |
-| handler 有结果但下一步 planner 不用 | 当前还没有专门的 semantic state updater | 先通过 `actions.jsonl` 和 action context 复盘；后续可接 semantic state update |
+| planner 调用被拒绝 | args 不符合 `input_schema` 或调用组合违反 runtime policy | 看 transcript 中的 rejected ToolResult |
+| handler 有结果但下一步 planner 不用 | 模型没有正确利用 ToolResult | 检查 `agent_transcript.jsonl` 中的调用、结果和下一次 assistant turn |
 
 ## 8. 当前限制
 
 - 现在 callable skill 已经可以被 planner 调用。
 - 当前没有专门的长期目标跟踪状态管理器。
-- handler 结果会作为 action result 写入 memory；如果你希望它成为稳定动态语义状态，需要后续新增 `semantic_state` context module 或 semantic state updater。
+- handler 结果会写入 AgentTranscript 和 action memory；如果你希望它跨 instruction 成为稳定动态语义状态，仍需要后续新增 `semantic_state` context module 或 semantic state updater。
 - 真实目标跟踪模型的依赖、GPU、模型文件路径和运行权限，需要在 handler 内部自己处理，并保持输出结构稳定。
 
 换句话说：接入一个目标跟踪能力已经足够方便；如果要让无人机持续使用“同一个目标”的跨帧状态，还需要下一步补 `semantic_state` 更新机制。

@@ -214,6 +214,8 @@ class BenchmarkReviewRenderer:
                 f"{_key_value_table(case.metrics)}</section>"
                 "<section><h2>Observation Gallery</h2>"
                 f"{gallery}</section>"
+                "<section><h2>Agent Tool Transcript</h2>"
+                f"{_agent_tool_transcript(case.audit, case.frame_assets, case_dir)}</section>"
                 "<section><h2>Action Timeline</h2>"
                 + _record_table(
                     case.audit.actions,
@@ -475,6 +477,309 @@ def _frame_association(
         return None
     action = max(preceding, key=lambda item: str(item["timestamp"]))
     return f"after {action.get('tool') or action.get('id')} (time-associated)"
+
+
+def _agent_tool_transcript(
+    audit: BenchmarkAuditLog,
+    assets: tuple[ResolvedFrameAsset, ...],
+    case_dir: Path,
+) -> str:
+    """Render the canonical model/tool exchange without inventing reasoning.
+
+    ``public_intent`` is the model's explicit explanation. The report pairs
+    calls and results by provider ``tool_call_id`` and keeps physical telemetry
+    in the separate Action Timeline below.
+    """
+
+    records = list(audit.agent_transcript)
+    if not records:
+        return (
+            '<p class="empty">No agent tool transcript was recorded for this '
+            "episode.</p>"
+        )
+
+    calls_by_id, results_by_id = _transcript_indexes(records)
+    diagnostics = _transcript_diagnostics(calls_by_id, results_by_id)
+    diagnostic_html = ""
+    if diagnostics:
+        diagnostic_html = (
+            '<div class="transcript-diagnostics"><strong>Transcript audit '
+            "issues</strong><ul>"
+            + "".join(f"<li>{_e(item)}</li>" for item in diagnostics)
+            + "</ul></div>"
+        )
+
+    cards = [
+        _transcript_record_card(
+            record,
+            calls_by_id=calls_by_id,
+            results_by_id=results_by_id,
+            assets=assets,
+            case_dir=case_dir,
+        )
+        for record in records
+    ]
+    return diagnostic_html + '<div class="transcript">' + "".join(cards) + "</div>"
+
+
+def _transcript_indexes(
+    records: list[dict[str, Any]],
+) -> tuple[
+    dict[str, list[tuple[int, dict[str, Any]]]],
+    dict[str, list[tuple[int, dict[str, Any]]]],
+]:
+    calls: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    results: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, record in enumerate(records):
+        payload = _dict(record.get("payload"))
+        if record.get("kind") == "assistant_turn":
+            raw_calls = payload.get("tool_calls")
+            if not isinstance(raw_calls, list):
+                continue
+            for raw_call in raw_calls:
+                if not isinstance(raw_call, dict):
+                    continue
+                call_id = str(raw_call.get("tool_call_id") or "")
+                if call_id:
+                    calls.setdefault(call_id, []).append((index, raw_call))
+        elif record.get("kind") == "tool_result":
+            call_id = str(payload.get("tool_call_id") or "")
+            if call_id:
+                results.setdefault(call_id, []).append((index, payload))
+    return calls, results
+
+
+def _transcript_diagnostics(
+    calls_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+    results_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+) -> list[str]:
+    issues: list[str] = []
+    for call_id, calls in calls_by_id.items():
+        results = results_by_id.get(call_id, [])
+        if len(calls) > 1:
+            issues.append(f"duplicate ToolCall id: {call_id}")
+        if not results:
+            issues.append(f"ToolCall has no terminal ToolResult: {call_id}")
+        elif len(results) > 1:
+            issues.append(f"ToolCall has multiple ToolResults: {call_id}")
+        elif len(calls) == 1:
+            call_tool = str(calls[0][1].get("tool_name") or "")
+            result_tool = str(results[0][1].get("tool_name") or "")
+            if call_tool and result_tool and call_tool != result_tool:
+                issues.append(
+                    f"ToolCall/ToolResult tool mismatch: {call_id} "
+                    f"({call_tool} != {result_tool})"
+                )
+    for call_id in results_by_id:
+        if call_id not in calls_by_id:
+            issues.append(f"orphan ToolResult: {call_id}")
+    return issues
+
+
+def _transcript_record_card(
+    record: dict[str, Any],
+    *,
+    calls_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+    results_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+    assets: tuple[ResolvedFrameAsset, ...],
+    case_dir: Path,
+) -> str:
+    kind = str(record.get("kind") or "unknown")
+    payload = _dict(record.get("payload"))
+    heading = kind.replace("_", " ").title()
+    metadata = " · ".join(
+        item
+        for item in (
+            str(record.get("timestamp") or ""),
+            str(record.get("id") or ""),
+        )
+        if item
+    )
+    body = _transcript_record_body(
+        kind,
+        payload,
+        calls_by_id=calls_by_id,
+        results_by_id=results_by_id,
+        assets=assets,
+        case_dir=case_dir,
+    )
+    return (
+        f'<article class="transcript-card transcript-{_css_token(kind)}">'
+        f"<header><h3>{_e(heading)}</h3>"
+        f'<span class="muted">{_e(metadata)}</span></header>'
+        f"{body}</article>"
+    )
+
+
+def _transcript_record_body(
+    kind: str,
+    payload: dict[str, Any],
+    *,
+    calls_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+    results_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+    assets: tuple[ResolvedFrameAsset, ...],
+    case_dir: Path,
+) -> str:
+    if kind == "user_instruction":
+        return f'<p class="transcript-intent">{_e(payload.get("instruction"))}</p>'
+    if kind == "state_checkpoint":
+        context = _dict(payload.get("context"))
+        phase = _dict(context.get("current_phase"))
+        observation_id = str(payload.get("observation_id") or "")
+        summary = {
+            "observation_id": observation_id or None,
+            "current_phase": phase.get("name"),
+            "completed": context.get("completed"),
+            "stopped": context.get("stopped"),
+        }
+        checkpoint_assets = tuple(
+            asset
+            for asset in assets
+            if observation_id
+            and str(asset.observation_id or "") == observation_id
+            and asset.modality == "rgb"
+            and asset.display_path
+        )
+        media = ""
+        if checkpoint_assets:
+            media = '<div class="gallery transcript-media">' + "".join(
+                _frame_card(
+                    asset,
+                    case_dir,
+                    roles=["transcript checkpoint"],
+                    observation_source=None,
+                    association=None,
+                )
+                for asset in checkpoint_assets
+            ) + "</div>"
+        return (
+            _key_value_table(summary)
+            + media
+            + _json_details(context, "Full checkpoint context")
+        )
+    if kind == "assistant_turn":
+        raw_calls = payload.get("tool_calls")
+        raw_calls = raw_calls if isinstance(raw_calls, list) else []
+        rows = []
+        for raw_call in raw_calls:
+            call = raw_call if isinstance(raw_call, dict) else {}
+            call_id = str(call.get("tool_call_id") or "")
+            rows.append(
+                {
+                    "tool_call_id": call_id,
+                    "tool": call.get("tool_name"),
+                    "args": call.get("args"),
+                    "result_status": _paired_result_status(
+                        call_id, calls_by_id, results_by_id
+                    ),
+                    "pairing": _transcript_pairing(
+                        call_id, calls_by_id, results_by_id
+                    ),
+                }
+            )
+        intent = (
+            '<p class="transcript-intent"><strong>Public intent:</strong> '
+            f'{_e(payload.get("public_intent"))}</p>'
+        )
+        return intent + _record_table(
+            rows,
+            ("tool_call_id", "tool", "args", "result_status", "pairing"),
+            empty_message="This assistant turn did not contain ToolCalls.",
+        )
+    if kind == "tool_result":
+        call_id = str(payload.get("tool_call_id") or "")
+        summary = {
+            "tool_call_id": call_id or None,
+            "tool": payload.get("tool_name"),
+            "status": payload.get("status"),
+            "message": payload.get("message"),
+            "pairing": _transcript_pairing(
+                call_id, calls_by_id, results_by_id
+            ),
+            "requested_args": payload.get("requested_args"),
+            "executed_args": payload.get("executed_args"),
+            "safety_interventions": payload.get("safety_interventions"),
+            "result_ref": payload.get("result_ref"),
+        }
+        return (
+            _key_value_table(summary)
+            + _transcript_artifact_refs(payload, assets, case_dir)
+            + _json_details(
+                payload.get("data"),
+                "Result data",
+                empty_message="No structured result data.",
+            )
+        )
+    if kind == "protocol_feedback":
+        return (
+            '<p class="transcript-feedback">'
+            f'{_e(payload.get("message"))}</p>'
+        )
+    return _json_details(payload, "Raw transcript payload")
+
+
+def _transcript_pairing(
+    call_id: str,
+    calls_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+    results_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+) -> str:
+    if not call_id:
+        return "invalid: missing tool_call_id"
+    call_count = len(calls_by_id.get(call_id, []))
+    result_count = len(results_by_id.get(call_id, []))
+    if call_count == 0:
+        return "invalid: orphan result"
+    if call_count > 1:
+        return "invalid: duplicate call id"
+    if result_count == 0:
+        return "open: missing ToolResult"
+    if result_count > 1:
+        return "invalid: multiple ToolResults"
+    call_tool = str(calls_by_id[call_id][0][1].get("tool_name") or "")
+    result_tool = str(results_by_id[call_id][0][1].get("tool_name") or "")
+    if call_tool and result_tool and call_tool != result_tool:
+        return "invalid: tool mismatch"
+    return "paired"
+
+
+def _paired_result_status(
+    call_id: str,
+    calls_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+    results_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+) -> Any:
+    if _transcript_pairing(call_id, calls_by_id, results_by_id) != "paired":
+        return None
+    return results_by_id[call_id][0][1].get("status")
+
+
+def _transcript_artifact_refs(
+    payload: dict[str, Any],
+    assets: tuple[ResolvedFrameAsset, ...],
+    case_dir: Path,
+) -> str:
+    refs = payload.get("artifact_refs")
+    if not isinstance(refs, list) or not refs:
+        return ""
+    safe_targets: dict[str, Path] = {}
+    for asset in assets:
+        for value in (asset.frame_id, asset.display_path, asset.raw_path):
+            if value not in (None, ""):
+                target = asset.display_path or asset.raw_path
+                if target:
+                    safe_targets[str(value)] = Path(target)
+    rendered = []
+    for value in refs:
+        ref = str(value)
+        target = safe_targets.get(ref)
+        if target is not None and target.is_file():
+            rendered.append(
+                f'<a href="{_relative_href(case_dir, target)}"><code>{_e(ref)}</code></a>'
+            )
+        else:
+            rendered.append(f"<code>{_e(ref)}</code>")
+    return "<h4>Artifact references</h4><ul>" + "".join(
+        f"<li>{item}</li>" for item in rendered
+    ) + "</ul>"
 
 
 def _materialize_planner_input_assets(
@@ -1394,6 +1699,21 @@ code, pre { font-family: Consolas, monospace; white-space: pre-wrap;
 details { margin-top: 12px; }
 details.planner-window { border: 1px solid #d9e2ec; border-radius: 8px;
   padding: 10px 12px; }
+.transcript { display: grid; gap: 12px; }
+.transcript-card { border: 1px solid #d9e2ec; border-left: 5px solid #829ab1;
+  border-radius: 8px; padding: 12px 14px; background: #fbfdff; }
+.transcript-card header { display: flex; align-items: baseline;
+  justify-content: space-between; gap: 16px; }
+.transcript-card header h3 { margin: 0 0 8px; }
+.transcript-assistant-turn { border-left-color: #2563eb; }
+.transcript-tool-result { border-left-color: #059669; }
+.transcript-protocol-feedback { border-left-color: #d97706; }
+.transcript-state-checkpoint { border-left-color: #7c3aed; }
+.transcript-intent, .transcript-feedback { font-size: 15px; }
+.transcript-diagnostics { border: 1px solid #d97706; border-radius: 8px;
+  background: #fffbeb; color: #92400e; margin-bottom: 12px; padding: 12px; }
+.transcript-diagnostics ul { margin-bottom: 0; }
+.transcript-media { margin-top: 12px; }
 .step-comparison td { min-width: 200px; }
 details > summary { cursor: pointer; color: #243b53; font-weight: 600; }
 a { color: #1367d1; }

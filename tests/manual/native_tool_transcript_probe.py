@@ -1,0 +1,88 @@
+"""Print a compact native tool-call transcript for manual inspection.
+
+This probe does not contact a model or simulator. It exercises the exact
+provider-message projection used by ModelActionPlanner.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import sys
+import tempfile
+
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from src.agent.transcript import AgentToolCall, AgentTranscript, AssistantTurn, ToolResult
+from src.memory.stores import MemoryEventWriter
+from src.plugins import PluginRegistry
+from src.tools.registry import default_registry
+
+
+def main() -> None:
+    plugins = PluginRegistry.discover(
+        {
+            "plugins": {
+                "roots": ["plugins/capabilities"],
+                "enabled": ["capabilities.perception"],
+            }
+        }
+    )
+    registry = default_registry(plugins)
+    with tempfile.TemporaryDirectory(prefix="flyagent_transcript_") as temp_dir:
+        transcript = AgentTranscript(MemoryEventWriter(temp_dir))
+        transcript.start_instruction("确认画面中的人，然后小幅转向并前进", "inst_demo")
+        transcript.append_state(
+            {
+                "current_phase": {
+                    "name": "approach_person",
+                    "done_when": ["person is confirmed and approached"],
+                },
+                "fragments": [],
+                "allowed_action_constraints": {"debug_only": True},
+            },
+            "obs_0001",
+        )
+        transcript.append_assistant(
+            AssistantTurn(
+                "assistant_detect",
+                "先确认当前观察中的目标。",
+                [
+                    AgentToolCall(
+                        "call_detect",
+                        "skill.person_detector.detect",
+                        {"observation_id": "obs_0001"},
+                    )
+                ],
+            )
+        )
+        transcript.append_tool_result(
+            ToolResult(
+                "call_detect",
+                "skill.person_detector.detect",
+                "ok",
+                "person detected",
+                data={"observation_id": "obs_0001", "confidence": 0.91},
+            )
+        )
+
+        messages = transcript.provider_messages(registry)
+        for index, message in enumerate(messages):
+            row = {"index": index, "role": message["role"]}
+            if "tool_calls" in message:
+                row["tool_call_ids"] = [call["id"] for call in message["tool_calls"]]
+            if "tool_call_id" in message:
+                row["tool_call_id"] = message["tool_call_id"]
+            print(json.dumps(row, ensure_ascii=False))
+
+        state_text = messages[1]["content"][-1]["text"]
+        if "allowed_action_constraints" in state_text:
+            raise RuntimeError("provider state unexpectedly duplicated tool constraints")
+        print("probe_ok")
+
+
+if __name__ == "__main__":
+    main()

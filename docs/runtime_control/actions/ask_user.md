@@ -1,4 +1,6 @@
-# ask_user 主动询问用户
+# ask_user 主动询问用户（旧 JSON 契约记录）
+
+> 当前模型侧名称为 `runtime.ask_user`，通过 provider 原生 tool call 暴露；本文中的 `control_actions` 示例仅供迁移追溯。
 
 `ask_user` 是阻塞式 runtime control action。它允许 planner 在继续飞行风险较高、目标或意图不明确，并且用户回答能显著降低风险时，向用户提出一个短问题。
 

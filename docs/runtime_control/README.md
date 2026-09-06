@@ -2,12 +2,13 @@
 
 Runtime Control Actions 是 FlyAgent 的运行时控制面。它描述的是影响任务编排、用户交互、语义计划或等待状态的动作，不是直接驱动无人机飞行的动作。
 
-这个专题把系统分成两个平面：
+这个专题最初按 JSON `steps/control_actions` 双平面设计。当前生产模型路径已经迁移到统一原生 tool calling：
 
-- 飞行动作面：真实影响无人机运动或插件能力调用，例如 `uav.hover`、`uav.turn_relative`、`uav.move_body`、`skill.*`。
-- 运行时控制面：影响任务流程，例如 `ask_user`、`semantic_plan_update`，后续也可以扩展为暂停任务、请求确认、整理记忆等。
+- physical tools：真实影响无人机运动，例如 `uav.hover`、`uav.turn_relative`、`uav.move_body`。
+- read-only tools：插件检测、VLM、OCR 等立即返回证据的能力。
+- runtime-control tools：影响任务流程，例如 `runtime.ask_user`、`runtime.semantic_plan_update`、`runtime.commit_phase_turn`。
 
-核心原则是：模型不能凭空使用运行时控制动作。只有 runtime 配置开启、当前运行模式允许、并且当前 planner context 显式暴露在 `runtime_control.available` 中的动作，模型才能在 `control_actions` 中请求。runtime 收到请求后还要再次校验，不能因为模型输出了某个动作就默认执行。
+核心原则是：模型只能调用本轮 provider `tools` 中实际出现的动作。Runtime 配置与 `ToolSpec.runtime` 共同决定暴露集合，收到调用后仍会再次校验。动态 pending/status 可以进入 StateCheckpoint，但 availability 和 schema 不在 context 中重复。
 
 ## 文档结构
 
@@ -25,7 +26,8 @@ docs/runtime_control/
 
 目录职责：
 
-- [01 架构](01_architecture.md)：说明 `steps` 与 `control_actions` 双平面、`RuntimeControlExecutor` 的边界，以及 phase window 主流程。
+- [原生 Tool-Call 执行计划](../agent_tool_loop_execution_plan.md)：当前生产架构与迁移状态。
+- [01 架构](01_architecture.md)：旧 JSON 双平面设计记录，供迁移追溯。
 - [02 控制动作配置](02_control_action_config.md)：说明如何显式开启、关闭、展示和覆盖 runtime control action。
 - [03 模型契约与上下文](03_model_contract_and_context.md)：说明 capability contract、每轮动态 context、planner policy、validator、event/memory 之间的关系。
 - [04 Runtime Control 全阶段实施路线](04_mvp_implementation_plan.md)：说明全阶段实现顺序、每阶段文件边界和验证方式。
@@ -34,14 +36,14 @@ docs/runtime_control/
 
 ## 第一版范围
 
-第一版建议只支持两个动作：
+当前配置可选择暴露两个控制动作：
 
 - `ask_user`：阻塞式用户澄清。runtime 先让无人机悬停或确认稳定，再向用户提问并暂停当前任务循环。
 - `semantic_plan_update`：异步语义计划更新。runtime 在当前窗口动作和自动 observation 之后提交后台更新，并只在后续 phase window 边界按版本校验后应用。
 
 第一版不做：
 
-- 不把运行时控制动作做成 UAV tool。
+- 不让运行时控制动作进入 UAV primitive dispatcher。
 - 不让 `ToolDispatcher` 执行 `ask_user` 或 `semantic_plan_update`。
 - 不新增专门的 `runtime_control.py` / `clarifications.py` context module；用户回复先复用现有 instruction/conversation memory。
 - 不让 reusable skill 描述 runtime 私有字段或控制动作 schema。
@@ -50,12 +52,12 @@ docs/runtime_control/
 ## 总数据流
 
 ```text
-capability contract 告诉模型“这些控制动作是什么意思、payload 怎么写”
-runtime_control context 告诉模型“当前这一轮哪些动作可用、是否有短状态”
+provider tools 告诉模型“这些控制动作是什么意思、payload 怎么写、当前是否可用”
+StateCheckpoint 只告诉模型“当前是否有 pending 等短状态”
 planner policy 告诉模型“什么时候应该请求，什么时候不应该请求”
 validator 保证“请求不等于执行”
 event / memory 记录“执行后发生了什么”
-context builder 把结果压缩给下一轮模型
+AgentTranscript 把精确调用和结果交给下一轮模型
 ```
 
 模型可见上下文应保持极简。不要在每轮 context 中重复输出动作默认语义、配置细节、环境变量、触发规则或 debug 状态。

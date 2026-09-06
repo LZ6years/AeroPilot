@@ -87,16 +87,19 @@ def test_agent_boundaries_document_prompt_and_skill_writing_rules():
     assert "must not infer AND/OR semantics" in guide
     assert "rather than exact long prompt sentences" in guide
     assert "condition quality, and grouping" in compact_guide
-    assert "phase-decision prompt owns only completion-evidence" in guide
-    assert "classification. The phase-strategy prompt owns" in guide
-    assert "ordered maneuver stages and active stage" in compact_guide
-    assert "action prompt owns tool choice, signed argument use" in compact_guide
+    assert "`src/agent/transcript.py` owns chronological model intent" in guide
+    assert "Context modules must not duplicate that history" in guide
+    assert "`runtime.commit_phase_turn` carries the completion assessment" in compact_guide
+    assert "provider request through `tools`" in guide
+    assert "The runtime uses two loops" in guide
+    assert "inner loop may execute immediate read-only tools" in guide
+    assert "outer phase loop sends an ordered batch" in compact_guide
     assert "Phase strategy is mutable Runtime state" in guide
     assert "not part of `SemanticPlan`" in guide
     assert "intermediate strategy stage may advance while phase completion remains unknown" in compact_guide
     assert "planning-time refresh with no new window measurement preserves that snapshot" in compact_guide
     assert "explicitly measured zero-motion window replaces it with zeros" in compact_guide
-    assert "canonical UAV tool contract" in guide
+    assert "canonical `ToolSpec` schemas" in compact_guide
 
 
 def test_agent_boundaries_require_benchmark_generalization():
@@ -229,22 +232,6 @@ def test_flyagent_rules_contain_general_visual_action_alignment_without_internal
         assert implementation_term not in user_preferences
 
 
-def test_model_repair_prompt_requires_contract_valid_tool_only_plan():
-    prompt = (Path("src") / "agent" / "planning" / "prompts" / "model_repair_system.txt").read_text(encoding="utf-8")
-
-    assert "Return exactly one corrected ShortHorizonPlan" in prompt
-    assert "Use only kind=\"tool\" steps" in prompt
-    assert "Never output kind=\"observe\"" in prompt
-    assert "Do not repeat the previous invalid plan" in prompt
-    assert "Repair only tool-contract issues" in prompt
-    assert "action_window" in prompt
-    assert "agent_messages" in prompt
-    assert "raw thinking" in prompt
-    assert "current_phase_only" in prompt
-    assert "requires_intermediate_observation" in prompt
-    assert "phase_transition" not in prompt
-
-
 def test_semantic_plan_update_prompt_is_limited_to_current_phase_patch():
     prompt = (Path("src") / "agent" / "semantic" / "prompts" / "semantic_plan_update_system.txt").read_text(
         encoding="utf-8"
@@ -274,136 +261,31 @@ def test_semantic_plan_update_prompt_is_limited_to_current_phase_patch():
     assert "reference path" not in prompt
 
 
-def test_coupled_prompt_fragments_have_clear_boundaries():
+def test_native_agent_tool_loop_prompt_has_clear_boundaries():
     prompt_dir = Path("src") / "agent" / "planning" / "prompts"
-    phase_prompt = (prompt_dir / "coupled_phase_decision_system.txt").read_text(encoding="utf-8")
-    strategy_prompt = (prompt_dir / "coupled_phase_strategy_system.txt").read_text(encoding="utf-8")
-    action_prompt = (prompt_dir / "coupled_action_planner_system.txt").read_text(encoding="utf-8")
+    prompt = (prompt_dir / "agent_tool_loop_system.txt").read_text(encoding="utf-8")
 
     assert not (prompt_dir / "coupled_action_phase_planner_system.txt").exists()
-    assert "Output only completion_assessment" in phase_prompt
-    assert "completion_assessment" in phase_prompt
-    assert len(phase_prompt) <= 3000
-    assert "control_actions" not in phase_prompt
-    assert "Runtime Control Boundary" not in phase_prompt
-    assert "Action Boundary" not in phase_prompt
-    assert "Ask for semantic_plan_update" not in phase_prompt
-    assert "Ask for ask_user" not in phase_prompt
-    assert "phase_completion_evaluation is not_measurable" not in phase_prompt
-    assert "phase_execution_summary.window_count is already high" not in phase_prompt
-    assert "repeated same-kind actions have produced meaningful phase_progress_evidence" not in phase_prompt
-    assert "endless small corrective actions" not in phase_prompt
-    assert "Judgment:" in phase_prompt
-    assert "Judge every supplied completion condition" in phase_prompt
-    assert "Missing ideal measurements" in phase_prompt
-    assert "unavailable sensors are not" in phase_prompt
-    assert "explicit either/or inside one done_when item" not in phase_prompt
-    assert "Continuation descriptions are" in phase_prompt
-    assert "not additional gates" in phase_prompt
-    assert "Do not use unknown to request a better view" in phase_prompt
-    assert "Lack of a centroid, exact pixel, direct measurement, or tolerance" in phase_prompt
-    assert "no calibrated measurement" not in phase_prompt
-    assert "target-distance condition" not in phase_prompt
-    assert "familiar target scale" not in phase_prompt
-    assert "Phase Decision Guide" not in phase_prompt
-    assert "visual_alignment" not in phase_prompt
-    assert "route_traversal" not in phase_prompt
-    assert "spatial_relation" not in phase_prompt
-    assert "circulation_or_orbit" not in phase_prompt
-    assert "hidden coordinates" in phase_prompt
-    assert "phase_progress_evidence" not in phase_prompt
-    assert "phase_execution_summary" not in phase_prompt
-    assert "action_trend" not in phase_prompt
-    assert "yaw_only_so_far" not in phase_prompt
-    assert "phase_metrics" not in phase_prompt
-    assert "phase_completion_evaluation" not in phase_prompt
-    assert "vertical flight-path angle" not in phase_prompt
-    assert "yaw, heading, vehicle pitch" not in phase_prompt
-    assert "exactly one object for every" in phase_prompt
-    assert "status is exactly supported, unknown, or contradicted" in phase_prompt
-    assert "evidence briefly states" in phase_prompt
-    assert "If continue_when is still true or evidence is uncertain" not in phase_prompt
-
-    assert "current-phase maneuver strategy planner" in strategy_prompt
-    assert "only stages, active_stage, and reason" in strategy_prompt
-    assert "1-4 short ordered stages" in strategy_prompt
-    assert "maneuver intent plus observable terminal state" in strategy_prompt
-    assert "Never put UAV tool names or argument fields" in strategy_prompt
-    assert "independently reassess the previous active stage" in strategy_prompt
-    assert "previous_reason only explains why the prior window" in strategy_prompt
-    assert "It is never evidence" in strategy_prompt
-    assert "Phase completion may remain unknown while an intermediate stage is satisfied" in strategy_prompt
-    assert "keep is not the default update" in strategy_prompt
-    assert "ideal geometric proof is not required" in strategy_prompt
-    assert "last-window UAV motion" in strategy_prompt
-    assert "indefinitely repeating the same action" in strategy_prompt
-    assert "Keep the ordered stages unchanged when the route remains valid" in strategy_prompt
-    assert "Rewrite only the active and future stages" in strategy_prompt
-    assert "target is no longer visible" in strategy_prompt
-    assert "Do not copy previous_reason as proof" in strategy_prompt
-    assert "phase_strategy does not determine phase completion" in strategy_prompt
-    assert "sunshade" not in strategy_prompt
-    assert "trees" not in strategy_prompt
-    assert "control_actions" not in strategy_prompt
-
-    assert "Do not output phase_decision" in action_prompt
-    assert "completion_assessment" in action_prompt
-    assert "a request for about 4.5 m with a credible target" in action_prompt
-    assert "is supported, not unknown" in action_prompt
-    assert "control_actions" in action_prompt
-    assert "Runtime Control Actions" in action_prompt
-    assert "Never put ask_user or semantic_plan_update in steps" in action_prompt
-    assert "runtime_control.available" in action_prompt
-    assert "semantic_plan_update may be requested alongside 1-3 safe UAV tool steps" in action_prompt
-    assert "semantic_plan_update payload must include reason" in action_prompt
-    assert "goal, done_when, or continue_when" in action_prompt
-    assert "steps must be []" in action_prompt
-    assert "use exactly one step" in action_prompt
-    assert "kind=\"observe\"" in action_prompt
-    assert "uav.hover" in action_prompt
-    assert "uav.turn_relative" in action_prompt
-    assert "uav.move_body" in action_prompt
-    assert "action_schemas[*].argument_semantics" in action_prompt
-    assert "args, action_window.expected_effect, and reason" in action_prompt
-    assert "must not knowingly move the state away from the phase goal" in action_prompt
-    assert "instead of guessing a signed movement" in action_prompt
-    assert "Positive moves forward" not in action_prompt
-    assert "negative turns left" not in action_prompt
-    assert '"direction":' not in action_prompt
-    assert "agent_messages" in action_prompt
-    assert '"phase_strategy"' in action_prompt
-    assert "updated phase_strategy.stages[phase_strategy.active_stage]" in action_prompt
-    assert "do not repeat an earlier stage after the strategy has advanced" in action_prompt
-    assert "Phase Decision Guide" not in action_prompt
-    assert "route progress evidence" not in action_prompt
-    coupled_prompts = phase_prompt + strategy_prompt + action_prompt
-    assert "phase_transition_judge_system" not in coupled_prompts
-    assert '"blocking"' not in coupled_prompts
-    assert '"async"' not in coupled_prompts
-    assert '"use_when"' not in coupled_prompts
-    assert '"avoid_when"' not in coupled_prompts
-
-
-def test_phase_strategy_prompt_separates_stage_progress_from_phase_completion():
-    prompt_dir = Path("src") / "agent" / "planning" / "prompts"
-    strategy_prompt = (prompt_dir / "coupled_phase_strategy_system.txt").read_text(encoding="utf-8")
-    action_prompt = (prompt_dir / "coupled_action_planner_system.txt").read_text(encoding="utf-8")
-
-    assert "independently reassess the previous active stage" in strategy_prompt
-    assert "previous_reason only explains why the prior window" in strategy_prompt
-    assert "Phase completion may remain unknown while an intermediate stage is satisfied" in strategy_prompt
-    assert "keep is not the default update" in strategy_prompt
-    assert "ideal geometric proof is not required" in strategy_prompt
-    assert "last-window UAV motion" in strategy_prompt
-    assert "phase-start-relative cumulative motion" in strategy_prompt
-    assert "indefinitely repeating the same action" in strategy_prompt
-    assert "target is no longer visible" in strategy_prompt
-    assert "Do not copy previous_reason as proof" in strategy_prompt
-    assert "Never put UAV tool names or argument fields" in strategy_prompt
-    assert "sunshade" not in strategy_prompt
-    assert "trees" not in strategy_prompt
-    assert "updated phase_strategy.stages[phase_strategy.active_stage]" in action_prompt
-    assert "do not repeat an earlier stage after the strategy has advanced" in action_prompt
+    assert not (prompt_dir / "coupled_action_planner_system.txt").exists()
+    assert not (prompt_dir / "coupled_phase_decision_system.txt").exists()
+    assert not (prompt_dir / "coupled_phase_strategy_system.txt").exists()
+    assert "chronological transcript" in prompt
+    assert "runtime_commit_phase_turn" in prompt
+    assert "completion_assessment" in prompt
+    assert "supported, unknown, or contradicted" in prompt
+    assert "continue_when" in prompt
+    assert "one to three" in prompt
+    assert "ordered action window" in prompt
+    assert "observes once" in prompt
+    assert "read-only" in prompt
+    assert "observation_id and frame_id" in prompt
+    assert "tool_call_id" in prompt
+    assert "hidden coordinates" in " ".join(prompt.split())
+    assert "previous intent" in prompt
+    assert "one to four short ordered maneuver stages" in prompt
+    assert "control_actions" not in prompt
+    assert "allowed_action_constraints" not in prompt
+    assert "response_format" not in prompt
 
 
 def test_orbit_skill_stays_compact_and_action_oriented():

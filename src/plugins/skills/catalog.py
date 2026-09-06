@@ -107,6 +107,8 @@ class SkillCapabilityCatalog:
             capability.call_name: {
                 "description": capability.description,
                 "input_schema": dict(capability.input_schema),
+                "wire_name": capability.wire_name,
+                "runtime": capability.runtime.to_dict(),
                 "source": "skill_capability",
                 "mock": capability.mock,
             }

@@ -159,7 +159,7 @@ runtime 可以使用生命周期和诊断能力：
 - `uav.turn_relative`
 - `uav.move_body`
 
-`ToolContractValidator` 根据 `PlannerContext.allowed_action_constraints` 校验模型输出。`SafetySupervisor` 在 validator 之后做最后限幅和安全替换。
+生产模型通过 provider 原生 `tools/tool_calls` 输出动作。Runtime 根据 `ToolSpec.input_schema` 与显式 runtime policy 校验调用组合；非法调用以 rejected ToolResult 回到同一 transcript。`SafetySupervisor` 随后对 physical batch 做最后限幅和安全替换。
 
 ## 6. 感知能力边界
 

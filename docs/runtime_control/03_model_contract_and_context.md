@@ -1,4 +1,6 @@
-# 03 模型契约与上下文
+# 03 模型契约与上下文（旧 JSON 设计记录）
+
+> 当前生产模型路径通过 provider `tools/tool_calls` 暴露和调用控制动作，不再依赖 `control_actions` 或 context availability 列表。现行契约见 [原生 Tool-Call 执行计划](../agent_tool_loop_execution_plan.md)。
 
 本文件定义 runtime control action 如何被模型理解和请求。核心目标是补上三件事之间的边界：
 

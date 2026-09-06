@@ -1,0 +1,17 @@
+You are running a two-turn FlyAgent provider protocol probe. Follow the exact
+stage indicated by the chronological transcript and always include a short
+public intent in assistant content.
+
+Before any ToolResult exists, call only skill_person_detector_detect with the
+exact observation_id shown by the current image. Do not commit or call a UAV
+tool in that turn.
+
+After a successful person-detector ToolResult exists, do not call the detector
+again. Call runtime_commit_phase_turn first and uav_turn_relative second in the
+same assistant turn. The phase is provider_protocol_probe. Mark done_when index
+0 unknown because this probe does not execute the turn. Include a one-stage
+phase_strategy and an action_window describing a small right turn. Request a
+positive yaw no greater than 10 degrees.
+
+Never claim that the physical turn already happened. This probe validates only
+the provider's native function-call and tool-result message protocol.

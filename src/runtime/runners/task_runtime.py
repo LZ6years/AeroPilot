@@ -10,11 +10,19 @@ from typing import Any
 from src.agent.mission_state import MissionState
 from src.agent.messages import AgentMessage
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
-from src.agent.planning.model_action_planner import ModelActionPlanner
-from src.agent.planning.model_repair_planner import ModelRepairPlannerError
+from src.agent.planning.model_action_planner import AgentProtocolError, ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.agent.safety import SafetyDecision
-from src.agent.planning.schemas import CoupledActionPhasePlan, ShortHorizonPlan
+from src.agent.planning.schemas import (
+    ActionWindow,
+    CompletionAssessment,
+    CoupledActionPhasePlan,
+    PhaseStrategy,
+    PlannedStep,
+    RuntimeControlAction,
+    ShortHorizonPlan,
+)
+from src.agent.transcript import AgentToolCall, AgentTranscript, ToolResult
 from src.agent.semantic.plan_updater import (
     SemanticPlanUpdater,
     validate_semantic_plan_patch_numeric_provenance,
@@ -38,6 +46,8 @@ from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.configs.task_execution_options import InitialPose, TaskExecutionOptions
 from src.runtime.context import PhaseWindowContextBuilder
 from src.tools.dispatcher import ToolDispatcher
+from src.tools.registry import default_registry
+from src.tools.validation import ToolArgumentError, validate_tool_args
 from src.runtime.middleware import ToolTelemetryMiddleware
 from src.uav import clean_pose_for_model, pose_measurements
 
@@ -63,6 +73,7 @@ class TaskRuntime:
         enable_action_planner_debug: bool = False,
         context_builder: ObservationContextBuilder | None = None,
         model_config: ModelConfig | None = None,
+        plugin_registry: PluginRegistry | None = None,
     ) -> None:
         if shutdown_policy not in self.SHUTDOWN_POLICIES:
             raise ValueError(f"Unsupported shutdown policy: {shutdown_policy}")
@@ -82,8 +93,12 @@ class TaskRuntime:
         self.shutdown_policy = shutdown_policy
         self.runtime_loop_guard_windows = int(runtime_loop_guard_windows)
         self.enable_action_planner_debug = bool(enable_action_planner_debug)
-        self.plugin_registry = PluginRegistry.from_config()
-        self.tools = ToolDispatcher(env_client, plugin_registry=self.plugin_registry)
+        self.plugin_registry = plugin_registry or PluginRegistry.from_config()
+        self.tools = ToolDispatcher(
+            env_client,
+            registry=default_registry(self.plugin_registry, self.safety.safety_config),
+            plugin_registry=self.plugin_registry,
+        )
         self.stabilizer = UavStabilizer(self.tools, recorder, stabilization_config)
         resolved_runtime_control_config = (
             runtime_control_config or load_runtime_control_config()
@@ -143,6 +158,7 @@ class TaskRuntime:
         self.tool_telemetry = ToolTelemetryMiddleware(self.tools, self._debug_event)
         self.memory_writer = MemoryEventWriter(self.recorder.run_dir)
         self.memory_reader = MemoryRecordReader(self.recorder.run_dir)
+        self.agent_transcript = AgentTranscript(self.memory_writer)
         self._preflight_scene_ids: set[str] = set()
         self._active_reused_scenes: dict[tuple[str, str | None], SceneInstance] = {}
         self._active_flight_memories: dict[tuple[str, str | None, str], FlightMemory] = {}
@@ -239,6 +255,10 @@ class TaskRuntime:
         )
         flight_memory = self._resolve_flight_memory(map_id, scene, agent_id, scene_policy, parse_result, state)
         self._state_flight_memories[state.run_id] = flight_memory
+        self.agent_transcript.start_instruction(
+            parse_result.instruction,
+            flight_memory.active_instruction_id,
+        )
         try:
             self._validate_execution_options(scene, options)
             self._prepare_scene_for_task(scene, agent_id, state, options)
@@ -478,7 +498,10 @@ class TaskRuntime:
     def _execute_phase_loop(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
         while not state.completed and not state.stopped:
             self._apply_completed_semantic_plan_update(state)
-            state.record_phase_window_started()
+            # Native read-only tool rounds are reasoning within one observed
+            # state. Only a committed physical batch consumes a flight window.
+            if not callable(getattr(self.planner, "plan_turn", None)):
+                state.record_phase_window_started()
             plan, safety_decision, transition = self._run_phase_window(scene, agent_id, state)
             self._apply_phase_transition(scene, agent_id, state, plan, safety_decision, transition)
             self._write_state(state)
@@ -639,21 +662,39 @@ class TaskRuntime:
         model_context = phase_window_context.model_context
         self.recorder.write_json("contexts/latest_context.json", coupled_context)
         self.recorder.write_json("contexts/latest_action_planner_model_context.json", model_context)
-        planner = getattr(self.planner, "plan_next_with_phase_decision", None)
-        if not callable(planner):
-            raise RuntimeError("TaskRuntime requires planner.plan_next_with_phase_decision")
-        try:
-            coupled_plan: CoupledActionPhasePlan = planner(state, coupled_context)
-        except ModelRepairPlannerError as exc:
-            self._record_model_action_contract_repair_events(exc.repair_attempts)
-            raise
-        self._record_model_action_contract_repair_events(getattr(self.planner, "last_repair_attempts", []))
-        request_recovery = dict(
-            getattr(self.planner, "last_model_request_recovery", {}) or {}
-        )
-        if request_recovery.get("status") == "recovered":
-            self._debug_event("model_action_request_recovered", request_recovery)
-        completion_result = dict(getattr(self.planner, "last_completion_result", {}) or {})
+        native_meta: dict[str, Any] = {}
+        if callable(getattr(self.planner, "plan_turn", None)):
+            self.agent_transcript.append_state(
+                coupled_context,
+                observation_before.get("observation_id"),
+            )
+            coupled_plan, native_meta = self._run_native_agent_tool_loop(
+                scene,
+                agent_id,
+                state,
+            )
+            completion_result = {
+                "status": "valid",
+                "native_tool_calls": True,
+                "assessment": (
+                    coupled_plan.completion_assessment.to_dict()
+                    if coupled_plan.completion_assessment is not None
+                    else None
+                ),
+            }
+            if coupled_plan.phase_decision.decision == CONTINUE_CURRENT_PHASE:
+                state.record_phase_window_started()
+        else:
+            # Deterministic injected planners remain useful for simulator and
+            # safety tests. The production model path above has no legacy JSON
+            # provider fallback.
+            planner = getattr(self.planner, "plan_next_with_phase_decision", None)
+            if not callable(planner):
+                raise RuntimeError("TaskRuntime planner must implement plan_turn")
+            coupled_plan = planner(state, coupled_context)
+            completion_result = dict(
+                getattr(self.planner, "last_completion_result", {}) or {}
+            )
         completion_payload = {
             "phase": coupled_plan.phase,
             "phase_key": phase_key,
@@ -685,6 +726,7 @@ class TaskRuntime:
         self._debug_event("model_action_planned", coupled_plan.to_dict())
         control_results = self.runtime_control.validate_all(coupled_plan.control_actions)
         self._record_runtime_control_results(coupled_plan.control_actions, control_results)
+        self._append_native_control_results(native_meta, control_results)
         safety_decision = SafetyDecision(raw_plan, [])
         planner_debug_ref = self._write_action_planner_debug_artifact(
             state,
@@ -706,6 +748,11 @@ class TaskRuntime:
         self._event("coupled_planner_phase_decided", decision_payload)
         self._agent_messages(coupled_plan.agent_messages, source="coupled_planner", phase=coupled_plan.phase)
         if transition.decision != CONTINUE_CURRENT_PHASE:
+            self._append_native_commit_result(
+                native_meta,
+                status="ok",
+                message="phase assessment committed without a physical action window",
+            )
             self._event(
                 "phase_plan_ready",
                 {
@@ -720,7 +767,7 @@ class TaskRuntime:
             )
             return raw_plan, safety_decision, transition
 
-        safety_decision = self.safety.review(raw_plan, state)
+        safety_decision = self.safety.review(raw_plan, state, registry=self.tools.registry)
         plan = safety_decision.plan
         planner_debug_ref = self._write_action_planner_debug_artifact(
             state,
@@ -760,31 +807,69 @@ class TaskRuntime:
                 phase=plan.phase,
             )
         executed_steps = []
+        native_physical_calls = list(native_meta.get("physical_calls", []))
+        failed_native_index: int | None = None
         for index, step in enumerate(plan.steps):
             payload = {"phase": plan.phase, "step_index": index, "step": step.to_dict()}
             if step.kind != "tool" or not step.tool:
                 raise ValueError("runtime action plan requires tool steps; observation is automatic")
             self._validate_step_capability(scene, step.tool)
-            result = self.tool_telemetry.call_step(
-                scene_instance_id=scene.scene_instance_id,
-                agent_id=agent_id,
-                phase=plan.phase,
-                window_index=state.current_phase_window_count,
-                step_index=index,
-                tool=step.tool,
-                args=step.args,
-                pose_before=self._pose_from_observation(state.latest_observation),
-                runtime_context={
-                    "latest_observation": dict(state.latest_observation),
-                    "observation_before": dict(observation_before),
-                    "phase": plan.phase,
-                    "run_dir": str(self.recorder.run_dir),
-                },
-            )
+            try:
+                result = self.tool_telemetry.call_step(
+                    scene_instance_id=scene.scene_instance_id,
+                    agent_id=agent_id,
+                    phase=plan.phase,
+                    window_index=state.current_phase_window_count,
+                    step_index=index,
+                    tool=step.tool,
+                    args=step.args,
+                    pose_before=self._pose_from_observation(state.latest_observation),
+                    runtime_context={
+                        "latest_observation": dict(state.latest_observation),
+                        "observation_before": dict(observation_before),
+                        "phase": plan.phase,
+                        "run_dir": str(self.recorder.run_dir),
+                    },
+                )
+            except Exception as exc:
+                if not native_physical_calls:
+                    raise
+                from src.env_client import ActionResult
+
+                result = ActionResult(
+                    ok=False,
+                    action=step.tool,
+                    message=f"{type(exc).__name__}: {exc}",
+                    data={"error_type": type(exc).__name__, "error": str(exc)},
+                )
             data = result.to_dict()
-            self._record_action(state, step.tool, step.args, data)
+            write_result = self._record_action(state, step.tool, step.args, data)
+            native_call = native_physical_calls[index] if index < len(native_physical_calls) else None
+            if native_call is not None:
+                requested_tool = native_call.tool_name
+                relevant_interventions = [
+                    dict(item)
+                    for item in safety_decision.interventions
+                    if item.get("tool") == requested_tool
+                ]
+                self.agent_transcript.append_tool_result(
+                    ToolResult(
+                        tool_call_id=native_call.tool_call_id,
+                        tool_name=requested_tool,
+                        status="ok" if result.ok else "error",
+                        message=result.message,
+                        data=dict(result.data),
+                        result_ref=write_result["action_ref"].get("ref"),
+                        requested_args=dict(native_call.args),
+                        executed_args=dict(step.args),
+                        safety_interventions=relevant_interventions,
+                    )
+                )
             if not result.ok:
-                raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
+                if not native_physical_calls:
+                    raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
+                failed_native_index = index
+                break
             stabilization = self.stabilizer.wait_after_step(
                 scene.scene_instance_id,
                 agent_id,
@@ -804,10 +889,36 @@ class TaskRuntime:
                 },
             )
             self._write_state(state)
+        if failed_native_index is not None:
+            for call in native_physical_calls[failed_native_index + 1 :]:
+                self.agent_transcript.append_tool_result(
+                    ToolResult(
+                        tool_call_id=call.tool_call_id,
+                        tool_name=call.tool_name,
+                        status="skipped",
+                        message="skipped because an earlier physical call failed",
+                        requested_args=dict(call.args),
+                    )
+                )
+            self._try_hover(scene, agent_id, state)
         observation_after = self._apply_automatic_observation_policy(scene, agent_id, state, plan.phase)
         window_measurements = pose_measurements(
             self._pose_from_observation(observation_before),
             self._pose_from_observation(observation_after),
+        )
+        self._append_native_commit_result(
+            native_meta,
+            status="error" if failed_native_index is not None else "ok",
+            message=(
+                "physical action window completed with a failed call"
+                if failed_native_index is not None
+                else "physical action window completed and was observed"
+            ),
+            data={
+                "observation_before_id": observation_before.get("observation_id"),
+                "observation_after_id": observation_after.get("observation_id"),
+                "observed_effect": window_measurements,
+            },
         )
         visual_search_recharge = self._maybe_recharge_visual_search_budget(
             state,
@@ -867,6 +978,328 @@ class TaskRuntime:
             selected_skill_guidance=self._selected_semantic_update_guidance(coupled_context),
         )
         return plan, safety_decision, PhaseTransition.continue_current_phase(transition.reason)
+
+    def _run_native_agent_tool_loop(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+    ) -> tuple[CoupledActionPhasePlan, dict[str, Any]]:
+        """Run immediate tools until the model commits one phase boundary.
+
+        Every rejected or completed read-only call is appended to the same
+        transcript before the next model request, allowing the model to repair
+        its own protocol and action choices without a separate repair model.
+        """
+
+        allowed_names = self._native_allowed_tool_names(scene)
+        max_rounds = int(getattr(self.model_config, "max_tool_rounds", 6) or 6)
+        for round_index in range(1, max_rounds + 1):
+            try:
+                turn = self.planner.plan_turn(
+                    self.agent_transcript,
+                    self.tools.registry,
+                    allowed_tool_names=allowed_names,
+                )
+            except AgentProtocolError as exc:
+                self.agent_transcript.append_protocol_feedback(
+                    f"Protocol error: {exc}. Return a corrected native tool-call turn."
+                )
+                self._debug_event(
+                    "agent_tool_protocol_rejected",
+                    {"round": round_index, "error": str(exc)},
+                )
+                continue
+
+            self.agent_transcript.append_assistant(turn)
+            specs = [self.tools.registry.get(call.tool_name) for call in turn.tool_calls]
+            try:
+                for call, spec in zip(turn.tool_calls, specs):
+                    if call.tool_name not in allowed_names:
+                        raise ToolArgumentError(f"tool is not exposed: {call.tool_name}")
+                    validate_tool_args(call.args, spec.input_schema)
+            except ToolArgumentError as exc:
+                self._reject_native_turn(turn.tool_calls, str(exc))
+                continue
+
+            read_calls = [
+                call
+                for call, spec in zip(turn.tool_calls, specs)
+                if spec.runtime.effect == "read_only"
+            ]
+            if read_calls:
+                if len(read_calls) != len(turn.tool_calls) or any(
+                    self.tools.registry.get(call.tool_name).runtime.result_timing != "immediate"
+                    for call in read_calls
+                ):
+                    self._reject_native_turn(
+                        turn.tool_calls,
+                        "read-only calls cannot be mixed with a phase commit or physical calls",
+                    )
+                    continue
+                if len(read_calls) > 1 and any(
+                    self.tools.registry.get(call.tool_name).runtime.batching
+                    != "parallel_safe"
+                    for call in read_calls
+                ):
+                    self._reject_native_turn(
+                        turn.tool_calls,
+                        "multiple read-only calls require parallel_safe batching",
+                    )
+                    continue
+                self._execute_native_read_calls(
+                    scene,
+                    agent_id,
+                    state,
+                    turn.public_intent,
+                    read_calls,
+                )
+                continue
+
+            commit_calls = [
+                call for call in turn.tool_calls if call.tool_name == "runtime.commit_phase_turn"
+            ]
+            if len(commit_calls) != 1 or turn.tool_calls[0].tool_name != "runtime.commit_phase_turn":
+                self._reject_native_turn(
+                    turn.tool_calls,
+                    "exactly one runtime.commit_phase_turn must be the first call",
+                )
+                continue
+
+            commit = commit_calls[0]
+            physical_calls = [
+                call
+                for call in turn.tool_calls
+                if self.tools.registry.get(call.tool_name).runtime.effect == "physical"
+            ]
+            control_calls = [
+                call
+                for call in turn.tool_calls
+                if self.tools.registry.get(call.tool_name).runtime.effect == "runtime_control"
+                and call.tool_name != "runtime.commit_phase_turn"
+            ]
+            recognized = 1 + len(physical_calls) + len(control_calls)
+            if recognized != len(turn.tool_calls):
+                self._reject_native_turn(turn.tool_calls, "turn contains a non-executable tool class")
+                continue
+            try:
+                plan = self._native_committed_plan(
+                    state,
+                    turn.public_intent,
+                    commit,
+                    physical_calls,
+                    control_calls,
+                )
+            except (TypeError, ValueError) as exc:
+                self._reject_native_turn(turn.tool_calls, str(exc))
+                continue
+            return plan, {
+                "commit_call": commit,
+                "physical_calls": physical_calls,
+                "control_calls": control_calls,
+            }
+
+        raise RuntimeError(
+            f"Agent native tool loop exhausted {max_rounds} rounds without a valid phase commit"
+        )
+
+    def _native_allowed_tool_names(self, scene: SceneInstance) -> set[str]:
+        allowed: set[str] = set()
+        for spec in self.tools.registry.model_specs():
+            backend_action = spec.metadata.get("backend_action")
+            if (
+                spec.runtime.effect == "physical"
+                and scene.capabilities is not None
+                and isinstance(backend_action, str)
+                and not scene.capabilities.supports(backend_action)
+            ):
+                continue
+            allowed.add(spec.name)
+        exposed_runtime_actions = set(
+            self.runtime_control.config.exposed_actions(
+                self.runtime_control.registry.names()
+            )
+        )
+        for canonical in self.tools.registry.names():
+            spec = self.tools.registry.get(canonical)
+            runtime_action = spec.metadata.get("runtime_action")
+            if runtime_action in exposed_runtime_actions:
+                allowed.add(canonical)
+        return allowed
+
+    def _execute_native_read_calls(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+        public_intent: str,
+        calls: list[AgentToolCall],
+    ) -> None:
+        for call in calls:
+            result = self.tools.call(
+                scene.scene_instance_id,
+                agent_id,
+                call.tool_name,
+                call.args,
+                runtime_context={
+                    "latest_observation": dict(state.latest_observation),
+                    "phase": state.current_phase_name,
+                    "run_dir": str(self.recorder.run_dir),
+                    "public_intent": public_intent,
+                },
+            )
+            data = result.to_dict()
+            write_result = self._record_action(state, call.tool_name, call.args, data)
+            self.agent_transcript.append_tool_result(
+                ToolResult(
+                    tool_call_id=call.tool_call_id,
+                    tool_name=call.tool_name,
+                    status="ok" if result.ok else "error",
+                    message=result.message,
+                    data=dict(result.data),
+                    artifact_refs=_result_artifact_refs(result.data),
+                    result_ref=write_result["action_ref"].get("ref"),
+                    requested_args=dict(call.args),
+                    executed_args=dict(call.args),
+                )
+            )
+
+    def _native_committed_plan(
+        self,
+        state: MissionState,
+        public_intent: str,
+        commit: AgentToolCall,
+        physical_calls: list[AgentToolCall],
+        control_calls: list[AgentToolCall],
+    ) -> CoupledActionPhasePlan:
+        data = commit.args
+        phase = str(data.get("phase", "")).strip()
+        if phase != state.current_phase_name:
+            raise ValueError(
+                f"commit phase mismatch: expected {state.current_phase_name}, got {phase}"
+            )
+        assessment = CompletionAssessment.from_dict(
+            dict(data.get("completion_assessment") or {})
+        )
+        current_phase = state.semantic_plan.phases[state.current_phase_index]
+        assessment.validate_coverage(len(current_phase.done_when))
+        complete = all(item.status == "supported" for item in assessment.done_when)
+        message = AgentMessage(
+            type="final" if complete and state.is_final_phase else "progress",
+            content=public_intent,
+            confidence="medium",
+        )
+        if complete:
+            if physical_calls or control_calls:
+                raise ValueError("a completed phase cannot emit physical or runtime-control side effects")
+            decision = COMPLETE_TASK if state.is_final_phase else ADVANCE_TO_NEXT_PHASE
+            transition = PhaseTransition(decision, "all done_when conditions are supported")
+            return CoupledActionPhasePlan(
+                phase=phase,
+                phase_decision=transition,
+                agent_messages=[message],
+                completion_assessment=assessment,
+            )
+
+        if not 1 <= len(physical_calls) <= 3:
+            raise ValueError("an incomplete phase requires one to three physical tool calls")
+        if any(
+            self.tools.registry.get(call.tool_name).runtime.batching != "ordered"
+            for call in physical_calls
+        ):
+            raise ValueError("physical action-window tools must declare ordered batching")
+        strategy_data = data.get("phase_strategy")
+        window_data = data.get("action_window")
+        if not isinstance(strategy_data, dict) or not isinstance(window_data, dict):
+            raise ValueError("an incomplete phase requires phase_strategy and action_window")
+        strategy = PhaseStrategy.from_dict(dict(strategy_data))
+        window = ActionWindow(
+            intent=str(window_data.get("intent", "")).strip(),
+            expected_effect=str(window_data.get("expected_effect", "")).strip(),
+        )
+        if not window.intent or not window.expected_effect:
+            raise ValueError("action_window intent and expected_effect must not be empty")
+        steps = [
+            PlannedStep.tool_step(call.tool_name, call.args, public_intent)
+            for call in physical_calls
+        ]
+        controls = [
+            RuntimeControlAction(
+                name=str(self.tools.registry.get(call.tool_name).metadata["runtime_action"]),
+                reason=public_intent,
+                payload=dict(call.args),
+            )
+            for call in control_calls
+        ]
+        return CoupledActionPhasePlan(
+            phase=phase,
+            phase_decision=PhaseTransition.continue_current_phase(
+                "completion evidence still requires progress"
+            ),
+            steps=steps,
+            action_window=window,
+            agent_messages=[message],
+            control_actions=controls,
+            completion_assessment=assessment,
+            phase_strategy=strategy,
+        )
+
+    def _reject_native_turn(self, calls: list[AgentToolCall], reason: str) -> None:
+        for call in calls:
+            self.agent_transcript.append_tool_result(
+                ToolResult(
+                    tool_call_id=call.tool_call_id,
+                    tool_name=call.tool_name,
+                    status="rejected",
+                    message=reason,
+                    requested_args=dict(call.args),
+                )
+            )
+        self.agent_transcript.append_protocol_feedback(
+            f"The previous tool-call turn was rejected: {reason}. Correct it using the available tools."
+        )
+
+    def _append_native_control_results(
+        self,
+        native_meta: dict[str, Any],
+        results: list[Any],
+    ) -> None:
+        calls = native_meta.get("control_calls", [])
+        for call, result in zip(calls, results):
+            self.agent_transcript.append_tool_result(
+                ToolResult(
+                    tool_call_id=call.tool_call_id,
+                    tool_name=call.tool_name,
+                    status="ok" if result.status in {"accepted", "pending"} else "error",
+                    message=result.reason,
+                    data=result.to_dict(),
+                    requested_args=dict(call.args),
+                    executed_args=dict(call.args),
+                )
+            )
+
+    def _append_native_commit_result(
+        self,
+        native_meta: dict[str, Any],
+        *,
+        status: str,
+        message: str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        call = native_meta.get("commit_call")
+        if not isinstance(call, AgentToolCall):
+            return
+        self.agent_transcript.append_tool_result(
+            ToolResult(
+                tool_call_id=call.tool_call_id,
+                tool_name=call.tool_name,
+                status=status,
+                message=message,
+                data=dict(data or {}),
+                requested_args=dict(call.args),
+                executed_args=dict(call.args),
+            )
+        )
 
     def _runtime_control_recommendation_context(self, state: MissionState) -> dict[str, Any]:
         """Return compact runtime evidence used only by runtime-control recommendations."""
@@ -1162,9 +1595,10 @@ class TaskRuntime:
         custom planners that do not use the model contract machinery.
         """
 
-        if not tool_name.startswith("uav.") or scene.capabilities is None:
+        spec = self.tools.registry.get(tool_name)
+        action = spec.metadata.get("backend_action")
+        if not isinstance(action, str) or not action or scene.capabilities is None:
             return
-        action = tool_name.removeprefix("uav.")
         if scene.capabilities.supports(action):
             return
         payload = {
@@ -1182,19 +1616,6 @@ class TaskRuntime:
             f"{scene.capabilities.control_mode} does not support {action}"
         )
 
-    def _record_model_action_contract_repair_events(self, attempts: list[dict]) -> None:
-        for attempt in attempts:
-            requested_payload = {
-                "attempt": attempt.get("attempt"),
-                "repair_context": attempt.get("repair_context", {}),
-            }
-            self._debug_event("model_action_contract_repair_requested", requested_payload)
-            status = attempt.get("status")
-            if status == "repaired":
-                self._debug_event("model_action_contract_repaired", attempt)
-            elif status == "failed":
-                self._debug_event("model_action_contract_repair_failed", attempt)
-
     def _record_observation(
         self,
         scene: SceneInstance,
@@ -1207,8 +1628,20 @@ class TaskRuntime:
         observation = self.tools.observe(scene.scene_instance_id, agent_id, modalities)
         raw = RawObservation.from_env_observation(observation, source=source)
         data = raw.to_dict()
-        state.record_observation(data)
         write_result = self.memory_writer.write_observation(data)
+        observation_id = write_result["observation_ref"]["id"]
+        data["observation_id"] = observation_id
+        frames = data.get("frames")
+        if isinstance(frames, dict):
+            for frame_ref in write_result.get("frame_refs", []):
+                modality = frame_ref.get("modality")
+                frame = frames.get(modality)
+                if isinstance(frame, dict):
+                    frame["id"] = frame_ref.get("id")
+                    frame["frame_id"] = frame_ref.get("id")
+                    frame["artifact_ref"] = frame_ref.get("ref")
+                    frame["observation_id"] = observation_id
+        state.record_observation(data)
         memory = self._memory_for_state(state)
         memory.append_observation_ref(write_result["observation_ref"])
         memory.append_pose_ref(write_result.get("pose_ref"))
@@ -1724,11 +2157,6 @@ class TaskRuntime:
         if coupled_plan is not None:
             payload["coupled_plan"] = coupled_plan.to_dict()
             payload["coupled_phase_decision"] = coupled_plan.phase_decision.to_dict()
-        request_recovery = dict(
-            getattr(self.planner, "last_model_request_recovery", {}) or {}
-        )
-        if request_recovery:
-            payload["model_request_recovery"] = request_recovery
         self.recorder.write_json(name, payload)
         return name
 
@@ -1829,12 +2257,13 @@ class TaskRuntime:
             raise RuntimeError(f"FlightMemory missing for run: {state.run_id}")
         return memory
 
-    def _record_action(self, state: MissionState, tool: str, args: dict, result: dict) -> None:
+    def _record_action(self, state: MissionState, tool: str, args: dict, result: dict) -> dict[str, Any]:
         state.record_action(tool, args, result)
         write_result = self.memory_writer.write_action(tool, args, result)
         memory = self._memory_for_state(state)
         memory.append_action_ref(write_result["action_ref"])
         memory.append_pose_ref(write_result.get("pose_ref"))
+        return write_result
 
 
 def _clean_observation_for_semantic_update(observation: dict[str, Any]) -> dict[str, Any]:
@@ -1845,6 +2274,26 @@ def _clean_observation_for_semantic_update(observation: dict[str, Any]) -> dict[
     if isinstance(pose, dict):
         data["pose"] = clean_pose_for_model(pose)
     return data
+
+
+def _result_artifact_refs(value: Any) -> list[str]:
+    """Collect explicit artifact references from a tool's structured result."""
+
+    refs: list[str] = []
+
+    def visit(item: Any) -> None:
+        if isinstance(item, dict):
+            artifact_ref = item.get("artifact_ref")
+            if isinstance(artifact_ref, str) and artifact_ref and artifact_ref not in refs:
+                refs.append(artifact_ref)
+            for child in item.values():
+                visit(child)
+        elif isinstance(item, list):
+            for child in item:
+                visit(child)
+
+    visit(value)
+    return refs
 
 
 def _copy_model_input_context(value: Any) -> Any:
