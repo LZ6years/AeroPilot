@@ -2334,6 +2334,89 @@ def test_task_runtime_continue_transition_window_limit_stops_without_advancing_p
     assert "current_phase_window_count" in mission_state
 
 
+def test_native_runtime_loop_guard_closes_last_physical_batch_with_checkpoint(tmp_path):
+    class NativeAlwaysContinuePlanner:
+        planner_mode = "model"
+
+        def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
+            observation_id = transcript.latest_observation_id()
+            return AssistantTurn(
+                "assistant_continue",
+                "Turn once, then check the resulting observation.",
+                [
+                    AgentToolCall(
+                        "call_commit",
+                        "runtime.commit_phase_turn",
+                        {
+                            "phase": "final_phase",
+                            "completion_assessment": {
+                                "done_when": [
+                                    {
+                                        "index": 0,
+                                        "status": "unknown",
+                                        "evidence": (
+                                            "The requested movement has not yet been "
+                                            f"confirmed in observation {observation_id}."
+                                        ),
+                                    }
+                                ]
+                            },
+                            "phase_strategy": {
+                                "stages": ["turn", "verify"],
+                                "active_stage": 0,
+                                "reason": "A post-action observation is required.",
+                            },
+                            "action_window": {
+                                "intent": "turn once",
+                                "expected_effect": "the camera bearing changes",
+                            },
+                        },
+                    ),
+                    AgentToolCall(
+                        "call_turn",
+                        "uav.turn_relative",
+                        {"yaw_deg": 5.0},
+                    ),
+                ],
+            )
+
+    run_dir = tmp_path / "native_loop_guard_checkpoint"
+    recorder = AsyncRunLogger(run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=NativeAlwaysContinuePlanner(),
+        shutdown_policy="none",
+        runtime_loop_guard_windows=1,
+    )
+
+    state = runtime.run_parsed_task(
+        "m1",
+        make_single_phase_parse_result("turn once", "final_phase"),
+    )
+    recorder.close()
+
+    transcript_records = [
+        json.loads(line)
+        for line in (run_dir / "memory" / "agent_transcript.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    checkpoints = [
+        record
+        for record in transcript_records
+        if record["kind"] == "state_checkpoint"
+    ]
+    assert state.stopped_reason == "runtime_loop_guard_reached"
+    assert len(checkpoints) == 2
+    assert (
+        checkpoints[0]["payload"]["observation_id"]
+        != checkpoints[1]["payload"]["observation_id"]
+    )
+    assert transcript_records[-1]["kind"] == "state_checkpoint"
+
+
 def test_task_runtime_stabilizes_after_each_motion_step_before_observation(tmp_path):
     class MultiMotionPlanner:
         planner_mode = "test"

@@ -1393,6 +1393,7 @@ class TaskRuntime:
         self._event("runtime_loop_guard_reached", guard_payload)
         self._event("phase_transition_window_limit_reached", guard_payload)
         self._try_hover(scene, agent_id, state)
+        self._append_terminal_native_state_checkpoint(scene, state)
         state.mark_stopped("runtime_loop_guard_reached", source=reason)
 
     def _stop_for_visual_search_budget(
@@ -1411,7 +1412,47 @@ class TaskRuntime:
         }
         self._event("visual_search_budget_exhausted", stop_payload)
         self._try_hover(scene, agent_id, state)
+        self._append_terminal_native_state_checkpoint(scene, state)
         state.mark_stopped("visual_search_budget_exhausted", source="safety_yaw_scan_budget")
+
+    def _append_terminal_native_state_checkpoint(
+        self,
+        scene: SceneInstance,
+        state: MissionState,
+    ) -> None:
+        """Close a native physical batch when no later model turn will run.
+
+        Ordinarily the next phase-window iteration appends the checkpoint for
+        the automatic post-action observation. A runtime stop has no next
+        model iteration, so persist that same current-state payload here. The
+        observation ID guard prevents duplicate checkpoints if a future stop
+        path has already recorded the latest state.
+        """
+
+        if not callable(getattr(self.planner, "plan_turn", None)):
+            return
+        observation = dict(state.latest_observation)
+        observation_id = observation.get("observation_id")
+        if (
+            not observation_id
+            or self.agent_transcript.latest_observation_id() == observation_id
+        ):
+            return
+        context = self.context_builder.build(state, self._memory_for_state(state))
+        runtime_control_context = self.runtime_control.model_context(
+            self._runtime_control_recommendation_context(state)
+        )
+        phase_window_context = self.phase_window_context_builder.build(
+            state,
+            context,
+            observation,
+            runtime_control_context=runtime_control_context,
+            scene_capabilities=scene.capabilities,
+        )
+        self.agent_transcript.append_state(
+            phase_window_context.planner_payload,
+            str(observation_id),
+        )
 
     def _phase_progress_evidence(self, state: MissionState) -> dict[str, Any]:
         return self.phase_window_context_builder.phase_progress_evidence(state)
