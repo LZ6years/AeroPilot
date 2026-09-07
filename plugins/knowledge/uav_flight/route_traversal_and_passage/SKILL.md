@@ -48,8 +48,7 @@ geometric boundary the camera cannot establish.
 
 ## Recovery
 
-If route identity, side, or free space was not established, inspect first. If
-movement is insufficient, contradictory, or still blocked, gather evidence
-before another move. After progress, do not replace
-translation evidence with repeated yaw to recover the cue. Shorten movement in
-narrow, cluttered, or people-adjacent routes.
+If a required route cue disappears unexpectedly, compare pre-maneuver and
+current views with measured motion. Try one bounded retrace and re-observe; do
+not continue blind motion. Hover only to compare. If no safe evidence-producing
+recovery remains, stop and cite why. Do not replace translation evidence with repeated yaw.

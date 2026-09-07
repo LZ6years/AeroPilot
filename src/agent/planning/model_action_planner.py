@@ -7,6 +7,10 @@ FlyAgent's canonical ToolSpec names.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import copy
+import hashlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -66,6 +70,10 @@ class ModelActionPlanner:
         self.system_prompt = self._load_system_prompt(configured_prompt)
         self.last_request: dict[str, Any] = {}
         self.last_response: dict[str, Any] = {}
+        # In-memory only until Runtime writes a decision artifact. Image bytes
+        # are separated from the JSON request so the durable record can point
+        # at content-addressed assets without embedding base64.
+        self.last_exchange: dict[str, Any] = {}
 
     def plan_turn(
         self,
@@ -102,9 +110,17 @@ class ModelActionPlanner:
             "tool_choice": "auto",
             "temperature": 0,
         }
-        self.last_request = _redact_request(payload)
+        request_snapshot, media = _snapshot_request(payload)
+        self.last_request = request_snapshot
+        self.last_response = {}
+        self.last_exchange = {
+            "request": copy.deepcopy(request_snapshot),
+            "media": media,
+            "response": None,
+        }
         data = self._request(payload)
         self.last_response = dict(data)
+        self.last_exchange["response"] = _public_response_snapshot(data)
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -298,15 +314,144 @@ def _memory_system_messages(context: dict[str, Any]) -> list[dict[str, str]]:
 
 
 def _redact_request(payload: dict[str, Any]) -> dict[str, Any]:
-    """Keep the exact protocol shape while avoiding duplicate image bytes in debug state."""
+    """Compatibility wrapper returning the exact request with media references."""
 
-    def clean(value: Any) -> Any:
+    request, _ = _snapshot_request(payload)
+    return request
+
+
+def _snapshot_request(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    """Separate provider image bytes from an otherwise exact request snapshot.
+
+    The returned media entries remain in memory only. Runtime persists each
+    digest once, replaces ``data`` with an asset reference, and only then writes
+    the decision JSON. Message order and image positions are retained so review
+    can reproduce what the provider received without exposing base64.
+    """
+
+    media: list[dict[str, Any]] = []
+
+    def clean(value: Any, path: tuple[Any, ...] = ()) -> Any:
         if isinstance(value, str) and value.startswith("data:image/"):
-            return "[image_data_url]"
+            decoded = _decode_image_data_url(value)
+            if decoded is None:
+                digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
+                media.append(
+                    {
+                        "sha256": digest,
+                        "mime_type": None,
+                        "suffix": ".bin",
+                        "data": None,
+                        "request_path": list(path),
+                        "unavailable_reason": "invalid_image_data_url",
+                    }
+                )
+            else:
+                content, mime_type, suffix = decoded
+                digest = hashlib.sha256(content).hexdigest()
+                media.append(
+                    {
+                        "sha256": digest,
+                        "mime_type": mime_type,
+                        "suffix": suffix,
+                        "data": content,
+                        "request_path": list(path),
+                    }
+                )
+            return f"[provider_media sha256={digest}]"
         if isinstance(value, list):
-            return [clean(item) for item in value]
+            return [clean(item, (*path, index)) for index, item in enumerate(value)]
         if isinstance(value, dict):
-            return {key: clean(item) for key, item in value.items()}
+            return {key: clean(item, (*path, key)) for key, item in value.items()}
         return value
 
-    return clean(payload)
+    snapshot = clean(payload)
+    for item in media:
+        item.update(_request_media_label(payload, item.get("request_path")))
+    return snapshot, media
+
+
+def _request_media_label(
+    payload: dict[str, Any], request_path: Any
+) -> dict[str, Any]:
+    """Copy the adjacent model-visible image label into the audit snapshot."""
+
+    if not isinstance(request_path, list) or len(request_path) < 6:
+        return {}
+    try:
+        messages_index = request_path.index("messages")
+        message_index = int(request_path[messages_index + 1])
+        content_index = int(request_path[messages_index + 3])
+        content = payload["messages"][message_index]["content"]
+        label = content[content_index - 1]
+    except (ValueError, TypeError, KeyError, IndexError):
+        return {}
+    if not isinstance(label, dict) or label.get("type") != "text":
+        return {}
+    text = label.get("text")
+    if not isinstance(text, str):
+        return {}
+    lines = text.splitlines()
+    if not lines or not lines[0].startswith(("HISTORY ", "CURRENT ")):
+        return {}
+    first = lines[0].split()
+    result: dict[str, Any] = {"timeline_role": first[0], "label": text}
+    for field in first[1:]:
+        key, separator, value = field.partition("=")
+        if separator and key in {"observation_id", "frame_id"}:
+            result[key] = value
+    for line in lines[1:]:
+        for key in ("scene_size", "display_size", "scene_bounds_in_display_pixels"):
+            prefix = f"{key}="
+            if line.startswith(prefix):
+                result[key] = line.removeprefix(prefix)
+    return result
+
+
+def _decode_image_data_url(value: str) -> tuple[bytes, str, str] | None:
+    try:
+        header, encoded = value.split(",", 1)
+    except ValueError:
+        return None
+    if ";base64" not in header.lower():
+        return None
+    mime_type = header[5:].split(";", 1)[0].lower()
+    suffix = {
+        "image/png": ".png",
+        "image/jpeg": ".jpg",
+        "image/jpg": ".jpg",
+        "image/webp": ".webp",
+    }.get(mime_type)
+    if suffix is None:
+        return None
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    return (data, mime_type, suffix) if data else None
+
+
+def _public_response_snapshot(response: dict[str, Any]) -> dict[str, Any]:
+    """Persist only provider fields that are public protocol evidence."""
+
+    choices = response.get("choices")
+    choices = choices if isinstance(choices, list) else []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    raw_message = choice.get("message")
+    raw_message = raw_message if isinstance(raw_message, dict) else {}
+    message: dict[str, Any] = {
+        "role": raw_message.get("role") or "assistant",
+        "content": _redact_provider_value(raw_message.get("content")),
+    }
+    if "tool_calls" in raw_message:
+        message["tool_calls"] = _redact_provider_value(raw_message.get("tool_calls"))
+    snapshot = {
+        "finish_reason": choice.get("finish_reason"),
+        "message": message,
+    }
+    usage = response.get("usage")
+    if isinstance(usage, dict):
+        snapshot["usage"] = _redact_provider_value(usage)
+    return snapshot

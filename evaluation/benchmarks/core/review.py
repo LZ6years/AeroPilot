@@ -215,7 +215,7 @@ class BenchmarkReviewRenderer:
                 "<section><h2>Observation Gallery</h2>"
                 f"{gallery}</section>"
                 "<section><h2>Agent Tool Transcript</h2>"
-                f"{_agent_tool_transcript(case.audit, case.frame_assets, case_dir)}</section>"
+                f"{_agent_tool_transcript(case.audit, case.frame_assets, case_dir, planner_input_assets)}</section>"
                 "<section><h2>Action Timeline</h2>"
                 + _record_table(
                     case.audit.actions,
@@ -231,7 +231,7 @@ class BenchmarkReviewRenderer:
                     ),
                 )
                 + "</section>"
-                "<section><h2>Planner Windows</h2>"
+                "<section><h2>Decision / Window Details</h2>"
                 f"{_planner_review(case.audit, case_dir, planner_input_assets)}</section>"
                 "<section><h2>Runtime Applied Phase State</h2>"
                 f"{_phase_event_table(case.audit.events)}</section>"
@@ -483,6 +483,7 @@ def _agent_tool_transcript(
     audit: BenchmarkAuditLog,
     assets: tuple[ResolvedFrameAsset, ...],
     case_dir: Path,
+    planner_input_assets: dict[str, list[dict[str, Any]]],
 ) -> str:
     """Render the canonical model/tool exchange without inventing reasoning.
 
@@ -501,6 +502,12 @@ def _agent_tool_transcript(
         )
 
     calls_by_id, results_by_id = _transcript_indexes(records)
+    fused_images: dict[str, dict[str, Any]] = {}
+    for request_assets in planner_input_assets.values():
+        for asset in request_assets:
+            observation_id = str(asset.get("observation_id") or "")
+            if observation_id and asset.get("path") and observation_id not in fused_images:
+                fused_images[observation_id] = asset
     diagnostics = _transcript_diagnostics(calls_by_id, results_by_id)
     diagnostic_html = ""
     if diagnostics:
@@ -511,15 +518,33 @@ def _agent_tool_transcript(
             + "</ul></div>"
         )
 
+    last_record_by_observation: dict[str, int] = {}
+    for index, record in enumerate(records):
+        if record.get("kind") != "state_checkpoint":
+            continue
+        observation_id = str(_dict(record.get("payload")).get("observation_id") or "")
+        if observation_id:
+            last_record_by_observation[observation_id] = index
+    latest_observation_index = max(last_record_by_observation.values(), default=-1)
     cards = [
         _transcript_record_card(
             record,
+            timeline_role=(
+                "CURRENT" if index == latest_observation_index else "HISTORY"
+            ),
+            show_checkpoint_media=(
+                last_record_by_observation.get(
+                    str(_dict(record.get("payload")).get("observation_id") or "")
+                )
+                == index
+            ),
             calls_by_id=calls_by_id,
             results_by_id=results_by_id,
             assets=assets,
             case_dir=case_dir,
+            fused_images=fused_images,
         )
-        for record in records
+        for index, record in enumerate(records)
     ]
     return diagnostic_html + '<div class="transcript">' + "".join(cards) + "</div>"
 
@@ -581,10 +606,13 @@ def _transcript_diagnostics(
 def _transcript_record_card(
     record: dict[str, Any],
     *,
+    timeline_role: str,
+    show_checkpoint_media: bool,
     calls_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
     results_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
     assets: tuple[ResolvedFrameAsset, ...],
     case_dir: Path,
+    fused_images: dict[str, dict[str, Any]],
 ) -> str:
     kind = str(record.get("kind") or "unknown")
     payload = _dict(record.get("payload"))
@@ -600,10 +628,13 @@ def _transcript_record_card(
     body = _transcript_record_body(
         kind,
         payload,
+        timeline_role=timeline_role,
+        show_checkpoint_media=show_checkpoint_media,
         calls_by_id=calls_by_id,
         results_by_id=results_by_id,
         assets=assets,
         case_dir=case_dir,
+        fused_images=fused_images,
     )
     return (
         f'<article class="transcript-card transcript-{_css_token(kind)}">'
@@ -617,10 +648,13 @@ def _transcript_record_body(
     kind: str,
     payload: dict[str, Any],
     *,
+    timeline_role: str,
+    show_checkpoint_media: bool,
     calls_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
     results_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
     assets: tuple[ResolvedFrameAsset, ...],
     case_dir: Path,
+    fused_images: dict[str, dict[str, Any]],
 ) -> str:
     if kind == "user_instruction":
         return f'<p class="transcript-intent">{_e(payload.get("instruction"))}</p>'
@@ -634,26 +668,64 @@ def _transcript_record_body(
             "completed": context.get("completed"),
             "stopped": context.get("stopped"),
         }
-        checkpoint_assets = tuple(
-            asset
-            for asset in assets
-            if observation_id
-            and str(asset.observation_id or "") == observation_id
-            and asset.modality == "rgb"
-            and asset.display_path
+        temporal_roles = (
+            _checkpoint_temporal_roles(context, observation_id, timeline_role)
+            if show_checkpoint_media
+            else []
         )
         media = ""
-        if checkpoint_assets:
-            media = '<div class="gallery transcript-media">' + "".join(
-                _frame_card(
-                    asset,
-                    case_dir,
-                    roles=["transcript checkpoint"],
-                    observation_source=None,
-                    association=None,
+        frame_cards = []
+        for temporal in temporal_roles:
+            role_observation_id = str(temporal.get("observation_id") or "")
+            frame_id = str(temporal.get("frame_id") or "")
+            fused = fused_images.get(role_observation_id)
+            if fused is not None:
+                frame_cards.append(
+                    _image_group(
+                        [
+                            {
+                                "path": fused["path"],
+                                "label": str(temporal.get("label") or "image"),
+                                "description": (
+                                    f"observation_id={role_observation_id} · "
+                                    f"frame_id={frame_id or fused.get('frame_id') or 'unknown'} · "
+                                    "provider RGB/depth fusion with bottom meter color bar"
+                                ),
+                            }
+                        ],
+                        case_dir,
+                    )
                 )
-                for asset in checkpoint_assets
-            ) + "</div>"
+                continue
+            matching = [
+                asset
+                for asset in assets
+                if role_observation_id
+                and str(asset.observation_id or "") == role_observation_id
+                and asset.modality == "rgb"
+                and asset.display_path
+                and (not frame_id or asset.frame_id == frame_id)
+            ]
+            for asset in matching:
+                frame_cards.append(
+                    _frame_card(
+                        asset,
+                        case_dir,
+                        roles=[str(temporal.get("label") or temporal.get("role"))],
+                        observation_source=None,
+                        association=_checkpoint_action_association(
+                            str(temporal.get("role") or ""),
+                            role_observation_id,
+                            results_by_id,
+                        ),
+                    )
+                )
+        if frame_cards:
+            media = (
+                '<div class="gallery transcript-media">'
+                + "".join(frame_cards)
+                + "</div>"
+            )
         return (
             _key_value_table(summary)
             + media
@@ -742,21 +814,169 @@ def _transcript_record_body(
             "safety_interventions": payload.get("safety_interventions"),
             "result_ref": payload.get("result_ref"),
         }
-        return (
-            _key_value_table(summary)
-            + _transcript_artifact_refs(payload, assets, case_dir)
-            + _json_details(
-                payload.get("data"),
+        result_data = _dict(payload.get("data"))
+        if payload.get("tool_name") == "skill.metric_depth.sample_region":
+            result_body = _depth_roi_preview(
+                payload,
+                result_data,
+                fused_images,
+                assets,
+                case_dir,
+            ) + _key_value_table(
+                {
+                    "observation_id": result_data.get("observation_id"),
+                    "distance_m": result_data.get("distance_m"),
+                }
+            ) + _json_details(
+                result_data.get("audit_details"),
+                "Internal depth calculation audit",
+                empty_message="No internal depth calculation audit.",
+            )
+        else:
+            result_body = _json_details(
+                result_data,
                 "Result data",
                 empty_message="No structured result data.",
             )
+        return (
+            _key_value_table(summary)
+            + _transcript_artifact_refs(payload, assets, case_dir)
+            + result_body
         )
     if kind == "protocol_feedback":
         return (
             '<p class="transcript-feedback">'
             f'{_e(payload.get("message"))}</p>'
         )
+    if kind == "task_terminal":
+        return (
+            '<p class="transcript-feedback"><strong>Instruction stopped incomplete.</strong> '
+            "Runtime closed the declared blocker and retained the scene for the next case.</p>"
+            + _key_value_table(
+                {
+                    "completed": payload.get("completed"),
+                    "stopped": payload.get("stopped"),
+                    "stopped_reason": payload.get("stopped_reason"),
+                    "stop_source": payload.get("stop_source"),
+                    "blocking_condition": payload.get("blocking_condition"),
+                    "evidence_refs": payload.get("evidence_refs"),
+                    "suggested_user_action": payload.get("suggested_user_action"),
+                    "observation_after_id": payload.get("observation_after_id"),
+                }
+            )
+            + _json_details(payload, "Complete terminal record")
+        )
     return _json_details(payload, "Raw transcript payload")
+
+
+def _depth_roi_preview(
+    payload: dict[str, Any],
+    result_data: dict[str, Any],
+    fused_images: dict[str, dict[str, Any]],
+    assets: tuple[ResolvedFrameAsset, ...],
+    case_dir: Path,
+) -> str:
+    """Overlay the requested display-normalized ROI on the safe fused image."""
+
+    args = _dict(payload.get("requested_args"))
+    observation_id = str(
+        result_data.get("observation_id") or args.get("observation_id") or ""
+    )
+    asset = fused_images.get(observation_id)
+    if isinstance(asset, dict):
+        path = Path(str(asset.get("path") or ""))
+    else:
+        fallback = next(
+            (
+                item
+                for item in assets
+                if item.modality == "rgb"
+                and str(item.observation_id or "") == observation_id
+                and item.display_path
+            ),
+            None,
+        )
+        path = Path(fallback.display_path) if fallback is not None else Path()
+    if not path.is_file():
+        return ""
+    try:
+        x_min = float(args["x_min"])
+        y_min = float(args["y_min"])
+        x_max = float(args["x_max"])
+        y_max = float(args["y_max"])
+    except (KeyError, TypeError, ValueError):
+        return ""
+    if not (
+        0.0 <= x_min < x_max <= 1.0
+        and 0.0 <= y_min < y_max <= 1.0
+    ):
+        return ""
+    style = (
+        f"left:{x_min * 100:.4f}%;top:{y_min * 100:.4f}%;"
+        f"width:{(x_max - x_min) * 100:.4f}%;"
+        f"height:{(y_max - y_min) * 100:.4f}%"
+    )
+    href = _relative_href(case_dir, path)
+    return (
+        '<figure class="frame-card depth-roi-preview">'
+        '<div class="depth-roi-image">'
+        f'<img loading="lazy" src="{href}" alt="{_e(observation_id)} depth ROI">'
+        f'<span class="depth-roi-box" style="{style}"></span>'
+        "</div>"
+        "<figcaption><strong>Requested metric-depth ROI</strong><br>"
+        f"<span>{_e(observation_id)} · normalized against displayed image</span>"
+        "</figcaption></figure>"
+    )
+
+
+def _checkpoint_temporal_roles(
+    context: dict[str, Any], current_observation_id: str, timeline_role: str
+) -> list[dict[str, Any]]:
+    """Read this checkpoint's sole chronological image reference."""
+
+    frame_id = None
+    fragments = context.get("fragments")
+    if isinstance(fragments, list):
+        for fragment in fragments:
+            fragment = _dict(fragment)
+            if fragment.get("name") != "image":
+                continue
+            selected = _dict(fragment.get("content")).get("selected_frames")
+            if not isinstance(selected, list):
+                break
+            for item in selected:
+                item = _dict(item)
+                if str(item.get("observation_id") or "") == current_observation_id:
+                    frame_id = item.get("frame_id")
+                    break
+            break
+    return [
+        {
+            "role": "current_observation",
+            "label": timeline_role,
+            "observation_id": current_observation_id,
+            "frame_id": frame_id,
+        }
+    ]
+
+
+def _checkpoint_action_association(
+    role: str,
+    observation_id: str,
+    results_by_id: dict[str, list[tuple[int, dict[str, Any]]]],
+) -> str | None:
+    if not observation_id:
+        return None
+    field = "observation_after_id" if role == "current_observation" else None
+    if field is None:
+        return None
+    for call_id, results in results_by_id.items():
+        for _, result in results:
+            data = _dict(result.get("data"))
+            if str(data.get(field) or "") == observation_id:
+                prefix = "before" if field == "observation_before_id" else "after"
+                return f"{prefix} committed action window {call_id}"
+    return None
 
 
 def _transcript_pairing(
@@ -839,6 +1059,15 @@ def _materialize_planner_input_assets(
     assets_by_record: dict[str, list[dict[str, Any]]] = {}
     for record in audit.planner_debug:
         record_key = _planner_record_key(record)
+        model_rounds = record.get("model_rounds")
+        if isinstance(model_rounds, list):
+            assets_by_record[record_key] = _materialize_provider_round_assets(
+                audit,
+                case_dir,
+                record,
+                model_rounds,
+            )
+            continue
         context = _dict(record.get("planner_context"))
         image_mode, attempt = _successful_image_request(record)
         if not context:
@@ -894,12 +1123,77 @@ def _materialize_planner_input_assets(
                     "input_id": input_id,
                     "role": image.get("role"),
                     "usage": image.get("usage"),
+                    "observation_id": image.get("observation_id"),
+                    "frame_id": image.get("frame_id"),
                     "image_mode": image_mode,
                     "attempt": attempt,
                 }
             )
         assets_by_record[record_key] = assets
     return assets_by_record
+
+
+def _materialize_provider_round_assets(
+    audit: BenchmarkAuditLog,
+    case_dir: Path,
+    record: dict[str, Any],
+    model_rounds: list[Any],
+) -> list[dict[str, Any]]:
+    """Copy content-addressed request media while preserving occurrence order."""
+
+    run_root = Path(audit.run_dir).resolve()
+    destination = case_dir / "review_assets" / "provider_inputs"
+    assets: list[dict[str, Any]] = []
+    for round_value in model_rounds:
+        if not isinstance(round_value, dict):
+            continue
+        round_index = round_value.get("round_index")
+        media = round_value.get("request_media")
+        if not isinstance(media, list):
+            continue
+        for order, value in enumerate(media, start=1):
+            item = value if isinstance(value, dict) else {}
+            asset = {
+                "round_index": round_index,
+                "order": order,
+                "sha256": item.get("sha256"),
+                "mime_type": item.get("mime_type"),
+                "request_path": item.get("request_path"),
+                "timeline_role": item.get("timeline_role"),
+                "observation_id": item.get("observation_id"),
+                "frame_id": item.get("frame_id"),
+                "scene_size": item.get("scene_size"),
+                "display_size": item.get("display_size"),
+                "scene_bounds_in_display_pixels": item.get(
+                    "scene_bounds_in_display_pixels"
+                ),
+                "label_text": item.get("label"),
+            }
+            ref = item.get("asset_ref")
+            if not isinstance(ref, str) or not ref:
+                asset["unavailable_reason"] = (
+                    item.get("unavailable_reason") or "provider_media_asset_not_saved"
+                )
+                assets.append(asset)
+                continue
+            source = (run_root / ref).resolve()
+            if run_root != source and run_root not in source.parents:
+                asset["unavailable_reason"] = "provider_media_ref_outside_run_dir"
+                assets.append(asset)
+                continue
+            if not source.is_file():
+                asset["unavailable_reason"] = "provider_media_asset_missing"
+                assets.append(asset)
+                continue
+            suffix = source.suffix.lower() or ".bin"
+            digest = _safe_asset_name(str(item.get("sha256") or "image"))
+            target = destination / f"{digest}{suffix}"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.is_file() or target.read_bytes() != source.read_bytes():
+                target.write_bytes(source.read_bytes())
+            asset["path"] = str(target)
+            assets.append(asset)
+    return assets
 
 
 def _successful_image_request(record: dict[str, Any]) -> tuple[str, int | None]:
@@ -965,6 +1259,29 @@ def _planner_review(
     planner_input_assets: dict[str, list[dict[str, Any]]],
 ) -> str:
     records = list(audit.planner_debug)
+    has_provider_exchange = any(
+        record.get("schema_version") == "agent_decision_debug_v2"
+        and isinstance(record.get("model_rounds"), list)
+        for record in records
+    )
+    has_checkpoint_transcript = any(
+        item.get("kind") == "state_checkpoint" for item in audit.agent_transcript
+    )
+    has_model_transcript = any(
+        item.get("kind") in {"assistant_turn", "provider_turn_rejected"}
+        for item in audit.agent_transcript
+    )
+    if (
+        not has_provider_exchange
+        and has_checkpoint_transcript
+        and has_model_transcript
+    ):
+        return _legacy_decision_review(
+            audit,
+            case_dir,
+            records,
+            planner_input_assets,
+        )
     if not records:
         return (
             '<p class="empty">Action planner debug was not enabled or no '
@@ -975,10 +1292,18 @@ def _planner_review(
     summary = _key_value_table(stats)
     timeline = _planner_timeline(records)
     details = "".join(
-        _planner_window(
-            record,
-            case_dir,
-            planner_input_assets.get(_planner_record_key(record), []),
+        (
+            _decision_window(
+                record,
+                case_dir,
+                planner_input_assets.get(_planner_record_key(record), []),
+            )
+            if record.get("schema_version") == "agent_decision_debug_v2"
+            else _planner_window(
+                record,
+                case_dir,
+                planner_input_assets.get(_planner_record_key(record), []),
+            )
         )
         for record in records
     )
@@ -987,8 +1312,313 @@ def _planner_review(
         + summary
         + "<h3>Decision Timeline</h3>"
         + timeline
-        + "<h3>Window Details</h3>"
+        + "<h3>Decision / Window Details</h3>"
         + details
+    )
+
+
+def _decision_window(
+    record: dict[str, Any],
+    case_dir: Path,
+    model_input_assets: list[dict[str, Any]],
+) -> str:
+    """Render one v2 state decision and all provider rounds within it."""
+
+    model_context = _dict(record.get("model_context"))
+    current_phase = _dict(model_context.get("current_phase"))
+    decision = _decision(record)
+    raw_plan = _dict(record.get("raw_plan"))
+    safe_plan = _dict(record.get("safe_plan"))
+    execution = _dict(record.get("_phase_window_execution"))
+    rounds = [item for item in record.get("model_rounds", []) if isinstance(item, dict)]
+    physical = record.get("physical_window_index")
+    physical_label = (
+        f"physical window {physical}"
+        if isinstance(physical, int)
+        else "no physical window"
+    )
+    transition = decision.get("decision") or "provider_failure"
+    title = (
+        f"Decision {record.get('decision_index')} · "
+        f"{record.get('checkpoint_observation_id') or 'unknown observation'} · "
+        f"{len(rounds)} model round{'s' if len(rounds) != 1 else ''} · "
+        f"{transition} · {physical_label}"
+    )
+    summary = {
+        "decision_id": record.get("decision_id"),
+        "checkpoint_observation_id": record.get("checkpoint_observation_id"),
+        "phase": current_phase.get("name") or record.get("phase"),
+        "completed_window_count_at_checkpoint": record.get("completed_window_count"),
+        "physical_window_index": physical,
+        "transition": transition,
+        "actual_execution_tools": _execution_tools(execution),
+    }
+    round_html = "".join(
+        _provider_round(
+            item,
+            case_dir,
+            [
+                asset
+                for asset in model_input_assets
+                if asset.get("round_index") == item.get("round_index")
+            ],
+        )
+        for item in rounds
+    )
+    if not rounds:
+        round_html = (
+            '<p class="empty">Exact provider exchange was not captured for this decision.</p>'
+        )
+    return (
+        '<details class="planner-window"><summary>'
+        + _e(title)
+        + "</summary>"
+        + _key_value_table(summary)
+        + "<h4>Provider Model Rounds</h4>"
+        + round_html
+        + _steps_comparison(raw_plan, safe_plan, execution)
+        + "<h4>Derived Runtime Artifacts</h4>"
+        + _json_details(
+            _compact_plan(raw_plan),
+            "Runtime plan reconstructed from accepted ToolCalls",
+        )
+        + _json_details(_compact_plan(safe_plan), "Safety-reviewed execution plan")
+        + _json_details(record.get("safety_decision"), "Safety decision")
+        + _json_details(record, "Complete decision debug record")
+        + "</details>"
+    )
+
+
+def _provider_round(
+    model_round: dict[str, Any],
+    case_dir: Path,
+    assets: list[dict[str, Any]],
+) -> str:
+    """Show the public response and Runtime handling before folded raw data."""
+
+    response = _dict(model_round.get("response"))
+    message = _dict(response.get("message"))
+    outcome = _dict(model_round.get("runtime_outcome"))
+    request = _dict(model_round.get("request"))
+    canonical = _dict(model_round.get("canonical_turn"))
+    content = message.get("content") if "content" in message else None
+    visible = {
+        "finish_reason": response.get("finish_reason"),
+        "content": content,
+        "runtime_status": outcome.get("status"),
+        "runtime_feedback": outcome.get("feedback"),
+        "public_intent": canonical.get("public_intent"),
+        "public_intent_source": canonical.get("public_intent_source"),
+    }
+    tools = request.get("tools")
+    request_messages = request.get("messages")
+    if not request:
+        availability = (
+            '<p class="empty">Exact provider request unavailable for this model round.</p>'
+        )
+    else:
+        availability = _model_input_images(assets, case_dir)
+    return (
+        '<details class="model-round" open><summary>'
+        f"Model round {_e(model_round.get('round_index'))} · "
+        f"{_e(outcome.get('status') or 'unknown outcome')}</summary>"
+        + availability
+        + _key_value_table(visible)
+        + "<h5>Raw provider ToolCalls</h5>"
+        + _json_details(message.get("tool_calls"), "Wire ToolCalls")
+        + "<h5>Runtime handling</h5>"
+        + _json_details(outcome, "Protocol feedback and ToolResults")
+        + _json_details(canonical, "Canonical accepted turn")
+        + "<h5>Actual Provider Request</h5>"
+        + _json_details(request_messages, "Complete request messages")
+        + _json_details(tools, "Exposed tools schema")
+        + _json_details(response, "Public provider response")
+        + "</details>"
+    )
+
+
+def _execution_tools(execution: dict[str, Any]) -> list[str]:
+    tools: list[str] = []
+    steps = execution.get("executed_steps")
+    if not isinstance(steps, list):
+        return tools
+    for item in steps:
+        step = _dict(_dict(item).get("step"))
+        if step.get("tool"):
+            tools.append(str(step["tool"]))
+    return tools
+
+
+def _legacy_decision_review(
+    audit: BenchmarkAuditLog,
+    case_dir: Path,
+    planner_records: list[dict[str, Any]],
+    planner_input_assets: dict[str, list[dict[str, Any]]],
+) -> str:
+    """Reconstruct state decisions from canonical transcript boundaries.
+
+    Historical runs did not save the exact provider payload. The canonical
+    transcript can still prove chronology, rejection feedback, ToolResults and
+    the distinction between terminal decisions and physical windows. It must
+    never be relabelled as an exact request snapshot.
+    """
+
+    cycles: list[dict[str, Any]] = []
+    active: dict[str, Any] | None = None
+    for item in audit.agent_transcript:
+        kind = item.get("kind")
+        if kind == "state_checkpoint":
+            if active is not None:
+                cycles.append(active)
+            payload = _dict(item.get("payload"))
+            active = {
+                "observation_id": payload.get("observation_id"),
+                "context": _dict(payload.get("context")),
+                "items": [],
+            }
+            continue
+        if active is not None:
+            active["items"].append(dict(item))
+    if active is not None:
+        cycles.append(active)
+
+    all_assets = [
+        asset
+        for values in planner_input_assets.values()
+        for asset in values
+    ]
+    physical_index = 0
+    cards: list[str] = []
+    for decision_index, cycle in enumerate(cycles, start=1):
+        model_items = [
+            item
+            for item in cycle["items"]
+            if item.get("kind") in {"assistant_turn", "provider_turn_rejected"}
+        ]
+        accepted = [
+            _dict(item.get("payload"))
+            for item in model_items
+            if item.get("kind") == "assistant_turn"
+        ]
+        final_turn = accepted[-1] if accepted else {}
+        calls = final_turn.get("tool_calls")
+        calls = calls if isinstance(calls, list) else []
+        physical_calls = [
+            call
+            for call in calls
+            if str(_dict(call).get("tool_name") or "").startswith("uav.")
+        ]
+        physical = None
+        if physical_calls:
+            physical_index += 1
+            physical = physical_index
+        transition = _legacy_transition_from_calls(calls)
+        observation_id = cycle.get("observation_id")
+        assets = [
+            asset
+            for asset in all_assets
+            if asset.get("observation_id") == observation_id
+            and "current" in str(asset.get("role") or "")
+        ]
+        cards.append(
+            _legacy_decision_card(
+                decision_index,
+                cycle,
+                model_items,
+                transition,
+                physical,
+                assets,
+                case_dir,
+            )
+        )
+
+    return (
+        '<p class="empty">Exact provider request unavailable: run predates '
+        "provider exchange capture. Canonical transcript records are shown "
+        "without reconstructing missing system messages, tool schemas, or images.</p>"
+        + "<h3>Decision Summary</h3>"
+        + _key_value_table(
+            {
+                "decision_count": len(cycles),
+                "physical_window_count": physical_index,
+                "capture_mode": "legacy canonical transcript",
+            }
+        )
+        + "<h3>Decision / Window Details</h3>"
+        + "".join(cards)
+    )
+
+
+def _legacy_transition_from_calls(calls: list[Any]) -> str:
+    commit = next(
+        (
+            _dict(call)
+            for call in calls
+            if _dict(call).get("tool_name") == "runtime.commit_phase_turn"
+        ),
+        {},
+    )
+    args = _dict(commit.get("args"))
+    assessment = _dict(args.get("completion_assessment"))
+    done_when = assessment.get("done_when")
+    if isinstance(done_when, list) and done_when and all(
+        _dict(item).get("status") == "supported" for item in done_when
+    ):
+        return "complete_task_or_advance_phase"
+    return "continue_current_phase" if commit else "no_commit"
+
+
+def _legacy_decision_card(
+    decision_index: int,
+    cycle: dict[str, Any],
+    model_items: list[dict[str, Any]],
+    transition: str,
+    physical_window_index: int | None,
+    assets: list[dict[str, Any]],
+    case_dir: Path,
+) -> str:
+    observation_id = cycle.get("observation_id") or "unknown observation"
+    physical = (
+        f"physical window {physical_window_index}"
+        if physical_window_index is not None
+        else "no physical window"
+    )
+    round_blocks = []
+    items = cycle.get("items") if isinstance(cycle.get("items"), list) else []
+    for round_index, model_item in enumerate(model_items, start=1):
+        try:
+            start = items.index(model_item)
+        except ValueError:
+            start = 0
+        later_model_positions = [
+            index
+            for index in range(start + 1, len(items))
+            if items[index].get("kind") in {"assistant_turn", "provider_turn_rejected"}
+        ]
+        end = later_model_positions[0] if later_model_positions else len(items)
+        handling = items[start + 1 : end]
+        payload = _dict(model_item.get("payload"))
+        round_blocks.append(
+            '<details class="model-round" open><summary>'
+            f"Model round {round_index} · {_e(model_item.get('kind'))}</summary>"
+            + _json_details(payload, "Canonical model record")
+            + _json_details(handling, "Canonical ToolResults / protocol feedback")
+            + "</details>"
+        )
+    image_html = _model_input_images(assets, case_dir) if assets else (
+        "<h4>Model Input Images</h4>"
+        '<p class="empty">Exact image unavailable for this checkpoint; no substitute was used.</p>'
+    )
+    return (
+        '<details class="planner-window"><summary>'
+        f"Decision {decision_index} · {_e(observation_id)} · "
+        f"{len(model_items)} model round{'s' if len(model_items) != 1 else ''} · "
+        f"{_e(transition)} · {_e(physical)}"
+        "</summary>"
+        + image_html
+        + "".join(round_blocks)
+        + _json_details(cycle.get("context"), "Saved checkpoint context (not exact provider request)")
+        + "</details>"
     )
 
 
@@ -1012,7 +1642,16 @@ def _planner_stats(
         ):
             no_tool_transitions += 1
     return {
-        "window_count": len(records),
+        "decision_count": len(records),
+        "physical_window_count": sum(
+            1
+            for record in records
+            if isinstance(record.get("physical_window_index"), int)
+            or (
+                record.get("schema_version") != "agent_decision_debug_v2"
+                and isinstance(record.get("window_index"), int)
+            )
+        ),
         "continue_count": counts["continue_current_phase"],
         "advance_count": counts["advance_to_next_phase"],
         "complete_count": counts["complete_task"],
@@ -1122,11 +1761,14 @@ def _planner_window(
             current_phase,
             decision,
         )
-        + "<h4>Model-Facing Context</h4><pre>"
+        + "<h4>Saved Planner Context (legacy; not an exact provider request)</h4><pre>"
         + _e(_model_facing_context_text(model_context))
         + "</pre><h4>Action Plan</h4>"
-        + _json_details(_compact_plan(raw_plan), "Raw model plan")
-        + _json_details(_compact_plan(safe_plan), "Safety-reviewed plan")
+        + _json_details(
+            _compact_plan(raw_plan),
+            "Runtime plan reconstructed from accepted ToolCalls",
+        )
+        + _json_details(_compact_plan(safe_plan), "Safety-reviewed execution plan")
         + "<h4>Safety</h4>"
         + _json_details(record.get("safety_decision"), "Safety decision")
         + "<h4>Raw Planner Record</h4>"
@@ -1152,12 +1794,37 @@ def _model_input_images(
     if available:
         cards = []
         for asset in available:
-            role = asset.get("role") or "image"
+            role = (
+                asset.get("timeline_role")
+                or asset.get("role")
+                or "provider request image"
+            )
             label = f"#{asset.get('order')} · {role}"
-            metadata = [
-                f"input_id={asset.get('input_id')}",
-                f"image_mode={asset.get('image_mode')}",
-            ]
+            metadata = []
+            if asset.get("input_id"):
+                metadata.append(f"input_id={asset.get('input_id')}")
+            if asset.get("image_mode"):
+                metadata.append(f"image_mode={asset.get('image_mode')}")
+            if asset.get("sha256"):
+                metadata.append(f"sha256={asset.get('sha256')}")
+            if asset.get("request_path"):
+                metadata.append(
+                    "request_path="
+                    + json.dumps(asset.get("request_path"), ensure_ascii=False)
+                )
+            if asset.get("observation_id"):
+                metadata.append(f"observation_id={asset.get('observation_id')}")
+            if asset.get("frame_id"):
+                metadata.append(f"frame_id={asset.get('frame_id')}")
+            if asset.get("scene_size"):
+                metadata.append(f"scene_size={asset.get('scene_size')}")
+            if asset.get("display_size"):
+                metadata.append(f"display_size={asset.get('display_size')}")
+            if asset.get("scene_bounds_in_display_pixels"):
+                metadata.append(
+                    "scene_bounds="
+                    f"{asset.get('scene_bounds_in_display_pixels')}"
+                )
             if asset.get("attempt") is not None:
                 metadata.append(f"attempt={asset.get('attempt')}")
             if asset.get("usage"):
@@ -1213,7 +1880,7 @@ def _steps_comparison(
     return (
         "<h4>Steps</h4>"
         '<table class="step-comparison"><thead><tr>'
-        "<th>index</th><th>model output</th><th>safety-reviewed</th>"
+        "<th>index</th><th>accepted ToolCall</th><th>safety-reviewed call</th>"
         "<th>actual execution</th></tr></thead><tbody>"
         + "".join(rows)
         + "</tbody></table>"
@@ -1259,7 +1926,9 @@ def _execution_cell(executed: dict[str, Any] | None) -> str:
     actual_step = _dict(executed.get("step"))
     result = _dict(executed.get("result"))
     ok = result.get("ok")
-    if ok is True:
+    if result.get("status") == "skipped":
+        status = "skipped"
+    elif ok is True:
         status = "success"
     elif ok is False:
         status = "failed"
@@ -1353,6 +2022,7 @@ def _phase_event_table(events: tuple[dict[str, Any], ...]) -> str:
         payload = _dict(item.get("payload"))
         rows.append(
             {
+                "decision_id": payload.get("decision_id"),
                 "timestamp": item.get("timestamp"),
                 "event": event,
                 "phase": payload.get("phase"),
@@ -1369,7 +2039,15 @@ def _phase_event_table(events: tuple[dict[str, Any], ...]) -> str:
         )
     return _record_table(
         rows,
-        ("timestamp", "event", "phase", "decision", "source", "reason"),
+        (
+            "decision_id",
+            "timestamp",
+            "event",
+            "phase",
+            "decision",
+            "source",
+            "reason",
+        ),
     )
 
 
@@ -1735,6 +2413,11 @@ code, pre { font-family: Consolas, monospace; white-space: pre-wrap;
 .frame-card img { display: block; width: 100%; height: 220px;
   object-fit: contain; background: #111827; }
 .frame-card figcaption { padding: 8px; font-size: 12px; color: #52667a; }
+.depth-roi-preview { max-width: 360px; margin: 12px 0; }
+.depth-roi-image { position: relative; background: #111827; }
+.depth-roi-image img { display: block; width: 100%; height: auto; }
+.depth-roi-box { position: absolute; box-sizing: border-box; border: 2px solid #ff2d55;
+  background: #ff2d5526; box-shadow: 0 0 0 1px #fff; pointer-events: none; }
 .instruction { font-size: 18px; }
 .muted, .empty { color: #627d98; }
 details { margin-top: 12px; }
@@ -1750,6 +2433,7 @@ details.planner-window { border: 1px solid #d9e2ec; border-radius: 8px;
 .transcript-tool-result { border-left-color: #059669; }
 .transcript-protocol-feedback { border-left-color: #d97706; }
 .transcript-state-checkpoint { border-left-color: #7c3aed; }
+.transcript-task-terminal { border-left-color: #b91c1c; background: #fff7f7; }
 .transcript-intent, .transcript-feedback { font-size: 15px; }
 .transcript-diagnostics { border: 1px solid #d97706; border-radius: 8px;
   background: #fffbeb; color: #92400e; margin-bottom: 12px; padding: 12px; }

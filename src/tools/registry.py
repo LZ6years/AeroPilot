@@ -193,6 +193,46 @@ def default_registry(
     )
     registry.register(
         ToolSpec(
+            name="runtime.report_blocked",
+            wire_name="runtime_report_blocked",
+            kind="runtime_control",
+            description=(
+                "Stop the current instruction as incomplete when available evidence cannot "
+                "support another safe, meaningful action. Cite only prior transcript evidence."
+            ),
+            input_schema={
+                "type": "object",
+                "required": ["blocking_condition", "reason", "evidence_refs"],
+                "properties": {
+                    "blocking_condition": {
+                        "type": "string",
+                        "enum": [
+                            "lost_required_reference",
+                            "insufficient_evidence",
+                            "unsafe_to_continue",
+                            "missing_capability",
+                            "irreducible_ambiguity",
+                            "no_progress",
+                        ],
+                    },
+                    "reason": {"type": "string", "minLength": 1},
+                    "evidence_refs": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {"type": "string"},
+                    },
+                    "suggested_user_action": {"type": "string"},
+                },
+                "additionalProperties": False,
+            },
+            runtime=ToolRuntimePolicy(
+                "runtime_control", "after_batch_observation", "single", True
+            ),
+            metadata={"runtime_action": "report_blocked", "core_runtime_control": True},
+        )
+    )
+    registry.register(
+        ToolSpec(
             name="runtime.semantic_plan_update",
             wire_name="runtime_semantic_plan_update",
             kind="runtime_control",

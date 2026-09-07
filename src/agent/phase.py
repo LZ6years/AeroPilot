@@ -16,10 +16,12 @@ from src.agent.messages import AgentMessage
 CONTINUE_CURRENT_PHASE = "continue_current_phase"
 ADVANCE_TO_NEXT_PHASE = "advance_to_next_phase"
 COMPLETE_TASK = "complete_task"
+STOP_TASK_INCOMPLETE = "stop_task_incomplete"
 VALID_PHASE_TRANSITIONS = {
     CONTINUE_CURRENT_PHASE,
     ADVANCE_TO_NEXT_PHASE,
     COMPLETE_TASK,
+    STOP_TASK_INCOMPLETE,
 }
 
 @dataclass(frozen=True)

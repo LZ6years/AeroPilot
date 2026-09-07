@@ -70,20 +70,34 @@ capability, do not make it in the shared runtime, prompts, or knowledge base.
 
 Model-facing state checkpoints should be current and decision useful:
 - current instruction and semantic phase;
-- one current observation image, preferring the aligned RGB-depth overlay when
-  configured and valid;
-- one raw phase-start reference image when distinct;
+- one current observation image, preferring an aligned RGB-depth overlay with
+  a bottom meter color bar when depth is valid;
 - one compact motion summary containing only measured phase-start-relative and
   last-window UAV self-motion;
 - compact phase completion evidence.
 
 The provider receives every checkpoint together with the complete active-task
-assistant/tool transcript in chronological order. Each image label carries its
-`observation_id` and `frame_id`; tool results pair to calls through
+assistant/tool transcript in chronological order. Each observation image is
+sent once; earlier labels say `HISTORY`, and only the newest says `CURRENT`.
+Labels carry `observation_id`, `frame_id`, and scene dimensions outside the
+image pixels. Tool results pair to calls through
 `tool_call_id`. Tool availability, argument schemas, runtime effects, result
 timing, and batching come from `ToolSpec` plus the provider `tools` array, not
 from duplicate context fields or name-prefix inference. Version 1 performs no
 application-level token budgeting, summarization, or silent history truncation.
+The transcript does not replay phase-start or before-window images. Runtime may
+retain those observation IDs as audit/state anchors, while full image history
+comes from the chronological checkpoints.
+
+The fused color bar supports qualitative range only. Explicit meter values,
+threshold-dependent actions, and quantitative completion claims use the
+read-only `skill.metric_depth.sample_region` capability when available. It
+accepts only a tight ROI on the latest observation, returns a rounded robust
+camera-to-visible-surface distance to the model, and keeps MAD/filter details
+only in durable audit data.
+Because the fused PNG appends its color bar below the scene, ROI coordinates
+are normalized against the actual `display_size` advertised beside the image,
+then mapped into `scene_bounds`; any box touching the color bar is rejected.
 
 Human/debug/review data may be larger and more detailed:
 - raw planner context and raw model outputs;

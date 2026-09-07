@@ -41,8 +41,9 @@ progress.
 
 ## Recovery
 
-If the target is near an image edge, partly lost, or ambiguous, hover or use a
-bounded yaw correction before the next shift. If repeated radial corrections
-produce no tangential progress, stop repairing radius and reassess the target
-relation and circulation direction. Reverse direction only for safety, target
-recovery, or clear evidence that the chosen direction is wrong.
+If a required relation disappears after a maneuver, compare pre-maneuver and
+current views with measured motion. Try one bounded retrace or correction, then
+re-observe; do not continue a blind shift. Hover only to stabilize or compare.
+If repeated radial corrections add no tangential progress, reassess. If no safe
+evidence-producing recovery remains, stop and cite the limitation. Reverse
+circulation only for safety, recovery, or clear directional conflict.

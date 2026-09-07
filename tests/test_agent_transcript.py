@@ -97,26 +97,22 @@ def test_transcript_keeps_images_in_memory_but_strips_binary_from_jsonl(tmp_path
     assert "frame_id=frame_0001" in json.dumps(messages[1], ensure_ascii=False)
 
 
-def test_transcript_sends_each_identified_image_once_at_its_first_checkpoint(tmp_path):
+def test_transcript_projects_each_observation_image_once_in_time_order(tmp_path):
     transcript = AgentTranscript(MemoryEventWriter(tmp_path))
     transcript.start_instruction("inspect over time", "inst_0001")
 
-    def context(current_id: str, current_data: str):
+    def context(
+        current_id: str,
+        current_data: str,
+        historical: list[dict[str, str]],
+    ):
         return {
             "current_phase": {"name": "inspect"},
             "fragments": [
                 {
                     "name": "image",
                     "model_inputs": [
-                        {
-                            "type": "image",
-                            "role": "phase_start_reference",
-                            "encoding": "data_url",
-                            "data": "data:image/png;base64,PAST",
-                            "observation_id": "obs_0001",
-                            "frame_id": "frame_0001",
-                            "artifact_ref": "memory/frames.jsonl#1",
-                        },
+                        *historical,
                         {
                             "type": "image",
                             "role": "current_observation",
@@ -125,21 +121,147 @@ def test_transcript_sends_each_identified_image_once_at_its_first_checkpoint(tmp
                             "observation_id": current_id,
                             "frame_id": f"frame_{current_id}",
                             "artifact_ref": f"memory/frames.jsonl#{current_id}",
+                            "scene_width": 256,
+                            "scene_height": 256,
+                            "display_width": 256,
+                            "display_height": 298,
                         },
                     ],
                 }
             ],
         }
 
-    transcript.append_state(context("obs_0001", "data:image/png;base64,PAST"), "obs_0001")
-    transcript.append_state(context("obs_0002", "data:image/png;base64,NOW"), "obs_0002")
+    def image(role: str, observation_id: str, data: str):
+        return {
+            "type": "image",
+            "role": role,
+            "encoding": "data_url",
+            "data": data,
+            "observation_id": observation_id,
+            "frame_id": f"frame_{observation_id}",
+            "artifact_ref": f"memory/frames.jsonl#{observation_id}",
+            "scene_width": 256,
+            "scene_height": 256,
+            "display_width": 256,
+            "display_height": 298,
+        }
+
+    obs1 = "data:image/png;base64,OBS1"
+    obs2 = "data:image/png;base64,OBS2"
+    obs3 = "data:image/png;base64,OBS3"
+    transcript.append_state(context("obs_0001", obs1, []), "obs_0001")
+    transcript.append_state(
+        context(
+            "obs_0002",
+            obs2,
+            [image("phase_start_before_last_action_reference", "obs_0001", obs1)],
+        ),
+        "obs_0002",
+    )
+    transcript.append_state(
+        context(
+            "obs_0003",
+            obs3,
+            [
+                image("phase_start_reference", "obs_0001", obs1),
+                image("before_last_action_reference", "obs_0002", obs2),
+            ],
+        ),
+        "obs_0003",
+    )
 
     rendered = json.dumps(
         transcript.provider_messages(default_registry()), ensure_ascii=False
     )
 
-    assert rendered.count("data:image/png;base64,PAST") == 1
-    assert rendered.count("data:image/png;base64,NOW") == 1
+    assert rendered.count(obs1) == 1
+    assert rendered.count(obs2) == 1
+    assert rendered.count(obs3) == 1
+    assert rendered.index(obs1) < rendered.index(obs2) < rendered.index(obs3)
+    assert rendered.count("HISTORY observation_id=obs_0001") == 1
+    assert rendered.count("HISTORY observation_id=obs_0002") == 1
+    assert rendered.count("CURRENT observation_id=obs_0003") == 1
+    assert rendered.count("scene_size=256x256") == 3
+    assert rendered.count("display_size=256x298") == 3
+    assert rendered.count("y_display_pixel/display_height") == 3
+    assert rendered.count("never include the color bar") == 3
+
+
+def test_transcript_defers_repeated_observation_image_to_its_last_checkpoint(tmp_path):
+    transcript = AgentTranscript(MemoryEventWriter(tmp_path))
+    transcript.start_instruction("measure", "inst_0001")
+    image = {
+        "type": "image",
+        "role": "current_observation",
+        "encoding": "data_url",
+        "data": "data:image/png;base64,SAME",
+        "observation_id": "obs_0001",
+        "frame_id": "frame_0001",
+    }
+    context = {"fragments": [{"name": "image", "model_inputs": [image]}]}
+    transcript.append_state(context, "obs_0001")
+    transcript.append_assistant(AssistantTurn("turn_1", "Measure.", []))
+    transcript.append_state(context, "obs_0001")
+
+    messages = transcript.provider_messages(default_registry())
+    rendered = json.dumps(messages, ensure_ascii=False)
+
+    assert rendered.count(image["data"]) == 1
+    assert "CURRENT observation_id=obs_0001" in rendered
+    assert image["data"] not in json.dumps(messages[1], ensure_ascii=False)
+
+
+def test_tool_result_provider_projection_hides_internal_audit_details():
+    result = ToolResult(
+        "call_depth",
+        "skill.metric_depth.sample_region",
+        "ok",
+        data={
+            "observation_id": "obs_0001",
+            "distance_m": 2.9,
+            "audit_details": {"mad_m": 0.07},
+        },
+    )
+
+    assert result.to_dict()["data"]["audit_details"] == {"mad_m": 0.07}
+    assert result.to_provider_dict()["data"] == {
+        "observation_id": "obs_0001",
+        "distance_m": 2.9,
+    }
+
+
+def test_transcript_terminal_event_is_audit_only_and_prior_refs_exclude_current_turn(tmp_path):
+    transcript = AgentTranscript(MemoryEventWriter(tmp_path))
+    transcript.start_instruction("inspect", "inst_0001")
+    transcript.append_state({"fragments": []}, "obs_0001")
+    transcript.append_assistant(
+        AssistantTurn(
+            "assistant_1",
+            "Need more evidence.",
+            [AgentToolCall("call_prior", "uav.hover", {})],
+        )
+    )
+    transcript.append_tool_result(
+        ToolResult("call_prior", "uav.hover", "ok", result_ref="memory/actions.jsonl#1")
+    )
+    transcript.append_assistant(
+        AssistantTurn(
+            "assistant_2",
+            "Cannot continue safely.",
+            [AgentToolCall("call_terminal", "runtime.report_blocked", {})],
+        )
+    )
+    prior_refs = transcript.prior_evidence_reference_ids()
+    transcript.append_task_terminal({"stopped": True})
+
+    assert prior_refs == {
+        "obs_0001",
+        "call_prior",
+        "memory/actions.jsonl#1",
+    }
+    assert "task_terminal" not in json.dumps(
+        transcript.provider_messages(default_registry()), ensure_ascii=False
+    )
 
 
 def test_fallback_intent_is_audited_but_not_fabricated_for_provider(tmp_path):

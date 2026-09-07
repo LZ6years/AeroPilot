@@ -97,7 +97,9 @@ flowchart TD
 ## 4. Module 职责
 
 - `InstructionModule`：当前指令、历史指令、semantic goal、phase goal。
-- `ImageModule`：当前/phase-start 图像选择、可选 depth overlay、artifact refs。
+- `ImageModule`：每个 checkpoint 的当前图像、可选 RGB/depth 融合、底部米制色条和 artifact refs。
+  融合图标签区分原始 `scene_size`、含色条的 `display_size` 与 `scene_bounds`；
+  测距 ROI 按显示图归一化后映射回场景，不能触及色条。
 - `PoseModule`：模型侧可选 AGL；绝对 pose 和 delta 留在审计 metadata。
 - `ActionModule`：phase-relative 自身运动、上一窗口位移、最近动作和必要字段语义。
 - `MapModule`：当前 map/scene 相关线索、recall filter、requires_reconfirmation。
@@ -153,8 +155,8 @@ module 不做：
   省略。它只包含 `stages`、`active_stage` 和标记为历史理由的 `previous_reason`。
   Action Fragment 只包含 `motion_history_summary`：phase-start-relative UAV motion 和
   上一窗口 UAV motion。模型意图、调用和结果的完整历史由 AgentTranscript 提供。
-- Image Module 的 `model_inputs`顺序是“时间角色规则 → PAST → NOW → 当前状态
-  提醒”；通用组装器保持文本/图片交错顺序，并在最后追加 JSON Context。
+- 每个 Image Module checkpoint 只含一张 observation 图；AgentTranscript 将所有
+  observation 按时间投影一次，并在图前文本标记 `HISTORY/CURRENT`、ID 和场景尺寸。
 - `last_window_uav_motion` 来自紧邻本轮规划前、已完成动作窗口的前后位姿差。规划前仅刷新
   累计进展时必须保留该快照；只有显式测得的零运动窗口才会把它更新为零。
 - 模型先判断上一版 active stage 自身的可观察停止条件，再决定保持、推进或重规划；整个

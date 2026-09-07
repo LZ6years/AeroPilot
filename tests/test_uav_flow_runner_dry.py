@@ -495,7 +495,7 @@ def test_runner_builds_depth_image_context_without_stmr():
     assert image_module.include_current_depth is True
     assert context_builder.composer.registry.modules["map"].name == "map"
     assert any(
-        capability.startswith("NOW metric depth overlay:")
+            capability.startswith("Metric-depth fusion:")
         for capability in context_builder.semantic_evidence_capabilities()
     )
 
@@ -568,7 +568,7 @@ def test_runner_uses_independent_runtime_scene_session_per_case(tmp_path, monkey
         assert (case_dir / "audit.json").exists()
         html = (case_dir / "review.html").read_text(encoding="utf-8")
         assert "Observation Gallery" in html
-        assert "Planner Windows" in html
+        assert "Decision / Window Details" in html
         assert "Action Timeline" in html
         assert "Trajectory Plots" in html
     assert result["summary_paths"]["html_review"].endswith("review.html")

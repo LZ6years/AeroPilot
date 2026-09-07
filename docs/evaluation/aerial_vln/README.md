@@ -137,10 +137,8 @@ pose 和轨迹压缩成 UAV 居中的语义地图。配置项为：
 - `shadow`：episode 结束并关闭 Runtime logger 后离线生成 STMR；不修改
   TaskParser、Planner context 或动作。
 - `planner`：在线增量生成 STMR，并通过现有 `map` context slot 向 Planner
-  提供一张语义历史图和紧凑摘要。当前窗口的地图成功生成且非 stale 时，
-  图像输入为“当前 RGB + STMR map”，不再重复附加 phase-start RGB；首帧、
-  地图尚未 ready 或本窗口更新失败时，自动回退为“phase-start RGB + 当前
-  RGB”。
+  提供一张语义历史图和紧凑摘要。图像 observation 始终由 transcript 按时间
+  各投影一次；STMR ready 时额外附加当前语义地图，失败时只省略地图。
 
 Shadow/Planner 都要求 observation profile 至少包含 `rgb + depth + pose`。
 STMR 空白格表示未知，不表示可通行。完整 voxel、性能数据和失败信息只写入

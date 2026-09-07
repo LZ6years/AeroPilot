@@ -80,6 +80,13 @@ class FlightMemory:
             return
         self.observation_anchors[key] = dict(ref)
 
+    def clear_observation_anchor(self, name: str) -> None:
+        """Remove one temporal role without disturbing other instruction anchors."""
+
+        key = str(name).strip()
+        if key:
+            self.observation_anchors.pop(key, None)
+
     def reset_pose_epoch(self, active_instruction: str | None = None) -> None:
         self.reset_epoch += 1
         if active_instruction is not None:

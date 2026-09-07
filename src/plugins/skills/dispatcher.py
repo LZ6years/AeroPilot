@@ -8,6 +8,7 @@ from typing import Any
 
 from src.env_client.schemas import ActionResult
 from src.plugins import PluginRegistry
+from src.plugins.contracts.skill import SkillCapabilityResult
 
 
 class SkillCapabilityDispatcher:
@@ -50,11 +51,16 @@ class SkillCapabilityDispatcher:
                 "capability": capability.listing(),
             }
             result = handler(payload)
-            data = dict(result) if isinstance(result, dict) else {"result": result}
-            data.setdefault("mock", capability.mock)
-            data.setdefault("skill_name", skill.name)
-            data.setdefault("plugin_id", skill.plugin_id)
-            return ActionResult(ok=True, action=tool_name, message="skill capability completed", data=data)
+            if isinstance(result, SkillCapabilityResult):
+                message = result.message
+                data = dict(result.data)
+            else:
+                message = "skill capability completed"
+                data = dict(result) if isinstance(result, dict) else {"result": result}
+                data.setdefault("mock", capability.mock)
+                data.setdefault("skill_name", skill.name)
+                data.setdefault("plugin_id", skill.plugin_id)
+            return ActionResult(ok=True, action=tool_name, message=message, data=data)
         except Exception as exc:
             return ActionResult(
                 ok=False,

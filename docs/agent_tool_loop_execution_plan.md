@@ -89,8 +89,8 @@ backend/handler binding
 
 - ID 能明确说明图片属于哪次观察，也能让检测工具拒绝过期引用。
 - VLM 只有在消息中实际再次收到图片 bytes/URL 时才能看见图片；ID 不是视觉内容。
-- active-task transcript 在内存中保留完整 provider media，因此历史 checkpoint 会重新发送相应图片。
-- 同一个 artifact/frame 若在后续 checkpoint 以 phase-start reference 再次出现，只保留第一次的时间位置，不重复发送图片内容。
+- active-task transcript 在内存中保留完整 provider media；每个 observation 图片只出现一次。
+- 图片按时间排列，旧图标记 `HISTORY`，最新图标记 `CURRENT`；不重放 phase-start 或 before-action 图片。
 - durable `agent_transcript.jsonl` 不复制 base64，只记录占位符与 artifact reference。
 
 未来增加目标检测、VLM caption、OCR 或深度查询时，只需注册新的 read-only `ToolSpec`，返回带 `tool_call_id`、`observation_id`、`frame_id` 和 artifact refs 的 ToolResult，不需要修改 transcript 结构。
@@ -103,6 +103,9 @@ backend/handler binding
 - [x] 迁移 `ModelActionPlanner` 到原生 `tools/tool_calls`。
 - [x] 建立内层 read-tool/self-repair loop 与外层 physical-window loop。
 - [x] 增加 `runtime.commit_phase_turn`。
+- [x] 增加通用 `runtime.report_blocked` 不完整终止及证据引用校验。
+- [x] 增加完整 observation 时间序列视觉上下文与 HISTORY/CURRENT 标签。
+- [x] 增加小 ROI 米制深度工具，并分离模型简报与完整审计数据。
 - [x] 支持同一窗口 1-3 个有序物理动作、整批一次观察。
 - [x] 从 action context module 移除动作 transcript 代理字段。
 - [x] 为图片增加 observation/frame/artifact 身份。

@@ -11,32 +11,19 @@ from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 from src.memory.context.modules.base import ContextModule
 from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
+from src.depth_display import depth_legend_height
 
 
-CURRENT_IMAGE_USAGE = "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
-PHASE_START_IMAGE_USAGE = "PAST | PHASE START. Comparison only."
+CURRENT_IMAGE_USAGE = (
+    "Use the fused colors for qualitative range only. For an explicit metric "
+    "distance or threshold, call the available metric-depth region tool."
+)
 CURRENT_RGB_DEPTH_OVERLAY_USAGE = (
-    "NOW | RGB + METRIC DEPTH OVERLAY. Same scene and pixels as NOW RGB; "
-    "false colors encode distance in meters from the UAV camera to visible "
-    "scene points, so colors on a visible target give its approximate range."
-)
-TEMPORAL_EVIDENCE_RULE = (
-    "TEMPORAL ROLE RULE: PAST is historical comparison evidence only. "
-    "Current visibility, image position, approximate range, and the next action "
-    "must be judged from NOW. An object visible only in PAST is not currently visible."
-)
-CURRENT_STATE_DECISION_REMINDER = (
-    "CURRENT-STATE CHECK: The immediately preceding NOW image is the current "
-    "observation. Base current visibility, bearing, approximate range, and the "
-    "next action on that NOW image."
+    "RGB + METRIC DEPTH OVERLAY. False colors provide qualitative range only; "
+    "the bottom color bar uses meters. For an explicit metric distance or "
+    "threshold, sample a small representative ROI with the metric-depth tool."
 )
 
-_CURRENT_IMAGE_BANNER = "NOW | CURRENT OBSERVATION"
-_PHASE_START_IMAGE_BANNER = "PAST | PHASE START"
-_CURRENT_RGB_DEPTH_OVERLAY_BANNER = "NOW | RGB + METRIC DEPTH"
-_CURRENT_IMAGE_BANNER_COLOR = (28, 122, 72)
-_PHASE_START_IMAGE_BANNER_COLOR = (190, 117, 20)
-_CURRENT_RGB_DEPTH_OVERLAY_BANNER_COLOR = (30, 78, 138)
 _DEFAULT_DEPTH_DISPLAY_MAX_M = 10.0
 _DEPTH_OVERLAY_ALPHA = 0.42
 _DEPTH_COLOR_STOPS = (
@@ -57,16 +44,9 @@ class DefaultImageContextModule(ContextModule):
     def __init__(
         self,
         *,
-        include_phase_start_reference: bool = True,
-        include_current_depth: bool = False,
+        include_current_depth: bool = True,
         depth_display_max_m: float = _DEFAULT_DEPTH_DISPLAY_MAX_M,
     ) -> None:
-        # The default preserves the shared two-frame temporal contract.  A
-        # benchmark composition may disable the reference only when another
-        # bounded history representation is successfully attached.
-        self.include_phase_start_reference = bool(
-            include_phase_start_reference
-        )
         self.include_current_depth = bool(include_current_depth)
         self.depth_display_max_m = float(depth_display_max_m)
         if self.depth_display_max_m <= 0.0:
@@ -79,20 +59,10 @@ class DefaultImageContextModule(ContextModule):
         observations = all_observations[-self.max_items :]
         rgb_frames = _recent_rgb_frames(reader, observations, self.max_items) if reader else []
         selected_rgb_frames = (
-            selected_rgb_frames_from_observations(
-                reader,
-                all_observations,
-                observation_anchors=getattr(memory, "observation_anchors", {}),
-            )
+            selected_rgb_frames_from_observations(reader, all_observations)
             if reader
             else []
         )
-        if not bool(
-            getattr(self, "include_phase_start_reference", True)
-        ):
-            selected_rgb_frames = _current_only_rgb_selection(
-                selected_rgb_frames
-            )
         latest_rgb = rgb_frames[-1] if rgb_frames else None
         current_rgb = next(
             (
@@ -107,9 +77,13 @@ class DefaultImageContextModule(ContextModule):
             if reader and bool(getattr(self, "include_current_depth", False))
             else None
         )
-        artifact_refs = [item["artifact_ref"] for item in rgb_frames if item.get("artifact_ref")]
-        if current_depth and current_depth.get("artifact_ref"):
-            artifact_refs.append(current_depth["artifact_ref"])
+        artifact_refs = list(
+            dict.fromkeys(
+                item["artifact_ref"]
+                for item in [*rgb_frames, *selected_rgb_frames]
+                if item.get("artifact_ref")
+            )
+        )
         warnings = []
         risks = []
         if not rgb_frames:
@@ -138,6 +112,8 @@ class DefaultImageContextModule(ContextModule):
             else None
         )
         if depth_overlay_input is not None:
+            if current_depth and current_depth.get("artifact_ref"):
+                artifact_refs.append(current_depth["artifact_ref"])
             model_inputs = _replace_current_with_depth_overlay_input(
                 model_inputs,
                 depth_overlay_input,
@@ -184,41 +160,23 @@ class DefaultImageContextModule(ContextModule):
 
     def describe_output(self) -> dict[str, Any]:
         semantic_evidence = [
-            "NOW RGB: current visible appearance and image-space relations.",
+            "One chronological RGB observation; transcript projection labels it HISTORY or CURRENT.",
         ]
-        include_phase_start_reference = bool(
-            getattr(self, "include_phase_start_reference", True)
-        )
-        if include_phase_start_reference:
-            semantic_evidence.append(
-                "PAST RGB when distinct: phase-start comparison only; not current visibility."
-            )
         if bool(getattr(self, "include_current_depth", False)):
             semantic_evidence.append(
-                "NOW metric depth overlay: approximate UAV-camera-to-scene distance at visible pixels; target pixels provide approximate UAV-to-target range."
+                "Metric-depth fusion: qualitative range colors only; explicit meter claims require a small-ROI depth tool result."
             )
         return {
             "summary": "Selected RGB frame roles, attached image count, and visual evidence availability.",
             "semantic_evidence": semantic_evidence,
             "content_fields": {
-                "selected_frames": (
-                    "Key RGB frames selected for multimodal input, including roles such as "
-                    "current_observation and phase_start_reference, plus input_id, usage, and source identifiers."
-                ),
+                "selected_frames": "The current checkpoint's single RGB frame and identifiers.",
                 "visual_evidence": "Boolean availability summary such as has_rgb, has_depth, has_mock_frames, latest_observation_source, and interpretation_status.",
             },
             "model_inputs": (
-                "One current image, using the pixel-aligned RGB-depth overlay when "
-                "configured and valid, otherwise raw RGB"
-                + (
-                    ", plus a distinct phase-start RGB reference"
-                    if include_phase_start_reference
-                    else ", without a phase-start reference"
-                )
-                + ". A temporal rule precedes two distinct roles, and a current-state "
-                "reminder immediately follows NOW. Single-image inputs keep only the "
-                "NOW role and reminder. Mock, missing, unreadable, or duplicate images "
-                "are not attached."
+                "Exactly one image for this checkpoint, using the pixel-aligned RGB-depth "
+                "overlay plus a bottom meter color bar when configured and valid, otherwise "
+                "raw RGB. Temporal roles are text labels added by transcript projection."
             ),
             "risk_fields": {
                 "visual_evidence_missing": "No recent RGB evidence is available.",
@@ -242,65 +200,19 @@ def _recent_rgb_frames(reader: Any, observations: list[dict[str, Any]], limit: i
 def selected_rgb_frames_from_observations(
     reader: Any,
     observations: list[dict[str, Any]],
-    observation_anchors: dict[str, dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Select key RGB frames from observation history without interpreting image content.
-
-    Prefer a distinct current-phase anchor followed by the latest RGB frame so
-    provider-ready multimodal input is chronological and current evidence is
-    last. If both roles resolve to one frame, keep it only as current evidence.
-    """
+    """Select only the newest RGB frame for this chronological checkpoint."""
 
     rgb_frames = _recent_rgb_frames(reader, observations, len(observations))
     if not rgb_frames:
         return []
-    anchors = observation_anchors if isinstance(observation_anchors, dict) else {}
-    phase_start = _rgb_frame_from_anchor(reader, anchors.get("phase_start"))
-    legacy_task_initial = _rgb_frame_from_anchor(reader, anchors.get("task_initial"))
-    phase_start_frame = phase_start or legacy_task_initial or rgb_frames[0]
     latest_frame = rgb_frames[-1]
-    if _frame_identity(phase_start_frame) == _frame_identity(latest_frame):
-        candidates = [("current_observation", CURRENT_IMAGE_USAGE, latest_frame)]
-    else:
-        candidates = [
-            ("phase_start_reference", PHASE_START_IMAGE_USAGE, phase_start_frame),
-            ("current_observation", CURRENT_IMAGE_USAGE, latest_frame),
-        ]
-    selected: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for role, reason, frame in candidates:
-        key = _frame_identity(frame)
-        if key in seen:
-            continue
-        seen.add(key)
-        item = dict(frame)
-        item["selection_role"] = role
-        item["selection_reason"] = reason
-        item["input_id"] = _image_input_id(len(selected) + 1, role)
-        item["usage"] = reason
-        selected.append(item)
-    return selected[:2]
-
-
-def _current_only_rgb_selection(
-    selected_frames: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
-    """Keep only NOW RGB and normalize its identity to the first image slot."""
-
-    current = next(
-        (
-            dict(frame)
-            for frame in selected_frames
-            if frame.get("selection_role") == "current_observation"
-        ),
-        None,
-    )
-    if current is None:
-        return []
-    current["selection_reason"] = CURRENT_IMAGE_USAGE
-    current["input_id"] = _image_input_id(1, "current_observation")
-    current["usage"] = CURRENT_IMAGE_USAGE
-    return [current]
+    item = dict(latest_frame)
+    item["selection_role"] = "current_observation"
+    item["selection_reason"] = CURRENT_IMAGE_USAGE
+    item["input_id"] = _image_input_id(1, "current_observation")
+    item["usage"] = CURRENT_IMAGE_USAGE
+    return [item]
 
 
 def selected_frame_summaries(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -377,48 +289,9 @@ def frame_debug_metadata(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def rgb_model_inputs_from_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Build provider inputs with temporal instructions adjacent to images.
+    """Encode the checkpoint's one current RGB frame without in-image labels."""
 
-    Temporal meaning belongs to this module, so the generic provider assembler
-    must not infer whether an image is PAST or NOW. For a two-image window the
-    rule precedes both images and the current-state reminder immediately follows
-    NOW. A first-window/current-only input has no synthetic PAST rule.
-    """
-
-    encoded_by_role: dict[str, dict[str, Any]] = {}
-    for frame in frames[:2]:
-        for item in latest_rgb_model_inputs_from_frame(frame):
-            role = item.get("role")
-            if isinstance(role, str) and role:
-                encoded_by_role[role] = item
-
-    current = encoded_by_role.get("current_observation")
-    if current is None:
-        return []
-    phase_start = encoded_by_role.get("phase_start_reference")
-    if phase_start is None:
-        return [
-            current,
-            {
-                "type": "text",
-                "role": "current_state_decision_reminder",
-                "text": CURRENT_STATE_DECISION_REMINDER,
-            },
-        ]
-    return [
-        {
-            "type": "text",
-            "role": "temporal_evidence_rule",
-            "text": TEMPORAL_EVIDENCE_RULE,
-        },
-        phase_start,
-        current,
-        {
-            "type": "text",
-            "role": "current_state_decision_reminder",
-            "text": CURRENT_STATE_DECISION_REMINDER,
-        },
-    ]
+    return latest_rgb_model_inputs_from_frame(frames[-1] if frames else None)
 
 
 def _replace_current_with_depth_overlay_input(
@@ -429,7 +302,7 @@ def _replace_current_with_depth_overlay_input(
 
     The overlay retains the current scene pixels, so attaching both copies asks
     the model to compare duplicate current evidence and consumes an unnecessary
-    image slot. The phase-start RGB remains a separate historical anchor.
+    image slot.
     """
 
     result: list[dict[str, Any]] = []
@@ -574,9 +447,10 @@ def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> lis
     role = str(latest_rgb.get("selection_role") or "latest")
     input_id = str(latest_rgb.get("input_id") or _image_input_id(1, role))
     usage = str(latest_rgb.get("usage") or latest_rgb.get("selection_reason") or "")
-    data_url = _annotated_image_data_url(path, role)
+    data_url = _image_data_url(path)
     if data_url is None:
         return []
+    scene_width, scene_height = _image_dimensions(path)
     return [
         {
             "type": "image",
@@ -586,6 +460,11 @@ def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> lis
             "observation_id": latest_rgb.get("observation_id"),
             "frame_id": latest_rgb.get("id"),
             "artifact_ref": latest_rgb.get("artifact_ref") or latest_rgb.get("path"),
+            "scene_width": _positive_int(latest_rgb.get("width")) or scene_width,
+            "scene_height": _positive_int(latest_rgb.get("height")) or scene_height,
+            "display_width": _positive_int(latest_rgb.get("width")) or scene_width,
+            "display_height": _positive_int(latest_rgb.get("height")) or scene_height,
+            "color_bar_height": 0,
             "mime_type": "image/png",
             "encoding": "data_url",
             "data": data_url,
@@ -618,6 +497,10 @@ def current_rgb_depth_overlay_model_input(
     )
     if data_url is None:
         return None
+    scene_width, scene_height = _image_dimensions(rgb_path)
+    resolved_scene_width = _positive_int(current_rgb.get("width")) or scene_width
+    resolved_scene_height = _positive_int(current_rgb.get("height")) or scene_height
+    legend_height = depth_legend_height(resolved_scene_height)
     return {
         "type": "image",
         "input_id": "image_current_rgb_depth_overlay",
@@ -631,6 +514,11 @@ def current_rgb_depth_overlay_model_input(
             if value
         ],
         "artifact_ref": current_rgb.get("artifact_ref") or current_rgb.get("path"),
+        "scene_width": resolved_scene_width,
+        "scene_height": resolved_scene_height,
+        "display_width": resolved_scene_width,
+        "display_height": resolved_scene_height + legend_height,
+        "color_bar_height": legend_height,
         "mime_type": "image/png",
         "encoding": "data_url",
         "data": data_url,
@@ -723,24 +611,16 @@ def _annotated_rgb_depth_overlay_image(
     scene: Image.Image,
     depth_display_max_m: float,
 ) -> Image.Image:
-    banner_height = _banner_height(scene.width, scene.height)
-    legend_height = max(42, min(68, round(scene.height * 0.18)))
+    legend_height = depth_legend_height(scene.height)
     annotated = Image.new(
         "RGB",
-        (scene.width, scene.height + banner_height + legend_height),
+        (scene.width, scene.height + legend_height),
         (20, 24, 30),
     )
-    annotated.paste(scene, (0, banner_height))
-    banner = Image.new(
-        "RGB",
-        (scene.width, banner_height),
-        _CURRENT_RGB_DEPTH_OVERLAY_BANNER_COLOR,
-    )
-    annotated.paste(banner, (0, 0))
-    _draw_banner_text(annotated, _CURRENT_RGB_DEPTH_OVERLAY_BANNER, banner_height)
+    annotated.paste(scene, (0, 0))
     _draw_depth_legend(
         annotated,
-        top=banner_height + scene.height,
+        top=scene.height,
         height=legend_height,
         depth_display_max_m=depth_display_max_m,
     )
@@ -784,11 +664,13 @@ def _draw_depth_legend(
     )
     label_top = bar_top + bar_height + 3
     font = _default_font(max(10, min(16, height // 4)))
-    labels = (
-        (left, "0 m"),
-        ((left + right) // 2, f"{depth_display_max_m / 2:g} m"),
-        (right, f"{depth_display_max_m:g}+ m"),
-    )
+    labels = []
+    for index in range(6):
+        fraction = index / 5
+        x = round(left + fraction * (right - left))
+        value = depth_display_max_m * fraction
+        suffix = "+ m" if index == 5 else " m"
+        labels.append((x, f"{value:g}{suffix}"))
     for x, label in labels:
         box = draw.textbbox((0, 0), label, font=font)
         text_width = box[2] - box[0]
@@ -809,56 +691,26 @@ def _positive_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _annotated_image_data_url(path: Path, role: str) -> str | None:
-    """Return a model-only PNG with an external temporal-role banner."""
+def _image_data_url(path: Path) -> str | None:
+    """Return a PNG without altering the source scene pixel region."""
 
     try:
         with Image.open(path) as source:
             scene = source.convert("RGB")
-            banner_text, banner_color = _image_banner(role)
-            banner_height = _banner_height(scene.width, scene.height)
-            annotated = Image.new("RGB", (scene.width, scene.height + banner_height), banner_color)
-            annotated.paste(scene, (0, banner_height))
-            _draw_banner_text(annotated, banner_text, banner_height)
             output = BytesIO()
-            annotated.save(output, format="PNG")
+            scene.save(output, format="PNG")
     except (OSError, UnidentifiedImageError, ValueError):
         return None
     encoded = base64.b64encode(output.getvalue()).decode("ascii")
     return f"data:image/png;base64,{encoded}"
 
 
-def _image_banner(role: str) -> tuple[str, tuple[int, int, int]]:
-    if role == "phase_start_reference":
-        return _PHASE_START_IMAGE_BANNER, _PHASE_START_IMAGE_BANNER_COLOR
-    return _CURRENT_IMAGE_BANNER, _CURRENT_IMAGE_BANNER_COLOR
-
-
-def _banner_height(width: int, height: int) -> int:
-    return max(28, min(56, round(min(width, height) * 0.14)))
-
-
-def _draw_banner_text(image: Image.Image, text: str, banner_height: int) -> None:
-    draw = ImageDraw.Draw(image)
-    max_font_size = max(10, min(24, banner_height - 12))
-    font = _fitted_banner_font(draw, text, image.width - 20, max_font_size)
-    text_box = draw.textbbox((0, 0), text, font=font)
-    text_height = text_box[3] - text_box[1]
-    left = 10
-    top = max(0, (banner_height - text_height) // 2 - text_box[1])
-    draw.text((left, top), text, fill=(255, 255, 255), font=font)
-
-
-def _fitted_banner_font(draw: ImageDraw.ImageDraw, text: str, max_width: int, max_size: int) -> ImageFont.ImageFont:
-    for font_size in range(max_size, 9, -1):
-        try:
-            font = ImageFont.load_default(size=font_size)
-        except TypeError:  # Pillow < 10 compatibility for downstream users.
-            return ImageFont.load_default()
-        text_box = draw.textbbox((0, 0), text, font=font)
-        if text_box[2] - text_box[0] <= max_width:
-            return font
-    return ImageFont.load_default()
+def _image_dimensions(path: Path) -> tuple[int | None, int | None]:
+    try:
+        with Image.open(path) as source:
+            return source.size
+    except (OSError, UnidentifiedImageError, ValueError):
+        return None, None
 
 
 def _default_font(size: int) -> ImageFont.ImageFont:

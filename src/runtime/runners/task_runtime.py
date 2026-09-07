@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 import re
 from collections.abc import Callable
@@ -9,7 +10,13 @@ from typing import Any
 
 from src.agent.mission_state import MissionState
 from src.agent.messages import AgentMessage
-from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
+from src.agent.phase import (
+    ADVANCE_TO_NEXT_PHASE,
+    COMPLETE_TASK,
+    CONTINUE_CURRENT_PHASE,
+    STOP_TASK_INCOMPLETE,
+    PhaseTransition,
+)
 from src.agent.planning.model_action_planner import AgentProtocolError, ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.agent.safety import SafetyDecision
@@ -22,7 +29,7 @@ from src.agent.planning.schemas import (
     RuntimeControlAction,
     ShortHorizonPlan,
 )
-from src.agent.transcript import AgentToolCall, AgentTranscript, ToolResult
+from src.agent.transcript import AgentToolCall, AgentTranscript, AssistantTurn, ToolResult
 from src.agent.semantic.plan_updater import (
     SemanticPlanUpdater,
     validate_semantic_plan_patch_numeric_provenance,
@@ -47,7 +54,11 @@ from src.runtime.configs.task_execution_options import InitialPose, TaskExecutio
 from src.runtime.context import PhaseWindowContextBuilder
 from src.tools.dispatcher import ToolDispatcher
 from src.tools.registry import default_registry
-from src.tools.validation import ToolArgumentError, validate_tool_args
+from src.tools.validation import (
+    ToolArgumentError,
+    validate_runtime_bound_tool_args,
+    validate_tool_args,
+)
 from src.runtime.middleware import ToolTelemetryMiddleware
 from src.uav import clean_pose_for_model, pose_measurements
 
@@ -168,6 +179,12 @@ class TaskRuntime:
         # depend on the async logger flushing before they can show the final reply.
         self._current_turn_agent_messages: list[dict] = []
         self._pending_task_parser_trace: dict[str, Any] = {}
+        # A decision is one state-checkpoint reasoning cycle. It is deliberately
+        # independent from physical window numbering because terminal decisions
+        # and read-only rounds consume no flight window.
+        self._decision_index = 0
+        self._pending_failed_model_rounds: list[dict[str, Any]] = []
+        self._persisted_provider_media: set[str] = set()
 
     def run_task(
         self,
@@ -182,6 +199,9 @@ class TaskRuntime:
         # Execute one short-horizon window per semantic phase.
         options = self._resolve_execution_options(execution_options)
         self._current_turn_agent_messages = []
+        self._decision_index = 0
+        self._pending_failed_model_rounds = []
+        self._persisted_provider_media = set()
         self._refresh_semantic_evidence_capabilities()
         parse_result = self.task_parser.parse(instruction)
         parse_trace = getattr(self.task_parser, "last_parse_trace", {})
@@ -216,6 +236,9 @@ class TaskRuntime:
             raise ValueError(f"Unsupported scene policy: {scene_policy}")
         options = self._resolve_execution_options(execution_options)
         self._current_turn_agent_messages = []
+        self._decision_index = 0
+        self._pending_failed_model_rounds = []
+        self._persisted_provider_media = set()
         self._debug_event("task_execution_options_resolved", options.to_dict())
         self.recorder.write_json("state/semantic_plan.json", parse_result.to_dict())
         self._debug_event("task_parsed", parse_result.to_dict())
@@ -628,12 +651,17 @@ class TaskRuntime:
         agent_id: str,
         state: MissionState,
     ) -> tuple[ShortHorizonPlan, SafetyDecision, PhaseTransition]:
-        """Execute one model call that decides both phase status and next action."""
+        """Execute one state decision containing one or more model rounds."""
 
+        self._decision_index += 1
+        decision_index = self._decision_index
+        decision_id = f"decision_{decision_index:04d}"
         phase_name = state.current_phase_name
         phase_key = state.current_phase_key
         semantic_plan_version = state.semantic_plan_version
         observation_before = dict(state.latest_observation)
+        checkpoint_observation_id = observation_before.get("observation_id")
+        completed_window_count = state.current_phase_window_count
         state.ensure_current_phase_progress(observation_before)
         state.update_current_phase_progress(observation_before)
         context = self.context_builder.build(state, self._memory_for_state(state))
@@ -668,11 +696,27 @@ class TaskRuntime:
                 coupled_context,
                 observation_before.get("observation_id"),
             )
-            coupled_plan, native_meta = self._run_native_agent_tool_loop(
-                scene,
-                agent_id,
-                state,
-            )
+            try:
+                coupled_plan, native_meta = self._run_native_agent_tool_loop(
+                    scene,
+                    agent_id,
+                    state,
+                )
+            except Exception:
+                self._write_failed_action_planner_debug_artifact(
+                    state,
+                    coupled_context,
+                    model_context,
+                    {
+                        "decision_id": decision_id,
+                        "decision_index": decision_index,
+                        "checkpoint_observation_id": checkpoint_observation_id,
+                        "completed_window_count": completed_window_count,
+                        "physical_window_index": None,
+                    },
+                    self._pending_failed_model_rounds,
+                )
+                raise
             completion_result = {
                 "status": "valid",
                 "native_tool_calls": True,
@@ -695,10 +739,23 @@ class TaskRuntime:
             completion_result = dict(
                 getattr(self.planner, "last_completion_result", {}) or {}
             )
+        physical_window_index = (
+            state.current_phase_window_count
+            if coupled_plan.phase_decision.decision == CONTINUE_CURRENT_PHASE
+            else None
+        )
+        decision_meta = {
+            "decision_id": decision_id,
+            "decision_index": decision_index,
+            "checkpoint_observation_id": checkpoint_observation_id,
+            "completed_window_count": completed_window_count,
+            "physical_window_index": physical_window_index,
+        }
         completion_payload = {
             "phase": coupled_plan.phase,
             "phase_key": phase_key,
-            "window_index": state.current_phase_window_count,
+            "window_index": physical_window_index,
+            **decision_meta,
             **completion_result,
         }
         self._event("phase_completion_assessed", completion_payload)
@@ -718,7 +775,8 @@ class TaskRuntime:
                 {
                     "phase": coupled_plan.phase,
                     "phase_key": phase_key,
-                    "window_index": state.current_phase_window_count,
+                    "window_index": physical_window_index,
+                    **decision_meta,
                     **strategy_update,
                 },
             )
@@ -736,9 +794,12 @@ class TaskRuntime:
             raw_plan,
             safety_decision,
             coupled_plan=coupled_plan,
+            decision_meta=decision_meta,
+            native_meta=native_meta,
         )
         decision_payload = {
             "phase": coupled_plan.phase,
+            **decision_meta,
             "decision": transition.decision,
             "reason": transition.reason,
             "step_count": len(coupled_plan.steps),
@@ -747,16 +808,61 @@ class TaskRuntime:
         }
         self._event("coupled_planner_phase_decided", decision_payload)
         self._agent_messages(coupled_plan.agent_messages, source="coupled_planner", phase=coupled_plan.phase)
+        if transition.decision == STOP_TASK_INCOMPLETE:
+            self._finish_agent_reported_blocked(
+                scene,
+                agent_id,
+                state,
+                native_meta,
+                decision_payload,
+            )
+            planner_debug_ref = self._write_action_planner_debug_artifact(
+                state,
+                coupled_context,
+                model_context,
+                raw_plan,
+                raw_plan,
+                safety_decision,
+                coupled_plan=coupled_plan,
+                decision_meta=decision_meta,
+                native_meta=native_meta,
+            )
+            self._event(
+                "phase_plan_ready",
+                {
+                    "phase": raw_plan.phase,
+                    **decision_meta,
+                    "action_window": raw_plan.action_window.to_dict(),
+                    "step_count": 0,
+                    "tools": [],
+                    "planner_debug_ref": planner_debug_ref,
+                    "coupled_phase_decision": transition.to_dict(),
+                    "note": "Agent reported a terminal blocker; no model-requested UAV tool executed.",
+                },
+            )
+            return raw_plan, safety_decision, transition
         if transition.decision != CONTINUE_CURRENT_PHASE:
             self._append_native_commit_result(
                 native_meta,
                 status="ok",
                 message="phase assessment committed without a physical action window",
             )
+            planner_debug_ref = self._write_action_planner_debug_artifact(
+                state,
+                coupled_context,
+                model_context,
+                raw_plan,
+                raw_plan,
+                safety_decision,
+                coupled_plan=coupled_plan,
+                decision_meta=decision_meta,
+                native_meta=native_meta,
+            )
             self._event(
                 "phase_plan_ready",
                 {
                     "phase": raw_plan.phase,
+                    **decision_meta,
                     "action_window": raw_plan.action_window.to_dict(),
                     "step_count": 0,
                     "tools": [],
@@ -777,12 +883,15 @@ class TaskRuntime:
             plan,
             safety_decision,
             coupled_plan=coupled_plan,
+            decision_meta=decision_meta,
+            native_meta=native_meta,
         )
         self._debug_event("short_horizon_planned", plan.to_dict())
         self._event(
             "phase_plan_ready",
             {
                 "phase": plan.phase,
+                **decision_meta,
                 "action_window": plan.action_window.to_dict(),
                 "step_count": len(plan.steps),
                 "tools": [step.tool for step in plan.steps if step.kind == "tool"],
@@ -806,6 +915,7 @@ class TaskRuntime:
                 source="safety",
                 phase=plan.phase,
             )
+        self._mark_before_last_action_window(state, observation_before)
         executed_steps = []
         native_physical_calls = list(native_meta.get("physical_calls", []))
         failed_native_index: int | None = None
@@ -852,8 +962,7 @@ class TaskRuntime:
                     for item in safety_decision.interventions
                     if item.get("tool") == requested_tool
                 ]
-                self.agent_transcript.append_tool_result(
-                    ToolResult(
+                transcript_result = ToolResult(
                         tool_call_id=native_call.tool_call_id,
                         tool_name=requested_tool,
                         status="ok" if result.ok else "error",
@@ -864,8 +973,19 @@ class TaskRuntime:
                         executed_args=dict(step.args),
                         safety_interventions=relevant_interventions,
                     )
-                )
+                self.agent_transcript.append_tool_result(transcript_result)
+                self._append_native_round_tool_result(native_meta, transcript_result)
             if not result.ok:
+                executed_steps.append(
+                    {
+                        **payload,
+                        "result": data,
+                        "stabilization": {
+                            "status": "skipped",
+                            "reason": "tool execution failed",
+                        },
+                    }
+                )
                 if not native_physical_calls:
                     raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
                 failed_native_index = index
@@ -881,6 +1001,8 @@ class TaskRuntime:
             self._event(
                 "tool_step_completed",
                 {
+                    "decision_id": decision_id,
+                    "physical_window_index": physical_window_index,
                     "phase": plan.phase,
                     "step_index": index,
                     "tool": step.tool,
@@ -890,16 +1012,41 @@ class TaskRuntime:
             )
             self._write_state(state)
         if failed_native_index is not None:
-            for call in native_physical_calls[failed_native_index + 1 :]:
-                self.agent_transcript.append_tool_result(
-                    ToolResult(
+            for skipped_index, call in enumerate(
+                native_physical_calls[failed_native_index + 1 :],
+                start=failed_native_index + 1,
+            ):
+                transcript_result = ToolResult(
                         tool_call_id=call.tool_call_id,
                         tool_name=call.tool_name,
                         status="skipped",
                         message="skipped because an earlier physical call failed",
                         requested_args=dict(call.args),
                     )
+                self.agent_transcript.append_tool_result(transcript_result)
+                self._append_native_round_tool_result(native_meta, transcript_result)
+                skipped_step = (
+                    plan.steps[skipped_index]
+                    if skipped_index < len(plan.steps)
+                    else None
                 )
+                if skipped_step is not None:
+                    executed_steps.append(
+                        {
+                            "phase": plan.phase,
+                            "step_index": skipped_index,
+                            "step": skipped_step.to_dict(),
+                            "result": {
+                                "ok": False,
+                                "status": "skipped",
+                                "message": "skipped because an earlier physical call failed",
+                            },
+                            "stabilization": {
+                                "status": "skipped",
+                                "reason": "physical call was not executed",
+                            },
+                        }
+                    )
             self._try_hover(scene, agent_id, state)
         observation_after = self._apply_automatic_observation_policy(scene, agent_id, state, plan.phase)
         window_measurements = pose_measurements(
@@ -920,12 +1067,24 @@ class TaskRuntime:
                 "observed_effect": window_measurements,
             },
         )
+        planner_debug_ref = self._write_action_planner_debug_artifact(
+            state,
+            coupled_context,
+            model_context,
+            raw_plan,
+            plan,
+            safety_decision,
+            coupled_plan=coupled_plan,
+            decision_meta=decision_meta,
+            native_meta=native_meta,
+        )
         visual_search_recharge = self._maybe_recharge_visual_search_budget(
             state,
             window_measurements,
             phase=phase_name,
         )
         window_record = {
+            **decision_meta,
             "phase_key": phase_key,
             "phase": phase_name,
             "window_index": state.current_phase_window_count,
@@ -943,6 +1102,7 @@ class TaskRuntime:
             window_record["visual_search_recharge"] = visual_search_recharge
         window_ref = self._write_phase_window_debug_artifact(phase_key, state.current_phase_window_count, window_record)
         window_summary = {
+            **decision_meta,
             "phase": phase_name,
             "phase_key": phase_key,
             "window_index": state.current_phase_window_count,
@@ -994,6 +1154,8 @@ class TaskRuntime:
 
         allowed_names = self._native_allowed_tool_names(scene)
         max_rounds = int(getattr(self.model_config, "max_tool_rounds", 6) or 6)
+        model_rounds: list[dict[str, Any]] = []
+        self._pending_failed_model_rounds = []
         for round_index in range(1, max_rounds + 1):
             try:
                 turn = self.planner.plan_turn(
@@ -1002,19 +1164,43 @@ class TaskRuntime:
                     allowed_tool_names=allowed_names,
                 )
             except AgentProtocolError as exc:
+                round_record = self._native_model_round_snapshot(round_index)
+                feedback = (
+                    f"Protocol error: {exc}. Return a corrected native tool-call turn."
+                )
+                round_record["runtime_outcome"] = {
+                    "status": "protocol_rejected",
+                    "feedback": feedback,
+                }
+                model_rounds.append(round_record)
                 if exc.rejected_turn:
                     self.agent_transcript.append_provider_rejection(
                         exc.rejected_turn
                     )
-                self.agent_transcript.append_protocol_feedback(
-                    f"Protocol error: {exc}. Return a corrected native tool-call turn."
-                )
+                self.agent_transcript.append_protocol_feedback(feedback)
                 self._debug_event(
                     "agent_tool_protocol_rejected",
                     {"round": round_index, "error": str(exc)},
                 )
                 continue
+            except Exception as exc:
+                round_record = self._native_model_round_snapshot(round_index)
+                round_record["runtime_outcome"] = {
+                    "status": "provider_failure",
+                    "feedback": None,
+                    "error_type": type(exc).__name__,
+                    "error": str(exc),
+                }
+                model_rounds.append(round_record)
+                # Preserve failure evidence for the caller even though no
+                # CoupledActionPhasePlan can be constructed.
+                self._pending_failed_model_rounds = model_rounds
+                raise
 
+            round_record = self._native_model_round_snapshot(
+                round_index,
+                canonical_turn=turn,
+            )
             self.agent_transcript.append_assistant(turn)
             specs = [self.tools.registry.get(call.tool_name) for call in turn.tool_calls]
             try:
@@ -1022,7 +1208,24 @@ class TaskRuntime:
                     if call.tool_name not in allowed_names:
                         raise ToolArgumentError(f"tool is not exposed: {call.tool_name}")
                     validate_tool_args(call.args, spec.input_schema)
+                    validate_runtime_bound_tool_args(
+                        call.args,
+                        spec.input_schema,
+                        state.latest_observation,
+                    )
             except ToolArgumentError as exc:
+                feedback = (
+                    "The previous tool-call turn was rejected: "
+                    f"{exc}. Correct it using the available tools."
+                )
+                round_record["runtime_outcome"] = {
+                    "status": "arguments_rejected",
+                    "feedback": feedback,
+                    "tool_results": self._rejected_tool_results(
+                        turn.tool_calls, str(exc)
+                    ),
+                }
+                model_rounds.append(round_record)
                 self._reject_native_turn(turn.tool_calls, str(exc))
                 continue
 
@@ -1036,9 +1239,18 @@ class TaskRuntime:
                     self.tools.registry.get(call.tool_name).runtime.result_timing != "immediate"
                     for call in read_calls
                 ):
+                    reason = "read-only calls cannot be mixed with a phase commit or physical calls"
+                    round_record["runtime_outcome"] = {
+                        "status": "tool_set_rejected",
+                        "feedback": reason,
+                        "tool_results": self._rejected_tool_results(
+                            turn.tool_calls, reason
+                        ),
+                    }
+                    model_rounds.append(round_record)
                     self._reject_native_turn(
                         turn.tool_calls,
-                        "read-only calls cannot be mixed with a phase commit or physical calls",
+                        reason,
                     )
                     continue
                 if len(read_calls) > 1 and any(
@@ -1046,27 +1258,51 @@ class TaskRuntime:
                     != "parallel_safe"
                     for call in read_calls
                 ):
+                    reason = "multiple read-only calls require parallel_safe batching"
+                    round_record["runtime_outcome"] = {
+                        "status": "tool_set_rejected",
+                        "feedback": reason,
+                        "tool_results": self._rejected_tool_results(
+                            turn.tool_calls, reason
+                        ),
+                    }
+                    model_rounds.append(round_record)
                     self._reject_native_turn(
                         turn.tool_calls,
-                        "multiple read-only calls require parallel_safe batching",
+                        reason,
                     )
                     continue
-                self._execute_native_read_calls(
+                read_results = self._execute_native_read_calls(
                     scene,
                     agent_id,
                     state,
                     turn.public_intent,
                     read_calls,
                 )
+                round_record["runtime_outcome"] = {
+                    "status": "read_only_executed",
+                    "feedback": None,
+                    "tool_results": read_results,
+                }
+                model_rounds.append(round_record)
                 continue
 
             commit_calls = [
                 call for call in turn.tool_calls if call.tool_name == "runtime.commit_phase_turn"
             ]
             if len(commit_calls) != 1 or turn.tool_calls[0].tool_name != "runtime.commit_phase_turn":
+                reason = "exactly one runtime.commit_phase_turn must be the first call"
+                round_record["runtime_outcome"] = {
+                    "status": "commit_rejected",
+                    "feedback": reason,
+                    "tool_results": self._rejected_tool_results(
+                        turn.tool_calls, reason
+                    ),
+                }
+                model_rounds.append(round_record)
                 self._reject_native_turn(
                     turn.tool_calls,
-                    "exactly one runtime.commit_phase_turn must be the first call",
+                    reason,
                 )
                 continue
 
@@ -1082,9 +1318,23 @@ class TaskRuntime:
                 if self.tools.registry.get(call.tool_name).runtime.effect == "runtime_control"
                 and call.tool_name != "runtime.commit_phase_turn"
             ]
+            report_blocked_calls = [
+                call
+                for call in control_calls
+                if call.tool_name == "runtime.report_blocked"
+            ]
             recognized = 1 + len(physical_calls) + len(control_calls)
             if recognized != len(turn.tool_calls):
-                self._reject_native_turn(turn.tool_calls, "turn contains a non-executable tool class")
+                reason = "turn contains a non-executable tool class"
+                round_record["runtime_outcome"] = {
+                    "status": "tool_set_rejected",
+                    "feedback": reason,
+                    "tool_results": self._rejected_tool_results(
+                        turn.tool_calls, reason
+                    ),
+                }
+                model_rounds.append(round_record)
+                self._reject_native_turn(turn.tool_calls, reason)
                 continue
             try:
                 plan = self._native_committed_plan(
@@ -1095,17 +1345,76 @@ class TaskRuntime:
                     control_calls,
                 )
             except (TypeError, ValueError) as exc:
+                round_record["runtime_outcome"] = {
+                    "status": "commit_rejected",
+                    "feedback": str(exc),
+                    "tool_results": self._rejected_tool_results(
+                        turn.tool_calls, str(exc)
+                    ),
+                }
+                model_rounds.append(round_record)
                 self._reject_native_turn(turn.tool_calls, str(exc))
                 continue
+            round_record["runtime_outcome"] = {
+                "status": "commit_accepted",
+                "feedback": None,
+            }
+            model_rounds.append(round_record)
             return plan, {
                 "commit_call": commit,
                 "physical_calls": physical_calls,
                 "control_calls": control_calls,
+                "report_blocked_call": (
+                    report_blocked_calls[0] if len(report_blocked_calls) == 1 else None
+                ),
+                "model_rounds": model_rounds,
             }
 
+        self._pending_failed_model_rounds = model_rounds
         raise RuntimeError(
             f"Agent native tool loop exhausted {max_rounds} rounds without a valid phase commit"
         )
+
+    def _native_model_round_snapshot(
+        self,
+        round_index: int,
+        *,
+        canonical_turn: AssistantTurn | None = None,
+    ) -> dict[str, Any]:
+        """Copy one public provider exchange without changing planner state."""
+
+        exchange = getattr(self.planner, "last_exchange", None)
+        exchange = copy.deepcopy(exchange) if isinstance(exchange, dict) else {}
+        record: dict[str, Any] = {
+            "round_index": round_index,
+            "request": exchange.get("request"),
+            "response": exchange.get("response"),
+        }
+        media = exchange.get("media")
+        if isinstance(media, list):
+            record["request_media"] = media
+        if canonical_turn is not None:
+            record["canonical_turn"] = canonical_turn.to_dict()
+        elif not exchange:
+            record["capture_status"] = "provider_exchange_unavailable"
+        return record
+
+    @staticmethod
+    def _rejected_tool_results(
+        calls: list[AgentToolCall], reason: str
+    ) -> list[dict[str, Any]]:
+        """Describe Runtime-generated rejection results for decision review."""
+
+        return [
+            ToolResult(
+                tool_call_id=call.tool_call_id,
+                tool_name=call.tool_name,
+                status="rejected",
+                message=reason,
+                requested_args=dict(call.args),
+            ).to_dict()
+            for call in calls
+        ]
 
     def _native_allowed_tool_names(self, scene: SceneInstance) -> set[str]:
         allowed: set[str] = set()
@@ -1138,7 +1447,8 @@ class TaskRuntime:
         state: MissionState,
         public_intent: str,
         calls: list[AgentToolCall],
-    ) -> None:
+    ) -> list[dict[str, Any]]:
+        recorded_results: list[dict[str, Any]] = []
         for call in calls:
             result = self.tools.call(
                 scene.scene_instance_id,
@@ -1154,8 +1464,7 @@ class TaskRuntime:
             )
             data = result.to_dict()
             write_result = self._record_action(state, call.tool_name, call.args, data)
-            self.agent_transcript.append_tool_result(
-                ToolResult(
+            transcript_result = ToolResult(
                     tool_call_id=call.tool_call_id,
                     tool_name=call.tool_name,
                     status="ok" if result.ok else "error",
@@ -1166,7 +1475,9 @@ class TaskRuntime:
                     requested_args=dict(call.args),
                     executed_args=dict(call.args),
                 )
-            )
+            self.agent_transcript.append_tool_result(transcript_result)
+            recorded_results.append(transcript_result.to_dict())
+        return recorded_results
 
     def _native_committed_plan(
         self,
@@ -1201,6 +1512,49 @@ class TaskRuntime:
             return CoupledActionPhasePlan(
                 phase=phase,
                 phase_decision=transition,
+                agent_messages=[message],
+                completion_assessment=assessment,
+            )
+
+        report_blocked_calls = [
+            call for call in control_calls if call.tool_name == "runtime.report_blocked"
+        ]
+        if report_blocked_calls:
+            if len(report_blocked_calls) != 1 or len(control_calls) != 1:
+                raise ValueError(
+                    "runtime.report_blocked must be the only runtime-control call"
+                )
+            if physical_calls:
+                raise ValueError(
+                    "runtime.report_blocked cannot be mixed with physical tool calls"
+                )
+            report = report_blocked_calls[0]
+            reason = str(report.args.get("reason", "")).strip()
+            evidence_refs = report.args.get("evidence_refs")
+            if not reason:
+                raise ValueError("runtime.report_blocked reason must not be empty")
+            if not isinstance(evidence_refs, list) or not evidence_refs:
+                raise ValueError(
+                    "runtime.report_blocked requires at least one evidence reference"
+                )
+            normalized_refs = [str(item).strip() for item in evidence_refs]
+            if any(not item for item in normalized_refs):
+                raise ValueError(
+                    "runtime.report_blocked evidence references must not be empty"
+                )
+            available_refs = self.agent_transcript.prior_evidence_reference_ids()
+            unknown_refs = sorted(set(normalized_refs) - available_refs)
+            if unknown_refs:
+                raise ValueError(
+                    "runtime.report_blocked references evidence outside the current "
+                    f"instruction transcript: {', '.join(unknown_refs)}"
+                )
+            return CoupledActionPhasePlan(
+                phase=phase,
+                phase_decision=PhaseTransition(
+                    STOP_TASK_INCOMPLETE,
+                    f"agent reported blocker: {report.args['blocking_condition']}",
+                ),
                 agent_messages=[message],
                 completion_assessment=assessment,
             )
@@ -1270,8 +1624,7 @@ class TaskRuntime:
     ) -> None:
         calls = native_meta.get("control_calls", [])
         for call, result in zip(calls, results):
-            self.agent_transcript.append_tool_result(
-                ToolResult(
+            transcript_result = ToolResult(
                     tool_call_id=call.tool_call_id,
                     tool_name=call.tool_name,
                     status="ok" if result.status in {"accepted", "pending"} else "error",
@@ -1280,7 +1633,8 @@ class TaskRuntime:
                     requested_args=dict(call.args),
                     executed_args=dict(call.args),
                 )
-            )
+            self.agent_transcript.append_tool_result(transcript_result)
+            self._append_native_round_tool_result(native_meta, transcript_result)
 
     def _append_native_commit_result(
         self,
@@ -1293,8 +1647,7 @@ class TaskRuntime:
         call = native_meta.get("commit_call")
         if not isinstance(call, AgentToolCall):
             return
-        self.agent_transcript.append_tool_result(
-            ToolResult(
+        transcript_result = ToolResult(
                 tool_call_id=call.tool_call_id,
                 tool_name=call.tool_name,
                 status=status,
@@ -1303,7 +1656,129 @@ class TaskRuntime:
                 requested_args=dict(call.args),
                 executed_args=dict(call.args),
             )
+        self.agent_transcript.append_tool_result(transcript_result)
+        self._append_native_round_tool_result(native_meta, transcript_result)
+
+    @staticmethod
+    def _append_native_round_tool_result(
+        native_meta: dict[str, Any], result: ToolResult
+    ) -> None:
+        """Attach post-acceptance ToolResults to the accepted model round."""
+
+        rounds = native_meta.get("model_rounds")
+        if not isinstance(rounds, list) or not rounds:
+            return
+        final_round = rounds[-1]
+        if not isinstance(final_round, dict):
+            return
+        outcome = final_round.get("runtime_outcome")
+        if not isinstance(outcome, dict):
+            outcome = {"status": "commit_accepted", "feedback": None}
+            final_round["runtime_outcome"] = outcome
+        results = outcome.setdefault("tool_results", [])
+        if isinstance(results, list):
+            results.append(result.to_dict())
+
+    def _finish_agent_reported_blocked(
+        self,
+        scene: SceneInstance,
+        agent_id: str,
+        state: MissionState,
+        native_meta: dict[str, Any],
+        decision_payload: dict[str, Any],
+    ) -> None:
+        """Safely close a model-declared terminal blocker and its ToolCalls."""
+
+        call = native_meta.get("report_blocked_call")
+        if not isinstance(call, AgentToolCall):
+            raise RuntimeError(
+                "stop_task_incomplete requires one runtime.report_blocked call"
+            )
+        blocking_condition = str(call.args.get("blocking_condition", "")).strip()
+        observation_before_id = state.latest_observation.get("observation_id")
+        self._try_hover(scene, agent_id, state)
+        final_observation: dict[str, Any] | None = None
+        observation_error: dict[str, str] | None = None
+        try:
+            final_observation = self._record_observation(
+                scene,
+                agent_id,
+                state,
+                list(state.observation_modalities),
+                source="agent_reported_blocked",
+            )
+            self._event(
+                "observation_updated",
+                self._observation_summary_event(
+                    final_observation, source="agent_reported_blocked"
+                ),
+            )
+        except Exception as exc:
+            observation_error = {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+            self._debug_event(
+                "agent_reported_blocked_final_observation_failed",
+                observation_error,
+            )
+
+        stopped_reason = f"agent_reported_blocked:{blocking_condition}"
+        state.mark_stopped(stopped_reason, source="runtime.report_blocked")
+        report_data: dict[str, Any] = {
+            "blocking_condition": blocking_condition,
+            "reason": str(call.args.get("reason", "")).strip(),
+            "evidence_refs": list(call.args.get("evidence_refs", [])),
+            "suggested_user_action": call.args.get("suggested_user_action"),
+            "observation_before_id": observation_before_id,
+            "observation_after_id": (
+                final_observation.get("observation_id")
+                if isinstance(final_observation, dict)
+                else None
+            ),
+        }
+        if observation_error is not None:
+            report_data["final_observation_error"] = observation_error
+        report_result = ToolResult(
+                tool_call_id=call.tool_call_id,
+                tool_name=call.tool_name,
+                status="ok",
+                message="current instruction stopped as incomplete",
+                data=report_data,
+                requested_args=dict(call.args),
+                executed_args=dict(call.args),
+            )
+        self.agent_transcript.append_tool_result(report_result)
+        self._append_native_round_tool_result(native_meta, report_result)
+        self._append_native_commit_result(
+            native_meta,
+            status="ok",
+            message="blocked phase assessment committed without a physical action window",
+            data=report_data,
         )
+        try:
+            self._append_terminal_native_state_checkpoint(scene, state)
+        except Exception as exc:
+            checkpoint_error = {
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            }
+            report_data["terminal_checkpoint_error"] = checkpoint_error
+            self._debug_event(
+                "agent_reported_blocked_terminal_checkpoint_failed",
+                checkpoint_error,
+            )
+        terminal_payload = {
+            **decision_payload,
+            "completed": False,
+            "stopped": True,
+            "stopped_reason": stopped_reason,
+            "stop_source": "runtime.report_blocked",
+            **report_data,
+        }
+        self.agent_transcript.append_task_terminal(terminal_payload)
+        self._event("agent_reported_blocked", terminal_payload)
+        self._write_state(state)
 
     def _runtime_control_recommendation_context(self, state: MissionState) -> dict[str, Any]:
         """Return compact runtime evidence used only by runtime-control recommendations."""
@@ -1357,6 +1832,13 @@ class TaskRuntime:
             state.advance_phase()
             self._mark_phase_start_observation(state)
             self._event("phase_transition_applied", payload)
+            return
+        if transition.decision == STOP_TASK_INCOMPLETE:
+            if not state.stopped or state.stop_source != "runtime.report_blocked":
+                raise RuntimeError(
+                    "stop_task_incomplete transition was not closed by runtime.report_blocked"
+                )
+            self._event("phase_transition_stopped", payload)
             return
         if transition.decision == COMPLETE_TASK:
             if not state.is_final_phase:
@@ -1706,9 +2188,40 @@ class TaskRuntime:
         """Anchor the latest observation as the start of the newly active phase."""
 
         memory = self._memory_for_state(state)
+        memory.clear_observation_anchor("before_last_action_window")
         if not memory.recent_observation_refs:
             return
         memory.set_observation_anchor("phase_start", memory.recent_observation_refs[-1], overwrite=True)
+
+    def _mark_before_last_action_window(
+        self,
+        state: MissionState,
+        observation_before: dict[str, Any],
+    ) -> None:
+        """Anchor one observation for the whole ordered physical action batch."""
+
+        memory = self._memory_for_state(state)
+        if not memory.recent_observation_refs:
+            return
+        expected_id = observation_before.get("observation_id")
+        latest_ref = memory.recent_observation_refs[-1]
+        if expected_id and latest_ref.get("id") != expected_id:
+            matching = next(
+                (
+                    ref
+                    for ref in reversed(memory.recent_observation_refs)
+                    if ref.get("id") == expected_id
+                ),
+                None,
+            )
+            if matching is None:
+                raise RuntimeError(
+                    "cannot anchor before_last_action_window: observation is not in active memory"
+                )
+            latest_ref = matching
+        memory.set_observation_anchor(
+            "before_last_action_window", latest_ref, overwrite=True
+        )
 
     def _try_hover(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
         if scene.capabilities and not scene.capabilities.supports("hover"):
@@ -2177,21 +2690,39 @@ class TaskRuntime:
         safe_plan: ShortHorizonPlan,
         safety_decision: SafetyDecision,
         coupled_plan: CoupledActionPhasePlan | None = None,
+        decision_meta: dict[str, Any] | None = None,
+        native_meta: dict[str, Any] | None = None,
     ) -> str | None:
         if not self.enable_action_planner_debug:
             return None
-        name = f"debug/action_planner/{self._safe_file_part(state.current_phase_key)}_window_{state.current_phase_window_count:03d}.json"
+        meta = dict(decision_meta or {})
+        decision_id = str(meta.get("decision_id") or "").strip()
+        if decision_id:
+            name = (
+                "debug/action_planner/"
+                f"{self._safe_file_part(state.current_phase_key)}_"
+                f"{self._safe_file_part(decision_id)}.json"
+            )
+        else:
+            # Compatibility for deterministic tests and callers that invoke
+            # this helper outside a decision cycle.
+            name = f"debug/action_planner/{self._safe_file_part(state.current_phase_key)}_window_{state.current_phase_window_count:03d}.json"
         payload = {
+            "schema_version": "agent_decision_debug_v2",
+            **meta,
             "phase": state.current_phase_name,
             "phase_key": state.current_phase_key,
-            "window_index": state.current_phase_window_count,
-            # Action-planner debug is a local, opt-in replay artifact.  Keep
-            # the provider-ready image data so a later offline review can
-            # display exactly the images from the successful model request.
-            # The HTML renderer redacts this binary data everywhere except
-            # its separately materialized local image assets.
-            "planner_context": _copy_model_input_context(planner_context),
+            "window_index": meta.get(
+                "physical_window_index", state.current_phase_window_count
+            ),
+            # Retained as a legacy replay aid. New reviews use model_rounds,
+            # which are the actual provider exchanges rather than a context
+            # reconstruction.
+            "planner_context": _redact_model_input_context(planner_context),
             "model_context": model_context,
+            "model_rounds": self._persist_provider_exchange_media(
+                list((native_meta or {}).get("model_rounds", []))
+            ),
             "raw_plan": raw_plan.to_dict(),
             "safe_plan": safe_plan.to_dict(),
             "safety_decision": {
@@ -2204,6 +2735,70 @@ class TaskRuntime:
             payload["coupled_phase_decision"] = coupled_plan.phase_decision.to_dict()
         self.recorder.write_json(name, payload)
         return name
+
+    def _write_failed_action_planner_debug_artifact(
+        self,
+        state: MissionState,
+        planner_context: dict[str, Any],
+        model_context: dict[str, Any],
+        decision_meta: dict[str, Any],
+        model_rounds: list[dict[str, Any]],
+    ) -> str | None:
+        """Persist provider failure/protocol exhaustion without fabricating a plan."""
+
+        if not self.enable_action_planner_debug:
+            return None
+        decision_id = self._safe_file_part(decision_meta.get("decision_id"))
+        name = (
+            "debug/action_planner/"
+            f"{self._safe_file_part(state.current_phase_key)}_{decision_id}.json"
+        )
+        self.recorder.write_json(
+            name,
+            {
+                "schema_version": "agent_decision_debug_v2",
+                **decision_meta,
+                "phase": state.current_phase_name,
+                "phase_key": state.current_phase_key,
+                "window_index": None,
+                "planner_context": _redact_model_input_context(planner_context),
+                "model_context": model_context,
+                "model_rounds": self._persist_provider_exchange_media(model_rounds),
+                "runtime_failure": True,
+            },
+        )
+        return name
+
+    def _persist_provider_exchange_media(
+        self, model_rounds: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Write request media once per digest and return base64-free rounds."""
+
+        persisted = copy.deepcopy(model_rounds)
+        save_bytes = getattr(self.recorder, "save_bytes", None)
+        for model_round in persisted:
+            media = model_round.get("request_media")
+            if not isinstance(media, list):
+                continue
+            for item in media:
+                if not isinstance(item, dict):
+                    continue
+                data = item.pop("data", None)
+                digest = str(item.get("sha256") or "").strip().lower()
+                suffix = str(item.get("suffix") or ".bin")
+                if (
+                    isinstance(data, bytes)
+                    and digest
+                    and callable(save_bytes)
+                ):
+                    relative = f"debug/provider_media/{digest}{suffix}"
+                    if digest not in self._persisted_provider_media:
+                        save_bytes(relative, data)
+                        self._persisted_provider_media.add(digest)
+                    item["asset_ref"] = relative
+                elif data is not None:
+                    item["unavailable_reason"] = "recorder_cannot_persist_media"
+        return persisted
 
     @staticmethod
     def _safe_file_part(value: str | None) -> str:
@@ -2341,14 +2936,20 @@ def _result_artifact_refs(value: Any) -> list[str]:
     return refs
 
 
-def _copy_model_input_context(value: Any) -> Any:
-    """Copy opt-in planner debug context without losing model input images."""
+def _redact_model_input_context(value: Any) -> Any:
+    """Keep v2 planner context readable; exact images live in provider_media."""
 
     if isinstance(value, dict):
-        copied = {}
-        for key, item in value.items():
-            copied[key] = _copy_model_input_context(item)
-        return copied
+        return {
+            key: (
+                "[inline image omitted from planner context]"
+                if key == "data"
+                and isinstance(item, str)
+                and item.startswith("data:image/")
+                else _redact_model_input_context(item)
+            )
+            for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [_copy_model_input_context(item) for item in value]
+        return [_redact_model_input_context(item) for item in value]
     return value

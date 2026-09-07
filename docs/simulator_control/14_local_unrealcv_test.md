@@ -241,8 +241,9 @@ evaluation/benchmarks/uav_flow/outputs/uav_flow_first_person_canary_20260820
 ```
 
 case `2025-03-30_11-49-14`以`status=ok`完成，产生 36 张 RGB 和 35 个正式动作。
-Planner 的最终模型请求同时包含 phase-start RGB、当前 RGB 和
-`current_rgb_depth_overlay`；抽查第 1、16、36 张 RGB 均无自机。该 canary 只验证
+该历史 canary 的 Planner 请求包含 RGB 和 `current_rgb_depth_overlay`；抽查第
+1、16、36 张 RGB 均无自机。当前实现已改为每个 observation 融合图按时间出现
+一次，不再重放 phase-start。该 canary 只验证
 真实 Agent 输入与第一视角部署链路，不把单 case 的任务指标作为相机验收条件。
 
 ## 最近一次真实结果

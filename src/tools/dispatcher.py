@@ -7,6 +7,7 @@ from src.env_client.schemas import ActionResult, Observation
 from src.plugins import PluginRegistry
 from src.plugins.skills.dispatcher import SkillCapabilityDispatcher
 from src.tools.registry import ToolRegistry, default_registry
+from src.tools.validation import validate_tool_args
 
 
 class ToolDispatcher:
@@ -51,20 +52,6 @@ class ToolDispatcher:
 
     @staticmethod
     def _validate_input_schema(schema: dict, args: dict) -> None:
-        """Enforce the common required/additional-properties contract.
+        """Apply the complete native ToolSpec contract at the final boundary."""
 
-        Full numeric and enum validation is performed before a model-requested
-        batch is accepted. Dispatcher keeps this final defensive boundary for
-        direct callers and lifecycle tools.
-        """
-
-        required_args = schema.get("required", []) if isinstance(schema, dict) else []
-        missing = [name for name in required_args if name not in args]
-        if missing:
-            raise ValueError(f"Missing required tool args: {', '.join(missing)}")
-        if isinstance(schema, dict) and schema.get("additionalProperties") is False:
-            properties = schema.get("properties", {})
-            allowed = set(properties) if isinstance(properties, dict) else set()
-            extra = sorted(set(args) - allowed)
-            if extra:
-                raise ValueError(f"Unsupported tool args: {', '.join(extra)}")
+        validate_tool_args(args, schema)

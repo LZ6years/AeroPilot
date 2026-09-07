@@ -176,13 +176,15 @@ stop_count    = 1
 2. Context Builder 只匹配同一个 `observation_id` 的当前 RGB 和 Depth。
 3. 两者尺寸不一致时拒绝构造 overlay，不缩放深度来制造伪对齐。
 4. 有效深度使用固定 `0–10m` 色标，以 `42%` 透明度叠加；无效深度像素保留原 RGB。
-5. 生成的带标题、米制图例 PNG 替代模型附件中的当前原始 RGB；原始 artifact
+5. 生成的无顶部标题、带底部米制色条 PNG 替代模型附件中的当前原始 RGB；原始 artifact
    仍保持不变。
 
-Planner 图片顺序为：可选 phase-start raw RGB、当前 RGB/Depth overlay。首窗口没有
-不同历史帧时只发送当前 overlay；Depth 失败时回退为可选 phase-start raw RGB +
-当前 raw RGB。因此启用 NOW depth 不再重复发送同一个当前画面，也不会改变
-reference path、nDTW 或评测真值。
+Planner 图片按 observation 时间排列，每张只发送一次：旧图为 `HISTORY`，最新图为
+`CURRENT`。每张有合法 Depth 时使用融合图，否则回退 raw RGB。显式米制任务必须先
+对 CURRENT 图选择不超过宽高 20% 的内部小 ROI，调用
+`skill.metric_depth.sample_region`；结果是相机到可见表面的约值，不是目标中心距离。
+色条附加在场景下方，因此 ROI 按实际 `display_size` 归一化，但必须完整位于标签给出的
+`scene_bounds` 内；触及色条的框会被拒绝。
 
 ## 5. Runtime 循环上限
 

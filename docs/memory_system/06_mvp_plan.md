@@ -50,7 +50,7 @@ StageContextInput
 | Module | 职责 |
 | --- | --- |
 | `InstructionModule` | 当前指令、历史指令、当前 goal / phase goal |
-| `ImageModule` | 当前与可选 phase-start 图像、可选当前 depth overlay、artifact refs |
+| `ImageModule` | 当前 observation 图像、可选 depth overlay/色条、artifact refs |
 | `PoseModule` | 模型侧可选 AGL；绝对 pose 和 delta 仅留在审计 metadata |
 | `ActionModule` | phase-relative自身运动、最近动作与字段语义 |
 | `MapModule` | 当前 map/scene 相关线索、requires_reconfirmation |

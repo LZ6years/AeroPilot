@@ -122,7 +122,7 @@ InstructionModule:
   当前指令、历史指令、当前 goal / phase goal
 
 ImageModule:
-  PAST/NOW选择、当前 RGB/depth overlay、artifact refs、图像可用性
+  单个当前 observation、RGB/depth overlay、artifact refs、图像可用性
 
 PoseModule:
   模型侧可选 AGL；完整 latest pose 和最近 pose delta 仅保留在 debug metadata

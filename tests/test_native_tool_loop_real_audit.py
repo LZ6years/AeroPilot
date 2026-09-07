@@ -222,10 +222,129 @@ def _valid_eval(tmp_path: Path) -> Path:
 def test_audit_accepts_closed_multi_action_transcript(tmp_path):
     report = MODULE.audit_evaluation(_valid_eval(tmp_path))
 
-    assert report["status"] == "ok"
+    assert report["status"] == "ok", report["violations"]
     assert report["violations"] == []
     assert report["coverage"]["physical_batches"] == 1
     assert report["coverage"]["multi_action_batches"] == 1
+
+
+def test_audit_accepts_generic_report_blocked_terminal(tmp_path):
+    root = _valid_eval(tmp_path)
+    case_dir = root / "cases" / "case-1"
+    audit_path = case_dir / "audit.json"
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    audit["agent_transcript"][7:] = [
+        {
+            "id": "turn_8",
+            "kind": "assistant_turn",
+            "payload": {
+                "public_intent": "No safe evidence-producing action remains.",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "commit_blocked",
+                        "tool_name": "runtime.commit_phase_turn",
+                        "args": {
+                            "completion_assessment": {
+                                "done_when": [
+                                    {
+                                        "index": 0,
+                                        "status": "unknown",
+                                        "evidence": "obs_2 remains inconclusive",
+                                    }
+                                ]
+                            }
+                        },
+                    },
+                    {
+                        "tool_call_id": "report_blocked",
+                        "tool_name": "runtime.report_blocked",
+                        "args": {
+                            "blocking_condition": "insufficient_evidence",
+                            "reason": "No safe evidence-producing action remains.",
+                            "evidence_refs": ["obs_2", "move_1"],
+                        },
+                    },
+                ],
+            },
+        },
+        {
+            "id": "turn_9",
+            "kind": "tool_result",
+            "payload": {
+                "tool_call_id": "report_blocked",
+                "tool_name": "runtime.report_blocked",
+                "status": "ok",
+            },
+        },
+        {
+            "id": "turn_10",
+            "kind": "tool_result",
+            "payload": {
+                "tool_call_id": "commit_blocked",
+                "tool_name": "runtime.commit_phase_turn",
+                "status": "ok",
+            },
+        },
+        {
+            "id": "turn_11",
+            "kind": "task_terminal",
+            "payload": {
+                "completed": False,
+                "stopped": True,
+                "stopped_reason": "agent_reported_blocked:insufficient_evidence",
+                "stop_source": "runtime.report_blocked",
+            },
+        },
+    ]
+    _write_json(audit_path, audit)
+    case_json = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
+    case_json["completed"] = False
+    case_json["stopped_reason"] = "agent_reported_blocked:insufficient_evidence"
+    _write_json(case_dir / "case.json", case_json)
+
+    report = MODULE.audit_evaluation(root)
+
+    assert report["status"] == "ok", report["violations"]
+    assert report["coverage"]["reported_blocked_turns"] == 1
+    assert report["coverage"]["task_terminal_items"] == 1
+
+
+def test_audit_rejects_report_blocked_with_unknown_evidence_and_physical_call(tmp_path):
+    root = _valid_eval(tmp_path)
+    audit_path = root / "cases" / "case-1" / "audit.json"
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    turn = audit["agent_transcript"][2]["payload"]
+    turn["tool_calls"].insert(
+        1,
+        {
+            "tool_call_id": "report_bad",
+            "tool_name": "runtime.report_blocked",
+            "args": {
+                "blocking_condition": "insufficient_evidence",
+                "reason": "Cannot continue.",
+                "evidence_refs": ["obs_unknown"],
+            },
+        },
+    )
+    audit["agent_transcript"].insert(
+        3,
+        {
+            "id": "result_report_bad",
+            "kind": "tool_result",
+            "payload": {
+                "tool_call_id": "report_bad",
+                "tool_name": "runtime.report_blocked",
+                "status": "ok",
+            },
+        },
+    )
+    _write_json(audit_path, audit)
+
+    report = MODULE.audit_evaluation(root)
+    codes = {item["code"] for item in report["violations"]}
+
+    assert "report_blocked_turn_invalid" in codes
+    assert "report_blocked_evidence_unknown" in codes
 
 
 def test_audit_rejects_duplicate_missing_and_orphan_results(tmp_path):

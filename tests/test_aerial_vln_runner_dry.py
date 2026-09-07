@@ -121,8 +121,8 @@ def test_aerial_vln_stmr_config_and_context_modes(tmp_path):
     assert stmr_module.online_builder.session is planner_session
     assert context_builder.composer.registry.modules["map"] is stmr_module
     assert context_builder.composer.registry.module_order.index(
-        "map"
-    ) < context_builder.composer.registry.module_order.index("image")
+        "image"
+    ) < context_builder.composer.registry.module_order.index("map")
 
 
 def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
@@ -181,13 +181,13 @@ def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
     ready_fragment = stmr_module.build(sources, stage)
 
     assert ready_fragment.model_inputs[0]["role"] == "stmr_semantic_map"
-    assert image_module.include_phase_start_reference is False
+    assert not hasattr(image_module, "include_phase_start_reference")
 
     stmr_module.online_builder = FailingOnlineStmrBuilder()
     failed_fragment = stmr_module.build(sources, stage)
 
     assert failed_fragment.model_inputs == []
-    assert image_module.include_phase_start_reference is True
+    assert not hasattr(image_module, "include_phase_start_reference")
 
 
 @pytest.mark.parametrize(

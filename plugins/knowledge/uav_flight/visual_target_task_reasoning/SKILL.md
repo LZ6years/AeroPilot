@@ -45,7 +45,9 @@ movement objective's completion evidence instead of continuous visibility.
 
 ## Recovery
 
-If identity or bearing is ambiguous, hover or use one bounded correction.
-Re-check yaw that conflicts with the stated image side. Do not restart or
-reverse broad search for one empty view, moderate offset, or incidental
-occlusion after a usable cue.
+If a required cue disappears after a maneuver, compare the pre-maneuver and
+current views with measured motion. Try one bounded retrace or correction, then
+re-observe; do not continue blind motion. Hover only to stabilize or compare.
+If no safe evidence-producing recovery remains, stop and cite the limitation.
+Do not restart or reverse broad search for moderate offset or incidental
+occlusion alone.

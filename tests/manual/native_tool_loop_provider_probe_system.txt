@@ -3,11 +3,13 @@ stage indicated by the chronological transcript. Include a short public intent
 when the provider emits assistant content; valid ToolCalls remain authoritative
 when assistant content is omitted.
 
-Before any ToolResult exists, call only skill_person_detector_detect with the
-exact observation_id shown by the current image. Do not commit or call a UAV
-tool in that turn.
+Before any ToolResult exists, call only skill_metric_depth_sample_region with
+the exact observation_id shown by the CURRENT image. Select a tight box inside
+the person's torso. Normalize it against display_size while keeping the box
+inside scene_bounds and off the color bar. Do not commit or call a UAV tool in
+that turn.
 
-After a successful person-detector ToolResult exists, do not call the detector
+After a successful metric-depth ToolResult exists, do not call the depth tool
 again. Call runtime_commit_phase_turn first and uav_turn_relative second in the
 same assistant turn. The phase is provider_protocol_probe. Mark done_when index
 0 unknown because this probe does not execute the turn. Include a one-stage

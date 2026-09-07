@@ -599,7 +599,7 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert "image" in latest_context["context_schema"]["module_content_fields"]
     fragments = {fragment["name"]: fragment for fragment in latest_context["fragments"]}
     selected_roles = [item["role"] for item in fragments["image"]["content"]["selected_frames"]]
-    assert selected_roles == ["phase_start_reference", "current_observation"]
+    assert selected_roles == ["current_observation"]
     assert "lifecycle_tools_excluded" not in latest_context["allowed_action_constraints"]
     assert "recent_actions" not in flight_memory
     assert "recent_observations" not in flight_memory
@@ -1408,10 +1408,20 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert "image" in planner.contexts[0]["context_schema"]["module_content_fields"]
     assert "selected_frames" in planner.contexts[0]["context_schema"]["module_content_fields"]["image"]
     action_constraints = planner.contexts[0]["allowed_action_constraints"]
-    assert action_constraints["planner_tools"] == ["uav.hover", "uav.turn_relative", "uav.move_body"]
+    assert action_constraints["planner_tools"] == [
+        "uav.hover",
+        "uav.turn_relative",
+        "uav.move_body",
+        "skill.metric_depth.sample_region",
+    ]
     assert "observe_step_schema" not in action_constraints
     assert planner.contexts[0]["observation_policy"]["mode"] == "automatic"
-    assert set(action_constraints["action_schemas"]) == {"uav.hover", "uav.turn_relative", "uav.move_body"}
+    assert set(action_constraints["action_schemas"]) == {
+        "uav.hover",
+        "uav.turn_relative",
+        "uav.move_body",
+        "skill.metric_depth.sample_region",
+    }
     assert action_constraints["action_schemas"]["uav.turn_relative"]["limits"] == {
         "yaw_deg_min": -30.0,
         "yaw_deg_max": 30.0,
@@ -1444,7 +1454,7 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
     assert not (run_dir / "state/final_answer.json").exists()
 
 
-def test_task_runtime_action_planner_debug_preserves_model_input_images(tmp_path):
+def test_task_runtime_action_planner_debug_redacts_non_provider_model_input_images(tmp_path):
     class OneTurnPlanner:
         planner_mode = "model"
 
@@ -1497,7 +1507,9 @@ def test_task_runtime_action_planner_debug_preserves_model_input_images(tmp_path
     assert payload["safe_plan"]["steps"][0]["tool"] == "uav.turn_relative"
     assert "safety_decision" in payload
     assert "model_request_recovery" not in payload
-    assert "data:image" in debug_files[0].read_text(encoding="utf-8")
+    debug_text = debug_files[0].read_text(encoding="utf-8")
+    assert "data:image" not in debug_text
+    assert "[inline image omitted from planner context]" in debug_text
     assert state.completed or state.stopped
 
 
@@ -1877,13 +1889,30 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
             self.allowed_names = []
             self.observation_ids = []
             self.provider_roles = []
+            self.checkpoint_selected_roles = []
 
         def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
             self.calls += 1
             self.allowed_names.append(set(allowed_tool_names or set()))
             self.observation_ids.append(transcript.latest_observation_id())
-            self.provider_roles.append(
-                [message["role"] for message in transcript.provider_messages(registry)]
+            provider_messages = transcript.provider_messages(registry)
+            self.provider_roles.append([message["role"] for message in provider_messages])
+            latest_context = transcript.latest_context()
+            image_fragment = next(
+                (
+                    fragment
+                    for fragment in latest_context.get("fragments", [])
+                    if fragment.get("name") == "image"
+                ),
+                {},
+            )
+            self.checkpoint_selected_roles.append(
+                [
+                    item.get("role")
+                    for item in image_fragment.get("content", {}).get(
+                        "selected_frames", []
+                    )
+                ]
             )
             observation_id = transcript.latest_observation_id()
             if self.calls == 1:
@@ -1993,6 +2022,7 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
         planner=planner,
         shutdown_policy="none",
         plugin_registry=plugin_registry,
+        enable_action_planner_debug=True,
     )
 
     state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
@@ -2028,12 +2058,23 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
     assert planner.observation_ids[0] == planner.observation_ids[1]
     assert planner.observation_ids[2] != planner.observation_ids[1]
     assert planner.provider_roles[1][-2:] == ["assistant", "tool"]
+    assert planner.checkpoint_selected_roles == [
+        ["current_observation"],
+        ["current_observation"],
+        ["current_observation"],
+    ]
     assert [record["tool"] for record in action_records].count(
         "skill.person_detector.detect"
     ) == 1
     assert [record["tool"] for record in action_records].count("uav.turn_relative") == 1
     assert [record["tool"] for record in action_records].count("uav.move_body") == 1
     assert len(observation_records) == 2
+    flight_memory = json.loads(
+        (run_dir / "state" / "flight_memory.json").read_text(encoding="utf-8")
+    )
+    assert flight_memory["observation_anchors"]["before_last_action_window"]["id"] == (
+        observation_records[0]["id"]
+    )
     assert [record["kind"] for record in transcript_records].count(
         "state_checkpoint"
     ) == 2
@@ -2049,6 +2090,72 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
         "call_move",
         "call_commit_done",
     } <= result_ids
+    decisions = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted((run_dir / "debug" / "action_planner").glob("*.json"))
+    ]
+    assert [len(item["model_rounds"]) for item in decisions] == [2, 1]
+    assert [
+        item["runtime_outcome"]["status"]
+        for item in decisions[0]["model_rounds"]
+    ] == ["read_only_executed", "commit_accepted"]
+    assert decisions[0]["model_rounds"][0]["runtime_outcome"]["tool_results"][0][
+        "tool_call_id"
+    ] == "call_detect"
+
+
+def test_phase_transition_clears_before_action_anchor_for_new_phase(tmp_path):
+    class FirstPhaseOnlyActionPlanner:
+        planner_mode = "test"
+
+        def __init__(self) -> None:
+            self.phase_calls: dict[str, int] = {}
+
+        def plan_next_with_phase_decision(self, state, context=None):
+            calls = self.phase_calls.get(state.current_phase_key, 0)
+            self.phase_calls[state.current_phase_key] = calls + 1
+            if state.current_phase_index == 0 and calls == 0:
+                return CoupledActionPhasePlan(
+                    phase=state.current_phase_name,
+                    phase_decision=PhaseTransition.continue_current_phase(),
+                    steps=[PlannedStep.tool_step("uav.hover", {}, "observe once")],
+                )
+            decision = (
+                ADVANCE_TO_NEXT_PHASE
+                if state.current_phase_index == 0
+                else COMPLETE_TASK
+            )
+            return CoupledActionPhasePlan(
+                phase=state.current_phase_name,
+                phase_decision=PhaseTransition(decision, "phase evidence accepted"),
+                steps=[],
+            )
+
+    run_dir = tmp_path / "phase_anchor_reset"
+    recorder = AsyncRunLogger(run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=FirstPhaseOnlyActionPlanner(),
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task("m1", make_two_phase_parse_result())
+    recorder.close()
+
+    memory = json.loads(
+        (run_dir / "state" / "flight_memory.json").read_text(encoding="utf-8")
+    )
+    observations = [
+        json.loads(line)
+        for line in (run_dir / "memory" / "observations.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert state.completed
+    assert "before_last_action_window" not in memory["observation_anchors"]
+    assert memory["observation_anchors"]["phase_start"]["id"] == observations[-1]["id"]
 
 
 def test_native_runtime_audits_provider_rejection_and_executes_null_content_turns(
@@ -2154,6 +2261,7 @@ def test_native_runtime_audits_provider_rejection_and_executes_null_content_turn
         planner=planner,
         shutdown_policy="none",
         model_config=planner.model_config,
+        enable_action_planner_debug=True,
     )
 
     state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
@@ -2202,6 +2310,123 @@ def test_native_runtime_audits_provider_rejection_and_executes_null_content_turn
         if item.get("role") == "assistant"
     ]
     assert replayed_assistant[-1]["content"] is None
+    decision_files = sorted((run_dir / "debug" / "action_planner").glob("*.json"))
+    decisions = [
+        json.loads(path.read_text(encoding="utf-8")) for path in decision_files
+    ]
+    assert [item["decision_id"] for item in decisions] == [
+        "decision_0001",
+        "decision_0002",
+    ]
+    assert [len(item["model_rounds"]) for item in decisions] == [2, 1]
+    assert decisions[0]["physical_window_index"] == 1
+    assert decisions[1]["physical_window_index"] is None
+    assert decisions[1]["completed_window_count"] == 1
+    assert [
+        item["runtime_outcome"]["status"]
+        for item in decisions[0]["model_rounds"]
+    ] == ["protocol_rejected", "commit_accepted"]
+    accepted_results = decisions[0]["model_rounds"][-1]["runtime_outcome"][
+        "tool_results"
+    ]
+    assert {item["tool_call_id"] for item in accepted_results} == {
+        "commit_move",
+        "hover_once",
+    }
+    assert decisions[1]["model_rounds"][0]["runtime_outcome"]["tool_results"][
+        0
+    ]["tool_call_id"] == "commit_done"
+    debug_text = json.dumps(decisions)
+    assert "must never enter" not in debug_text
+    assert "data:image" not in debug_text
+    phase_window = next(
+        record["payload"]
+        for record in load_event_records(run_dir)
+        if record["event"] == "phase_window_recorded"
+    )
+    assert phase_window["decision_id"] == "decision_0001"
+
+
+def test_native_decision_ids_keep_two_physical_windows_and_terminal_separate(
+    tmp_path,
+):
+    class TwoWindowsThenComplete:
+        planner_mode = "model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
+            self.calls += 1
+            supported = self.calls == 3
+            commit = AgentToolCall(
+                f"commit_{self.calls}",
+                "runtime.commit_phase_turn",
+                {
+                    "phase": "final_phase",
+                    "completion_assessment": {
+                        "done_when": [
+                            {
+                                "index": 0,
+                                "status": "supported" if supported else "unknown",
+                                "evidence": "complete" if supported else "observe again",
+                            }
+                        ]
+                    },
+                    **(
+                        {}
+                        if supported
+                        else {
+                            "phase_strategy": {
+                                "stages": ["hover and observe"],
+                                "active_stage": 0,
+                                "reason": "another checkpoint is needed",
+                            },
+                            "action_window": {
+                                "intent": "hover once",
+                                "expected_effect": "a new checkpoint is captured",
+                            },
+                        }
+                    ),
+                },
+            )
+            calls = [commit]
+            if not supported:
+                calls.append(AgentToolCall(f"hover_{self.calls}", "uav.hover", {}))
+            return AssistantTurn(
+                f"assistant_{self.calls}",
+                "complete" if supported else "hover once",
+                calls,
+            )
+
+    run_dir = tmp_path / "three_decisions"
+    recorder = AsyncRunLogger(run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=TwoWindowsThenComplete(),
+        shutdown_policy="none",
+        enable_action_planner_debug=True,
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+
+    decisions = [
+        json.loads(path.read_text(encoding="utf-8"))
+        for path in sorted((run_dir / "debug" / "action_planner").glob("*.json"))
+    ]
+    assert state.completed
+    assert len(decisions) == 3
+    assert [item["decision_id"] for item in decisions] == [
+        "decision_0001",
+        "decision_0002",
+        "decision_0003",
+    ]
+    assert [item["physical_window_index"] for item in decisions] == [1, 2, None]
+    assert [item["completed_window_count"] for item in decisions] == [0, 1, 2]
+    assert decisions[-1]["coupled_phase_decision"]["decision"] == COMPLETE_TASK
 
 
 def test_task_runtime_normalizes_yaw_wraparound_delta(tmp_path):
@@ -2415,6 +2640,100 @@ def test_native_runtime_loop_guard_closes_last_physical_batch_with_checkpoint(tm
         != checkpoints[1]["payload"]["observation_id"]
     )
     assert transcript_records[-1]["kind"] == "state_checkpoint"
+
+
+def test_native_runtime_report_blocked_stops_current_instruction_and_closes_calls(tmp_path):
+    class NativeBlockedPlanner:
+        planner_mode = "model"
+
+        def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
+            observation_id = transcript.latest_observation_id()
+            assert observation_id
+            assert allowed_tool_names is not None
+            assert "runtime.report_blocked" in allowed_tool_names
+            return AssistantTurn(
+                "assistant_blocked",
+                "The available evidence cannot support another safe action.",
+                [
+                    AgentToolCall(
+                        "call_commit_blocked",
+                        "runtime.commit_phase_turn",
+                        {
+                            "phase": "final_phase",
+                            "completion_assessment": {
+                                "done_when": [
+                                    {
+                                        "index": 0,
+                                        "status": "unknown",
+                                        "evidence": f"Observation {observation_id} is insufficient.",
+                                    }
+                                ]
+                            },
+                        },
+                    ),
+                    AgentToolCall(
+                        "call_report_blocked",
+                        "runtime.report_blocked",
+                        {
+                            "blocking_condition": "insufficient_evidence",
+                            "reason": "No safe evidence-producing maneuver remains.",
+                            "evidence_refs": [observation_id],
+                            "suggested_user_action": "Provide a new landmark.",
+                        },
+                    ),
+                ],
+            )
+
+    run_dir = tmp_path / "native_report_blocked"
+    recorder = AsyncRunLogger(run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=NativeBlockedPlanner(),
+        shutdown_policy="none",
+    )
+
+    state = runtime.run_parsed_task(
+        "m1",
+        make_single_phase_parse_result("inspect safely", "final_phase"),
+    )
+    recorder.close()
+
+    assert state.completed is False
+    assert state.stopped is True
+    assert state.stopped_reason == "agent_reported_blocked:insufficient_evidence"
+    assert state.stop_source == "runtime.report_blocked"
+    transcript_records = [
+        json.loads(line)
+        for line in (run_dir / "memory" / "agent_transcript.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assistant = next(
+        item for item in transcript_records if item["kind"] == "assistant_turn"
+    )
+    assert [
+        call["tool_name"] for call in assistant["payload"]["tool_calls"]
+    ] == ["runtime.commit_phase_turn", "runtime.report_blocked"]
+    results = {
+        item["payload"]["tool_call_id"]: item["payload"]
+        for item in transcript_records
+        if item["kind"] == "tool_result"
+    }
+    assert results["call_report_blocked"]["status"] == "ok"
+    assert results["call_commit_blocked"]["status"] == "ok"
+    assert transcript_records[-1]["kind"] == "task_terminal"
+    assert transcript_records[-1]["payload"]["completed"] is False
+    checkpoints = [
+        item for item in transcript_records if item["kind"] == "state_checkpoint"
+    ]
+    assert len(checkpoints) == 2
+    assert checkpoints[0]["payload"]["observation_id"] != checkpoints[1]["payload"]["observation_id"]
+    assert not any(
+        call["tool_name"].startswith("uav.")
+        for call in assistant["payload"]["tool_calls"]
+    )
 
 
 def test_task_runtime_stabilizes_after_each_motion_step_before_observation(tmp_path):

@@ -454,10 +454,13 @@ def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
     assert model_input["type"] == "image"
     assert model_input["input_id"] == "image_1_current_observation"
     assert model_input["role"] == "current_observation"
-    assert model_input["usage"] == "NOW | CURRENT OBSERVATION. Use for current visibility and action decisions."
+    assert model_input["usage"] == (
+        "Use the fused colors for qualitative range only. For an explicit metric "
+        "distance or threshold, call the available metric-depth region tool."
+    )
     assert model_input["encoding"] == "data_url"
     assert model_input["data"].startswith("data:image/png;base64,")
-    assert model_input["data"] != "data:image/png;base64," + base64.b64encode(rgb_path.read_bytes()).decode("ascii")
+    assert model_input["data"] == "data:image/png;base64," + base64.b64encode(rgb_path.read_bytes()).decode("ascii")
     assert model_input["observation_id"] == "obs_0001"
     assert model_input["frame_id"] == "frame_0001"
     assert model_input["artifact_ref"] == str(rgb_path)
@@ -500,8 +503,59 @@ def test_image_module_keeps_three_recent_rgb_frames_only(tmp_path):
         "rgb_2.png",
         "rgb_3.png",
     ]
-    assert image["artifact_refs"] == ["rgb_1.png", "rgb_2.png", "rgb_3.png"]
+    assert image["artifact_refs"] == [
+        "rgb_1.png",
+        "rgb_2.png",
+        "rgb_3.png",
+    ]
     assert all("depth" not in ref for ref in image["artifact_refs"])
+
+
+def test_image_module_ignores_temporal_anchors_for_checkpoint_media(tmp_path):
+    writer = MemoryEventWriter(tmp_path)
+    reader = MemoryRecordReader(tmp_path)
+    memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
+    observation_refs = []
+    for index in range(3):
+        rgb_path = tmp_path / f"temporal_{index}.png"
+        write_test_png(rgb_path)
+        written = writer.write_observation(
+            {
+                "source": f"window_{index}",
+                "modalities": ["rgb"],
+                "frames": {"rgb": {"path": str(rgb_path), "mock": False}},
+            }
+        )
+        observation_refs.append(written["observation_ref"])
+        memory.append_observation_ref(written["observation_ref"])
+        memory.append_frame_refs(written["frame_refs"])
+
+    memory.set_observation_anchor("phase_start", observation_refs[0])
+    memory.set_observation_anchor("before_last_action_window", observation_refs[1])
+    context = ContextComposer().compose(
+        MemorySourceBundle(memory, MapMemoryStore()),
+        make_stage_context(current_phase={"name": "navigate"}),
+    )
+    image = _fragment(context, "image")
+    selected = image["content"]["selected_frames"]
+
+    assert [item["role"] for item in selected] == ["current_observation"]
+    assert [item["observation_id"] for item in selected] == ["obs_0003"]
+    assert [
+        item["role"] for item in image["model_inputs"] if item.get("type") == "image"
+    ] == ["current_observation"]
+
+    memory.set_observation_anchor("before_last_action_window", observation_refs[0])
+    merged = _fragment(
+        ContextComposer().compose(
+            MemorySourceBundle(memory, MapMemoryStore()),
+            make_stage_context(current_phase={"name": "navigate"}),
+        ),
+        "image",
+    )
+    assert [item["role"] for item in merged["content"]["selected_frames"]] == [
+        "current_observation"
+    ]
 
 
 def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):

@@ -2,10 +2,12 @@
   "plugins": {
     "roots": [
       "plugins/knowledge",
-      "plugins/research"
+      "plugins/research",
+      "plugins/capabilities"
     ],
     "enabled": [
-      "knowledge.uav_flight"
+      "knowledge.uav_flight",
+      "capabilities.metric_depth"
     ],
     "disabled": []
   },

@@ -273,24 +273,27 @@ flowchart TD
 
 ## 9. 视觉输入边界
 
-RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image context module 保持轻量：不 caption、不调用模型；它选择当前帧和可选的不同 phase-start 帧，并按配置将当前 RGB 与对齐深度融合成 provider-ready 输入，同时继续保留图像 metadata、artifact refs 和可用性。项目可以通过 custom image module 替换默认处理方式，例如压缩、caption，或只输出文字摘要。
+RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image context module 保持轻量：不 caption、不调用模型；每个 checkpoint 只产出当次 observation 的图像，并在深度有效时生成带底部米制色条的 RGB/depth 融合图。完整历史由 transcript 按 observation 时间保留。
 
 默认多模态接入遵守这些边界：
 
-- `src/memory/context/modules/image.py` 独占 PAST/NOW 语义、图像顺序和 overlay
-  说明。存在不同的 phase-start 帧和有效深度时，模型收到 `PAST raw RGB + NOW
-  RGB/depth overlay`；首窗口只收到 NOW；深度不可用时回退为 `PAST + NOW raw RGB`。
+- `src/memory/context/modules/image.py` 只产出单个当前图像及 overlay；不在图像像素中
+  写 NOW/PAST 标题。场景像素保持原尺寸，色条仅附加在下方。
 - 每个图片标签都包含 `observation_id`、`frame_id` 和 artifact reference，使后续
   tool call/result 能明确指向同一画面；ID 本身不会让 VLM 自动记住未再次发送的图片。
-- 两帧输入严格按“时间角色规则 → PAST 标签/图片 → NOW 标签/图片 → 当前状态提醒
-  → JSON Context”排列；时间规则必须在 PAST 前，当前状态提醒必须紧跟 NOW。
-- 有效 NOW overlay 会替代模型附件中的原始 NOW RGB，不重复发送同一当前画面；
+- transcript 按时间把旧图标为 `HISTORY`、最新图标为 `CURRENT`，每个 observation
+  只发送一次；phase-start 与 before-action ID 可继续作为审计锚点，但不重放图像。
+- 有效 overlay 会替代该 checkpoint 模型附件中的原始 RGB，不重复发送同一画面；
   原始 RGB 与 Depth artifact 仍分别保存，未被覆盖。
 - custom image module 负责读取、筛选、融合、caption 或压缩图片，并产出 planner-ready 信息；当前 `multimodal_image` 实现会把最近真实 RGB 转成 `visual_description` 文本。
 - `ModelActionPlanner` 不读取图片 path，不理解图片策略，只消费 `model_inputs` 中已经编码好的输入。
 - `ModelInputAssembler` 按 module 给出的交错顺序把 `model_inputs` 转成
   openai-compatible content parts，最后追加脱敏后的 JSON Context；它不解释
-  PAST/NOW。caption 模式下 planner 收到的是 text model input。
+  时间角色。caption 模式下 planner 收到的是 text model input。
+- 融合色条只支持定性远近；显式米制值或阈值使用
+  `skill.metric_depth.sample_region` 对最新图像的小 ROI 做鲁棒中位数测距。
+  图前标签同时给出 `scene_size`、含色条的 `display_size` 和 `scene_bounds`；
+  ROI 按模型实际看到的 `display_size` 归一化，再确定性映射回场景像素，触及色条即拒绝。
 - 视觉层不输出 `recommended_next_observation`、转向、扫描或移动建议。
 - 模型只有在实际收到图片，或 context 中存在明确视觉证据时，才能声称看到了目标。
 

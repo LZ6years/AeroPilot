@@ -6,7 +6,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.agent.messages import AgentMessage
-from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
+from src.agent.phase import (
+    ADVANCE_TO_NEXT_PHASE,
+    COMPLETE_TASK,
+    CONTINUE_CURRENT_PHASE,
+    STOP_TASK_INCOMPLETE,
+    PhaseTransition,
+)
 
 ACTION_WINDOW_SCOPE_CURRENT_PHASE = "current_phase_only"
 VALID_DONE_WHEN_ASSESSMENT_STATUSES = {"supported", "unknown", "contradicted"}
@@ -387,7 +393,7 @@ class CoupledActionPhasePlan:
                 raise ValueError("CoupledActionPhasePlan continue decision requires action_window")
             if not 1 <= len(steps) <= 3:
                 raise ValueError("CoupledActionPhasePlan continue decision requires 1-3 tool steps")
-        elif decision in {ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK}:
+        elif decision in {ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, STOP_TASK_INCOMPLETE}:
             if steps:
                 raise ValueError("CoupledActionPhasePlan transition decisions require empty steps")
         else:  # PhaseTransition.from_dict should already protect this.

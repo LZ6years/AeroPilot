@@ -111,7 +111,12 @@ def test_demo_memory_builds_context_with_schema_fragments_and_action_contract(tm
         "image",
         "map",
     ]
-    assert context["allowed_action_constraints"]["planner_tools"] == ["uav.hover", "uav.turn_relative", "uav.move_body"]
+    assert context["allowed_action_constraints"]["planner_tools"] == [
+        "uav.hover",
+        "uav.turn_relative",
+        "uav.move_body",
+        "skill.metric_depth.sample_region",
+    ]
 
 
 def test_demo_writes_expected_artifact_files(tmp_path):

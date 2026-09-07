@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import base64
+import hashlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -506,8 +507,8 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
             },
             3,
         ),
-        _transcript_event(
-            "tool_result",
+            _transcript_event(
+                "tool_result",
             {
                 "tool_call_id": "call_detect_bad",
                 "tool_name": "skill.person_detector.detect",
@@ -554,10 +555,69 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
                 "artifact_refs": ["frame_1", "../../not-linked.txt"],
                 "data": {"confidence": 0.91},
             },
-            7,
-        ),
-        _transcript_event(
-            "assistant_turn",
+                7,
+            ),
+            _transcript_event(
+                "assistant_turn",
+                {
+                    "turn_id": "assistant_depth",
+                    "public_intent": "Measure the current visible surface.",
+                    "tool_calls": [
+                        {
+                            "tool_call_id": "call_depth",
+                            "tool_name": "skill.metric_depth.sample_region",
+                            "args": {
+                                "observation_id": "obs_1",
+                                "x_min": 0.45,
+                                "y_min": 0.4,
+                                "x_max": 0.55,
+                                "y_max": 0.58,
+                            },
+                        }
+                    ],
+                },
+                7,
+            ),
+            _transcript_event(
+                "tool_result",
+                {
+                    "tool_call_id": "call_depth",
+                    "tool_name": "skill.metric_depth.sample_region",
+                    "status": "ok",
+                    "message": "Approximate camera-to-visible-surface distance.",
+                    "requested_args": {
+                        "observation_id": "obs_1",
+                        "x_min": 0.45,
+                        "y_min": 0.4,
+                        "x_max": 0.55,
+                        "y_max": 0.58,
+                    },
+                    "executed_args": {
+                        "observation_id": "obs_1",
+                        "x_min": 0.45,
+                        "y_min": 0.4,
+                        "x_max": 0.55,
+                        "y_max": 0.58,
+                    },
+                    "safety_interventions": [],
+                    "artifact_refs": [],
+                    "data": {
+                        "observation_id": "obs_1",
+                        "distance_m": 2.9,
+                        "audit_details": {
+                            "frame_id": "depth_1",
+                            "roi_pixels": [115, 102, 141, 149],
+                            "valid_pixel_count": 412,
+                            "inlier_pixel_count": 396,
+                            "raw_median_m": 2.86,
+                            "mad_m": 0.07,
+                        },
+                    },
+                },
+                7,
+            ),
+            _transcript_event(
+                "assistant_turn",
             {
                 "turn_id": "assistant_move",
                 "public_intent": "Turn and advance in one action window.",
@@ -607,7 +667,25 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
                 "context": {
                     "current_phase": {"name": "inspect"},
                     "completed": False,
-                    "fragments": [],
+                    "fragments": [
+                        {
+                            "name": "image",
+                            "content": {
+                                "selected_frames": [
+                                    {
+                                        "role": "phase_start_before_last_action_reference",
+                                        "observation_id": "obs_1",
+                                        "frame_id": "frame_1",
+                                    },
+                                    {
+                                        "role": "current_observation",
+                                        "observation_id": "obs_2",
+                                        "frame_id": "frame_2",
+                                    },
+                                ]
+                            },
+                        }
+                    ],
                 },
             },
             12,
@@ -658,8 +736,15 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
     assert "call_commit" in html and "call_turn" in html and "call_move" in html
     assert "requested_args" in html and "executed_args" in html
     assert "safety_interventions" in html
+    assert "skill.metric_depth.sample_region" in html
+    assert "distance_m" in html and "2.9" in html
+    assert "Internal depth calculation audit" in html and "mad_m" in html
+    assert "Requested metric-depth ROI" in html
+    assert "depth-roi-box" in html
     assert "review_assets/frames/obs_1.png" in html
     assert "review_assets/frames/obs_2.png" in html
+    assert "HISTORY" in html
+    assert "CURRENT" in html
     assert '<a href="../../not-linked.txt"' not in html
     assert "Transcript audit issues" not in html
 
@@ -772,6 +857,19 @@ def test_core_review_labels_fallback_intent_and_provider_rejection(tmp_path):
         _tool_result_event(
             "commit_fixed", "runtime.commit_phase_turn", 4
         ),
+        _transcript_event(
+            "task_terminal",
+            {
+                "completed": False,
+                "stopped": True,
+                "stopped_reason": "agent_reported_blocked:insufficient_evidence",
+                "stop_source": "runtime.report_blocked",
+                "blocking_condition": "insufficient_evidence",
+                "evidence_refs": ["obs_1"],
+                "suggested_user_action": "Provide &lt;landmark&gt;.",
+            },
+            5,
+        ),
     )
     audit = BenchmarkAuditLog(
         run_dir=str(tmp_path / "run"),
@@ -800,6 +898,9 @@ def test_core_review_labels_fallback_intent_and_provider_rejection(tmp_path):
     assert "unsafe_&lt;tool&gt;" in html
     assert "&lt;script&gt;bad()&lt;/script&gt;" in html
     assert "ToolCall has no terminal ToolResult: bad_&lt;id&gt;" not in html
+    assert "Instruction stopped incomplete." in html
+    assert "agent_reported_blocked:insufficient_evidence" in html
+    assert "Provide &amp;lt;landmark&amp;gt;." in html
 
 
 def test_core_review_correlates_completion_and_renders_planner_window(
@@ -952,7 +1053,7 @@ def test_core_review_correlates_completion_and_renders_planner_window(
     assert "continue_current_phase" in case_html
     assert "Runtime Applied Phase State" in case_html
     assert "coupled_planner" in case_html
-    assert "Model-Facing Context" in case_html
+    assert "Saved Planner Context (legacy; not an exact provider request)" in case_html
     assert "planner_context_not_saved" in case_html
     assert "yaw-only so far" in case_html
     assert "data:image/png;base64" not in case_html
@@ -1166,8 +1267,8 @@ def test_core_review_renders_exact_successful_model_images_and_steps(tmp_path):
     assert "image_mode=current_only" in case_html
     assert "image_mode=all" in case_html
     assert "Steps" in case_html
-    assert "model output" in case_html
-    assert "safety-reviewed" in case_html
+    assert "accepted ToolCall" in case_html
+    assert "safety-reviewed call" in case_html
     assert "actual execution" in case_html
     assert "Safety-limited left movement." in case_html
     assert "success" in case_html
@@ -1177,6 +1278,371 @@ def test_core_review_renders_exact_successful_model_images_and_steps(tmp_path):
     assert "data:image/png;base64" not in case_html
     renderer.write_case(eval_dir, case_review)
     assert sorted((case_dir / "review_assets" / "planner_inputs").glob("*.png")) == assets
+
+
+def test_core_review_renders_provider_rounds_and_keeps_terminal_decision_separate(
+    tmp_path,
+):
+    run_dir = tmp_path / "run"
+    write_audit_fixture(run_dir)
+    planner_dir = run_dir / "debug" / "action_planner"
+    planner_dir.mkdir(parents=True)
+    (run_dir / "debug" / "provider_media").mkdir(parents=True)
+    (run_dir / "debug" / "phase_windows").mkdir(parents=True)
+    image_bytes = _png_bytes()
+    digest = hashlib.sha256(image_bytes).hexdigest()
+    media_ref = f"debug/provider_media/{digest}.png"
+    (run_dir / media_ref).write_bytes(image_bytes)
+    request = {
+        "model": "stub-vl",
+        "messages": [
+            {"role": "system", "content": "exact system prompt"},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "STATE CHECKPOINT obs_0001"},
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"[provider_media sha256={digest}]"
+                        },
+                    },
+                ],
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {"name": "runtime_commit_phase_turn"},
+            }
+        ],
+        "tool_choice": "auto",
+        "temperature": 0,
+    }
+    response = {
+        "finish_reason": "tool_calls",
+        "message": {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "commit_1",
+                    "type": "function",
+                    "function": {
+                        "name": "runtime_commit_phase_turn",
+                        "arguments": "{\"phase\":\"align\"}",
+                    },
+                }
+            ],
+        },
+        "usage": {"prompt_tokens": 10},
+    }
+    common = {
+        "schema_version": "agent_decision_debug_v2",
+        "phase": "align",
+        "phase_key": "1:align",
+        "model_context": {"current_phase": {"name": "align"}},
+        "planner_context": {},
+        "safety_decision": {"interventions": [], "plan_changed": False},
+    }
+    decision_1 = {
+        **common,
+        "decision_id": "decision_0001",
+        "decision_index": 1,
+        "checkpoint_observation_id": "obs_0001",
+        "completed_window_count": 0,
+        "physical_window_index": 1,
+        "window_index": 1,
+        "model_rounds": [
+            {
+                "round_index": 1,
+                "request": request,
+                "request_media": [
+                    {
+                        "sha256": digest,
+                        "mime_type": "image/png",
+                        "suffix": ".png",
+                        "request_path": [
+                            "messages", 1, "content", 1, "image_url", "url"
+                        ],
+                        "timeline_role": "CURRENT",
+                        "observation_id": "obs_0001",
+                        "frame_id": "frame_0001",
+                        "scene_size": "256x256",
+                        "asset_ref": media_ref,
+                    }
+                ],
+                "response": response,
+                "canonical_turn": {
+                    "public_intent": "hover once",
+                    "public_intent_source": "tool_arguments_fallback",
+                },
+                "runtime_outcome": {
+                    "status": "commit_accepted",
+                    "feedback": None,
+                },
+            }
+        ],
+        "raw_plan": {"steps": [{"tool": "uav.hover", "args": {}}]},
+        "safe_plan": {"steps": [{"tool": "uav.hover", "args": {}}]},
+        "coupled_phase_decision": {
+            "decision": "continue_current_phase",
+            "reason": "observe once",
+        },
+    }
+    decision_2 = {
+        **common,
+        "decision_id": "decision_0002",
+        "decision_index": 2,
+        "checkpoint_observation_id": "obs_0002",
+        "completed_window_count": 1,
+        "physical_window_index": None,
+        "window_index": None,
+        "model_rounds": [
+            {
+                "round_index": 1,
+                "request": {
+                    **request,
+                    "messages": [{"role": "system", "content": "terminal"}],
+                },
+                "request_media": [],
+                "response": response,
+                "runtime_outcome": {
+                    "status": "commit_accepted",
+                    "feedback": None,
+                },
+            }
+        ],
+        "raw_plan": {"steps": []},
+        "safe_plan": {"steps": []},
+        "coupled_phase_decision": {
+            "decision": "complete_task",
+            "reason": "complete",
+        },
+    }
+    for payload in (decision_1, decision_2):
+        (planner_dir / f"align_{payload['decision_id']}.json").write_text(
+            json.dumps(payload), encoding="utf-8"
+        )
+    window_ref = "debug/phase_windows/align_window_001.json"
+    (run_dir / window_ref).write_text(
+        json.dumps(
+            {
+                "decision_id": "decision_0001",
+                "executed_steps": [
+                    {
+                        "step_index": 0,
+                        "step": {"tool": "uav.hover", "args": {}},
+                        "result": {"ok": True, "message": "hovered"},
+                    }
+                ],
+                "safety_interventions": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    for decision_id, window_index in (
+        ("decision_0001", 1),
+        ("decision_0002", None),
+    ):
+        append_jsonl(
+            run_dir / "events.jsonl",
+            {
+                "timestamp": "2026-01-01T00:00:06+00:00",
+                "event": "phase_completion_assessed",
+                "payload": {
+                    "decision_id": decision_id,
+                    "phase": "align",
+                    "phase_key": "1:align",
+                    "window_index": window_index,
+                },
+            },
+        )
+    append_jsonl(
+        run_dir / "events.jsonl",
+        {
+            "timestamp": "2026-01-01T00:00:06+00:00",
+            "event": "phase_window_recorded",
+            "payload": {
+                "decision_id": "decision_0001",
+                "phase": "align",
+                "phase_key": "1:align",
+                "window_index": 1,
+                "debug_ref": window_ref,
+            },
+        },
+    )
+
+    audit = BenchmarkAuditReader().read(EpisodeAuditCursor.freeze(run_dir))
+    assert audit.planner_debug[0].get("_phase_window_execution")
+    assert "_phase_window_execution" not in audit.planner_debug[1]
+    eval_dir = tmp_path / "eval"
+    case = BenchmarkCaseReview(
+        case_id="decision",
+        benchmark_name="Test",
+        protocol_variant="test.v1",
+        instruction="Turn",
+        outcome={"status": "ok"},
+        metrics={},
+        audit=audit,
+        frame_assets=(),
+    )
+    renderer = BenchmarkReviewRenderer()
+    renderer.write_case(eval_dir, case)
+    renderer.write_case(eval_dir, case)
+    page = (eval_dir / "cases" / "decision" / "review.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert (
+        "Decision 1 · obs_0001 · 1 model round · continue_current_phase · "
+        "physical window 1"
+    ) in page
+    assert (
+        "Decision 2 · obs_0002 · 1 model round · complete_task · "
+        "no physical window"
+    ) in page
+    assert "Actual Provider Request" in page
+    assert "exact system prompt" in page
+    assert "runtime_commit_phase_turn" in page
+    assert "tool_arguments_fallback" in page
+    assert "#1 · CURRENT" in page
+    assert "observation_id=obs_0001" in page
+    assert "scene_size=256x256" in page
+    assert "accepted ToolCall" in page
+    assert "data:image" not in page
+    copied = list(
+        (
+            eval_dir
+            / "cases"
+            / "decision"
+            / "review_assets"
+            / "provider_inputs"
+        ).glob("*.png")
+    )
+    assert len(copied) == 1
+
+
+def test_legacy_tool_transcript_reconstructs_three_decisions_without_overwrite(
+    tmp_path,
+):
+    run_dir = tmp_path / "legacy_run"
+    write_audit_fixture(run_dir)
+    transcript_path = run_dir / "memory" / "agent_transcript.jsonl"
+    physical_args = {
+        "phase": "align",
+        "completion_assessment": {
+            "done_when": [{"index": 0, "status": "unknown", "evidence": "not yet"}]
+        },
+    }
+    records = [
+        _transcript_event(
+            "assistant_turn",
+            {
+                "public_intent": "turn left",
+                "public_intent_source": "provider_content",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "commit_1",
+                        "tool_name": "runtime.commit_phase_turn",
+                        "args": physical_args,
+                    },
+                    {
+                        "tool_call_id": "turn_1",
+                        "tool_name": "uav.turn_relative",
+                        "args": {"yaw_deg": -15},
+                    },
+                ],
+            },
+            3,
+        ),
+        _tool_result_event("turn_1", "uav.turn_relative", 4),
+        _transcript_event(
+            "state_checkpoint",
+            {"observation_id": "obs_0002", "context": {"current_phase": {"name": "align"}}},
+            5,
+        ),
+        _transcript_event(
+            "assistant_turn",
+            {
+                "public_intent": "turn a little more",
+                "public_intent_source": "provider_content",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "commit_2",
+                        "tool_name": "runtime.commit_phase_turn",
+                        "args": physical_args,
+                    },
+                    {
+                        "tool_call_id": "turn_2",
+                        "tool_name": "uav.turn_relative",
+                        "args": {"yaw_deg": -10},
+                    },
+                ],
+            },
+            6,
+        ),
+        _tool_result_event("turn_2", "uav.turn_relative", 7),
+        _transcript_event(
+            "state_checkpoint",
+            {"observation_id": "obs_0003", "context": {"current_phase": {"name": "align"}}},
+            8,
+        ),
+        _transcript_event(
+            "assistant_turn",
+            {
+                "public_intent": "complete",
+                "public_intent_source": "provider_content",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "commit_3",
+                        "tool_name": "runtime.commit_phase_turn",
+                        "args": {
+                            "phase": "align",
+                            "completion_assessment": {
+                                "done_when": [
+                                    {
+                                        "index": 0,
+                                        "status": "supported",
+                                        "evidence": "aligned",
+                                    }
+                                ]
+                            },
+                        },
+                    }
+                ],
+            },
+            9,
+        ),
+    ]
+    for record in records:
+        record["instruction_id"] = "inst_1"
+        append_jsonl(transcript_path, record)
+
+    audit = BenchmarkAuditReader().read(EpisodeAuditCursor.freeze(run_dir))
+    eval_dir = tmp_path / "eval"
+    BenchmarkReviewRenderer().write_case(
+        eval_dir,
+        BenchmarkCaseReview(
+            case_id="legacy",
+            benchmark_name="Test",
+            protocol_variant="test.v1",
+            instruction="Turn",
+            outcome={"status": "ok"},
+            metrics={},
+            audit=audit,
+            frame_assets=(),
+        ),
+    )
+    page = (eval_dir / "cases" / "legacy" / "review.html").read_text(
+        encoding="utf-8"
+    )
+
+    assert "Exact provider request unavailable: run predates provider exchange capture" in page
+    assert "Decision 1 · obs_0001 · 1 model round · continue_current_phase · physical window 1" in page
+    assert "Decision 2 · obs_0002 · 1 model round · continue_current_phase · physical window 2" in page
+    assert "Decision 3 · obs_0003 · 1 model round · complete_task_or_advance_phase · no physical window" in page
+    assert "model output absent" not in page
 
 
 def make_episode(

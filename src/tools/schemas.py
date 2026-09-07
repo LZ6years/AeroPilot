@@ -7,6 +7,7 @@ Tool names are identifiers only. Runtime behavior is declared explicitly by
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -87,7 +88,7 @@ class ToolSpec:
             "function": {
                 "name": self.wire_name,
                 "description": self.description,
-                "parameters": dict(self.input_schema),
+                "parameters": _provider_schema(self.input_schema),
             },
         }
 
@@ -99,3 +100,17 @@ class ToolCall:
     tool_call_id: str
     tool: str
     args: dict[str, Any] = field(default_factory=dict)
+
+
+def _provider_schema(value: Any) -> Any:
+    """Remove Runtime-only JSON-Schema extensions from provider contracts."""
+
+    if isinstance(value, dict):
+        return {
+            key: _provider_schema(item)
+            for key, item in value.items()
+            if not str(key).startswith("x-flyagent-")
+        }
+    if isinstance(value, list):
+        return [_provider_schema(item) for item in value]
+    return copy.deepcopy(value)

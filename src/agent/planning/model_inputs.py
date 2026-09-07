@@ -160,6 +160,44 @@ def _input_label_part(item: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def _input_label_text(item: dict[str, Any]) -> str:
+    timeline_role = item.get("timeline_role")
+    if timeline_role in {"HISTORY", "CURRENT"}:
+        observation_id = str(item.get("observation_id") or "unknown")
+        frame_id = str(item.get("frame_id") or "unknown")
+        lines = [
+            f"{timeline_role} observation_id={observation_id} frame_id={frame_id}"
+        ]
+        scene_width = item.get("scene_width")
+        scene_height = item.get("scene_height")
+        if isinstance(scene_width, int) and isinstance(scene_height, int):
+            lines.append(f"scene_size={scene_width}x{scene_height}")
+            display_width = item.get("display_width")
+            display_height = item.get("display_height")
+            if isinstance(display_width, int) and isinstance(display_height, int):
+                lines.append(f"display_size={display_width}x{display_height}")
+            lines.extend(
+                [
+                    (
+                        "scene_bounds_in_display_pixels="
+                        f"x:[0,{scene_width}) y:[0,{scene_height})"
+                    ),
+                    (
+                        "ROI coordinates are normalized against the complete attached "
+                        "display_size: x_display_pixel/display_width and "
+                        "y_display_pixel/display_height. The box must remain inside "
+                        "scene_bounds; never include the color bar."
+                    ),
+                ]
+            )
+        usage = item.get("usage")
+        if isinstance(usage, str) and usage.strip():
+            lines.append(usage.strip())
+        if timeline_role == "CURRENT":
+            lines.append(
+                "Only CURRENT establishes current visibility and the next action."
+            )
+        return "\n".join(lines)
+
     identity = []
     for key in ("observation_id", "frame_id"):
         value = item.get(key)
@@ -226,7 +264,11 @@ def _clean_selected_skills(fragment: dict[str, Any]) -> None:
     selected = content.get("selected_skills")
     if not isinstance(selected, list):
         return
-    allowed = {"name", "description", "skill_text", "requested_references", "capability"}
+    # Callable schemas are already supplied through the Provider's native
+    # ``tools`` field. Keep only human guidance here so a selected capability
+    # does not duplicate its full schema in the state JSON.
+    content.pop("callable_capabilities", None)
+    allowed = {"name", "description", "skill_text", "requested_references"}
     for index, item in enumerate(list(selected)):
         if not isinstance(item, dict):
             continue

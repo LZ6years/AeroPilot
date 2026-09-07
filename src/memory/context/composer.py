@@ -145,7 +145,7 @@ def _compact_module_content_fields() -> dict[str, dict[str, str]]:
             "callable_capabilities": "Enabled callable skill tools, present only when non-empty.",
         },
         "image": {
-            "selected_frames": "Attached image roles such as current_observation and phase_start_reference.",
+            "selected_frames": "The checkpoint's single current observation image reference.",
             "visual_evidence": "RGB availability, mock status, attached image count, and interpretation status.",
         },
         "pose": {

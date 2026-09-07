@@ -90,6 +90,20 @@ class ToolResult:
             data["result_ref"] = self.result_ref
         return data
 
+    def to_provider_dict(self) -> dict[str, Any]:
+        """Return the compact result replayed to the model.
+
+        Capability handlers may retain calculation diagnostics under
+        ``data.audit_details``. Those fields remain durable for review, but are
+        deliberately excluded from the conversational result.
+        """
+
+        payload = self.to_dict()
+        result_data = payload.get("data")
+        if isinstance(result_data, dict):
+            result_data.pop("audit_details", None)
+        return payload
+
 
 @dataclass(frozen=True)
 class _TranscriptItem:
@@ -133,6 +147,11 @@ class AgentTranscript:
 
         self._append("provider_turn_rejected", copy.deepcopy(rejected_turn))
 
+    def append_task_terminal(self, payload: dict[str, Any]) -> None:
+        """Persist a terminal task outcome without projecting it to the provider."""
+
+        self._append("task_terminal", copy.deepcopy(payload))
+
     def latest_context(self) -> dict[str, Any]:
         for item in reversed(self.items):
             if item.kind == "state_checkpoint":
@@ -148,19 +167,66 @@ class AgentTranscript:
                 return str(value) if value else None
         return None
 
+    def prior_evidence_reference_ids(self) -> set[str]:
+        """Return observation and call references preceding the latest assistant turn.
+
+        A terminal control call must cite evidence that already existed when
+        the provider made its decision. Excluding the newest assistant turn
+        prevents a report from using its own ToolCall ID as circular evidence.
+        """
+
+        limit = len(self.items)
+        if limit and self.items[-1].kind == "assistant_turn":
+            limit -= 1
+        references: set[str] = set()
+        for item in self.items[:limit]:
+            if item.kind == "state_checkpoint":
+                observation_id = item.payload.get("observation_id")
+                if observation_id:
+                    references.add(str(observation_id))
+            elif item.kind == "assistant_turn":
+                turn: AssistantTurn = item.payload
+                references.update(call.tool_call_id for call in turn.tool_calls)
+            elif item.kind == "tool_result":
+                result: ToolResult = item.payload
+                references.add(result.tool_call_id)
+                if result.result_ref:
+                    references.add(result.result_ref)
+        return references
+
     def provider_messages(self, registry: "ToolRegistry") -> list[dict[str, Any]]:
         """Render the complete active transcript without compaction."""
 
         messages: list[dict[str, Any]] = []
         seen_media: set[str] = set()
-        for item in self.items:
+        last_state_index_by_observation: dict[str, int] = {}
+        for index, candidate in enumerate(self.items):
+            if candidate.kind != "state_checkpoint":
+                continue
+            observation_id = candidate.payload.get("observation_id")
+            if observation_id:
+                last_state_index_by_observation[str(observation_id)] = index
+        latest_image_state_index = max(
+            last_state_index_by_observation.values(), default=-1
+        )
+        for item_index, item in enumerate(self.items):
             if item.kind == "user_instruction":
                 messages.append({"role": "user", "content": item.payload["instruction"]})
                 continue
             if item.kind == "state_checkpoint":
                 observation_id = item.payload.get("observation_id") or "unknown"
                 provider_context = _provider_state_context(
-                    item.payload["context"], seen_media=seen_media
+                    item.payload["context"],
+                    seen_media=seen_media,
+                    include_media=(
+                        last_state_index_by_observation.get(str(observation_id))
+                        == item_index
+                    ),
+                    timeline_role=(
+                        "CURRENT"
+                        if item_index == latest_image_state_index
+                        else "HISTORY"
+                    ),
                 )
                 content = build_model_user_content(
                     provider_context, include_memory_documents=False
@@ -214,7 +280,9 @@ class AgentTranscript:
                     {
                         "role": "tool",
                         "tool_call_id": result.tool_call_id,
-                        "content": json.dumps(result.to_dict(), ensure_ascii=False),
+                        "content": json.dumps(
+                            result.to_provider_dict(), ensure_ascii=False
+                        ),
                     }
                 )
                 continue
@@ -270,7 +338,11 @@ def _strip_binary(value: Any) -> Any:
 
 
 def _provider_state_context(
-    context: dict[str, Any], *, seen_media: set[str]
+    context: dict[str, Any],
+    *,
+    seen_media: set[str],
+    include_media: bool,
+    timeline_role: str,
 ) -> dict[str, Any]:
     """Remove capability declarations already represented by provider tools.
 
@@ -287,13 +359,24 @@ def _provider_state_context(
         runtime_control.pop("contracts", None)
         if not runtime_control:
             projected.pop("runtime_control", None)
-    _drop_duplicate_media(projected, seen_media)
+    _drop_duplicate_media(
+        projected,
+        seen_media,
+        include_media=include_media,
+        timeline_role=timeline_role,
+    )
     return projected
 
 
-def _drop_duplicate_media(context: dict[str, Any], seen_media: set[str]) -> None:
-    """Send each uniquely identified image once at its first transcript position."""
-
+def _drop_duplicate_media(
+    context: dict[str, Any],
+    seen_media: set[str],
+    *,
+    include_media: bool,
+    timeline_role: str,
+) -> None:
+    """Attach each observation image once and label its chronological role."""
+    checkpoint_media: set[str] = set()
     fragments = context.get("fragments")
     if not isinstance(fragments, list):
         return
@@ -308,26 +391,31 @@ def _drop_duplicate_media(context: dict[str, Any], seen_media: set[str]) -> None
             if not isinstance(item, dict) or item.get("type") != "image":
                 unique_inputs.append(item)
                 continue
+            if not include_media:
+                continue
             identities = _media_identities(item)
+            if identities & checkpoint_media:
+                continue
             if identities & seen_media:
                 continue
             seen_media.update(identities)
+            checkpoint_media.update(identities)
+            item["timeline_role"] = timeline_role
             unique_inputs.append(item)
         fragment["model_inputs"] = unique_inputs
 
 
 def _media_identities(item: dict[str, Any]) -> set[str]:
+    identities: set[str] = set()
     data = item.get("data")
     if isinstance(data, str) and data.startswith("data:image/"):
         digest = hashlib.sha256(data.encode("utf-8")).hexdigest()
-        return {f"provider_media_sha256:{digest}"}
-    identities: set[str] = set()
+        identities.add(f"provider_media_sha256:{digest}")
     for key in ("artifact_ref", "frame_id"):
         value = item.get(key)
         if isinstance(value, str) and value:
             identities.add(f"{key}:{value}")
     observation_id = item.get("observation_id")
-    role = item.get("role")
-    if isinstance(observation_id, str) and observation_id and isinstance(role, str):
-        identities.add(f"observation_role:{observation_id}:{role}")
+    if isinstance(observation_id, str) and observation_id:
+        identities.add(f"observation:{observation_id}")
     return identities

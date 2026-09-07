@@ -119,6 +119,12 @@ def audit_evaluation(eval_dir: str | Path) -> dict[str, Any]:
         "rejected_assistant_turns": sum(
             item["coverage"]["rejected_assistant_turns"] for item in case_reports
         ),
+        "reported_blocked_turns": sum(
+            item["coverage"]["reported_blocked_turns"] for item in case_reports
+        ),
+        "task_terminal_items": sum(
+            item["coverage"]["task_terminal_items"] for item in case_reports
+        ),
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -233,6 +239,8 @@ def _audit_transcript(
         "protocol_feedback_items": 0,
         "provider_rejected_turns": 0,
         "rejected_assistant_turns": 0,
+        "reported_blocked_turns": 0,
+        "task_terminal_items": 0,
     }
     if not records:
         return coverage
@@ -324,6 +332,14 @@ def _audit_transcript(
                         case_id,
                         transcript_id,
                     )
+                )
+            if isinstance(context, dict):
+                _audit_checkpoint_image_contract(
+                    context,
+                    observation_id if isinstance(observation_id, str) else "",
+                    violations,
+                    case_id,
+                    transcript_id,
                 )
         elif kind == "assistant_turn":
             coverage["assistant_turns"] += 1
@@ -440,6 +456,17 @@ def _audit_transcript(
                         transcript_id,
                     )
                 )
+        elif kind == "task_terminal":
+            coverage["task_terminal_items"] += 1
+            if payload.get("completed") is not False or payload.get("stopped") is not True:
+                violations.append(
+                    Violation(
+                        "task_terminal_state_invalid",
+                        "task_terminal must record completed=false and stopped=true",
+                        case_id,
+                        transcript_id,
+                    )
+                )
 
     _audit_provider_rejection_feedback(records, violations, case_id)
 
@@ -489,6 +516,11 @@ def _audit_transcript(
 
         read_calls = [(call, spec) for call, spec in specs if spec.runtime.effect == "read_only"]
         physical_calls = [(call, spec) for call, spec in specs if spec.runtime.effect == "physical"]
+        report_blocked_calls = [
+            (call, spec)
+            for call, spec in specs
+            if call.get("tool_name") == "runtime.report_blocked"
+        ]
         commits = [
             (call, spec)
             for call, spec in specs
@@ -563,7 +595,80 @@ def _audit_transcript(
                     transcript_id,
                 )
             )
-        if not complete and not 1 <= len(physical_calls) <= 3:
+        if report_blocked_calls:
+            coverage["reported_blocked_turns"] += 1
+            other_side_effects = [
+                (call, spec)
+                for call, spec in side_effect_calls
+                if call.get("tool_name") != "runtime.report_blocked"
+            ]
+            if (
+                complete
+                or len(report_blocked_calls) != 1
+                or len(turn_calls) != 2
+                or turn_calls[1].get("tool_name") != "runtime.report_blocked"
+                or physical_calls
+                or other_side_effects
+            ):
+                violations.append(
+                    Violation(
+                        "report_blocked_turn_invalid",
+                        "runtime.report_blocked requires one incomplete leading commit and no other calls",
+                        case_id,
+                        transcript_id,
+                    )
+                )
+            if not any(status in {"unknown", "contradicted"} for status in statuses):
+                violations.append(
+                    Violation(
+                        "report_blocked_assessment_invalid",
+                        "blocked termination requires unknown or contradicted completion evidence",
+                        case_id,
+                        transcript_id,
+                    )
+                )
+            report_args = _object(report_blocked_calls[0][0].get("args"))
+            evidence_refs = report_args.get("evidence_refs")
+            known_refs = _prior_evidence_refs(records, assistant_index)
+            if not isinstance(evidence_refs, list) or not evidence_refs:
+                violations.append(
+                    Violation(
+                        "report_blocked_evidence_missing",
+                        "runtime.report_blocked requires at least one evidence reference",
+                        case_id,
+                        transcript_id,
+                    )
+                )
+            else:
+                unknown_refs = sorted(
+                    str(ref)
+                    for ref in evidence_refs
+                    if not isinstance(ref, str) or not ref or ref not in known_refs
+                )
+                if unknown_refs:
+                    violations.append(
+                        Violation(
+                            "report_blocked_evidence_unknown",
+                            "runtime.report_blocked cites unknown prior evidence: "
+                            + ", ".join(unknown_refs),
+                            case_id,
+                            transcript_id,
+                        )
+                    )
+            later_terminal = any(
+                record.get("kind") == "task_terminal"
+                for record in records[assistant_index + 1 :]
+            )
+            if not later_terminal:
+                violations.append(
+                    Violation(
+                        "report_blocked_terminal_missing",
+                        "accepted runtime.report_blocked must be followed by task_terminal",
+                        case_id,
+                        transcript_id,
+                    )
+                )
+        elif not complete and not 1 <= len(physical_calls) <= 3:
             violations.append(
                 Violation(
                     "physical_batch_size_invalid",
@@ -634,6 +739,35 @@ def _audit_transcript(
     _audit_portable_html(case_dir, audit, violations, case_id)
     _audit_scene_capabilities(records, case_data, registry, violations, case_id)
     return coverage
+
+
+def _prior_evidence_refs(
+    records: list[dict[str, Any]], assistant_index: int
+) -> set[str]:
+    """Collect instruction-local observation and ToolCall/result references."""
+
+    refs: set[str] = set()
+    for item in records[:assistant_index]:
+        payload = _payload(item)
+        if item.get("kind") == "state_checkpoint":
+            observation_id = payload.get("observation_id")
+            if isinstance(observation_id, str) and observation_id:
+                refs.add(observation_id)
+        elif item.get("kind") == "assistant_turn":
+            calls = payload.get("tool_calls")
+            if isinstance(calls, list):
+                for call in calls:
+                    call_id = _object(call).get("tool_call_id")
+                    if isinstance(call_id, str) and call_id:
+                        refs.add(call_id)
+        elif item.get("kind") == "tool_result":
+            call_id = payload.get("tool_call_id")
+            result_ref = payload.get("result_ref")
+            if isinstance(call_id, str) and call_id:
+                refs.add(call_id)
+            if isinstance(result_ref, str) and result_ref:
+                refs.add(result_ref)
+    return refs
 
 
 def _audit_provider_rejection_feedback(
@@ -795,6 +929,52 @@ def _audit_read_only_observation_ids(
                     _string(call.get("tool_call_id")),
                 )
             )
+
+
+def _audit_checkpoint_image_contract(
+    context: dict[str, Any],
+    observation_id: str,
+    violations: list[Violation],
+    case_id: str,
+    transcript_id: str,
+) -> None:
+    """Require one current image reference per chronological checkpoint."""
+
+    fragments = context.get("fragments")
+    if not isinstance(fragments, list):
+        return
+    image_fragment = next(
+        (
+            item
+            for item in fragments
+            if isinstance(item, dict) and item.get("name") == "image"
+        ),
+        None,
+    )
+    if not isinstance(image_fragment, dict):
+        return
+    selected = _object(image_fragment.get("content")).get("selected_frames")
+    selected = [item for item in selected if isinstance(item, dict)] if isinstance(selected, list) else []
+    rgb = [item for item in selected if item.get("role") != "current_depth"]
+    if len(rgb) != 1 or rgb[0].get("role") != "current_observation":
+        violations.append(
+            Violation(
+                "checkpoint_image_contract_invalid",
+                f"checkpoint must contain one current_observation image reference, received roles={[item.get('role') for item in rgb]}",
+                case_id,
+                transcript_id,
+            )
+        )
+        return
+    if str(rgb[0].get("observation_id") or "") != observation_id:
+        violations.append(
+            Violation(
+                "checkpoint_image_observation_mismatch",
+                "checkpoint image observation_id does not match the checkpoint",
+                case_id,
+                transcript_id,
+            )
+        )
 
 
 def _audit_physical_observations(

@@ -18,17 +18,45 @@ coordinates or treat a previous intent as an observed result. continue_when
 describes when work may continue; it is not an additional completion gate.
 
 If every done_when item is supported, call only runtime_commit_phase_turn.
-Otherwise include phase_strategy and action_window, and emit one to three
-physical tool calls in the same assistant turn after the commit call. The calls
-form one ordered action window and Runtime observes once after the whole batch.
-Keep phase_strategy to one to four short ordered maneuver stages. Reassess the
-active stage from the latest observation and tool results; do not repeat an old
-stage merely because it appeared in a prior plan.
+If work is incomplete and a safe, meaningful action remains, include
+phase_strategy and action_window, then emit one to three physical tool calls in
+the same assistant turn after the commit call. The calls form one ordered action window
+and Runtime observes once after the whole batch. Keep phase_strategy to
+one to four short ordered maneuver stages. Reassess the active stage from the
+latest observation and tool results; do not repeat an old stage merely because
+it appeared in a prior plan.
+
+Observation images appear once in chronological order. Earlier images are
+labeled HISTORY and the newest image is labeled CURRENT. Only CURRENT
+establishes current visibility. Use HISTORY with adjacent ToolResults to assess
+what changed and choose a bounded recovery when evidence disappears. Do not
+continue the same blind motion merely because it was previously intended.
+Hover only to stabilize or obtain comparable evidence, never as a terminal
+placeholder.
+
+The RGB-depth fusion and meter color bar support qualitative near/far judgment,
+not a precise numeric claim. When an explicit meter target or threshold affects
+the next action, when the user asks for accurate distance, or before marking a
+quantitative done_when supported, call the available metric-depth region tool
+in a read-only-only turn. Select a tight interior ROI on the CURRENT image,
+avoid edges, ground, and background, wait for its ToolResult, and remeasure the
+new CURRENT observation after physical motion. If no tight visible ROI can be
+identified, keep the quantitative condition unknown.
+The appended color bar makes display_size taller than scene_size. Normalize ROI
+coordinates against the complete display_size exactly as stated in the CURRENT
+image label, but keep the box wholly inside scene_bounds and off the color bar.
+
+If the phase remains incomplete but the transcript cannot support another safe,
+meaningful action, call runtime_commit_phase_turn followed only by
+runtime_report_blocked. The completion assessment must contain unknown or
+contradicted evidence. Do not mix this terminal report with physical or other
+runtime-control calls. Cite prior observation IDs or ToolCall/result references
+from this instruction; never invent an evidence reference.
 
 Do not mix read-only calls with a physical action window. Do not call lifecycle
 or observation tools unless they are explicitly present in the provided tools.
 Use tool argument signs and limits exactly as described by the tool schemas.
 
-Current images are labeled with observation_id and frame_id. Tool results refer
+Images are labeled with observation_id and frame_id. Tool results refer
 back to tool_call_id; use those identifiers to distinguish historical evidence
 from the latest state.

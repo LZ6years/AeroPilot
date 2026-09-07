@@ -23,6 +23,14 @@ class RecordWriter:
         path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         return path
 
+    def save_bytes(self, relative_path: str | Path, data: bytes) -> Path:
+        """Persist one binary debug asset inside the run directory."""
+
+        path = self.run_dir / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(data)
+        return path
+
     def event(self, event: str, payload: dict[str, Any]) -> None:
         # Append a timestamped user-facing event to the JSONL event stream.
         record = {

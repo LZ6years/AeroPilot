@@ -35,7 +35,7 @@ class ContextModule:
 | Module | 默认职责 |
 | --- | --- |
 | `InstructionModule` | 当前指令、历史指令、semantic goal、phase goal |
-| `ImageModule` | PAST/NOW 图像选择、可选 depth overlay、artifact refs |
+| `ImageModule` | 当前 observation 图像、可选 depth overlay/色条、artifact refs |
 | `PoseModule` | 模型侧可选 AGL；绝对 pose 仅保留在审计 metadata |
 | `ActionModule` | phase 内自身运动、近期 action 与字段语义 |
 | `MapModule` | map/scene 相关线索、recall filter、reconfirmation risk |

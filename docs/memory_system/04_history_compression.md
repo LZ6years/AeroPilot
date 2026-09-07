@@ -33,7 +33,7 @@ flowchart TD
 | Module | 默认窗口 | 输出重点 |
 | --- | --- | --- |
 | `InstructionModule` | 最近约 5 条指令 | active instruction、history summary、phase goal |
-| `ImageModule` | 当前帧与可选 phase-start 帧 | provider-ready NOW、可选 PAST、artifact refs |
+| `ImageModule` | 当前 checkpoint 帧 | provider-ready RGB/depth 融合图、artifact refs |
 | `PoseModule` | 最近 2-3 个 pose | 模型侧可选 AGL；绝对 pose/delta 仅审计 |
 | `ActionModule` | 最近 3-5 个 action | phase-relative自身运动、tool/args、失败记录 |
 | `MapModule` | 当前 map/scene 匹配线索 | recalled clues、requires_reconfirmation |

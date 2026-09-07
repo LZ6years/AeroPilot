@@ -99,43 +99,6 @@ class PreparedAerialVlnEvaluation:
         }
 
 
-class _AerialVlnStmrMapContextModule(StmrMapContextModule):
-    """Coordinate one STMR build with the AerialVLN image fallback.
-
-    The registry normally builds RGB before map context.  Planner-mode STMR
-    must make the opposite decision: omit the phase-start RGB only when the
-    map produced for this exact context window is current and attachable.
-    Keeping this coordinator in the benchmark composition avoids changing the
-    shared registry order or the reusable STMR plugin contract.
-    """
-
-    def __init__(
-        self,
-        *,
-        image_module: DefaultImageContextModule,
-        **kwargs: Any,
-    ) -> None:
-        super().__init__(**kwargs)
-        self.image_module = image_module
-
-    def build(self, sources: Any, stage_context: Any) -> Any:
-        fragment = super().build(sources, stage_context)
-        stmr = fragment.content.get("stmr")
-        current_map_attached = (
-            isinstance(stmr, dict)
-            and stmr.get("status") == "ready"
-            and not bool(stmr.get("stale"))
-            and any(
-                item.get("role") == "stmr_semantic_map"
-                for item in fragment.model_inputs
-            )
-        )
-        self.image_module.include_phase_start_reference = not (
-            current_map_attached
-        )
-        return fragment
-
-
 class AerialVlnBenchmarkRunner:
     """AerialVLN benchmark composition over the shared executor."""
 
@@ -849,11 +812,8 @@ class AerialVlnBenchmarkRunner:
             skill_selector=skill_selector,
         )
         modules = dict(default_registry.modules)
-        image_module = DefaultImageContextModule(
-            include_phase_start_reference=True
-        )
-        stmr_module = _AerialVlnStmrMapContextModule(
-            image_module=image_module,
+        image_module = DefaultImageContextModule()
+        stmr_module = StmrMapContextModule(
             mode="planner",
             session=self._shared_stmr_session(),
             prior=self.config.stmr_prior,
@@ -862,12 +822,7 @@ class AerialVlnBenchmarkRunner:
         )
         modules["image"] = image_module
         modules["map"] = stmr_module
-        # Build the map before the image so the image module can apply the
-        # current-window fallback. ContextComposer later restores presentation
-        # order by priority (RGB before map), so model media order is unchanged.
         module_order = list(default_registry.module_order)
-        module_order.remove("map")
-        module_order.insert(module_order.index("image"), "map")
         registry = ContextModuleRegistry(
             modules,
             disabled=default_registry.disabled,

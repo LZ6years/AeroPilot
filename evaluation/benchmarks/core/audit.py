@@ -477,6 +477,15 @@ def _planner_debug_records(
                     "error": str(exc),
                 }
             )
+    if any(isinstance(item.get("decision_index"), int) for item in records):
+        records.sort(
+            key=lambda item: (
+                item.get("decision_index")
+                if isinstance(item.get("decision_index"), int)
+                else 10**9,
+                str(item.get("path") or ""),
+            )
+        )
     return records, diagnostics
 
 
@@ -493,6 +502,7 @@ def _associate_phase_completion(
     """
 
     completions: dict[tuple[str, int], dict[str, Any]] = {}
+    completions_by_decision: dict[str, dict[str, Any]] = {}
     for item in events:
         if (item.get("event") or item.get("kind")) != (
             "phase_completion_assessed"
@@ -501,6 +511,9 @@ def _associate_phase_completion(
         payload = item.get("payload")
         if not isinstance(payload, dict):
             continue
+        decision_id = payload.get("decision_id")
+        if decision_id not in (None, ""):
+            completions_by_decision[str(decision_id)] = dict(payload)
         window_index = payload.get("window_index")
         if not isinstance(window_index, int):
             continue
@@ -511,6 +524,13 @@ def _associate_phase_completion(
     enriched: list[dict[str, Any]] = []
     for record in planner_records:
         item = dict(record)
+        decision_id = item.get("decision_id")
+        if decision_id not in (None, ""):
+            completion = completions_by_decision.get(str(decision_id))
+            if completion is not None:
+                item["_phase_completion_result"] = completion
+                enriched.append(item)
+                continue
         window_index = item.get("window_index")
         if isinstance(window_index, int):
             for phase in (item.get("phase_key"), item.get("phase")):
@@ -536,6 +556,7 @@ def _associate_phase_window_execution(
     """
 
     executions: dict[tuple[str, int], dict[str, Any]] = {}
+    executions_by_decision: dict[str, dict[str, Any]] = {}
     diagnostics: list[dict[str, Any]] = []
     for event in events:
         if (event.get("event") or event.get("kind")) != (
@@ -556,6 +577,9 @@ def _associate_phase_window_execution(
         )
         if execution is None:
             continue
+        decision_id = payload.get("decision_id")
+        if decision_id not in (None, ""):
+            executions_by_decision[str(decision_id)] = execution
         for phase in (payload.get("phase_key"), payload.get("phase")):
             if phase not in (None, ""):
                 executions[(str(phase), window_index)] = execution
@@ -563,6 +587,13 @@ def _associate_phase_window_execution(
     enriched: list[dict[str, Any]] = []
     for record in planner_records:
         item = dict(record)
+        decision_id = item.get("decision_id")
+        if decision_id not in (None, ""):
+            execution = executions_by_decision.get(str(decision_id))
+            if execution is not None:
+                item["_phase_window_execution"] = execution
+            enriched.append(item)
+            continue
         window_index = item.get("window_index")
         if isinstance(window_index, int):
             for phase in (item.get("phase_key"), item.get("phase")):

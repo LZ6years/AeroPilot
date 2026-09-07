@@ -10,6 +10,14 @@ from src.tools.schemas import ToolRuntimePolicy
 
 
 @dataclass(frozen=True)
+class SkillCapabilityResult:
+    """Typed handler result with separate user/model message and data."""
+
+    message: str
+    data: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class SkillCapability:
     call_name: str
     wire_name: str

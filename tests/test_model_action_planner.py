@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 import pytest
@@ -88,6 +89,67 @@ def test_native_planner_sends_tools_and_parses_canonical_call(tmp_path):
         tool["function"]["name"] == "runtime_commit_phase_turn"
         for tool in payload["tools"]
     )
+
+
+def test_native_planner_captures_exact_public_exchange_and_hashed_media(tmp_path):
+    image_bytes = b"\x89PNG\r\n\x1a\nprovider-image"
+    image_data = "data:image/png;base64," + base64.b64encode(image_bytes).decode()
+    transcript = AgentTranscript(MemoryEventWriter(tmp_path))
+    transcript.start_instruction("inspect", "inst_media")
+    transcript.append_state(
+        {
+            "current_phase": {"name": "approach", "done_when": ["near"]},
+            "fragments": [
+                {
+                    "name": "image",
+                    "model_inputs": [
+                        {
+                            "type": "image",
+                            "role": "current_observation",
+                            "encoding": "data_url",
+                            "data": image_data,
+                            "observation_id": "obs_media",
+                            "frame_id": "frame_media",
+                            "scene_width": 256,
+                            "scene_height": 256,
+                            "display_width": 256,
+                            "display_height": 298,
+                        }
+                    ],
+                }
+            ],
+        },
+        "obs_media",
+    )
+    response = response_with_calls(("call_1", "uav_hover", {}), content=None)
+    response["choices"][0]["finish_reason"] = "tool_calls"
+    response["choices"][0]["message"]["reasoning_content"] = "private reasoning"
+    response["usage"] = {"prompt_tokens": 12, "completion_tokens": 4}
+    planner = StubPlanner(response)
+
+    planner.plan_turn(transcript, default_registry())
+
+    exchange = planner.last_exchange
+    request_text = json.dumps(exchange["request"])
+    response_text = json.dumps(exchange["response"])
+    assert "data:image" not in request_text
+    assert "provider_media sha256=" in request_text
+    assert exchange["media"][0]["data"] == image_bytes
+    assert exchange["media"][0]["request_path"][:2] == ["messages", 2]
+    assert exchange["media"][0]["timeline_role"] == "CURRENT"
+    assert exchange["media"][0]["observation_id"] == "obs_media"
+    assert exchange["media"][0]["frame_id"] == "frame_media"
+    assert exchange["media"][0]["scene_size"] == "256x256"
+    assert exchange["media"][0]["display_size"] == "256x298"
+    assert exchange["media"][0]["scene_bounds_in_display_pixels"] == (
+        "x:[0,256) y:[0,256)"
+    )
+    assert exchange["response"]["message"]["content"] is None
+    assert exchange["response"]["message"]["tool_calls"][0]["function"][
+        "arguments"
+    ] == "{}"
+    assert exchange["response"]["usage"]["prompt_tokens"] == 12
+    assert "private reasoning" not in response_text
 
 
 def test_native_planner_replays_tool_result_in_full_transcript(tmp_path):

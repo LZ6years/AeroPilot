@@ -15,11 +15,12 @@ target visibility can conflict with traversal.
 
 ## Evidence Model
 
-Approach is target-relative. Form a credible rough range from the available
-visual relation, depth, and change after translation. Treat the estimate as a
-range, not an exact point. A visible target normally spans several depth values;
-use the representative target region and overall scene relation instead of
-requiring all target pixels to agree. UAV displacement from a local origin is
+For qualitative requests, form a credible rough
+range from the visible relation, fused depth colors, and change after
+translation. For an explicit meter target or threshold, use an available
+metric-depth sampler on a tight representative interior region before acting
+or claiming completion. Its result is camera-to-visible-surface distance, not
+target-center or horizontal distance. UAV displacement from a local origin is
 not target distance. Yaw cannot reach a distance or side relation.
 
 ## Decision Procedure
@@ -29,23 +30,23 @@ not target distance. Yaw cannot reach a distance or side relation.
 3. Approach only when available cues clearly place the UAV too far; retreat
    only when they clearly place it too near.
 4. For qualitative or approximate requests, use a broad coherent range rather
-   than waiting for exact measurement. Improve observation only when the cues
-   cannot distinguish the needed direction.
-5. After one bounded correction, re-estimate. Reverse only when new evidence
+   than waiting for exact measurement. For explicit metric requests, sample a
+   small interior ROI and keep the state unknown if it cannot be isolated.
+5. After one bounded correction, re-estimate; repeat metric sampling on the new
+   observation when the requested relation is numeric. Reverse only when new evidence
    clearly places the relation on the opposite side of the request.
 
 ## Completion And Stop
 
-A requested standoff is sufficiently reached when a usable target cue and
-available visual or depth evidence jointly place the UAV broadly near the
-requested relation. Minor distance differences and normal depth spread across
-the visible target are acceptable; exact equality, point containment, or one
-uniform target depth is not required. Stop correcting unless cues clearly show
-a substantial near/far mismatch. Instrument-level or decimal certainty is not
-required. Facing is not the requested distance relation.
+A qualitative standoff is reached when a usable target cue and coherent visual
+or depth evidence place the UAV broadly near the requested relation. An explicit
+metric standoff additionally requires a fresh small-ROI measurement consistent
+with its stated tolerance or threshold. Do not infer a decimal distance from
+the color bar. Facing is not the requested distance relation.
 
 ## Recovery
 
-If the target is absent or uncertain, search before translating. If the
-relation changes wrongly, stop and reassess. Repeated reversals mean the range
-is uncertain; reacquire it. Near people or tight clearance, use smaller changes.
+If the relation disappears, compare earlier and current views with measured
+motion. Try one bounded retrace, then re-observe; do not continue blindly.
+Hover only to stabilize. If no safe recovery remains, stop and cite it. Use
+smaller changes near people or tight clearance.

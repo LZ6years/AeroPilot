@@ -43,8 +43,9 @@ is sufficient without requiring an additional ideal view.
 
 ## Recovery
 
-If the available cues materially conflict about height or region, hover or use
-a smaller adjustment before continuing. Correct overshoot gently instead of
-oscillating. When already low or near a surface, avoid large downward steps. If
-an angled path is unsafe or temporarily unobservable, stabilize first and
-resume its intended relation only when evidence is usable.
+If height or region cues conflict, hover or use a smaller adjustment. If they
+disappear after a maneuver, compare pre-maneuver and current views with measured
+vertical and horizontal change. Try one bounded retrace, then re-observe; never
+continue a blind descent. Hover only to stabilize or compare. If no safe
+evidence-producing recovery remains, stop and cite the limitation. Correct
+overshoot gently and avoid large downward steps near a surface.

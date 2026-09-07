@@ -380,22 +380,18 @@ def test_approach_skill_stops_before_overshoot_and_excludes_route_references():
     assert "A side relation belongs here only when the UAV must stop or hold there" in normalized
     assert "target visibility can conflict with traversal" in normalized
     assert "Target identity and target-relative range are independently assessable facts" not in normalized
-    assert "Treat the estimate as a range, not an exact point" in normalized
+    assert "For qualitative requests, form a credible rough range" in normalized
     assert "Assess identity and range separately" not in normalized
-    assert "representative target region and overall scene relation" in normalized
-    assert "instead of requiring all target pixels to agree" in normalized
+    assert "tight representative interior region" in normalized
     assert "Yaw cannot reach a distance or side relation" in normalized
     assert "familiar scale, ground contact" not in normalized
     assert "clearly place the UAV too far" in normalized
     assert "clearly place it too near" in normalized
     assert "before correcting distance" in normalized
     assert "Completion requires credible target identity. Separately" not in normalized
-    assert "jointly place the UAV broadly near" in normalized
     assert "broadly near the requested relation" in normalized
-    assert "Minor distance differences and normal depth spread" in normalized
-    assert "exact equality, point containment, or one uniform target depth is not required" in normalized
-    assert "clearly show a substantial near/far mismatch" in normalized
-    assert "Instrument-level or decimal certainty is not required" in normalized
+    assert "explicit metric standoff additionally requires a fresh small-ROI measurement" in normalized
+    assert "Do not infer a decimal distance from the color bar" in normalized
     assert "Reverse only when new evidence clearly places the relation on the opposite side" in normalized
     assert "contains the requested value" not in normalized
     forbidden_terms = [

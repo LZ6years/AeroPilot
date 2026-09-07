@@ -2,8 +2,8 @@
 
 The probe uses the production ``ModelActionPlanner``, canonical ``ToolRegistry``,
 and ``AgentTranscript`` provider projection. It normally performs two paid
-model calls: one read-only person-detector request, followed by one phase commit
-plus a UAV turn request after a synthetic detector ToolResult. A genuinely
+model calls: one read-only metric-depth request, followed by one phase commit
+plus a UAV turn request after a synthetic depth ToolResult. A genuinely
 invalid provider response may add a bounded repair round. No UAV command is
 executed.
 
@@ -51,7 +51,7 @@ PROBE_PROMPT = Path(__file__).with_name(
 )
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "runs" / "manual_native_tool_loop_provider_probe"
 ALLOWED_TOOLS = {
-    "skill.person_detector.detect",
+    "skill.metric_depth.sample_region",
     "runtime.commit_phase_turn",
     "uav.turn_relative",
 }
@@ -71,45 +71,44 @@ def main() -> None:
 
     registry = _registry()
     transcript = AgentTranscript(MemoryEventWriter(output_dir))
-    image_path = output_dir / "artifacts" / "rgb" / "provider_probe.png"
-    _write_probe_image(image_path)
+    image_paths = _write_probe_images(output_dir / "artifacts" / "rgb_depth")
     transcript.start_instruction(
-        "Confirm the visible person through the detector, then request one small right turn.",
+        "Measure the visible person, then request one small right turn.",
         "provider_protocol_probe",
     )
-    transcript.append_state(_probe_context(image_path), "obs_probe_0001")
+    for observation_id in ("obs_probe_start", "obs_probe_before", "obs_probe_0001"):
+        transcript.append_state(
+            _probe_context(image_paths[observation_id], observation_id),
+            observation_id,
+        )
 
     planner = ModelActionPlanner(config, prompt_path=str(PROBE_PROMPT))
     first_turn, first_request, first_attempts = _plan_with_protocol_repair(
         planner,
         transcript,
         registry,
-        stage="read_only_detector",
+        stage="read_only_metric_depth",
     )
     _assert_first_turn(first_turn)
     transcript.append_assistant(first_turn)
-    detector_call = first_turn.tool_calls[0]
+    depth_call = first_turn.tool_calls[0]
     transcript.append_tool_result(
         ToolResult(
-            tool_call_id=detector_call.tool_call_id,
-            tool_name=detector_call.tool_name,
+            tool_call_id=depth_call.tool_call_id,
+            tool_name=depth_call.tool_name,
             status="ok",
-            message="probe detector confirmed one visible person",
+            message=(
+                "Approximate camera-to-visible-surface distance, computed as the robust "
+                "median metric depth inside the requested small ROI and rounded to 0.1 m."
+            ),
             data={
-                "mock": True,
                 "observation_id": "obs_probe_0001",
-                "frame_id": "frame_probe_rgb_0001",
-                "detections": [
-                    {
-                        "class": "person",
-                        "confidence": 0.97,
-                        "bbox": [0.39, 0.18, 0.61, 0.86],
-                    }
-                ],
+                "distance_m": 2.9,
+                "audit_details": {"frame_id": "depth_obs_probe_0001"},
             },
-            artifact_refs=["frame_probe_rgb_0001"],
-            requested_args=dict(detector_call.args),
-            executed_args=dict(detector_call.args),
+            artifact_refs=["depth_obs_probe_0001"],
+            requested_args=dict(depth_call.args),
+            executed_args=dict(depth_call.args),
         )
     )
 
@@ -198,7 +197,7 @@ def _registry():
         {
             "plugins": {
                 "roots": ["plugins/capabilities"],
-                "enabled": ["capabilities.perception"],
+                "enabled": ["capabilities.metric_depth"],
             }
         }
     )
@@ -209,18 +208,36 @@ def _registry():
     return registry
 
 
-def _probe_context(image_path: Path) -> dict[str, Any]:
+def _probe_context(image_path: Path, observation_id: str) -> dict[str, Any]:
     encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    frame_id = f"frame_{observation_id}"
+    selected_frames = [{"role": "current_observation", "observation_id": observation_id, "frame_id": frame_id}]
+    model_inputs = [{
+        "type": "image",
+        "input_id": frame_id,
+        "frame_id": frame_id,
+        "observation_id": observation_id,
+        "role": "current_rgb_depth_overlay",
+        "usage": "RGB + METRIC DEPTH OVERLAY. Use a small ROI for explicit meters.",
+        "scene_width": 240,
+        "scene_height": 180,
+        "display_width": 240,
+        "display_height": 222,
+        "mime_type": "image/png",
+        "encoding": "data_url",
+        "data": f"data:image/png;base64,{encoded}",
+        "artifact_ref": str(image_path),
+    }]
     return {
         "active_instruction": (
-            "Confirm the visible person through the detector, then request "
+            "Measure the visible person with metric depth, then request "
             "one small right turn."
         ),
         "current_phase": {
             "name": "provider_protocol_probe",
             "goal": "confirm the person and request a small right turn",
             "done_when": [
-                "the UAV has turned right after the detector confirmed the person"
+                "the UAV has turned right after the person's range was measured"
             ],
             "continue_when": ["the requested right turn has not executed"],
         },
@@ -231,36 +248,34 @@ def _probe_context(image_path: Path) -> dict[str, Any]:
         "fragments": [
             {
                 "name": "image",
-                "content": {"observation_id": "obs_probe_0001"},
-                "model_inputs": [
-                    {
-                        "type": "image",
-                        "input_id": "frame_probe_rgb_0001",
-                        "frame_id": "frame_probe_rgb_0001",
-                        "observation_id": "obs_probe_0001",
-                        "role": "current_observation",
-                        "usage": "Current RGB image for the provider protocol probe.",
-                        "mime_type": "image/png",
-                        "encoding": "data_url",
-                        "data": f"data:image/png;base64,{encoded}",
-                        "artifact_ref": str(image_path),
-                    }
-                ],
+                "content": {"selected_frames": selected_frames},
+                "model_inputs": model_inputs,
             }
         ],
     }
 
 
-def _write_probe_image(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    image = Image.new("RGB", (240, 180), "white")
-    draw = ImageDraw.Draw(image)
-    draw.ellipse((102, 22, 138, 58), fill=(42, 72, 110))
-    draw.rectangle((96, 58, 144, 128), fill=(49, 105, 158))
-    draw.line((106, 128, 88, 166), fill=(42, 72, 110), width=10)
-    draw.line((134, 128, 152, 166), fill=(42, 72, 110), width=10)
-    draw.text((12, 12), "provider tool-loop probe", fill=(24, 35, 52))
-    image.save(path)
+def _write_probe_images(directory: Path) -> dict[str, Path]:
+    directory.mkdir(parents=True, exist_ok=True)
+    paths = {}
+    for index, observation_id in enumerate(
+        ("obs_probe_start", "obs_probe_before", "obs_probe_0001"),
+        start=1,
+    ):
+        path = directory / f"provider_probe_{index}.png"
+        image = Image.new("RGB", (240, 222), (255, 255 - index * 12, 255 - index * 7))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((102, 22, 138, 58), fill=(42, 72, 110))
+        draw.rectangle((96, 58, 144, 128), fill=(49, 105, 158))
+        draw.line((106, 128, 88, 166), fill=(42, 72, 110), width=10)
+        draw.line((134, 128, 152, 166), fill=(42, 72, 110), width=10)
+        draw.rectangle((0, 180, 239, 221), fill=(20, 24, 30))
+        for x in range(10, 230):
+            fraction = (x - 10) / 219
+            draw.line((x, 188, x, 201), fill=(round(255 * (1 - fraction)), round(210 * fraction), round(180 * fraction)))
+        image.save(path)
+        paths[observation_id] = path
+    return paths
 
 
 def _plan_with_protocol_repair(
@@ -312,14 +327,14 @@ def _plan_with_protocol_repair(
 
 def _assert_first_turn(turn) -> None:
     names = [call.tool_name for call in turn.tool_calls]
-    if names != ["skill.person_detector.detect"]:
+    if names != ["skill.metric_depth.sample_region"]:
         raise RuntimeError(
-            "First provider turn must contain only the read-only detector; "
+            "First provider turn must contain only the read-only metric-depth tool; "
             f"received={names}"
         )
     if turn.tool_calls[0].args.get("observation_id") != "obs_probe_0001":
         raise RuntimeError(
-            "Detector did not preserve the image observation_id: "
+            "Metric-depth call did not preserve the image observation_id: "
             f"{turn.tool_calls[0].args}"
         )
 
@@ -347,8 +362,21 @@ def _assert_provider_requests(
 ) -> None:
     if "response_format" in first_request or "response_format" in second_request:
         raise RuntimeError("Native tool-loop request unexpectedly used response_format")
-    if not _contains_value(first_request, "[image_data_url]"):
-        raise RuntimeError("First provider request did not include a redacted image input")
+    if _count_provider_media(first_request) != 3:
+        raise RuntimeError(
+            "First provider request did not include all three chronological images"
+        )
+    serialized = json.dumps(first_request, ensure_ascii=False)
+    if serialized.count("HISTORY observation_id=") != 2 or serialized.count(
+        "CURRENT observation_id=obs_probe_0001"
+    ) != 1:
+        raise RuntimeError("Provider image labels do not identify two HISTORY images and one CURRENT image")
+    if serialized.count("display_size=240x222") != 3 or serialized.count(
+        "y_display_pixel/display_height"
+    ) != 3:
+        raise RuntimeError(
+            "Provider image labels do not distinguish scene and displayed-image coordinates"
+        )
     tool_messages = [
         item
         for item in second_request.get("messages", [])
@@ -386,14 +414,14 @@ def _assert_provider_requests(
         )
 
 
-def _contains_value(value: Any, expected: Any) -> bool:
-    if value == expected:
-        return True
+def _count_provider_media(value: Any) -> int:
+    if isinstance(value, str):
+        return int(value.startswith("[provider_media sha256="))
     if isinstance(value, dict):
-        return any(_contains_value(item, expected) for item in value.values())
+        return sum(_count_provider_media(item) for item in value.values())
     if isinstance(value, list):
-        return any(_contains_value(item, expected) for item in value)
-    return False
+        return sum(_count_provider_media(item) for item in value)
+    return 0
 
 
 def _assert_closed_transcript(value: dict[str, Any]) -> None:
