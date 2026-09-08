@@ -177,6 +177,10 @@ def _parse_assistant_turn(message: dict[str, Any], registry: "ToolRegistry") -> 
             raise AgentProtocolError("assistant tool calls require unique ids and function objects")
         seen.add(call_id)
         wire_name = str(function.get("name", "")).strip()
+        if not wire_name:
+            raise AgentProtocolError(
+                f"provider tool call {call_id} has an empty function name"
+            )
         try:
             spec = registry.from_wire_name(wire_name)
         except KeyError as exc:

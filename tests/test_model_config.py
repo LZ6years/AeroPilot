@@ -24,7 +24,7 @@ def test_model_config_defaults_to_model_mode_without_env(tmp_path, monkeypatch):
     assert config.provider == "openai_compatible"
     assert config.api_key == ""
     assert config.max_tool_rounds == 10
-    assert config.max_consecutive_protocol_rejections == 3
+    assert config.max_consecutive_protocol_rejections == 6
 
 
 def test_model_config_loads_dotenv_and_redacts_api_key(tmp_path, monkeypatch):

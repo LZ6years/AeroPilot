@@ -63,6 +63,8 @@ from this instruction; never invent an evidence reference.
 Do not mix read-only calls with a physical action window. Do not call lifecycle
 or observation tools unless they are explicitly present in the provided tools.
 Use tool argument signs and limits exactly as described by the tool schemas.
+Every native ToolCall must use an exact advertised wire name. Never omit the
+function name, and never encode a function arguments object as a JSON string.
 
 Images are labeled with observation_id and frame_id. Tool results refer
 back to tool_call_id; use those identifiers to distinguish historical evidence

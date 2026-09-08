@@ -16,7 +16,7 @@ class ModelConfig:
     base_url: str = ""
     timeout_sec: float = 60.0
     max_tool_rounds: int = 10
-    max_consecutive_protocol_rejections: int = 3
+    max_consecutive_protocol_rejections: int = 6
     task_parser_prompt_path: str = ""
     task_parser_structure_prompt_path: str = ""
     task_parser_criteria_prompt_path: str = ""
@@ -42,7 +42,7 @@ class ModelConfig:
             timeout_sec=float(env.get("FLYAGENT_MODEL_TIMEOUT_SEC", "60")),
             max_tool_rounds=int(env.get("FLYAGENT_AGENT_MAX_TOOL_ROUNDS", "10")),
             max_consecutive_protocol_rejections=int(
-                env.get("FLYAGENT_AGENT_MAX_CONSECUTIVE_PROTOCOL_REJECTIONS", "3")
+                env.get("FLYAGENT_AGENT_MAX_CONSECUTIVE_PROTOCOL_REJECTIONS", "6")
             ),
             task_parser_prompt_path=env.get("FLYAGENT_TASK_PARSER_PROMPT_PATH", "").strip(),
             task_parser_structure_prompt_path=env.get(

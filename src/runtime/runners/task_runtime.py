@@ -1219,7 +1219,7 @@ class TaskRuntime:
         allowed_names = self._native_allowed_tool_names(scene)
         max_rounds = int(getattr(self.model_config, "max_tool_rounds", 10) or 10)
         max_consecutive_rejections = int(
-            getattr(self.model_config, "max_consecutive_protocol_rejections", 3) or 3
+            getattr(self.model_config, "max_consecutive_protocol_rejections", 6) or 6
         )
         consecutive_protocol_rejections = 0
         read_call_counts: dict[tuple[str, str], int] = {}
@@ -1235,8 +1235,8 @@ class TaskRuntime:
                 )
             except AgentProtocolError as exc:
                 round_record = self._native_model_round_snapshot(round_index)
-                feedback = (
-                    f"Protocol error: {exc}. Return a corrected native tool-call turn."
+                feedback = self._native_protocol_correction_feedback(
+                    str(exc), provider_shape_error=True
                 )
                 round_record["runtime_outcome"] = {
                     "status": "protocol_rejected",
@@ -1851,7 +1851,27 @@ class TaskRuntime:
                 )
             )
         self.agent_transcript.append_protocol_feedback(
-            f"The previous tool-call turn was rejected: {reason}. Correct it using the available tools."
+            self._native_protocol_correction_feedback(reason)
+        )
+
+    @staticmethod
+    def _native_protocol_correction_feedback(
+        reason: str,
+        *,
+        provider_shape_error: bool = False,
+    ) -> str:
+        prefix = (
+            "Protocol error"
+            if provider_shape_error
+            else "The previous tool-call turn was rejected"
+        )
+        return (
+            f"{prefix}: {reason}. Return corrected native tool calls using only "
+            "the exact exposed wire names. Every function.name must be non-empty, "
+            "and every function.arguments value must be a JSON object rather than "
+            "a JSON-encoded string. For an incomplete phase, place "
+            "runtime_commit_phase_turn first and include one to three physical tool "
+            "calls in the same assistant turn."
         )
 
     def _append_native_control_results(

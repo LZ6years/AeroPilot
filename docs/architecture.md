@@ -270,7 +270,7 @@ flowchart TD
 ```
 
 `max_tool_rounds`（默认 10）是单个状态上的总协议安全阀；连续协议拒绝另由
-`max_consecutive_protocol_rejections`（默认 3）限制。成功 read-only ToolResult 会清零
+`max_consecutive_protocol_rejections`（默认 6）限制。成功 read-only ToolResult 会清零
 连续拒绝计数。两者都不是 token budget；当前版本不做 transcript 摘要、裁剪或静默降级，
 超限应显式报错。
 

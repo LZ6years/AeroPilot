@@ -193,6 +193,10 @@ def test_native_planner_replays_tool_result_in_full_transcript(tmp_path):
     "response,error",
     [
         (response_with_calls(("call_1", "unknown_tool", {})), "unknown provider tool"),
+        (
+            response_with_calls(("call_empty", "", {})),
+            "provider tool call call_empty has an empty function name",
+        ),
         (response_with_calls(("same", "uav_hover", {}), ("same", "uav_hover", {})), "unique ids"),
         ({"choices": [{"message": {"content": "no tools"}}]}, "must call a tool"),
     ],
