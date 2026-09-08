@@ -42,6 +42,10 @@ from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
+from src.plugins.contracts.skill import (
+    SKILL_ARTIFACT_REFS_KEY,
+    SKILL_MODEL_INPUTS_KEY,
+)
 from src.plugins.skills import ModelSkillSelector
 from src.perception.raw_observation import RawObservation
 from src.runtime.control import RuntimeControlExecutor, UavStabilizer
@@ -1460,20 +1464,39 @@ class TaskRuntime:
                     "phase": state.current_phase_name,
                     "run_dir": str(self.recorder.run_dir),
                     "public_intent": public_intent,
+                    "tool_call_id": call.tool_call_id,
                 },
             )
+            result_data = dict(result.data)
+            capability_artifact_refs = _pop_string_list(
+                result_data,
+                SKILL_ARTIFACT_REFS_KEY,
+            )
+            capability_model_inputs = _pop_dict_list(
+                result_data,
+                SKILL_MODEL_INPUTS_KEY,
+            )
             data = result.to_dict()
+            data["data"] = result_data
             write_result = self._record_action(state, call.tool_name, call.args, data)
             transcript_result = ToolResult(
                     tool_call_id=call.tool_call_id,
                     tool_name=call.tool_name,
                     status="ok" if result.ok else "error",
                     message=result.message,
-                    data=dict(result.data),
-                    artifact_refs=_result_artifact_refs(result.data),
+                    data=result_data,
+                    artifact_refs=list(
+                        dict.fromkeys(
+                            [
+                                *capability_artifact_refs,
+                                *_result_artifact_refs(result_data),
+                            ]
+                        )
+                    ),
                     result_ref=write_result["action_ref"].get("ref"),
                     requested_args=dict(call.args),
                     executed_args=dict(call.args),
+                    model_inputs=capability_model_inputs,
                 )
             self.agent_transcript.append_tool_result(transcript_result)
             recorded_results.append(transcript_result.to_dict())
@@ -1499,6 +1522,8 @@ class TaskRuntime:
         current_phase = state.semantic_plan.phases[state.current_phase_index]
         assessment.validate_coverage(len(current_phase.done_when))
         complete = all(item.status == "supported" for item in assessment.done_when)
+        if complete:
+            self._validate_current_observation_completion_evidence(phase)
         message = AgentMessage(
             type="final" if complete and state.is_final_phase else "progress",
             content=public_intent,
@@ -1601,6 +1626,37 @@ class TaskRuntime:
             completion_assessment=assessment,
             phase_strategy=strategy,
         )
+
+    def _validate_current_observation_completion_evidence(self, phase: str) -> None:
+        """Enforce ToolSpec-declared evidence freshness after capability use.
+
+        The policy is independent of task language and tool-name prefixes.
+        A qualitative phase that never invokes the capability is unaffected.
+        """
+
+        observation_id = self.agent_transcript.latest_observation_id()
+        for tool_name in self.tools.registry.names():
+            spec = self.tools.registry.get(tool_name)
+            policy = spec.metadata.get("completion_evidence")
+            if not isinstance(policy, dict):
+                continue
+            if policy.get("after_use") != "current_observation_success":
+                continue
+            results = self.agent_transcript.phase_tool_results(phase, tool_name)
+            if not results:
+                continue
+            if any(
+                result.status == "ok"
+                and str(result.data.get("observation_id") or "") == observation_id
+                for result in results
+            ):
+                continue
+            raise ValueError(
+                f"{tool_name} was used in this phase, so a supported completion "
+                "requires its successful result for the current observation "
+                f"{observation_id}; retry the evidence tool or keep the condition "
+                "unknown and report blocked"
+            )
 
     def _reject_native_turn(self, calls: list[AgentToolCall], reason: str) -> None:
         for call in calls:
@@ -2934,6 +2990,24 @@ def _result_artifact_refs(value: Any) -> list[str]:
 
     visit(value)
     return refs
+
+
+def _pop_string_list(data: dict[str, Any], key: str) -> list[str]:
+    """Remove an internal skill envelope field and return safe string values."""
+
+    value = data.pop(key, [])
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [item for item in value if isinstance(item, str) and item]
+
+
+def _pop_dict_list(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    """Remove an internal skill envelope field and return copied objects."""
+
+    value = data.pop(key, [])
+    if not isinstance(value, (list, tuple)):
+        return []
+    return [dict(item) for item in value if isinstance(item, dict)]
 
 
 def _redact_model_input_context(value: Any) -> Any:

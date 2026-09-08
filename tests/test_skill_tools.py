@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from PIL import Image
 
 from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
 from src.agent.planning.tool_contract_validator import ToolContractValidationError, ToolContractValidator
@@ -12,6 +13,10 @@ from src.env_client.schemas import MapPackage
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
 from src.plugins.skills.dispatcher import SkillCapabilityDispatcher
+from src.plugins.contracts.skill import (
+    SKILL_ARTIFACT_REFS_KEY,
+    SKILL_MODEL_INPUTS_KEY,
+)
 from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
 from src.tools.registry import default_registry
@@ -255,6 +260,8 @@ def test_metric_depth_capability_has_read_only_small_roi_contract():
 
 def test_metric_depth_samples_robust_median_and_keeps_audit_details(tmp_path):
     depth_path = tmp_path / "depth.npy"
+    rgb_path = tmp_path / "rgb.png"
+    Image.new("RGB", (100, 100), (80, 100, 120)).save(rgb_path)
     depth = np.full((100, 100), 2.86, dtype=np.float32)
     depth[63:89, 47:56][0, 0] = 50.0
     depth[63:89, 47:56][0, 1] = np.nan
@@ -276,13 +283,16 @@ def test_metric_depth_samples_robust_median_and_keeps_audit_details(tmp_path):
             "latest_observation": {
                 "observation_id": "obs_0001",
                 "frames": {
+                    "rgb": {"id": "frame_0001", "path": str(rgb_path)},
                     "depth": {
                         "id": "frame_0002",
                         "path": str(depth_path),
                         "depth_unit": "meter",
                     }
                 },
-            }
+            },
+            "run_dir": str(tmp_path),
+            "tool_call_id": "call_depth",
         },
     )
 
@@ -293,10 +303,18 @@ def test_metric_depth_samples_robust_median_and_keeps_audit_details(tmp_path):
     assert result.data["audit_details"]["frame_id"] == "frame_0002"
     assert result.data["audit_details"]["roi_pixels"] == [47, 63, 56, 89]
     assert result.data["audit_details"]["inlier_pixel_count"] < result.data["audit_details"]["valid_pixel_count"]
+    assert len(result.data[SKILL_ARTIFACT_REFS_KEY]) == 1
+    assert len(result.data[SKILL_MODEL_INPUTS_KEY]) == 1
+    confirmation_path = result.data[SKILL_ARTIFACT_REFS_KEY][0]
+    assert result.data[SKILL_MODEL_INPUTS_KEY][0]["path"] == confirmation_path
+    with Image.open(confirmation_path) as confirmation:
+        assert confirmation.size == (308, 100)
 
 
 def test_metric_depth_rejects_region_crossing_inconsistent_surfaces(tmp_path):
     depth_path = tmp_path / "depth.npy"
+    rgb_path = tmp_path / "rgb.png"
+    Image.new("RGB", (100, 100), (80, 100, 120)).save(rgb_path)
     depth = np.full((100, 100), 6.0, dtype=np.float32)
     # The display-normalized ROI below maps to scene pixels [40:60, 42:71].
     # A strong depth gradient indicates that the model did not isolate one
@@ -320,18 +338,23 @@ def test_metric_depth_rejects_region_crossing_inconsistent_surfaces(tmp_path):
             "latest_observation": {
                 "observation_id": "obs_0001",
                 "frames": {
+                    "rgb": {"id": "frame_rgb", "path": str(rgb_path)},
                     "depth": {
                         "id": "frame_depth",
                         "path": str(depth_path),
                         "depth_unit": "meter",
                     }
                 },
-            }
+            },
+            "run_dir": str(tmp_path),
+            "tool_call_id": "call_inconsistent",
         },
     )
 
     assert result.ok is False
     assert "inconsistent depth surfaces" in result.message
+    assert result.data[SKILL_ARTIFACT_REFS_KEY]
+    assert result.data[SKILL_MODEL_INPUTS_KEY]
 
 
 def test_metric_depth_rejects_stale_low_coverage_and_tiny_regions(tmp_path):

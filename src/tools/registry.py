@@ -253,6 +253,12 @@ def default_registry(
 
     plugins = plugin_registry or PluginRegistry.from_config()
     for capability in plugins.skill_capability_catalog.capabilities:
+        completion_evidence = capability.input_schema.get(
+            "x-flyagent-completion-evidence"
+        )
+        metadata = {"mock": capability.mock}
+        if isinstance(completion_evidence, dict):
+            metadata["completion_evidence"] = dict(completion_evidence)
         registry.register(
             ToolSpec(
                 name=capability.call_name,
@@ -261,7 +267,7 @@ def default_registry(
                 description=capability.description,
                 input_schema=dict(capability.input_schema),
                 runtime=capability.runtime,
-                metadata={"mock": capability.mock},
+                metadata=metadata,
             )
         )
     return registry

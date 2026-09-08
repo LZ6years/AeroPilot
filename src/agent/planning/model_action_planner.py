@@ -394,13 +394,16 @@ def _request_media_label(
     if not isinstance(text, str):
         return {}
     lines = text.splitlines()
-    if not lines or not lines[0].startswith(("HISTORY ", "CURRENT ")):
+    if not lines or not lines[0].startswith(
+        ("HISTORY ", "CURRENT ", "TOOL EVIDENCE ")
+    ):
         return {}
     first = lines[0].split()
-    result: dict[str, Any] = {"timeline_role": first[0], "label": text}
+    role = "TOOL_EVIDENCE" if first[:2] == ["TOOL", "EVIDENCE"] else first[0]
+    result: dict[str, Any] = {"timeline_role": role, "label": text}
     for field in first[1:]:
         key, separator, value = field.partition("=")
-        if separator and key in {"observation_id", "frame_id"}:
+        if separator and key in {"observation_id", "frame_id", "tool_call_id"}:
             result[key] = value
     for line in lines[1:]:
         for key in ("scene_size", "display_size", "scene_bounds_in_display_pixels"):

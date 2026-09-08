@@ -98,6 +98,16 @@ only in durable audit data.
 Because the fused PNG appends its color bar below the scene, ROI coordinates
 are normalized against the actual `display_size` advertised beside the image,
 then mapped into `scene_bounds`; any box touching the color bar is rejected.
+The result may project a target-agnostic ROI confirmation image after the tool
+role message. It shows the model's own rectangle in a full RGB view, a
+magnified neighborhood, and a panel containing only the sampled pixels; the
+model must retry a semantically misplaced box before using the numeric
+distance. This tool evidence is not a new observation and does not change
+`CURRENT`.
+The capability declares `current_observation_success` completion freshness.
+Once it is used in a phase, a supported completion requires one successful
+sample on the current observation; an older or failed sample cannot close the
+phase. This is ToolSpec-driven and does not inspect instruction language.
 
 Human/debug/review data may be larger and more detailed:
 - raw planner context and raw model outputs;

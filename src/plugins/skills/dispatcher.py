@@ -8,7 +8,12 @@ from typing import Any
 
 from src.env_client.schemas import ActionResult
 from src.plugins import PluginRegistry
-from src.plugins.contracts.skill import SkillCapabilityResult
+from src.plugins.contracts.skill import (
+    SKILL_ARTIFACT_REFS_KEY,
+    SKILL_MODEL_INPUTS_KEY,
+    SkillCapabilityFailure,
+    SkillCapabilityResult,
+)
 
 
 class SkillCapabilityDispatcher:
@@ -54,13 +59,45 @@ class SkillCapabilityDispatcher:
             if isinstance(result, SkillCapabilityResult):
                 message = result.message
                 data = dict(result.data)
+                artifact_refs = result.artifact_refs
+                model_inputs = result.model_inputs
             else:
                 message = "skill capability completed"
                 data = dict(result) if isinstance(result, dict) else {"result": result}
                 data.setdefault("mock", capability.mock)
                 data.setdefault("skill_name", skill.name)
                 data.setdefault("plugin_id", skill.plugin_id)
-            return ActionResult(ok=True, action=tool_name, message=message, data=data)
+                artifact_refs = ()
+                model_inputs = ()
+            if artifact_refs:
+                data[SKILL_ARTIFACT_REFS_KEY] = list(artifact_refs)
+            if model_inputs:
+                data[SKILL_MODEL_INPUTS_KEY] = [dict(item) for item in model_inputs]
+            return ActionResult(
+                ok=True,
+                action=tool_name,
+                message=message,
+                data=data,
+            )
+        except SkillCapabilityFailure as exc:
+            data = {
+                "tool": tool_name,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                **exc.data,
+            }
+            if exc.artifact_refs:
+                data[SKILL_ARTIFACT_REFS_KEY] = list(exc.artifact_refs)
+            if exc.model_inputs:
+                data[SKILL_MODEL_INPUTS_KEY] = [
+                    dict(item) for item in exc.model_inputs
+                ]
+            return ActionResult(
+                ok=False,
+                action=tool_name,
+                message=f"Skill capability failed: {exc}",
+                data=data,
+            )
         except Exception as exc:
             return ActionResult(
                 ok=False,

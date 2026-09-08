@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 
 from src.agent.transcript import AgentToolCall, AgentTranscript, AssistantTurn, ToolResult
@@ -52,6 +53,25 @@ def test_transcript_projects_state_calls_and_results_in_chronological_order(tmp_
     assert messages[2]["tool_calls"][0]["id"] == "call_detect"
     assert json.loads(messages[3]["content"])["status"] == "ok"
     assert transcript.latest_observation_id() == "obs_0001"
+
+
+def test_transcript_scopes_tool_results_to_current_contiguous_phase(tmp_path):
+    transcript = AgentTranscript(MemoryEventWriter(tmp_path))
+    transcript.start_instruction("measure then continue", "inst_0001")
+    transcript.append_state({"current_phase": {"name": "phase_a"}}, "obs_0001")
+    transcript.append_tool_result(
+        ToolResult("call_a", "skill.metric_depth.sample_region", "ok")
+    )
+    transcript.append_state({"current_phase": {"name": "phase_b"}}, "obs_0002")
+    transcript.append_tool_result(
+        ToolResult("call_b", "skill.metric_depth.sample_region", "error")
+    )
+
+    results = transcript.phase_tool_results(
+        "phase_b", "skill.metric_depth.sample_region"
+    )
+
+    assert [result.tool_call_id for result in results] == ["call_b"]
 
 
 def test_transcript_keeps_images_in_memory_but_strips_binary_from_jsonl(tmp_path):
@@ -228,6 +248,69 @@ def test_tool_result_provider_projection_hides_internal_audit_details():
         "observation_id": "obs_0001",
         "distance_m": 2.9,
     }
+
+
+def test_tool_result_projects_path_based_visual_evidence_after_tool_role(tmp_path):
+    evidence_path = tmp_path / "roi_confirmation.png"
+    evidence_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
+    )
+    evidence_path.write_bytes(evidence_bytes)
+    transcript = AgentTranscript(MemoryEventWriter(tmp_path))
+    transcript.start_instruction("measure", "inst_depth")
+    transcript.append_assistant(
+        AssistantTurn(
+            "turn_depth",
+            "Measure the selected surface.",
+            [
+                AgentToolCall(
+                    "call_depth",
+                    "skill.metric_depth.sample_region",
+                    {
+                        "observation_id": "obs_0001",
+                        "x_min": 0.4,
+                        "y_min": 0.4,
+                        "x_max": 0.5,
+                        "y_max": 0.5,
+                    },
+                )
+            ],
+        )
+    )
+    result = ToolResult(
+        "call_depth",
+        "skill.metric_depth.sample_region",
+        "ok",
+        data={"observation_id": "obs_0001", "distance_m": 2.9},
+        artifact_refs=[str(evidence_path)],
+        model_inputs=[
+            {
+                "type": "image",
+                "role": "metric_depth_roi_confirmation",
+                "observation_id": "obs_0001",
+                "path": str(evidence_path),
+                "mime_type": "image/png",
+                "usage": "Verify the red ROI.",
+            }
+        ],
+    )
+    transcript.append_tool_result(result)
+
+    messages = transcript.provider_messages(default_registry())
+
+    assert [message["role"] for message in messages] == [
+        "user",
+        "assistant",
+        "tool",
+        "user",
+    ]
+    assert json.loads(messages[2]["content"])["data"]["distance_m"] == 2.9
+    assert "model_inputs" not in json.loads(messages[2]["content"])
+    assert "TOOL EVIDENCE tool_call_id=call_depth" in messages[3]["content"][0]["text"]
+    assert messages[3]["content"][1]["image_url"]["url"].endswith(
+        base64.b64encode(evidence_bytes).decode("ascii")
+    )
+    assert result.to_dict()["model_inputs"][0]["path"] == str(evidence_path)
 
 
 def test_transcript_terminal_event_is_audit_only_and_prior_refs_exclude_current_turn(tmp_path):

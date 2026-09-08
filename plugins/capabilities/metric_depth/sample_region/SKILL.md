@@ -15,6 +15,15 @@ appended color bar is part of display coordinates but never part of a valid ROI.
 If the tool reports inconsistent depth surfaces, shrink and recenter the box
 inside one visible surface before retrying.
 
+Every result may include a confirmation image: left is the complete current
+RGB, middle is a magnified neighborhood, right contains only the sampled ROI
+pixels, and the red rectangle is the exact sample. Identify what is actually
+inside the box before using `distance_m`. If it is not wholly inside the surface
+meant by the instruction, retry against the same observation. The confirmation
+is tool evidence, not a new observation. A failed sample cannot support an
+explicit metric completion claim; keep it unknown if a valid box cannot be
+isolated.
+
 The returned `distance_m` is the approximate camera-to-visible-surface depth in
 that small rectangle. It is not the target center distance, horizontal ground
 distance, or benchmark ground truth. After a physical action, sample the new

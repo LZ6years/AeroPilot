@@ -8,9 +8,11 @@ they do not retain conversational history.
 from __future__ import annotations
 
 import copy
+import base64
 import hashlib
 import json
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from src.agent.planning.model_inputs import build_model_user_content
@@ -73,6 +75,7 @@ class ToolResult:
     requested_args: dict[str, Any] = field(default_factory=dict)
     executed_args: dict[str, Any] = field(default_factory=dict)
     safety_interventions: list[dict[str, Any]] = field(default_factory=list)
+    model_inputs: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         data = {
@@ -88,6 +91,8 @@ class ToolResult:
         }
         if self.result_ref:
             data["result_ref"] = self.result_ref
+        if self.model_inputs:
+            data["model_inputs"] = [dict(item) for item in self.model_inputs]
         return data
 
     def to_provider_dict(self) -> dict[str, Any]:
@@ -102,6 +107,7 @@ class ToolResult:
         result_data = payload.get("data")
         if isinstance(result_data, dict):
             result_data.pop("audit_details", None)
+        payload.pop("model_inputs", None)
         return payload
 
 
@@ -194,6 +200,44 @@ class AgentTranscript:
                     references.add(result.result_ref)
         return references
 
+    def phase_tool_results(
+        self,
+        phase_name: str,
+        tool_name: str,
+    ) -> list[ToolResult]:
+        """Return tool results from the current contiguous phase transcript."""
+
+        start_index = 0
+        found_phase = False
+        for index in range(len(self.items) - 1, -1, -1):
+            item = self.items[index]
+            if item.kind != "state_checkpoint":
+                continue
+            context = item.payload.get("context")
+            current_phase = (
+                context.get("current_phase") if isinstance(context, dict) else None
+            )
+            checkpoint_phase = (
+                str(current_phase.get("name") or "")
+                if isinstance(current_phase, dict)
+                else ""
+            )
+            if checkpoint_phase == phase_name:
+                found_phase = True
+                start_index = index
+                continue
+            if found_phase:
+                break
+        if not found_phase:
+            return []
+        return [
+            item.payload
+            for item in self.items[start_index:]
+            if item.kind == "tool_result"
+            and isinstance(item.payload, ToolResult)
+            and item.payload.tool_name == tool_name
+        ]
+
     def provider_messages(self, registry: "ToolRegistry") -> list[dict[str, Any]]:
         """Render the complete active transcript without compaction."""
 
@@ -285,6 +329,9 @@ class AgentTranscript:
                         ),
                     }
                 )
+                evidence_message = _tool_evidence_message(result)
+                if evidence_message is not None:
+                    messages.append(evidence_message)
                 continue
             if item.kind == "protocol_feedback":
                 messages.append({"role": "user", "content": item.payload["message"]})
@@ -419,3 +466,47 @@ def _media_identities(item: dict[str, Any]) -> set[str]:
     if isinstance(observation_id, str) and observation_id:
         identities.add(f"observation:{observation_id}")
     return identities
+
+
+def _tool_evidence_message(result: ToolResult) -> dict[str, Any] | None:
+    """Project safe path-based ToolResult evidence as a following user turn.
+
+    Provider tool messages stay compact JSON strings for broad compatibility.
+    The assistant ToolCall is closed by that tool message before this ordinary
+    multimodal user message asks the model to verify its own selected region.
+    """
+
+    content: list[dict[str, Any]] = []
+    for item in result.model_inputs:
+        if not isinstance(item, dict) or item.get("type") != "image":
+            continue
+        path = Path(str(item.get("path") or item.get("artifact_ref") or ""))
+        if not path.is_file():
+            continue
+        try:
+            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        except OSError:
+            continue
+        mime_type = str(item.get("mime_type") or "image/png")
+        observation_id = str(item.get("observation_id") or "unknown")
+        usage = str(item.get("usage") or "Verify this tool evidence.")
+        content.extend(
+            [
+                {
+                    "type": "text",
+                    "text": (
+                        f"TOOL EVIDENCE tool_call_id={result.tool_call_id} "
+                        f"observation_id={observation_id}. {usage}"
+                    ),
+                },
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": f"data:{mime_type};base64,{encoded}"
+                    },
+                },
+            ]
+        )
+    if not content:
+        return None
+    return {"role": "user", "content": content}

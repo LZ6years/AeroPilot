@@ -45,6 +45,15 @@ identified, keep the quantitative condition unknown.
 The appended color bar makes display_size taller than scene_size. Normalize ROI
 coordinates against the complete display_size exactly as stated in the CURRENT
 image label, but keep the box wholly inside scene_bounds and off the color bar.
+After each metric-depth ToolResult, inspect its TOOL EVIDENCE image before using
+the numeric distance. The left panel shows the full CURRENT RGB, the middle
+panel magnifies the neighborhood, and the right panel contains only the pixels
+inside the submitted ROI. The red rectangle is the exact sampled ROI. First
+identify what is actually inside the box. If it is not wholly inside the visible
+surface you intended, make another read-only metric-depth call on the same
+CURRENT observation with a corrected ROI. Do not commit a physical action from
+a semantically wrong box. A failed measurement cannot support a quantitative
+done_when and must not be replaced by color-bar arithmetic or expected motion.
 
 If the phase remains incomplete but the transcript cannot support another safe,
 meaningful action, call runtime_commit_phase_turn followed only by

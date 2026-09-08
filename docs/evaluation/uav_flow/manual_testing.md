@@ -185,6 +185,12 @@ Planner 图片按 observation 时间排列，每张只发送一次：旧图为 `
 `skill.metric_depth.sample_region`；结果是相机到可见表面的约值，不是目标中心距离。
 色条附加在场景下方，因此 ROI 按实际 `display_size` 归一化，但必须完整位于标签给出的
 `scene_bounds` 内；触及色条的框会被拒绝。
+每次测距后还要检查 ToolResult 随附的 ROI 确认图：红框若没有完整落在指令所指的
+可见表面上，必须针对同一 CURRENT observation 重新框选，不能用错误框的数值提交动作。
+确认图依次展示完整 RGB、局部邻域和仅 ROI 像素；失败的测距不能由色条估算或预期位移
+替代为定量完成证据。
+一旦当前 phase 使用过测距 capability，动作后的 supported 终态还必须在最新 observation
+上有成功测量；否则 Runtime 应拒绝该 commit，并要求重新测量或保持 unknown/blocked。
 
 ## 5. Runtime 循环上限
 

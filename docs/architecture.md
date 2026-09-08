@@ -294,6 +294,12 @@ RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image conte
   `skill.metric_depth.sample_region` 对最新图像的小 ROI 做鲁棒中位数测距。
   图前标签同时给出 `scene_size`、含色条的 `display_size` 和 `scene_bounds`；
   ROI 按模型实际看到的 `display_size` 归一化，再确定性映射回场景像素，触及色条即拒绝。
+  ToolResult 之后可追加一个普通 user-role 的 ROI 确认图：左侧完整 RGB、中间局部放大、
+  右侧只显示实际参与测距的 ROI 像素。红框仅表示模型自己提交的区域，不包含目标类别推断，
+  也不创建新 observation。
+  该 capability 通过 ToolSpec metadata 声明 `current_observation_success`：一个 phase
+  一旦使用过它，supported 终态必须具有当前 observation 上的成功结果。Runtime 不解析
+  任务语言或目标类别；未调用该 capability 的定性任务不受此门禁影响。
 - 视觉层不输出 `recommended_next_observation`、转向、扫描或移动建议。
 - 模型只有在实际收到图片，或 context 中存在明确视觉证据时，才能声称看到了目标。
 

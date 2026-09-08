@@ -72,6 +72,10 @@ def main() -> None:
     registry = _registry()
     transcript = AgentTranscript(MemoryEventWriter(output_dir))
     image_paths = _write_probe_images(output_dir / "artifacts" / "rgb_depth")
+    confirmation_path = _write_probe_confirmation(
+        image_paths["obs_probe_0001"],
+        output_dir / "artifacts" / "tool_evidence" / "roi_confirmation.png",
+    )
     transcript.start_instruction(
         "Measure the visible person, then request one small right turn.",
         "provider_protocol_probe",
@@ -109,6 +113,20 @@ def main() -> None:
             artifact_refs=["depth_obs_probe_0001"],
             requested_args=dict(depth_call.args),
             executed_args=dict(depth_call.args),
+            model_inputs=[
+                {
+                    "type": "image",
+                    "role": "metric_depth_roi_confirmation",
+                    "observation_id": "obs_probe_0001",
+                    "path": str(confirmation_path),
+                    "artifact_ref": str(confirmation_path),
+                    "mime_type": "image/png",
+                    "usage": (
+                        "The red rectangle is the exact sampled ROI. Confirm "
+                        "that it lies inside the intended visible surface."
+                    ),
+                }
+            ],
         )
     )
 
@@ -278,6 +296,18 @@ def _write_probe_images(directory: Path) -> dict[str, Path]:
     return paths
 
 
+def _write_probe_confirmation(source_path: Path, output_path: Path) -> Path:
+    """Create a synthetic ROI confirmation image for protocol validation."""
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(source_path) as source:
+        image = source.convert("RGB")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((108, 62, 132, 108), outline=(255, 30, 70), width=3)
+    image.save(output_path)
+    return output_path
+
+
 def _plan_with_protocol_repair(
     planner: ModelActionPlanner,
     transcript: AgentTranscript,
@@ -377,6 +407,14 @@ def _assert_provider_requests(
         raise RuntimeError(
             "Provider image labels do not distinguish scene and displayed-image coordinates"
         )
+    if _count_provider_media(second_request) != 4:
+        raise RuntimeError(
+            "Second provider request did not include the three observations plus ROI evidence"
+        )
+    if "TOOL EVIDENCE tool_call_id=" not in json.dumps(
+        second_request, ensure_ascii=False
+    ):
+        raise RuntimeError("Second provider request omitted ROI confirmation evidence")
     tool_messages = [
         item
         for item in second_request.get("messages", [])

@@ -8,13 +8,35 @@ from typing import Any
 
 from src.tools.schemas import ToolRuntimePolicy
 
+SKILL_ARTIFACT_REFS_KEY = "_flyagent_artifact_refs"
+SKILL_MODEL_INPUTS_KEY = "_flyagent_model_inputs"
+
 
 @dataclass(frozen=True)
 class SkillCapabilityResult:
-    """Typed handler result with separate user/model message and data."""
+    """Typed handler result with compact data and optional visual evidence."""
 
     message: str
     data: dict[str, Any]
+    artifact_refs: tuple[str, ...] = ()
+    model_inputs: tuple[dict[str, Any], ...] = ()
+
+
+class SkillCapabilityFailure(Exception):
+    """Capability failure that retains safe evidence for model correction."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        data: dict[str, Any] | None = None,
+        artifact_refs: tuple[str, ...] = (),
+        model_inputs: tuple[dict[str, Any], ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.data = dict(data or {})
+        self.artifact_refs = tuple(artifact_refs)
+        self.model_inputs = tuple(dict(item) for item in model_inputs)
 
 
 @dataclass(frozen=True)

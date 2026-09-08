@@ -30,6 +30,9 @@
       "x_max_field": "x_max",
       "y_max_field": "y_max",
       "coordinate_space": "depth_overlay_display_normalized"
+    },
+    "x-flyagent-completion-evidence": {
+      "after_use": "current_observation_success"
     }
   },
   "runtime": {

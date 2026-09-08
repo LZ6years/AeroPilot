@@ -14,7 +14,7 @@ from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.phase import ADVANCE_TO_NEXT_PHASE, COMPLETE_TASK, CONTINUE_CURRENT_PHASE, PhaseTransition
 from src.agent.planning.schemas import CoupledActionPhasePlan, PlannedStep, ShortHorizonPlan
 from src.agent.safety import SafetyDecision, SafetySupervisor
-from src.agent.transcript import AgentToolCall, AssistantTurn
+from src.agent.transcript import AgentToolCall, AssistantTurn, ToolResult
 from src.agent.semantic.schemas import SemanticPhase, SemanticPlan, TaskGoal, TaskParseResult
 from src.agent.semantic.task_parser import TaskParser
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter, PrimitiveResult
@@ -60,6 +60,47 @@ def test_task_runtime_default_loop_guard_is_40():
     parameter = inspect.signature(TaskRuntime.__init__).parameters["runtime_loop_guard_windows"]
 
     assert parameter.default == 40
+
+
+def test_native_completion_requires_fresh_success_after_evidence_tool_use(
+    tmp_path,
+):
+    run_dir = tmp_path / "completion_evidence_freshness"
+    recorder = AsyncRunLogger(run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=HoverOnlyPlanner(),
+        shutdown_policy="none",
+    )
+    runtime.agent_transcript.start_instruction("hold a measured distance", "inst")
+    runtime.agent_transcript.append_state(
+        {"current_phase": {"name": "final_phase"}},
+        "obs_0002",
+    )
+    runtime.agent_transcript.append_tool_result(
+        ToolResult(
+            "call_failed",
+            "skill.metric_depth.sample_region",
+            "error",
+            data={"observation_id": "obs_0002"},
+        )
+    )
+
+    with pytest.raises(ValueError, match="successful result for the current observation"):
+        runtime._validate_current_observation_completion_evidence("final_phase")
+
+    runtime.agent_transcript.append_tool_result(
+        ToolResult(
+            "call_ok",
+            "skill.metric_depth.sample_region",
+            "ok",
+            data={"observation_id": "obs_0002", "distance_m": 3.5},
+        )
+    )
+    runtime._validate_current_observation_completion_evidence("final_phase")
+    recorder.close()
 
 
 def test_task_runtime_injects_one_model_config_into_planner_dependencies(tmp_path):
