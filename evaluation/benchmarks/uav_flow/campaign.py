@@ -208,7 +208,13 @@ def audit_campaign(
             if isinstance(item, dict) and str(item.get("case_id")) in finalized_ids
         ]
         for item in native_case_violations:
-            violations.append({"scope": "native_transcript", "segment": segment_name, **item})
+            violations.append(
+                {
+                    "scope": "native_transcript",
+                    "segment": segment_name,
+                    **item,
+                }
+            )
         for item in native_cases.values():
             coverage = item.get("coverage")
             if isinstance(coverage, dict):
@@ -266,8 +272,19 @@ def audit_campaign(
         "scene_session_missing",
         "scene_lifecycle_mismatch",
     }
-    protocol_valid = not any(item.get("scope") == "native_transcript" for item in violations)
-    infrastructure_clean = not any(item.get("code") in config_codes for item in violations)
+    protocol_valid = not any(
+        item.get("scope") == "native_transcript" for item in violations
+    )
+    trace_valid = bool(ordered_results) and all(
+        item.get("trace_valid") is True for item in ordered_results
+    )
+    tracking_valid = bool(ordered_results) and all(
+        item.get("tracking_valid") is True for item in ordered_results
+    )
+    infrastructure_clean = (
+        not any(item.get("code") in config_codes for item in violations)
+        and all(item.get("infrastructure_clean") is True for item in ordered_results)
+    )
     duplicate_present = any(
         item.get("code") == "duplicate_finalized_case" for item in violations
     )
@@ -294,8 +311,19 @@ def audit_campaign(
         "finalized_case_count": len(finalized_by_id),
         "coverage_complete": coverage_complete,
         "protocol_valid": protocol_valid,
+        "trace_valid": trace_valid,
+        "tracking_valid": tracking_valid,
         "infrastructure_clean": infrastructure_clean,
-        "status": "ok" if coverage_complete and protocol_valid and infrastructure_clean and not violations else "incomplete_or_invalid",
+        "status": (
+            "ok"
+            if coverage_complete
+            and protocol_valid
+            and trace_valid
+            and tracking_valid
+            and infrastructure_clean
+            and not violations
+            else "incomplete_or_invalid"
+        ),
         "missing_case_ids": missing_ids,
         "unknown_finalized_case_ids": unknown_finalized,
         "segments": segment_reports,
@@ -314,6 +342,9 @@ def audit_campaign(
                 "stopped_reason": item.get("stopped_reason"),
                 "ndtw": (item.get("ndtw") or {}).get("ndtw"),
                 "action_count": ((item.get("trace") or {}).get("action_count", 0)),
+                "trace_valid": item.get("trace_valid"),
+                "tracking_valid": item.get("tracking_valid"),
+                "infrastructure_clean": item.get("infrastructure_clean"),
                 "segment": owner_by_id.get(item["case_id"]),
                 "review_html": item.get("review_html"),
             }
@@ -444,24 +475,27 @@ def _case_result(payload: dict[str, Any], case_dir: Path) -> dict[str, Any]:
         "sr_judge": payload.get("sr_judge") if isinstance(payload.get("sr_judge"), dict) else {},
         "trace": payload.get("trace") if isinstance(payload.get("trace"), dict) else {},
         "backend_action_tracking": payload.get("backend_action_tracking") if isinstance(payload.get("backend_action_tracking"), dict) else {},
+        "trace_valid": payload.get("trace_valid"),
+        "tracking_valid": payload.get("tracking_valid"),
+        "infrastructure_clean": payload.get("infrastructure_clean"),
         "review_html": str(case_dir / "review.html"),
     }
 
 
 def _behavior_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
-    zero_action = 0
+    zero_motion = 0
     tracking_out_of_tolerance = 0
     action_count = 0
     for item in results:
         trace = item.get("trace") or {}
         tracking = item.get("backend_action_tracking") or {}
-        action_count += int(trace.get("action_count") or 0)
-        zero_action += int(tracking.get("zero_action_completion") is True)
+        action_count += int(trace.get("physical_call_count") or 0)
+        zero_motion += int(tracking.get("zero_motion_completion") is True)
         tracking_out_of_tolerance += int(tracking.get("all_observed_within_tolerance") is False)
     return {
         "completed_count": sum(bool(item.get("completed")) for item in results),
         "loop_guard_count": sum(item.get("stopped_reason") == "runtime_loop_guard_reached" for item in results),
-        "zero_action_completion_count": zero_action,
+        "zero_motion_completion_count": zero_motion,
         "tracking_out_of_tolerance_count": tracking_out_of_tolerance,
         "physical_action_count": action_count,
     }
@@ -475,6 +509,8 @@ def _campaign_markdown(report: dict[str, Any]) -> str:
         f"- Status: {report.get('status')}",
         f"- Coverage complete: {report.get('coverage_complete')}",
         f"- Protocol valid: {report.get('protocol_valid')}",
+        f"- Trace valid: {report.get('trace_valid')}",
+        f"- Tracking valid: {report.get('tracking_valid')}",
         f"- Infrastructure clean: {report.get('infrastructure_clean')}",
         f"- Finalized: {report.get('finalized_case_count')}/{report.get('expected_case_count')}",
         f"- Overall mean nDTW: {metrics.get('overall_mean_ndtw')}",
@@ -521,6 +557,7 @@ def _campaign_html(report: dict[str, Any]) -> str:
         "</head><body>"
         "<h1>UAV-Flow Campaign</h1>"
         f"<p>Status: <strong>{esc(report.get('status'))}</strong>; finalized {esc(report.get('finalized_case_count'))}/{esc(report.get('expected_case_count'))}; violations {esc(len(report.get('violations') or []))}.</p>"
+        f"<p>Protocol valid: {esc(report.get('protocol_valid'))}; trace valid: {esc(report.get('trace_valid'))}; tracking valid: {esc(report.get('tracking_valid'))}; infrastructure clean: {esc(report.get('infrastructure_clean'))}.</p>"
         "<h2>Segments</h2><table><thead><tr><th>Segment</th><th>Status</th><th>Cases</th><th>Review</th></tr></thead>"
         f"<tbody>{segment_rows}</tbody></table>"
         "<h2>Cases</h2><table><thead><tr><th>Case</th><th>Class</th><th>Status</th><th>nDTW</th><th>Review</th></tr></thead>"

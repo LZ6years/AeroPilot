@@ -52,6 +52,86 @@ def _valid_eval(tmp_path: Path) -> Path:
             "status": "ok",
             "completed": True,
             "stopped_reason": None,
+            "trace_valid": True,
+            "tracking_valid": True,
+            "infrastructure_clean": True,
+            "trace": {
+                "trace_schema_version": "physical_window_v2",
+                "trace_integrity": "ok",
+                "trace_issues": [],
+                "action_count": 2,
+                "physical_call_count": 2,
+                "physical_window_count": 1,
+                "motion_call_count": 2,
+                "samples": [],
+                "coordinate_frames": ["unrealcv_world_m"],
+                "physical_windows": [
+                    {
+                        "decision_id": "decision_0001",
+                        "phase": "move",
+                        "phase_key": "1:move",
+                        "window_index": 1,
+                        "status": "ok",
+                        "observation_before_id": "obs_1",
+                        "observation_after_id": "obs_2",
+                        "observation_before_pose": {
+                            "x": 0.0,
+                            "y": 0.0,
+                            "z": 1.0,
+                            "yaw_deg": 0.0,
+                            "coordinate_frame": "unrealcv_world_m",
+                        },
+                        "observation_after_pose": {
+                            "x": 0.49,
+                            "y": 0.09,
+                            "z": 1.0,
+                            "yaw_deg": 10.0,
+                            "coordinate_frame": "unrealcv_world_m",
+                        },
+                        "ordered_steps": [
+                            {
+                                "step_index": 0,
+                                "tool_call_id": "turn_1",
+                                "tool": "uav.turn_relative",
+                                "effect": "physical",
+                                "status": "ok",
+                                "action_ref": "memory/actions.jsonl#1",
+                                "result_pose_ref": "memory/poses.jsonl#1",
+                                "requested_args": {"yaw_deg": 10.0},
+                                "executed_args": {"yaw_deg": 10.0},
+                                "safety_interventions": [],
+                            },
+                            {
+                                "step_index": 1,
+                                "tool_call_id": "move_1",
+                                "tool": "uav.move_body",
+                                "effect": "physical",
+                                "status": "ok",
+                                "action_ref": "memory/actions.jsonl#2",
+                                "result_pose_ref": "memory/poses.jsonl#2",
+                                "requested_args": {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 0.5},
+                                "executed_args": {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 0.5},
+                                "safety_interventions": [],
+                            },
+                        ],
+                    }
+                ],
+            },
+            "backend_action_tracking": {
+                "schema_version": "uav_flow_window_tracking_v2",
+                "association_source": "explicit_runtime_window",
+                "trace_valid": True,
+                "tracking_valid": True,
+                "physical_call_count": 2,
+                "motion_call_count": 2,
+                "physical_window_count": 1,
+                "tracked_window_count": 1,
+                "observed_window_count": 1,
+                "unavailable_window_count": 0,
+                "zero_motion_completion": False,
+                "all_observed_within_tolerance": True,
+                "windows": [],
+            },
             "scene_capabilities": {
                 "supported_actions": ["turn_relative", "move_body", "hover"]
             },
@@ -226,6 +306,23 @@ def test_audit_accepts_closed_multi_action_transcript(tmp_path):
     assert report["violations"] == []
     assert report["coverage"]["physical_batches"] == 1
     assert report["coverage"]["multi_action_batches"] == 1
+
+
+def test_audit_rejects_legacy_trace_and_unavailable_window_tracking(tmp_path):
+    root = _valid_eval(tmp_path)
+    case_path = root / "cases" / "case-1" / "case.json"
+    payload = json.loads(case_path.read_text(encoding="utf-8"))
+    payload["trace"]["trace_schema_version"] = None
+    payload["trace"]["trace_integrity"] = "unsupported_legacy_trace_schema"
+    payload["backend_action_tracking"]["tracking_valid"] = False
+    _write_json(case_path, payload)
+
+    report = MODULE.audit_evaluation(root)
+
+    scopes = {item["scope"] for item in report["violations"]}
+    codes = {item["code"] for item in report["violations"]}
+    assert "physical_trace" in scopes
+    assert "physical_trace_schema_unsupported" in codes
 
 
 def test_audit_accepts_generic_report_blocked_terminal(tmp_path):

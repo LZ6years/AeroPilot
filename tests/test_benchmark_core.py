@@ -65,9 +65,13 @@ def test_trace_reader_excludes_preflight_and_shutdown_and_keeps_stationary_actio
     assert trace.samples[1].tool == "uav.turn_relative"
     assert trace.samples[1].pose["x"] == 1.0
     assert trace.samples[1].action_args == {"yaw_deg": 15.0}
-    assert trace.samples[1].post_action_observation_pose["yaw_deg"] == (
+    assert trace.physical_windows[0].observation_after_pose["yaw_deg"] == (
         15.25
     )
+    assert trace.trace_integrity == "ok"
+    assert trace.physical_call_count == 1
+    assert trace.physical_window_count == 1
+    assert trace.motion_call_count == 1
     assert trace.require_single_coordinate_frame("unrealcv_world_m") == (
         "unrealcv_world_m"
     )
@@ -79,7 +83,7 @@ def test_trace_reader_falls_back_to_observation_pose(tmp_path):
     trace = EpisodeTraceReader().read(TraceCursor.freeze(tmp_path))
 
     assert trace.action_count == 1
-    assert trace.samples[-1].source == "observation_fallback"
+    assert trace.samples[-1].source == "window_observation_fallback"
     assert trace.samples[-1].pose["yaw_deg"] == 15.0
 
 
@@ -113,6 +117,33 @@ def test_trace_reader_excludes_runtime_error_hover_after_last_observation(
     assert [sample.tool for sample in trace.samples[1:]] == [
         "uav.turn_relative"
     ]
+
+
+def test_trace_reader_never_promotes_read_only_action_to_trajectory(tmp_path):
+    write_trace_fixture(tmp_path, include_read_only=True)
+
+    trace = EpisodeTraceReader().read(TraceCursor.freeze(tmp_path))
+
+    assert trace.trace_integrity == "ok"
+    assert trace.action_count == 1
+    assert trace.physical_call_count == 1
+    assert [sample.tool for sample in trace.samples[1:]] == [
+        "uav.turn_relative"
+    ]
+    assert trace.physical_windows[0].ordered_steps[0].action_ref == (
+        "memory/actions.jsonl#3"
+    )
+
+
+def test_trace_reader_marks_legacy_timestamps_unsupported(tmp_path):
+    write_trace_fixture(tmp_path)
+    (tmp_path / "events.jsonl").unlink()
+
+    trace = EpisodeTraceReader().read(TraceCursor.freeze(tmp_path))
+
+    assert trace.trace_integrity == "unsupported_legacy_trace_schema"
+    assert trace.action_count == 0
+    assert len(trace.samples) == 1
 
 
 def test_trace_reader_rejects_mixed_coordinate_frames(tmp_path):
@@ -740,6 +771,8 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
     assert "distance_m" in html and "2.9" in html
     assert "Internal depth calculation audit" in html and "mad_m" in html
     assert "Requested metric-depth ROI" in html
+    assert "Manual ROI review required." in html
+    assert "semantic target intended by the model" in html
     assert "depth-roi-box" in html
     assert "review_assets/frames/obs_1.png" in html
     assert "review_assets/frames/obs_2.png" in html
@@ -1752,11 +1785,31 @@ def write_trace_fixture(
     *,
     include_action: bool = True,
     action_pose: bool = True,
+    include_read_only: bool = False,
 ) -> None:
     memory_dir = run_dir / "memory"
     state_dir = run_dir / "state"
     memory_dir.mkdir(parents=True, exist_ok=True)
     state_dir.mkdir(parents=True, exist_ok=True)
+    append_jsonl(
+        run_dir / "events.jsonl",
+        {
+            "timestamp": "2026-01-01T00:00:00+00:00",
+            "event": "instruction_started",
+            "payload": {"physical_trace_schema": "physical_window_v2"},
+        },
+    )
+    if include_read_only:
+        append_jsonl(
+            memory_dir / "actions.jsonl",
+            {
+                "id": "act_depth",
+                "timestamp": "2026-01-01T00:00:01.5+00:00",
+                "tool": "skill.metric_depth.sample_region",
+                "args": {"observation_id": "obs_0001"},
+                "result": {"ok": True},
+            },
+        )
     append_jsonl(
         memory_dir / "actions.jsonl",
         {
@@ -1878,6 +1931,46 @@ def write_trace_fixture(
             pose_line = 2
     else:
         pose_line = 1
+    if include_action:
+        append_jsonl(
+            run_dir / "events.jsonl",
+            {
+                "timestamp": "2026-01-01T00:00:03+00:00",
+                "event": "phase_window_recorded",
+                "payload": {
+                    "schema_version": "physical_window_v2",
+                    "decision_id": "decision_0001",
+                    "phase": "turn",
+                    "phase_key": "1:turn",
+                    "window_index": 1,
+                    "observation_before_id": "obs_0001",
+                    "observation_after_id": "obs_0002",
+                    "status": "ok",
+                    "ordered_steps": [
+                        {
+                            "step_index": 0,
+                            "tool_call_id": "call_turn",
+                            "tool": "uav.turn_relative",
+                            "effect": "physical",
+                            "status": "ok",
+                            "action_ref": (
+                                "memory/actions.jsonl#3"
+                                if include_read_only
+                                else "memory/actions.jsonl#2"
+                            ),
+                            "result_pose_ref": (
+                                "memory/poses.jsonl#2"
+                                if action_pose
+                                else None
+                            ),
+                            "requested_args": {"yaw_deg": 15.0},
+                            "executed_args": {"yaw_deg": 15.0},
+                            "safety_interventions": [],
+                        }
+                    ],
+                },
+            },
+        )
     (state_dir / "flight_memory.json").write_text(
         json.dumps(
             {

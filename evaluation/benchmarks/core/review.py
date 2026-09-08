@@ -832,6 +832,13 @@ def _transcript_record_body(
                 "Internal depth calculation audit",
                 empty_message="No internal depth calculation audit.",
             )
+            if payload.get("status") == "ok":
+                result_body += (
+                    '<p class="transcript-feedback"><strong>Manual ROI review required.</strong> '
+                    "The metric depth is valid for the submitted pixels, but "
+                    "evaluation has not verified that the ROI belongs to the "
+                    "semantic target intended by the model.</p>"
+                )
         else:
             result_body = _json_details(
                 result_data,

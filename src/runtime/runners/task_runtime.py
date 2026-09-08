@@ -67,6 +67,9 @@ from src.runtime.middleware import ToolTelemetryMiddleware
 from src.uav import clean_pose_for_model, pose_measurements
 
 
+PHYSICAL_TRACE_SCHEMA_VERSION = "physical_window_v2"
+
+
 class TaskRuntime:
     SHUTDOWN_POLICIES = {"hover", "land", "none"}
     SCENE_POLICIES = {"isolated", "reuse_running"}
@@ -262,6 +265,11 @@ class TaskRuntime:
                 "instruction": parse_result.instruction,
                 "phase_count": len(parse_result.plan.phases),
                 "phase_names": [phase.name for phase in parse_result.plan.phases],
+                # A task-level marker is required so a zero-motion run can be
+                # distinguished from a legacy run that simply lacks window
+                # records. Evaluation may trust only explicitly versioned
+                # physical-window evidence.
+                "physical_trace_schema": PHYSICAL_TRACE_SCHEMA_VERSION,
             },
         )
         scene = self._resolve_scene(map_id, scene_policy, scene_id)
@@ -928,6 +936,13 @@ class TaskRuntime:
             if step.kind != "tool" or not step.tool:
                 raise ValueError("runtime action plan requires tool steps; observation is automatic")
             self._validate_step_capability(scene, step.tool)
+            native_call = native_physical_calls[index] if index < len(native_physical_calls) else None
+            requested_tool = native_call.tool_name if native_call is not None else step.tool
+            relevant_interventions = [
+                dict(item)
+                for item in safety_decision.interventions
+                if item.get("tool") == requested_tool
+            ]
             try:
                 result = self.tool_telemetry.call_step(
                     scene_instance_id=scene.scene_instance_id,
@@ -958,14 +973,26 @@ class TaskRuntime:
                 )
             data = result.to_dict()
             write_result = self._record_action(state, step.tool, step.args, data)
-            native_call = native_physical_calls[index] if index < len(native_physical_calls) else None
+            action_ref = write_result.get("action_ref") or {}
+            pose_ref = write_result.get("pose_ref") or {}
+            step_tracking = {
+                "step_index": index,
+                "tool_call_id": (
+                    native_call.tool_call_id if native_call is not None else None
+                ),
+                "requested_tool": requested_tool,
+                "tool": step.tool,
+                "effect": self.tools.registry.get(step.tool).runtime.effect,
+                "status": "ok" if result.ok else "error",
+                "action_ref": action_ref.get("ref"),
+                "result_pose_ref": pose_ref.get("ref"),
+                "requested_args": dict(
+                    native_call.args if native_call is not None else step.args
+                ),
+                "executed_args": dict(step.args),
+                "safety_interventions": relevant_interventions,
+            }
             if native_call is not None:
-                requested_tool = native_call.tool_name
-                relevant_interventions = [
-                    dict(item)
-                    for item in safety_decision.interventions
-                    if item.get("tool") == requested_tool
-                ]
                 transcript_result = ToolResult(
                         tool_call_id=native_call.tool_call_id,
                         tool_name=requested_tool,
@@ -983,6 +1010,7 @@ class TaskRuntime:
                 executed_steps.append(
                     {
                         **payload,
+                        "tracking": step_tracking,
                         "result": data,
                         "stabilization": {
                             "status": "skipped",
@@ -1001,7 +1029,14 @@ class TaskRuntime:
                 step,
                 capabilities=scene.capabilities,
             )
-            executed_steps.append({**payload, "result": data, "stabilization": stabilization})
+            executed_steps.append(
+                {
+                    **payload,
+                    "tracking": step_tracking,
+                    "result": data,
+                    "stabilization": stabilization,
+                }
+            )
             self._event(
                 "tool_step_completed",
                 {
@@ -1040,6 +1075,21 @@ class TaskRuntime:
                             "phase": plan.phase,
                             "step_index": skipped_index,
                             "step": skipped_step.to_dict(),
+                            "tracking": {
+                                "step_index": skipped_index,
+                                "tool_call_id": call.tool_call_id,
+                                "requested_tool": call.tool_name,
+                                "tool": skipped_step.tool,
+                                "effect": self.tools.registry.get(
+                                    skipped_step.tool
+                                ).runtime.effect,
+                                "status": "skipped",
+                                "action_ref": None,
+                                "result_pose_ref": None,
+                                "requested_args": dict(call.args),
+                                "executed_args": None,
+                                "safety_interventions": [],
+                            },
                             "result": {
                                 "ok": False,
                                 "status": "skipped",
@@ -1106,10 +1156,14 @@ class TaskRuntime:
             window_record["visual_search_recharge"] = visual_search_recharge
         window_ref = self._write_phase_window_debug_artifact(phase_key, state.current_phase_window_count, window_record)
         window_summary = {
+            "schema_version": PHYSICAL_TRACE_SCHEMA_VERSION,
             **decision_meta,
             "phase": phase_name,
             "phase_key": phase_key,
             "window_index": state.current_phase_window_count,
+            "observation_before_id": observation_before.get("observation_id"),
+            "observation_after_id": observation_after.get("observation_id"),
+            "status": "error" if failed_native_index is not None else "ok",
             "action_window": plan.action_window.to_dict(),
             "coupled_phase_decision": transition.to_dict(),
             "executed_step_count": len(executed_steps),
@@ -1117,6 +1171,11 @@ class TaskRuntime:
                 executed.get("step", {}).get("tool")
                 for executed in executed_steps
                 if isinstance(executed.get("step", {}), dict)
+            ],
+            "ordered_steps": [
+                dict(executed.get("tracking"))
+                for executed in executed_steps
+                if isinstance(executed.get("tracking"), dict)
             ],
             "measurements": window_measurements,
             "safety_intervention_count": len(safety_decision.interventions),

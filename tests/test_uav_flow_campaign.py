@@ -128,11 +128,23 @@ def _segment(
             "completed": case_id != error_case,
             "stopped_reason": None,
             "error": {"error": "provider failed"} if case_id == error_case else None,
-            "trace": {"action_count": 1},
+            "trace": {
+                "action_count": 1,
+                "physical_call_count": 1,
+                "physical_window_count": 1,
+                "motion_call_count": 1,
+                "trace_schema_version": "physical_window_v2",
+                "trace_integrity": "ok",
+            },
+            "trace_valid": True,
+            "tracking_valid": True,
+            "infrastructure_clean": True,
             "ndtw": {"status": "ok", "ndtw": 0.5},
             "sr_judge": {"status": "skipped"},
             "backend_action_tracking": {
-                "zero_action_completion": False,
+                "zero_motion_completion": False,
+                "trace_valid": True,
+                "tracking_valid": True,
                 "all_observed_within_tolerance": True,
             },
         }
@@ -227,6 +239,38 @@ def test_finalized_error_is_not_returned_as_missing(tmp_path):
 
     assert report["missing_case_ids"] == ["case_c"]
     assert report["status_counts"] == {"error": 1, "ok": 1}
+
+
+def test_campaign_separates_trace_tracking_and_infrastructure_gates(tmp_path):
+    dataset = _dataset(tmp_path)
+    config_path, config = _config(tmp_path, dataset)
+    main = _segment(
+        tmp_path,
+        config,
+        "main",
+        ["case_a", "case_b", "case_c"],
+        ["case_a", "case_b", "case_c"],
+    )
+    case_path = main / "cases" / "case_b" / "case.json"
+    payload = json.loads(case_path.read_text(encoding="utf-8"))
+    payload["tracking_valid"] = False
+    payload["infrastructure_clean"] = False
+    payload["backend_action_tracking"]["tracking_valid"] = False
+    case_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = audit_campaign(
+        config_path,
+        [main],
+        expected_loop_guard_windows=50,
+        segment_auditor=_native_stub,
+    )
+
+    assert report["coverage_complete"] is True
+    assert report["protocol_valid"] is True
+    assert report["trace_valid"] is True
+    assert report["tracking_valid"] is False
+    assert report["infrastructure_clean"] is False
+    assert report["status"] == "incomplete_or_invalid"
 
 
 def test_campaign_rejects_duplicate_config_drift_and_dataset_drift(tmp_path):

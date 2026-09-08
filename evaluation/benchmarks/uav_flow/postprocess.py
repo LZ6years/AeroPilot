@@ -381,7 +381,9 @@ def _case_metrics(
         "translation_tracking_max_error_m": tracking.get(
             "max_position_error_m"
         ),
-        "zero_action_completion": tracking.get("zero_action_completion"),
+        "zero_motion_completion": tracking.get("zero_motion_completion"),
+        "trace_valid": tracking.get("trace_valid"),
+        "tracking_valid": tracking.get("tracking_valid"),
     }
 
 
@@ -405,9 +407,11 @@ def _summary_case(result: dict[str, Any]) -> dict[str, Any]:
             "translation_tracking_max_error_m": tracking.get(
                 "max_position_error_m"
             ),
-            "zero_action_completion": tracking.get(
-                "zero_action_completion"
+            "zero_motion_completion": tracking.get(
+                "zero_motion_completion"
             ),
+            "trace_valid": tracking.get("trace_valid"),
+            "tracking_valid": tracking.get("tracking_valid"),
         },
     }
 

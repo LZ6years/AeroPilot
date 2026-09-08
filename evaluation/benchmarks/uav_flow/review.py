@@ -91,22 +91,22 @@ def build_uav_flow_review_sections(
         tracking_summary = {
             key: value
             for key, value in backend_action_tracking.items()
-            if key != "samples"
+            if key != "windows"
         }
         sections.append(
             ReviewSection(
-                "Backend Action Tracking",
+                "Physical Window Tracking",
                 "key_value",
                 tracking_summary,
             )
         )
         sections.append(
             ReviewSection(
-                "Backend Action Tracking Samples",
+                "Physical Window Tracking Details",
                 "table",
                 [
                     dict(item)
-                    for item in backend_action_tracking.get("samples", [])
+                    for item in backend_action_tracking.get("windows", [])
                     if isinstance(item, dict)
                 ],
             )

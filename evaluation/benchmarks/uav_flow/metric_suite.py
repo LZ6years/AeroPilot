@@ -152,103 +152,140 @@ def _backend_action_tracking(
     action_config: UavActionConfig,
     completed: bool,
 ) -> dict[str, Any]:
-    """Compare requested primitives with settled post-action observations."""
+    """Compare composed physical windows with settled observations.
+
+    A Runtime window may contain several ordered physical calls but owns only
+    one automatic observation. Per-action timestamp association is therefore
+    invalid; only the explicit window boundary can measure settled tracking.
+    """
 
     rows: list[dict[str, Any]] = []
-    previous_pose = (
-        dict(trace.samples[0].pose) if trace.samples else None
-    )
-    for sample in trace.samples[1:]:
-        if sample.tool not in {"uav.turn_relative", "uav.move_body"}:
-            observed_pose = sample.post_action_observation_pose
-            if observed_pose is not None:
-                previous_pose = dict(observed_pose)
-            elif sample.pose:
-                previous_pose = dict(sample.pose)
-            continue
-        observed_pose = sample.post_action_observation_pose
+    for window in trace.physical_windows:
+        before = window.observation_before_pose
+        after = window.observation_after_pose
         row: dict[str, Any] = {
-            "action_id": sample.action_id,
-            "tool": sample.tool,
-            "observation_timestamp": (
-                sample.post_action_observation_timestamp
-            ),
+            "decision_id": window.decision_id,
+            "phase": window.phase,
+            "window_index": window.window_index,
+            "window_status": window.status,
+            "observation_before_id": window.observation_before_id,
+            "observation_after_id": window.observation_after_id,
+            "observation_timestamp": window.observation_after_timestamp,
             "expected_delta_m": None,
             "observed_delta_m": None,
             "position_tracking_error_m": None,
-            "requested_yaw_delta_deg": None,
+            "expected_yaw_delta_deg": None,
             "observed_yaw_delta_deg": None,
             "yaw_tracking_error_deg": None,
             "within_tolerance": None,
-            "unavailable_reason": None,
+            "unavailable_reason": window.unavailable_reason,
+            "ordered_steps": [],
         }
-        if previous_pose is None:
-            row["unavailable_reason"] = "pre_action_pose_unavailable"
-        elif observed_pose is None:
-            row["unavailable_reason"] = (
-                "post_action_observation_unavailable"
-            )
-        elif sample.tool == "uav.turn_relative":
-            requested = _finite_float(sample.action_args.get("yaw_deg"))
-            previous_yaw = _finite_float(previous_pose.get("yaw_deg"))
-            observed_yaw = _finite_float(observed_pose.get("yaw_deg"))
-            if requested is None:
-                row["unavailable_reason"] = "requested_yaw_unavailable"
-            elif previous_yaw is None or observed_yaw is None:
+        row["ordered_steps"] = [
+            {
+                "step_index": step.step_index,
+                "tool_call_id": step.tool_call_id,
+                "action_id": step.action_id,
+                "requested_tool": step.requested_tool,
+                "tool": step.tool,
+                "status": step.status,
+                "requested_args": dict(step.requested_args),
+                "executed_args": (
+                    dict(step.executed_args)
+                    if step.executed_args is not None
+                    else None
+                ),
+                "safety_interventions": [
+                    dict(item) for item in step.safety_interventions
+                ],
+                "acknowledged_pose": (
+                    dict(step.acknowledged_pose)
+                    if step.acknowledged_pose is not None
+                    else None
+                ),
+            }
+            for step in window.ordered_steps
+        ]
+        expected_pose = dict(before) if before is not None else None
+        if row["unavailable_reason"] is None and expected_pose is None:
+            row["unavailable_reason"] = "pre_window_observation_unavailable"
+        if row["unavailable_reason"] is None and after is None:
+            row["unavailable_reason"] = "post_window_observation_unavailable"
+        if row["unavailable_reason"] is None:
+            for step in window.ordered_steps:
+                if step.status != "ok":
+                    continue
+                if step.executed_args is None:
+                    row["unavailable_reason"] = "executed_args_unavailable"
+                    break
+                if step.tool == "uav.hover":
+                    continue
+                if step.tool == "uav.turn_relative":
+                    requested = _finite_float(step.executed_args.get("yaw_deg"))
+                    current_yaw = _finite_float(expected_pose.get("yaw_deg"))
+                    if requested is None or current_yaw is None:
+                        row["unavailable_reason"] = "requested_yaw_unavailable"
+                        break
+                    expected_pose["yaw_deg"] = _normalize_yaw(
+                        current_yaw + requested
+                    )
+                    continue
+                if step.tool == "uav.move_body":
+                    delta = _expected_move_delta(
+                        step.executed_args,
+                        expected_pose,
+                        action_config,
+                    )
+                    if delta is None:
+                        row["unavailable_reason"] = (
+                            "requested_translation_unavailable"
+                        )
+                        break
+                    try:
+                        for axis, key in (("x", "dx"), ("y", "dy"), ("z", "dz")):
+                            expected_pose[axis] = float(expected_pose[axis]) + delta[key]
+                    except (KeyError, TypeError, ValueError):
+                        row["unavailable_reason"] = "pre_window_position_unavailable"
+                        break
+                    continue
+                row["unavailable_reason"] = "unsupported_physical_tool"
+                break
+
+        if row["unavailable_reason"] is None and expected_pose is not None and after is not None:
+            expected_delta = _observed_position_delta(before, expected_pose)
+            observed_delta = _observed_position_delta(before, after)
+            before_yaw = _finite_float(before.get("yaw_deg"))
+            expected_yaw = _finite_float(expected_pose.get("yaw_deg"))
+            observed_yaw = _finite_float(after.get("yaw_deg"))
+            if expected_delta is None or observed_delta is None:
+                row["unavailable_reason"] = "observation_position_unavailable"
+            elif before_yaw is None or expected_yaw is None or observed_yaw is None:
                 row["unavailable_reason"] = "observation_yaw_unavailable"
             else:
-                observed = _normalize_yaw(observed_yaw - previous_yaw)
-                error = _normalize_yaw(observed - requested)
-                row.update(
-                    {
-                        "requested_yaw_delta_deg": requested,
-                        "observed_yaw_delta_deg": observed,
-                        "yaw_tracking_error_deg": error,
-                        "within_tolerance": (
-                            abs(error) <= TURN_TRACKING_TOLERANCE_DEG
-                        ),
-                    }
-                )
-        else:
-            expected = _expected_move_delta(
-                sample.action_args,
-                previous_pose,
-                action_config,
-            )
-            observed = _observed_position_delta(
-                previous_pose,
-                observed_pose,
-            )
-            if expected is None:
-                row["unavailable_reason"] = (
-                    "requested_translation_unavailable"
-                )
-            elif observed is None:
-                row["unavailable_reason"] = (
-                    "observation_position_unavailable"
-                )
-            else:
-                error = math.sqrt(
+                position_error = math.sqrt(
                     sum(
-                        (observed[key] - expected[key]) ** 2
+                        (observed_delta[key] - expected_delta[key]) ** 2
                         for key in ("dx", "dy", "dz")
                     )
                 )
+                expected_yaw_delta = _normalize_yaw(expected_yaw - before_yaw)
+                observed_yaw_delta = _normalize_yaw(observed_yaw - before_yaw)
+                yaw_error = _normalize_yaw(observed_yaw_delta - expected_yaw_delta)
                 row.update(
                     {
-                        "expected_delta_m": expected,
-                        "observed_delta_m": observed,
-                        "position_tracking_error_m": error,
+                        "expected_delta_m": expected_delta,
+                        "observed_delta_m": observed_delta,
+                        "position_tracking_error_m": position_error,
+                        "expected_yaw_delta_deg": expected_yaw_delta,
+                        "observed_yaw_delta_deg": observed_yaw_delta,
+                        "yaw_tracking_error_deg": yaw_error,
                         "within_tolerance": (
-                            error <= TRANSLATION_TRACKING_TOLERANCE_M
+                            position_error <= TRANSLATION_TRACKING_TOLERANCE_M
+                            and abs(yaw_error) <= TURN_TRACKING_TOLERANCE_DEG
                         ),
                     }
                 )
         rows.append(row)
-        if observed_pose is not None:
-            previous_pose = dict(observed_pose)
-        elif sample.pose:
-            previous_pose = dict(sample.pose)
 
     position_errors = [
         float(row["position_tracking_error_m"])
@@ -260,17 +297,34 @@ def _backend_action_tracking(
         for row in rows
         if row["yaw_tracking_error_deg"] is not None
     ]
-    observed_rows = [
-        row for row in rows if row["unavailable_reason"] is None
-    ]
+    observed_rows = [row for row in rows if row["unavailable_reason"] is None]
+    trace_supported = trace.trace_schema_version == "physical_window_v2"
+    trace_valid = trace_supported and trace.trace_integrity == "ok"
     return {
-        "formal_action_count": trace.action_count,
-        "tracked_action_count": len(rows),
-        "observed_count": len(observed_rows),
-        "unavailable_count": len(rows) - len(observed_rows),
-        "zero_action_completion": (
-            bool(completed) and trace.action_count == 0
+        "schema_version": "uav_flow_window_tracking_v2",
+        "association_source": (
+            "explicit_runtime_window"
+            if trace_supported
+            else "unsupported_legacy_trace_schema"
         ),
+        "trace_valid": trace_valid,
+        "tracking_valid": trace_valid and len(observed_rows) == len(rows),
+        "trace_issues": list(trace.trace_issues),
+        "physical_call_count": trace.physical_call_count,
+        "motion_call_count": trace.motion_call_count,
+        "physical_window_count": trace.physical_window_count,
+        "failed_window_count": sum(
+            window.status != "ok" for window in trace.physical_windows
+        ),
+        "failed_or_skipped_step_count": sum(
+            step.status != "ok"
+            for window in trace.physical_windows
+            for step in window.ordered_steps
+        ),
+        "tracked_window_count": len(rows),
+        "observed_window_count": len(observed_rows),
+        "unavailable_window_count": len(rows) - len(observed_rows),
+        "zero_motion_completion": bool(completed) and trace.motion_call_count == 0,
         "translation_tolerance_m": TRANSLATION_TRACKING_TOLERANCE_M,
         "yaw_tolerance_deg": TURN_TRACKING_TOLERANCE_DEG,
         "mean_position_error_m": (
@@ -292,7 +346,7 @@ def _backend_action_tracking(
             if rows
             else None
         ),
-        "samples": rows,
+        "windows": rows,
     }
 
 
@@ -301,12 +355,7 @@ def _backend_turn_tracking(
     *,
     action_tracking: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Measure requested yaw against the first post-action observation.
-
-    Action-result poses describe the Backend target pose.  This diagnostic
-    deliberately uses the following observation instead so evaluation reports
-    the settled simulator state rather than echoing the requested command.
-    """
+    """Project window-level yaw tracking for Turn/Rotate diagnostics."""
 
     if action_tracking is None:
         action_tracking = _backend_action_tracking(
@@ -315,16 +364,23 @@ def _backend_turn_tracking(
             completed=False,
         )
     rows = []
-    for item in action_tracking.get("samples", []):
-        if not isinstance(item, dict) or item.get("tool") != "uav.turn_relative":
+    for item in action_tracking.get("windows", []):
+        if not isinstance(item, dict):
+            continue
+        steps = item.get("ordered_steps")
+        if not isinstance(steps, list) or not any(
+            isinstance(step, dict)
+            and step.get("status") == "ok"
+            and step.get("tool") == "uav.turn_relative"
+            for step in steps
+        ):
             continue
         error = item.get("yaw_tracking_error_deg")
         rows.append(
             {
-                "action_id": item.get("action_id"),
-                "requested_yaw_delta_deg": item.get(
-                    "requested_yaw_delta_deg"
-                ),
+                "decision_id": item.get("decision_id"),
+                "window_index": item.get("window_index"),
+                "expected_yaw_delta_deg": item.get("expected_yaw_delta_deg"),
                 "observed_yaw_delta_deg": item.get(
                     "observed_yaw_delta_deg"
                 ),
@@ -340,6 +396,11 @@ def _backend_turn_tracking(
             }
         )
 
+        if error is not None:
+            rows[-1]["within_tolerance"] = (
+                abs(float(error)) <= TURN_TRACKING_TOLERANCE_DEG
+            )
+
     observed_errors = [
         float(item["abs_tracking_error_deg"])
         for item in rows
@@ -347,7 +408,7 @@ def _backend_turn_tracking(
     ]
     return {
         "tolerance_deg": TURN_TRACKING_TOLERANCE_DEG,
-        "turn_action_count": len(rows),
+        "turn_window_count": len(rows),
         "observed_count": len(observed_errors),
         "unavailable_count": len(rows) - len(observed_errors),
         "mean_abs_error_deg": (

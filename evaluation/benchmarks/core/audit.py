@@ -228,8 +228,13 @@ class BenchmarkAuditReader:
             )
         ]
         candidate_actions = [
-            item
-            for item in records["memory/actions.jsonl"]
+            {
+                **item,
+                "_memory_ref": f"memory/actions.jsonl#{index}",
+            }
+            for index, item in enumerate(
+                records["memory/actions.jsonl"], start=1
+            )
             if _in_time_window(item, cursor.started_at, cursor.ended_at)
             and str(item.get("tool") or "") not in _NON_PLANNER_TOOLS
         ]
@@ -665,6 +670,39 @@ def _formal_planner_actions(
     fallback.
     """
 
+    declared_v2 = any(
+        (event.get("event") or event.get("kind")) == "instruction_started"
+        and isinstance(event.get("payload"), dict)
+        and event["payload"].get("physical_trace_schema") == "physical_window_v2"
+        for event in events
+    )
+    if declared_v2:
+        ordered_refs = []
+        for event in events:
+            if (event.get("event") or event.get("kind")) != "phase_window_recorded":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict) or payload.get("schema_version") != "physical_window_v2":
+                continue
+            steps = payload.get("ordered_steps")
+            if not isinstance(steps, list):
+                continue
+            ordered_refs.extend(
+                str(step.get("action_ref"))
+                for step in steps
+                if isinstance(step, dict) and step.get("action_ref")
+            )
+        by_ref = {
+            str(item.get("_memory_ref")): item
+            for item in candidates
+            if item.get("_memory_ref")
+        }
+        return [
+            {key: value for key, value in by_ref[ref].items() if key != "_memory_ref"}
+            for ref in ordered_refs
+            if ref in by_ref
+        ]
+
     steps = []
     for event in events:
         if (event.get("event") or event.get("kind")) != (
@@ -675,7 +713,10 @@ def _formal_planner_actions(
         if isinstance(payload, dict):
             steps.append((event, payload))
     if not steps:
-        return [dict(item) for item in candidates]
+        return [
+            {key: value for key, value in item.items() if key != "_memory_ref"}
+            for item in candidates
+        ]
 
     available = list(enumerate(candidates))
     used: set[int] = set()
@@ -709,7 +750,11 @@ def _formal_planner_actions(
             used.add(index)
             formal.append(
                 {
-                    **action,
+                    **{
+                        key: value
+                        for key, value in action.items()
+                        if key != "_memory_ref"
+                    },
                     "phase": payload.get("phase"),
                     "step_index": payload.get("step_index"),
                     "tool_step_timestamp": event.get("timestamp"),

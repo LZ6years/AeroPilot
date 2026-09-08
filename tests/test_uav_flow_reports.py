@@ -145,16 +145,19 @@ def test_uav_flow_review_sections_include_metrics_tracking_and_plots(
             },
         },
         backend_action_tracking={
-            "formal_action_count": 1,
-            "tracked_action_count": 1,
-            "observed_count": 1,
-            "unavailable_count": 0,
-            "zero_action_completion": False,
+            "schema_version": "uav_flow_window_tracking_v2",
+            "physical_call_count": 1,
+            "physical_window_count": 1,
+            "motion_call_count": 1,
+            "tracked_window_count": 1,
+            "observed_window_count": 1,
+            "unavailable_window_count": 0,
+            "zero_motion_completion": False,
             "max_position_error_m": 0.01,
-            "samples": [
+            "windows": [
                 {
-                    "action_id": "move_1",
-                    "tool": "uav.move_body",
+                    "decision_id": "decision_0001",
+                    "window_index": 1,
                     "position_tracking_error_m": 0.01,
                 }
             ],
@@ -184,16 +187,16 @@ def test_uav_flow_review_sections_include_metrics_tracking_and_plots(
         == "act_1"
     )
     assert (
-        by_title["Backend Action Tracking"].payload[
+        by_title["Physical Window Tracking"].payload[
             "max_position_error_m"
         ]
         == 0.01
     )
     assert (
-        by_title["Backend Action Tracking Samples"].payload[0][
-            "action_id"
+        by_title["Physical Window Tracking Details"].payload[0][
+            "decision_id"
         ]
-        == "move_1"
+        == "decision_0001"
     )
     assert (
         by_title["Scenario Contract Diagnostics"].payload["contract"][

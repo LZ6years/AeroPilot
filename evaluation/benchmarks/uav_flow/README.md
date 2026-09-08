@@ -102,8 +102,12 @@ DowntownWest 的真实运行沿用旧 UAV-Flow Blueprint 视觉契约：
 - `cases/<case_id>/scenario_diagnostics.json`：目标实际位置、旋转和视觉契约回读；
 - `cases/<case_id>/turn_diagnostics.json`：数据集 yaw 结果和独立的
   `backend_turn_tracking`；
-- `cases/<case_id>/backend_action_tracking.json`：正式 yaw/translation primitive
-  的请求值、观测值、执行误差和 `zero_action_completion`；
+- `cases/<case_id>/backend_action_tracking.json`：显式 physical window 的
+  ordered calls、before/after observation、组合期望位姿、观测执行误差和
+  `zero_motion_completion`；旧运行缺少 `physical_window_v2` 时只标记为不支持，
+  不使用时间戳推断；
+- 成功的 `skill.metric_depth.sample_region` 会在 Transcript 中标记为需要人工
+  ROI 语义复核；数值只证明所选像素的深度，不证明框内像素属于模型声称的目标；
 - `summary.json`、`summary.md`、case 指标和评测真值文件。
 
 不再生成 case 级 Markdown review；Core HTML 是唯一的可视化审计页面。

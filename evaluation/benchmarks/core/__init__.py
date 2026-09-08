@@ -31,6 +31,8 @@ from evaluation.benchmarks.core.review import (
     ReviewSection,
 )
 from evaluation.benchmarks.core.trace import (
+    EpisodePhysicalStep,
+    EpisodePhysicalWindow,
     EpisodeTrace,
     EpisodeTraceReader,
     EpisodeTraceSample,
@@ -50,6 +52,8 @@ __all__ = [
     "BenchmarkReviewRenderer",
     "BenchmarkSummaryReview",
     "EpisodeAuditCursor",
+    "EpisodePhysicalStep",
+    "EpisodePhysicalWindow",
     "EpisodeTrace",
     "EpisodeTraceReader",
     "EpisodeTraceSample",

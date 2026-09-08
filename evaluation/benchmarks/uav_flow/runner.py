@@ -473,8 +473,15 @@ class UavFlowBenchmarkRunner:
                 "cleanup_errors": [],
             }
             trace_payload: dict[str, Any] = {
+                "trace_schema_version": None,
+                "trace_integrity": "episode_setup_failed",
+                "trace_issues": ["episode_setup_failed"],
                 "samples": [],
                 "action_count": 0,
+                "physical_call_count": 0,
+                "physical_window_count": 0,
+                "motion_call_count": 0,
+                "physical_windows": [],
                 "coordinate_frames": [],
             }
             ndtw_result = {
@@ -489,12 +496,18 @@ class UavFlowBenchmarkRunner:
             }
             turn_diagnostics = None
             backend_action_tracking = {
-                "formal_action_count": 0,
-                "tracked_action_count": 0,
-                "observed_count": 0,
-                "unavailable_count": 0,
-                "zero_action_completion": False,
-                "samples": [],
+                "schema_version": "uav_flow_window_tracking_v2",
+                "association_source": "episode_setup_failed",
+                "trace_valid": False,
+                "tracking_valid": False,
+                "physical_call_count": 0,
+                "motion_call_count": 0,
+                "physical_window_count": 0,
+                "tracked_window_count": 0,
+                "observed_window_count": 0,
+                "unavailable_window_count": 0,
+                "zero_motion_completion": False,
+                "windows": [],
             }
             metric_error = None
             scene_capabilities = None
@@ -521,17 +534,21 @@ class UavFlowBenchmarkRunner:
             backend_action_tracking = execution.metrics.get(
                 "backend_action_tracking",
                 {
-                    "formal_action_count": trace_payload.get(
-                        "action_count", 0
-                    ),
-                    "tracked_action_count": 0,
-                    "observed_count": 0,
-                    "unavailable_count": 0,
-                    "zero_action_completion": (
+                    "schema_version": "uav_flow_window_tracking_v2",
+                    "association_source": "metric_failed",
+                    "trace_valid": trace_payload.get("trace_integrity") == "ok",
+                    "tracking_valid": False,
+                    "physical_call_count": trace_payload.get("physical_call_count", 0),
+                    "motion_call_count": trace_payload.get("motion_call_count", 0),
+                    "physical_window_count": trace_payload.get("physical_window_count", 0),
+                    "tracked_window_count": 0,
+                    "observed_window_count": 0,
+                    "unavailable_window_count": trace_payload.get("physical_window_count", 0),
+                    "zero_motion_completion": (
                         bool(outcome.get("completed"))
-                        and trace_payload.get("action_count", 0) == 0
+                        and trace_payload.get("motion_call_count", 0) == 0
                     ),
-                    "samples": [],
+                    "windows": [],
                 },
             )
             metric_error = execution.metric_error
@@ -645,6 +662,18 @@ class UavFlowBenchmarkRunner:
             "ndtw": ndtw_result,
             "turn_diagnostics": turn_diagnostics,
             "backend_action_tracking": backend_action_tracking,
+            "trace_valid": backend_action_tracking.get("trace_valid") is True,
+            "tracking_valid": backend_action_tracking.get("tracking_valid") is True,
+            "infrastructure_clean": (
+                backend_action_tracking.get("tracking_valid") is True
+                and backend_action_tracking.get("all_observed_within_tolerance")
+                is not False
+                and backend_action_tracking.get("failed_window_count", 0) == 0
+                and backend_action_tracking.get(
+                    "failed_or_skipped_step_count", 0
+                )
+                == 0
+            ),
             "sr_judge": sr_result,
             "stmr": stmr_summary,
             "metric_error": metric_error,
@@ -696,9 +725,9 @@ class UavFlowBenchmarkRunner:
                 "translation_tracking_max_error_m": (
                     backend_action_tracking or {}
                 ).get("max_position_error_m"),
-                "zero_action_completion": (
+                "zero_motion_completion": (
                     backend_action_tracking or {}
-                ).get("zero_action_completion"),
+                ).get("zero_motion_completion"),
             },
             audit=audit,
             frame_assets=frame_assets,
@@ -745,6 +774,18 @@ class UavFlowBenchmarkRunner:
             "ndtw": ndtw_result,
             "turn_diagnostics": turn_diagnostics,
             "backend_action_tracking": backend_action_tracking,
+            "trace_valid": backend_action_tracking.get("trace_valid") is True,
+            "tracking_valid": backend_action_tracking.get("tracking_valid") is True,
+            "infrastructure_clean": (
+                backend_action_tracking.get("tracking_valid") is True
+                and backend_action_tracking.get("all_observed_within_tolerance")
+                is not False
+                and backend_action_tracking.get("failed_window_count", 0) == 0
+                and backend_action_tracking.get(
+                    "failed_or_skipped_step_count", 0
+                )
+                == 0
+            ),
             "scenario_diagnostics": scenario_diagnostics,
             "sr_judge": sr_result,
             "stmr": stmr_summary,
@@ -1054,8 +1095,8 @@ def _result_console_line(result: dict[str, Any]) -> str:
         f"{tracking.get('max_abs_error_deg')} "
         "translation_tracking_max_error_m="
         f"{action_tracking.get('max_position_error_m')} "
-        "zero_action_completion="
-        f"{action_tracking.get('zero_action_completion')}"
+        "zero_motion_completion="
+        f"{action_tracking.get('zero_motion_completion')}"
     )
 
 

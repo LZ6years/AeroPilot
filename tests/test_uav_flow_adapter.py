@@ -6,6 +6,8 @@ import pytest
 
 from evaluation.benchmarks.core import (
     BenchmarkExecutionOutcome,
+    EpisodePhysicalStep,
+    EpisodePhysicalWindow,
     EpisodeTrace,
     EpisodeTraceSample,
 )
@@ -158,6 +160,19 @@ def test_turn_metric_suite_reports_real_pose_and_yaw_diagnostics(tmp_path):
         ),
         action_count=1,
         coordinate_frames=("unrealcv_world_m",),
+        physical_windows=(
+            physical_window(
+                1,
+                pose(1.0, 2.0, 0.5, 90.0),
+                pose(1.06, 2.0, 0.5, 115.4),
+                [("uav.turn_relative", {"yaw_deg": 25.0})],
+            ),
+        ),
+        physical_call_count=1,
+        physical_window_count=1,
+        motion_call_count=1,
+        trace_schema_version="physical_window_v2",
+        trace_integrity="ok",
     )
     payload = UavFlowEvaluationPayload(
         case_id=case.case_id,
@@ -187,7 +202,7 @@ def test_turn_metric_suite_reports_real_pose_and_yaw_diagnostics(tmp_path):
     assert diagnostics["initial_yaw_error_deg"] == 0.0
     assert diagnostics["initial_pose_within_tolerance"] is True
     tracking = diagnostics["backend_turn_tracking"]
-    assert tracking["turn_action_count"] == 1
+    assert tracking["turn_window_count"] == 1
     assert tracking["observed_count"] == 1
     assert tracking["max_abs_error_deg"] == pytest.approx(0.4)
     assert tracking["all_observed_within_tolerance"] is True
@@ -244,6 +259,32 @@ def test_turn_tracking_handles_signed_wrap_and_missing_observation(tmp_path):
         ),
         action_count=3,
         coordinate_frames=("unrealcv_world_m",),
+        physical_windows=(
+            physical_window(
+                1,
+                pose(0.0, 0.0, 0.0, 170.0),
+                pose(0.0, 0.0, 0.0, -159.7),
+                [("uav.turn_relative", {"yaw_deg": 30.0})],
+            ),
+            physical_window(
+                2,
+                pose(0.0, 0.0, 0.0, -159.7),
+                pose(0.0, 0.0, 0.0, -174.9),
+                [("uav.turn_relative", {"yaw_deg": -15.0})],
+            ),
+            physical_window(
+                3,
+                pose(0.0, 0.0, 0.0, -174.9),
+                None,
+                [("uav.turn_relative", {"yaw_deg": 10.0})],
+                unavailable_reason="post_window_observation_unavailable",
+            ),
+        ),
+        physical_call_count=3,
+        physical_window_count=3,
+        motion_call_count=3,
+        trace_schema_version="physical_window_v2",
+        trace_integrity="ok",
     )
     payload = UavFlowEvaluationPayload(
         case_id=case.case_id,
@@ -264,7 +305,7 @@ def test_turn_tracking_handles_signed_wrap_and_missing_observation(tmp_path):
     )
 
     tracking = result["turn_diagnostics"]["backend_turn_tracking"]
-    assert tracking["turn_action_count"] == 3
+    assert tracking["turn_window_count"] == 3
     assert tracking["observed_count"] == 2
     assert tracking["unavailable_count"] == 1
     assert tracking["mean_abs_error_deg"] == pytest.approx(0.25)
@@ -276,7 +317,7 @@ def test_turn_tracking_handles_signed_wrap_and_missing_observation(tmp_path):
         pytest.approx(-15.2)
     )
     assert tracking["samples"][2]["unavailable_reason"] == (
-        "post_action_observation_unavailable"
+        "post_window_observation_unavailable"
     )
 
 
@@ -315,6 +356,29 @@ def test_backend_action_tracking_reports_translation_and_zero_action(tmp_path):
         ),
         action_count=1,
         coordinate_frames=("unrealcv_world_m",),
+        physical_windows=(
+            physical_window(
+                1,
+                pose(1.0, 2.0, 0.5, 90.0),
+                pose(1.0, 4.0, 0.5, 90.0),
+                [
+                    (
+                        "uav.move_body",
+                        {
+                            "vx": 1.0,
+                            "vy": 0.0,
+                            "vz": 0.0,
+                            "duration": 2.0,
+                        },
+                    )
+                ],
+            ),
+        ),
+        physical_call_count=1,
+        physical_window_count=1,
+        motion_call_count=1,
+        trace_schema_version="physical_window_v2",
+        trace_integrity="ok",
     )
 
     result = UavFlowMetricSuite(case, tmp_path).evaluate(
@@ -324,13 +388,13 @@ def test_backend_action_tracking_reports_translation_and_zero_action(tmp_path):
     )
 
     tracking = result["backend_action_tracking"]
-    assert tracking["zero_action_completion"] is False
+    assert tracking["zero_motion_completion"] is False
     assert tracking["max_position_error_m"] == pytest.approx(0.0)
     assert tracking["all_observed_within_tolerance"] is True
-    assert tracking["samples"][0]["expected_delta_m"] == pytest.approx(
+    assert tracking["windows"][0]["expected_delta_m"] == pytest.approx(
         {"dx": 0.0, "dy": 2.0, "dz": 0.0}
     )
-    assert tracking["samples"][0]["observed_delta_m"] == pytest.approx(
+    assert tracking["windows"][0]["observed_delta_m"] == pytest.approx(
         {"dx": 0.0, "dy": 2.0, "dz": 0.0}
     )
 
@@ -340,11 +404,13 @@ def test_backend_action_tracking_reports_translation_and_zero_action(tmp_path):
             samples=(sample(1.0, 2.0, 0.5, 90.0),),
             action_count=0,
             coordinate_frames=("unrealcv_world_m",),
+            trace_schema_version="physical_window_v2",
+            trace_integrity="ok",
         ),
         BenchmarkExecutionOutcome(completed=True),
     )
     assert (
-        zero_result["backend_action_tracking"]["zero_action_completion"]
+        zero_result["backend_action_tracking"]["zero_motion_completion"]
         is True
     )
     assert (
@@ -352,6 +418,195 @@ def test_backend_action_tracking_reports_translation_and_zero_action(tmp_path):
             "all_observed_within_tolerance"
         ]
         is None
+    )
+
+
+def test_window_tracking_composes_turn_then_move_in_one_batch(tmp_path):
+    before = pose(0.0, 0.0, 1.0, 0.0)
+    after = pose(0.984808, 0.173648, 1.0, 10.0)
+    window = physical_window(
+        1,
+        before,
+        after,
+        [
+            ("uav.turn_relative", {"yaw_deg": 10.0}),
+            (
+                "uav.move_body",
+                {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 1.0},
+            ),
+        ],
+    )
+    trace = EpisodeTrace(
+        samples=(sample(0.0, 0.0, 1.0, 0.0),),
+        action_count=2,
+        coordinate_frames=("unrealcv_world_m",),
+        physical_windows=(window,),
+        physical_call_count=2,
+        physical_window_count=1,
+        motion_call_count=2,
+        trace_schema_version="physical_window_v2",
+        trace_integrity="ok",
+    )
+
+    tracking = metric_result(tmp_path, trace)["backend_action_tracking"]
+
+    assert tracking["tracked_window_count"] == 1
+    assert tracking["windows"][0]["expected_delta_m"] == pytest.approx(
+        {"dx": 0.984807753, "dy": 0.173648178, "dz": 0.0}
+    )
+    assert tracking["windows"][0]["expected_yaw_delta_deg"] == 10.0
+    assert tracking["all_observed_within_tolerance"] is True
+
+
+def test_window_tracking_uses_each_window_boundary_after_hover(tmp_path):
+    hover = physical_window(
+        1,
+        pose(0.0, 0.0, 1.0, 0.0),
+        pose(0.0, 0.0, 1.0, 0.0),
+        [("uav.hover", {})],
+    )
+    move = physical_window(
+        2,
+        pose(0.0, 0.0, 1.0, 0.0),
+        pose(2.0, 0.0, 1.0, 0.0),
+        [
+            (
+                "uav.move_body",
+                {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 2.0},
+            )
+        ],
+    )
+    trace = EpisodeTrace(
+        samples=(sample(0.0, 0.0, 1.0, 0.0),),
+        action_count=2,
+        coordinate_frames=("unrealcv_world_m",),
+        physical_windows=(hover, move),
+        physical_call_count=2,
+        physical_window_count=2,
+        motion_call_count=1,
+        trace_schema_version="physical_window_v2",
+        trace_integrity="ok",
+    )
+
+    tracking = metric_result(tmp_path, trace)["backend_action_tracking"]
+
+    assert [item["position_tracking_error_m"] for item in tracking["windows"]] == [
+        pytest.approx(0.0),
+        pytest.approx(0.0),
+    ]
+    assert tracking["zero_motion_completion"] is False
+
+
+def test_window_tracking_regression_depth_calls_cannot_consume_move_observation(
+    tmp_path,
+):
+    before = pose(-111.01492, 1.85048, 1.86642, -105.257)
+    after = pose(-111.53660, -0.08028, 1.86642, -104.957)
+    move = physical_window(
+        1,
+        before,
+        after,
+        [
+            (
+                "uav.move_body",
+                {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 2.0},
+            )
+        ],
+    )
+    trace = EpisodeTrace(
+        samples=(
+            sample(
+                before["x"],
+                before["y"],
+                before["z"],
+                before["yaw_deg"],
+            ),
+        ),
+        action_count=1,
+        coordinate_frames=("unrealcv_world_m",),
+        physical_windows=(move,),
+        physical_call_count=1,
+        physical_window_count=1,
+        motion_call_count=1,
+        trace_schema_version="physical_window_v2",
+        trace_integrity="ok",
+    )
+
+    tracking = metric_result(tmp_path, trace)["backend_action_tracking"]
+    row = tracking["windows"][0]
+
+    assert row["observed_delta_m"] == pytest.approx(
+        {"dx": -0.52168, "dy": -1.93076, "dz": 0.0}
+    )
+    assert row["position_tracking_error_m"] < 0.01
+    assert row["position_tracking_error_m"] != pytest.approx(2.0)
+
+
+def test_window_tracking_uses_safety_executed_args(tmp_path):
+    step = EpisodePhysicalStep(
+            step_index=0,
+            tool_call_id="call_move",
+            requested_tool="uav.move_body",
+            tool="uav.move_body",
+        effect="physical",
+        status="ok",
+        action_ref="memory/actions.jsonl#1",
+        result_pose_ref="memory/poses.jsonl#1",
+        action_id="act_0001",
+        requested_args={"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 2.0},
+        executed_args={"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 1.0},
+        safety_interventions=({"field": "duration", "to": 1.0},),
+    )
+    window = EpisodePhysicalWindow(
+        decision_id="decision_0001",
+        phase="test",
+        phase_key="1:test",
+        window_index=1,
+        status="ok",
+        observation_before_id="obs_0001",
+        observation_after_id="obs_0002",
+        observation_before_pose=pose(0.0, 0.0, 1.0, 0.0),
+        observation_after_pose=pose(1.0, 0.0, 1.0, 0.0),
+        observation_after_timestamp="2026-01-01T00:00:01+00:00",
+        ordered_steps=(step,),
+    )
+    trace = EpisodeTrace(
+        samples=(sample(0.0, 0.0, 1.0, 0.0),),
+        action_count=1,
+        coordinate_frames=("unrealcv_world_m",),
+        physical_windows=(window,),
+        physical_call_count=1,
+        physical_window_count=1,
+        motion_call_count=1,
+        trace_schema_version="physical_window_v2",
+        trace_integrity="ok",
+    )
+
+    row = metric_result(tmp_path, trace)["backend_action_tracking"]["windows"][0]
+
+    assert row["expected_delta_m"] == pytest.approx(
+        {"dx": 1.0, "dy": 0.0, "dz": 0.0}
+    )
+    assert row["position_tracking_error_m"] == pytest.approx(0.0)
+
+
+def metric_result(tmp_path, trace: EpisodeTrace) -> dict:
+    case = make_case()
+    payload = UavFlowEvaluationPayload(
+        case_id=case.case_id,
+        class_name=case.class_name,
+        initial_pos=tuple(case.initial_pos),
+        end_pos=(),
+        target_pos=tuple(case.target_pos or ()),
+        reference_path_raw=(),
+        reference_path_preprocessed=tuple(
+            tuple(row) for row in case.reference_path_preprocessed
+        ),
+    )
+    return UavFlowMetricSuite(case, tmp_path).evaluate(
+        payload,
+        trace,
+        BenchmarkExecutionOutcome(completed=True),
     )
 
 
@@ -369,6 +624,56 @@ def make_case() -> UavFlowCase:
         reference_path_preprocessed=[
             [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
         ],
+    )
+
+
+def pose(x: float, y: float, z: float, yaw: float) -> dict:
+    return {
+        "x": x,
+        "y": y,
+        "z": z,
+        "yaw_deg": yaw,
+        "coordinate_frame": "unrealcv_world_m",
+    }
+
+
+def physical_window(
+    index: int,
+    before: dict,
+    after: dict | None,
+    steps: list[tuple[str, dict]],
+    *,
+    unavailable_reason: str | None = None,
+) -> EpisodePhysicalWindow:
+    physical_steps = tuple(
+        EpisodePhysicalStep(
+            step_index=step_index,
+            tool_call_id=f"call_{index}_{step_index}",
+            requested_tool=tool,
+            tool=tool,
+            effect="physical",
+            status="ok",
+            action_ref=f"memory/actions.jsonl#{index + step_index}",
+            result_pose_ref=None,
+            action_id=f"act_{index}_{step_index}",
+            requested_args=dict(args),
+            executed_args=dict(args),
+        )
+        for step_index, (tool, args) in enumerate(steps)
+    )
+    return EpisodePhysicalWindow(
+        decision_id=f"decision_{index:04d}",
+        phase="test",
+        phase_key="1:test",
+        window_index=index,
+        status="ok",
+        observation_before_id=f"obs_{index:04d}",
+        observation_after_id=(f"obs_{index + 1:04d}" if after else None),
+        observation_before_pose=dict(before),
+        observation_after_pose=(dict(after) if after else None),
+        observation_after_timestamp="2026-01-01T00:00:00+00:00" if after else None,
+        ordered_steps=physical_steps,
+        unavailable_reason=unavailable_reason,
     )
 
 

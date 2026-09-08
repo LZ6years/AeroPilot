@@ -8,6 +8,7 @@ import json
 
 import pytest
 
+from evaluation.benchmarks.core import EpisodeTraceReader, TraceCursor
 from src.agent.mission_state import MissionState
 from src.agent.messages import AgentMessage
 from src.agent.planning.model_action_planner import ModelActionPlanner
@@ -2087,6 +2088,7 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
             encoding="utf-8"
         ).splitlines()
     ]
+    events = load_event_records(run_dir)
 
     assert state.completed
     assert state.current_phase_window_count == 1
@@ -2110,6 +2112,33 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
     assert [record["tool"] for record in action_records].count("uav.turn_relative") == 1
     assert [record["tool"] for record in action_records].count("uav.move_body") == 1
     assert len(observation_records) == 2
+    instruction_event = next(
+        record for record in events if record["event"] == "instruction_started"
+    )
+    assert instruction_event["payload"]["physical_trace_schema"] == (
+        "physical_window_v2"
+    )
+    window_event = next(
+        record for record in events if record["event"] == "phase_window_recorded"
+    )
+    window_payload = window_event["payload"]
+    assert window_payload["schema_version"] == "physical_window_v2"
+    assert window_payload["observation_before_id"] == observation_records[0]["id"]
+    assert window_payload["observation_after_id"] == observation_records[1]["id"]
+    assert [item["tool_call_id"] for item in window_payload["ordered_steps"]] == [
+        "call_turn",
+        "call_move",
+    ]
+    assert all(item["effect"] == "physical" for item in window_payload["ordered_steps"])
+    assert all(item["action_ref"] for item in window_payload["ordered_steps"])
+    trace = EpisodeTraceReader().read(TraceCursor.freeze(run_dir))
+    assert trace.trace_integrity == "ok"
+    assert trace.physical_call_count == 2
+    assert trace.physical_window_count == 1
+    assert [sample.tool for sample in trace.samples[1:]] == [
+        "uav.turn_relative",
+        "uav.move_body",
+    ]
     flight_memory = json.loads(
         (run_dir / "state" / "flight_memory.json").read_text(encoding="utf-8")
     )

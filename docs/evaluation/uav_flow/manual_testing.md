@@ -74,9 +74,11 @@ Turn diagnostics 包含 reference/actual yaw delta、最终 yaw 误差、平移�
 `audit_summary`。
 
 `case_ids` 是运行选择，不是环境校准。同一 DowntownWest 下更换案例只需替换 ID，
-不修改 MapPackage。报告中的 `backend_action_tracking.json` 分别记录 yaw 和
-translation primitive 的请求/观测误差；模型零动作结束会明确标为
-`zero_action_completion`。
+不修改 MapPackage。新运行通过 `physical_window_v2` 显式记录每批动作的 ordered
+steps 和 before/after observation。`backend_action_tracking.json` 按窗口组合 turn、
+move 和 hover 后再与唯一的批后观测比较；模型没有成功执行 move/turn 就完成时标记为
+`zero_motion_completion`。旧运行缺少该 schema 时显示
+`unsupported_legacy_trace_schema`，不得使用时间戳猜测或通过严格 Campaign 审计。
 
 ## 3. 273 Case 全量配置
 

@@ -127,8 +127,8 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
         f"- Cases: {metrics.get('case_count', 0)}",
         f"- Evaluated nDTW: {metrics.get('evaluated_count', 0)}",
         f"- Overall mean nDTW: {metrics.get('overall_mean_ndtw')}",
-        f"- Zero-action completions: "
-        f"{action_tracking.get('zero_action_completion_count', 0)}",
+        f"- Zero-motion completions: "
+        f"{action_tracking.get('zero_motion_completion_count', 0)}",
         f"- Max translation tracking error (m): "
         f"{action_tracking.get('max_position_error_m')}",
         f"- Max yaw tracking error (deg): "
@@ -169,8 +169,8 @@ def _summary_markdown(summary: dict[str, Any]) -> str:
             f"translation_drift_m={turn.get('translation_drift_m')} "
             f"translation_tracking_max_error_m="
             f"{tracking.get('max_position_error_m')} "
-            f"zero_action_completion="
-            f"{tracking.get('zero_action_completion')}"
+            f"zero_motion_completion="
+            f"{tracking.get('zero_motion_completion')}"
         )
     return "\n".join(lines) + "\n"
 
@@ -208,11 +208,17 @@ def _summarize_backend_action_tracking(
 ) -> dict[str, Any]:
     position_errors = []
     yaw_errors = []
-    zero_action_count = 0
+    zero_motion_count = 0
+    trace_invalid_count = 0
+    tracking_invalid_count = 0
     for result in results:
         tracking = result.get("backend_action_tracking") or {}
-        if tracking.get("zero_action_completion") is True:
-            zero_action_count += 1
+        if tracking.get("zero_motion_completion") is True:
+            zero_motion_count += 1
+        if tracking.get("trace_valid") is not True:
+            trace_invalid_count += 1
+        if tracking.get("tracking_valid") is not True:
+            tracking_invalid_count += 1
         position_error = tracking.get("max_position_error_m")
         yaw_error = tracking.get("max_abs_yaw_error_deg")
         if isinstance(position_error, (int, float)):
@@ -220,7 +226,9 @@ def _summarize_backend_action_tracking(
         if isinstance(yaw_error, (int, float)):
             yaw_errors.append(float(yaw_error))
     return {
-        "zero_action_completion_count": zero_action_count,
+        "zero_motion_completion_count": zero_motion_count,
+        "trace_invalid_count": trace_invalid_count,
+        "tracking_invalid_count": tracking_invalid_count,
         "max_position_error_m": (
             max(position_errors) if position_errors else None
         ),

@@ -37,7 +37,7 @@ from src.tools.registry import ToolRegistry, default_registry
 
 
 SCHEMA_VERSION = "native_tool_loop_real_audit_v2"
-TERMINAL_RESULT_STATUSES = {"ok", "error", "rejected"}
+TERMINAL_RESULT_STATUSES = {"ok", "error", "rejected", "skipped"}
 PUBLIC_INTENT_SOURCES = {"provider_content", "tool_arguments_fallback"}
 
 
@@ -50,6 +50,7 @@ class Violation:
     case_id: str | None = None
     transcript_id: str | None = None
     tool_call_id: str | None = None
+    scope: str = "native_transcript"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +59,7 @@ class Violation:
             "case_id": self.case_id,
             "transcript_id": self.transcript_id,
             "tool_call_id": self.tool_call_id,
+            "scope": self.scope,
         }
 
 
@@ -209,6 +211,14 @@ def _audit_case(
         violations,
         case_id,
     )
+    _audit_physical_trace(
+        case_data,
+        transcript,
+        audit,
+        registry,
+        violations,
+        case_id,
+    )
     return {
         "case_id": case_id,
         "class_name": _nested(case_data, "case", "class_name"),
@@ -241,6 +251,7 @@ def _audit_transcript(
         "rejected_assistant_turns": 0,
         "reported_blocked_turns": 0,
         "task_terminal_items": 0,
+        "metric_depth_successes_requiring_manual_roi_review": 0,
     }
     if not records:
         return coverage
@@ -423,6 +434,13 @@ def _audit_transcript(
                 )
                 continue
             results.setdefault(call_id, []).append((index, payload, transcript_id))
+            if (
+                payload.get("tool_name") == "skill.metric_depth.sample_region"
+                and payload.get("status") == "ok"
+            ):
+                coverage[
+                    "metric_depth_successes_requiring_manual_roi_review"
+                ] += 1
             if payload.get("status") not in TERMINAL_RESULT_STATUSES:
                 violations.append(
                     Violation(
@@ -739,6 +757,259 @@ def _audit_transcript(
     _audit_portable_html(case_dir, audit, violations, case_id)
     _audit_scene_capabilities(records, case_data, registry, violations, case_id)
     return coverage
+
+
+def _audit_physical_trace(
+    case_data: dict[str, Any],
+    records: list[dict[str, Any]],
+    audit: dict[str, Any],
+    registry: ToolRegistry,
+    violations: list[Violation],
+    case_id: str,
+) -> None:
+    """Validate window-v2 evidence independently from transcript protocol."""
+
+    def trace_violation(code: str, message: str) -> None:
+        violations.append(
+            Violation(
+                code,
+                message,
+                case_id=case_id,
+                scope="physical_trace",
+            )
+        )
+
+    trace = case_data.get("trace")
+    if not isinstance(trace, dict):
+        trace_violation("physical_trace_missing", "case trace must be an object")
+        return
+    if trace.get("trace_schema_version") != "physical_window_v2":
+        trace_violation(
+            "physical_trace_schema_unsupported",
+            "strict audit requires physical_window_v2",
+        )
+        return
+    if trace.get("trace_integrity") != "ok":
+        trace_violation(
+            "physical_trace_invalid",
+            f"trace_integrity={trace.get('trace_integrity')!r}, issues={trace.get('trace_issues')!r}",
+        )
+    windows = trace.get("physical_windows")
+    if not isinstance(windows, list):
+        trace_violation("physical_windows_invalid", "physical_windows must be a list")
+        windows = []
+
+    observation_by_id = {
+        str(item.get("id")): item
+        for item in _dict_items(audit.get("observations"))
+        if item.get("id") not in (None, "")
+    }
+    trace_steps: dict[str, dict[str, Any]] = {}
+    after_ids: set[str] = set()
+    step_count = 0
+    motion_count = 0
+    for window in windows:
+        if not isinstance(window, dict):
+            trace_violation("physical_window_invalid", "physical window must be an object")
+            continue
+        before_id = window.get("observation_before_id")
+        after_id = window.get("observation_after_id")
+        if not isinstance(before_id, str) or not isinstance(after_id, str):
+            trace_violation(
+                "physical_window_observation_missing",
+                "physical window requires before/after observation IDs",
+            )
+        elif before_id == after_id:
+            trace_violation(
+                "physical_window_observation_not_advanced",
+                f"physical window reused {before_id!r}",
+            )
+        else:
+            if before_id not in observation_by_id:
+                trace_violation(
+                    "physical_window_before_observation_unknown",
+                    f"before observation {before_id!r} is absent from audit",
+                )
+            after_observation = observation_by_id.get(after_id)
+            if after_observation is None:
+                trace_violation(
+                    "physical_window_after_observation_unknown",
+                    f"after observation {after_id!r} is absent from audit",
+                )
+            elif after_observation.get("source") != "automatic_phase_window":
+                trace_violation(
+                    "physical_window_after_observation_source_invalid",
+                    f"after observation {after_id!r} is not automatic_phase_window",
+                )
+            if after_id in after_ids:
+                trace_violation(
+                    "physical_window_after_observation_duplicate",
+                    f"after observation {after_id!r} is reused by multiple windows",
+                )
+            after_ids.add(after_id)
+        steps = window.get("ordered_steps")
+        if not isinstance(steps, list) or not steps:
+            trace_violation(
+                "physical_window_steps_missing",
+                "physical window requires ordered physical steps",
+            )
+            continue
+        for expected_index, step in enumerate(steps):
+            step_count += 1
+            if not isinstance(step, dict):
+                trace_violation("physical_step_invalid", "physical step must be an object")
+                continue
+            if step.get("step_index") != expected_index:
+                trace_violation(
+                    "physical_step_order_invalid",
+                    f"expected step_index {expected_index}, got {step.get('step_index')!r}",
+                )
+            if step.get("effect") != "physical":
+                trace_violation(
+                    "non_physical_step_in_trace",
+                    f"trace step effect is {step.get('effect')!r}",
+                )
+            tool = str(step.get("tool") or "")
+            if (
+                step.get("status") == "ok"
+                and tool in {"uav.move_body", "uav.turn_relative"}
+            ):
+                motion_count += 1
+            call_id = step.get("tool_call_id")
+            if not isinstance(call_id, str) or not call_id:
+                trace_violation(
+                    "physical_step_tool_call_id_missing",
+                    "native physical trace step requires tool_call_id",
+                )
+            elif call_id in trace_steps:
+                trace_violation(
+                    "physical_step_tool_call_id_duplicate",
+                    f"duplicate physical tool_call_id {call_id!r}",
+                )
+            else:
+                trace_steps[call_id] = step
+            if step.get("status") in {"ok", "error"} and not step.get("action_ref"):
+                trace_violation(
+                    "physical_step_action_ref_missing",
+                    f"executed step {call_id!r} lacks action_ref",
+                )
+
+    if trace.get("physical_call_count") != step_count:
+        trace_violation(
+            "physical_call_count_mismatch",
+            f"declared={trace.get('physical_call_count')!r}, actual={step_count}",
+        )
+    if trace.get("physical_window_count") != len(windows):
+        trace_violation(
+            "physical_window_count_mismatch",
+            f"declared={trace.get('physical_window_count')!r}, actual={len(windows)}",
+        )
+    if trace.get("motion_call_count") != motion_count:
+        trace_violation(
+            "motion_call_count_mismatch",
+            f"declared={trace.get('motion_call_count')!r}, actual={motion_count}",
+        )
+
+    transcript_steps: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
+    results: dict[str, dict[str, Any]] = {}
+    for record in records:
+        if record.get("kind") != "tool_result":
+            continue
+        payload = _payload(record)
+        call_id = payload.get("tool_call_id")
+        if isinstance(call_id, str):
+            results[call_id] = payload
+    for record in records:
+        if record.get("kind") != "assistant_turn":
+            continue
+        calls = _payload(record).get("tool_calls")
+        if not isinstance(calls, list):
+            continue
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            call_id = call.get("tool_call_id")
+            if not isinstance(call_id, str):
+                continue
+            try:
+                spec = registry.get(str(call.get("tool_name") or ""))
+            except KeyError:
+                continue
+            result = results.get(call_id)
+            if (
+                spec.runtime.effect == "physical"
+                and result is not None
+                and result.get("status") in {"ok", "error", "skipped"}
+            ):
+                transcript_steps[call_id] = (call, result)
+    if set(trace_steps) != set(transcript_steps):
+        trace_violation(
+            "physical_trace_transcript_mismatch",
+            f"trace IDs={sorted(trace_steps)}, transcript IDs={sorted(transcript_steps)}",
+        )
+    for call_id in sorted(set(trace_steps) & set(transcript_steps)):
+        step = trace_steps[call_id]
+        call, result = transcript_steps[call_id]
+        if (step.get("requested_tool") or step.get("tool")) != call.get("tool_name"):
+            trace_violation(
+                "physical_trace_tool_mismatch",
+                f"{call_id}: trace requested={step.get('requested_tool')!r}, transcript={call.get('tool_name')!r}",
+            )
+        if step.get("status") != result.get("status"):
+            trace_violation(
+                "physical_trace_status_mismatch",
+                f"{call_id}: trace={step.get('status')!r}, ToolResult={result.get('status')!r}",
+            )
+        if not _json_equal(step.get("requested_args"), result.get("requested_args")):
+            trace_violation(
+                "physical_trace_requested_args_mismatch",
+                f"{call_id}: requested args differ from ToolResult",
+            )
+        if not _json_equal(step.get("executed_args"), result.get("executed_args")):
+            trace_violation(
+                "physical_trace_executed_args_mismatch",
+                f"{call_id}: executed args differ from ToolResult",
+            )
+        if step.get("action_ref") != result.get("result_ref"):
+            trace_violation(
+                "physical_trace_action_ref_mismatch",
+                f"{call_id}: action_ref differs from ToolResult result_ref",
+            )
+        if not _json_equal(
+            step.get("safety_interventions"),
+            result.get("safety_interventions"),
+        ):
+            trace_violation(
+                "physical_trace_safety_mismatch",
+                f"{call_id}: safety interventions differ from ToolResult",
+            )
+
+    tracking = case_data.get("backend_action_tracking")
+    if not isinstance(tracking, dict):
+        violations.append(
+            Violation(
+                "window_tracking_missing",
+                "backend_action_tracking must be an object",
+                case_id=case_id,
+                scope="tracking",
+            )
+        )
+        return
+    for key, expected in (
+        ("schema_version", "uav_flow_window_tracking_v2"),
+        ("association_source", "explicit_runtime_window"),
+        ("trace_valid", True),
+        ("tracking_valid", True),
+    ):
+        if tracking.get(key) != expected:
+            violations.append(
+                Violation(
+                    "window_tracking_invalid",
+                    f"{key} expected {expected!r}, got {tracking.get(key)!r}",
+                    case_id=case_id,
+                    scope="tracking",
+                )
+            )
 
 
 def _prior_evidence_refs(

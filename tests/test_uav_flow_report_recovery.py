@@ -234,7 +234,7 @@ def _case_payload(case_id: str) -> dict:
         "plot_result": {"status": "skipped"},
         "ndtw": {"status": "ok", "ndtw": 1.0},
         "turn_diagnostics": {},
-        "backend_action_tracking": {"zero_action_completion": False},
+        "backend_action_tracking": {"zero_motion_completion": False},
         "scenario_diagnostics": {},
         "sr_judge": {"status": "skipped"},
         "stmr": {"mode": "off", "status": "disabled"},
