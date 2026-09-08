@@ -7,7 +7,7 @@
     ],
     "enabled": [
       "knowledge.uav_flight",
-      "capabilities.metric_depth"
+      "capabilities.visual_grounding"
     ],
     "disabled": []
   },

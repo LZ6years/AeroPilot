@@ -72,6 +72,9 @@ def _capability(skill_dir: Path) -> SkillCapability | None:
         raise SkillMarkdownError(f"Capability handler must stay inside skill dir: {path}") from exc
     if not handler_path.exists() or not handler_path.is_file():
         raise SkillMarkdownError(f"Capability handler does not exist: {handler_path}")
+    settings = data.get("settings", {})
+    if not isinstance(settings, dict):
+        raise SkillMarkdownError(f"Capability settings must be a JSON object: {path}")
     return SkillCapability(
         call_name=call_name,
         wire_name=wire_name,
@@ -81,6 +84,7 @@ def _capability(skill_dir: Path) -> SkillCapability | None:
         handler=handler,
         handler_path=handler_path,
         mock=bool(data.get("mock", False)),
+        settings=dict(settings),
     )
 
 

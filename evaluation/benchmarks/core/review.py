@@ -815,7 +815,38 @@ def _transcript_record_body(
             "result_ref": payload.get("result_ref"),
         }
         result_data = _dict(payload.get("data"))
-        if payload.get("tool_name") == "skill.metric_depth.sample_region":
+        if payload.get("tool_name") == "skill.visual_grounding.locate":
+            candidates = result_data.get("candidates")
+            candidate_rows = candidates if isinstance(candidates, list) else []
+            result_body = _key_value_table(
+                {
+                    "observation_id": result_data.get("observation_id"),
+                    "query": result_data.get("query"),
+                    "include_distance": result_data.get("include_distance"),
+                }
+            ) + _record_table(
+                [item for item in candidate_rows if isinstance(item, dict)],
+                (
+                    "candidate_id",
+                    "label",
+                    "confidence",
+                    "box_normalized",
+                    "distance_m",
+                    "distance_status",
+                ),
+                empty_message="No grounded candidates were returned.",
+            ) + _json_details(
+                result_data.get("audit_details"),
+                "Internal grounding and depth audit",
+                empty_message="No internal grounding audit.",
+            )
+            if payload.get("status") == "ok":
+                result_body += (
+                    '<p class="transcript-feedback"><strong>Manual candidate review required.</strong> '
+                    "Detector boxes, masks, and metric depth are auditable, but evaluation "
+                    "has not verified that a candidate is the semantic target intended by the instruction.</p>"
+                )
+        elif payload.get("tool_name") == "skill.metric_depth.sample_region":
             result_body = _depth_roi_preview(
                 payload,
                 result_data,

@@ -60,6 +60,14 @@ def write_run_manifest(
             "max_tool_rounds": int(
                 getattr(model_config, "max_tool_rounds", 0) or 0
             ),
+            "max_consecutive_protocol_rejections": int(
+                getattr(
+                    model_config,
+                    "max_consecutive_protocol_rejections",
+                    0,
+                )
+                or 0
+            ),
         },
         "selected_case_ids": [case.case_id for case in selected],
         "class_counts": dict(

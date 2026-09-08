@@ -82,7 +82,12 @@ def _manifest(config: UavFlowEvalConfig, selected: list[str]) -> dict:
         "git_commit": "abc123",
         "git_dirty": False,
         "resolved_config": resolved,
-        "model": {"provider": "test", "name": "model", "max_tool_rounds": 6},
+        "model": {
+            "provider": "test",
+            "name": "model",
+            "max_tool_rounds": 10,
+            "max_consecutive_protocol_rejections": 3,
+        },
         "selected_case_ids": selected,
         "class_counts": {},
         "dataset_sha256": dataset_sha256(config),
@@ -182,7 +187,11 @@ def test_run_manifest_is_redacted_and_hashes_full_dataset(tmp_path, monkeypatch)
         lambda root: ("deadbeef", False),
     )
     model = SimpleNamespace(
-        provider="provider", model_name="model", max_tool_rounds=6, api_key="secret"
+        provider="provider",
+        model_name="model",
+        max_tool_rounds=10,
+        max_consecutive_protocol_rejections=3,
+        api_key="secret",
     )
 
     path = write_run_manifest(
@@ -194,6 +203,8 @@ def test_run_manifest_is_redacted_and_hashes_full_dataset(tmp_path, monkeypatch)
     assert payload["selected_case_ids"] == ["case_a", "case_b", "case_c"]
     assert payload["class_counts"] == {"Move": 1, "Turn": 2}
     assert payload["dataset_sha256"] == dataset_sha256(config)
+    assert payload["model"]["max_tool_rounds"] == 10
+    assert payload["model"]["max_consecutive_protocol_rejections"] == 3
     assert "secret" not in Path(path).read_text(encoding="utf-8")
 
 

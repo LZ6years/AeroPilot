@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +49,7 @@ class SkillCapability:
     handler: str
     handler_path: Path
     mock: bool = False
+    settings: dict[str, Any] = field(default_factory=dict)
 
     def listing(self) -> dict[str, Any]:
         return {

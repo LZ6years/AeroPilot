@@ -649,6 +649,73 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
             ),
             _transcript_event(
                 "assistant_turn",
+                {
+                    "turn_id": "assistant_grounding",
+                    "public_intent": "Locate the requested person and measure only this candidate.",
+                    "tool_calls": [
+                        {
+                            "tool_call_id": "call_grounding",
+                            "tool_name": "skill.visual_grounding.locate",
+                            "args": {
+                                "observation_id": "obs_1",
+                                "query": "the person to approach",
+                                "include_distance": True,
+                            },
+                        }
+                    ],
+                },
+                7,
+            ),
+            _transcript_event(
+                "tool_result",
+                {
+                    "tool_call_id": "call_grounding",
+                    "tool_name": "skill.visual_grounding.locate",
+                    "status": "ok",
+                    "message": "Located one candidate with robust metric depth.",
+                    "requested_args": {
+                        "observation_id": "obs_1",
+                        "query": "the person to approach",
+                        "include_distance": True,
+                    },
+                    "executed_args": {
+                        "observation_id": "obs_1",
+                        "query": "the person to approach",
+                        "include_distance": True,
+                    },
+                    "safety_interventions": [],
+                    "artifact_refs": ["frame_1"],
+                    "data": {
+                        "observation_id": "obs_1",
+                        "query": "the person to approach",
+                        "include_distance": True,
+                        "candidates": [
+                            {
+                                "candidate_id": "candidate_01",
+                                "label": "person",
+                                "confidence": 0.91,
+                                "box_normalized": [0.45, 0.3, 0.55, 0.75],
+                                "distance_m": 2.9,
+                                "distance_status": "ok",
+                            }
+                        ],
+                        "audit_details": {
+                            "grounding_backend": "grounding_dino",
+                            "segmentation_backend": "sam",
+                            "candidates": [
+                                {
+                                    "candidate_id": "candidate_01",
+                                    "sampling_source": "eroded_mask",
+                                    "mad_m": 0.06,
+                                }
+                            ],
+                        },
+                    },
+                },
+                7,
+            ),
+            _transcript_event(
+                "assistant_turn",
             {
                 "turn_id": "assistant_move",
                 "public_intent": "Turn and advance in one action window.",
@@ -774,6 +841,10 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
     assert "Manual ROI review required." in html
     assert "semantic target intended by the model" in html
     assert "depth-roi-box" in html
+    assert "skill.visual_grounding.locate" in html
+    assert "candidate_01" in html
+    assert "Internal grounding and depth audit" in html
+    assert "Manual candidate review required." in html
     assert "review_assets/frames/obs_1.png" in html
     assert "review_assets/frames/obs_2.png" in html
     assert "HISTORY" in html

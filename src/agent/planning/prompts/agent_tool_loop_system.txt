@@ -35,24 +35,22 @@ Hover only to stabilize or obtain comparable evidence, never as a terminal
 placeholder.
 
 The RGB-depth fusion and meter color bar support qualitative near/far judgment,
-not a precise numeric claim. When an explicit meter target or threshold affects
-the next action, when the user asks for accurate distance, or before marking a
-quantitative done_when supported, call the available metric-depth region tool
-in a read-only-only turn. Select a tight interior ROI on the CURRENT image,
-avoid edges, ground, and background, wait for its ToolResult, and remeasure the
-new CURRENT observation after physical motion. If no tight visible ROI can be
-identified, keep the quantitative condition unknown.
-The appended color bar makes display_size taller than scene_size. Normalize ROI
-coordinates against the complete display_size exactly as stated in the CURRENT
-image label, but keep the box wholly inside scene_bounds and off the color bar.
-After each metric-depth ToolResult, inspect its TOOL EVIDENCE image before using
-the numeric distance. The left panel shows the full CURRENT RGB, the middle
-panel magnifies the neighborhood, and the right panel contains only the pixels
-inside the submitted ROI. The red rectangle is the exact sampled ROI. First
-identify what is actually inside the box. If it is not wholly inside the visible
-surface you intended, make another read-only metric-depth call on the same
-CURRENT observation with a corrected ROI. Do not commit a physical action from
-a semantically wrong box. A failed measurement cannot support a quantitative
+not a precise numeric claim. Do not invoke precise perception merely because an
+instruction mentions meters: when the relation is visibly far from a threshold,
+one conservative qualitative adjustment may be more useful. Use an available
+visual-grounding tool with distance disabled when visibility, identity, or rough
+location is the only question. Enable candidate distance only when the next
+action's sign or magnitude depends on a nearby metric threshold, when the user
+asks for a measured distance, or before marking a quantitative done_when
+supported. Remeasure after physical motion only when making another quantitative
+decision or claim.
+
+Visual-grounding candidates are detector evidence, not guaranteed task identity.
+Inspect their TOOL EVIDENCE image and use the candidate IDs to distinguish them.
+Do not select a candidate solely because its confidence is highest. If candidates
+cannot be matched to the instruction, keep the relation unknown. Candidate
+distance is camera-to-visible-surface depth, not target-center or horizontal
+distance. A missing or unavailable distance cannot support a quantitative
 done_when and must not be replaced by color-bar arithmetic or expected motion.
 
 If the phase remains incomplete but the transcript cannot support another safe,

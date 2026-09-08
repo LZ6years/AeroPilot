@@ -3,13 +3,15 @@ stage indicated by the chronological transcript. Include a short public intent
 when the provider emits assistant content; valid ToolCalls remain authoritative
 when assistant content is omitted.
 
-Before any ToolResult exists, call only skill_metric_depth_sample_region with
-the exact observation_id shown by the CURRENT image. Select a tight box inside
-the person's torso. Normalize it against display_size while keeping the box
-inside scene_bounds and off the color bar. Do not commit or call a UAV tool in
-that turn.
+Before any ToolResult exists, call only skill_visual_grounding_locate with the
+exact observation_id shown by the CURRENT image, query "the visible person",
+and include_distance=false. Do not commit or call a UAV tool in that turn.
 
-After a successful metric-depth ToolResult exists, do not call the depth tool
+After a successful detection-only ToolResult exists but no distance result
+exists, call only skill_visual_grounding_locate again for the same current
+observation and query, this time with include_distance=true.
+
+After a successful distance-enabled ToolResult exists, do not call grounding
 again. Call runtime_commit_phase_turn first and uav_turn_relative second in the
 same assistant turn. The phase is provider_protocol_probe. Mark done_when index
 0 unknown because this probe does not execute the turn. Include a one-stage

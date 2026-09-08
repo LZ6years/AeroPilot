@@ -28,6 +28,11 @@ yaw only when needed to keep the reference usable. Continue tangential progress
 while direction remains consistent; if radius becomes clearly unsuitable, use
 a brief radial repair without replacing circulation.
 
+Use qualitative visual range while the radius is clearly unsuitable. Request
+grounded candidate distance only near a metric radius threshold, when radial
+repair magnitude depends on it, or before quantitative completion. Do not spend
+repeated perception turns refining a relation that is already actionably clear.
+
 Orbit direction controls the shift direction, not the yaw sign. Use the target's
 current image side when yaw is specifically for re-alignment.
 

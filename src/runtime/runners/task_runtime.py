@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import math
 import re
 from collections.abc import Callable
@@ -1216,7 +1217,13 @@ class TaskRuntime:
         """
 
         allowed_names = self._native_allowed_tool_names(scene)
-        max_rounds = int(getattr(self.model_config, "max_tool_rounds", 6) or 6)
+        max_rounds = int(getattr(self.model_config, "max_tool_rounds", 10) or 10)
+        max_consecutive_rejections = int(
+            getattr(self.model_config, "max_consecutive_protocol_rejections", 3) or 3
+        )
+        consecutive_protocol_rejections = 0
+        read_call_counts: dict[tuple[str, str], int] = {}
+        seen_read_call_signatures: set[tuple[str, str, str]] = set()
         model_rounds: list[dict[str, Any]] = []
         self._pending_failed_model_rounds = []
         for round_index in range(1, max_rounds + 1):
@@ -1245,6 +1252,13 @@ class TaskRuntime:
                     "agent_tool_protocol_rejected",
                     {"round": round_index, "error": str(exc)},
                 )
+                consecutive_protocol_rejections += 1
+                if consecutive_protocol_rejections >= max_consecutive_rejections:
+                    self._pending_failed_model_rounds = model_rounds
+                    raise RuntimeError(
+                        "Agent native tool loop exhausted "
+                        f"{max_consecutive_rejections} consecutive protocol rejections"
+                    )
                 continue
             except Exception as exc:
                 round_record = self._native_model_round_snapshot(round_index)
@@ -1290,6 +1304,13 @@ class TaskRuntime:
                 }
                 model_rounds.append(round_record)
                 self._reject_native_turn(turn.tool_calls, str(exc))
+                consecutive_protocol_rejections += 1
+                if consecutive_protocol_rejections >= max_consecutive_rejections:
+                    self._pending_failed_model_rounds = model_rounds
+                    raise RuntimeError(
+                        "Agent native tool loop exhausted "
+                        f"{max_consecutive_rejections} consecutive protocol rejections"
+                    )
                 continue
 
             read_calls = [
@@ -1315,6 +1336,13 @@ class TaskRuntime:
                         turn.tool_calls,
                         reason,
                     )
+                    consecutive_protocol_rejections += 1
+                    if consecutive_protocol_rejections >= max_consecutive_rejections:
+                        self._pending_failed_model_rounds = model_rounds
+                        raise RuntimeError(
+                            "Agent native tool loop exhausted "
+                            f"{max_consecutive_rejections} consecutive protocol rejections"
+                        )
                     continue
                 if len(read_calls) > 1 and any(
                     self.tools.registry.get(call.tool_name).runtime.batching
@@ -1334,7 +1362,71 @@ class TaskRuntime:
                         turn.tool_calls,
                         reason,
                     )
+                    consecutive_protocol_rejections += 1
+                    if consecutive_protocol_rejections >= max_consecutive_rejections:
+                        self._pending_failed_model_rounds = model_rounds
+                        raise RuntimeError(
+                            "Agent native tool loop exhausted "
+                            f"{max_consecutive_rejections} consecutive protocol rejections"
+                        )
                     continue
+                observation_id = str(state.latest_observation.get("observation_id") or "")
+                quota_reason = None
+                pending_signatures: list[tuple[str, str, str]] = []
+                pending_signature_set: set[tuple[str, str, str]] = set()
+                pending_counts: dict[tuple[str, str], int] = {}
+                for call in read_calls:
+                    spec = self.tools.registry.get(call.tool_name)
+                    signature = (
+                        observation_id,
+                        call.tool_name,
+                        json.dumps(call.args, sort_keys=True, ensure_ascii=False),
+                    )
+                    if (
+                        signature in seen_read_call_signatures
+                        or signature in pending_signature_set
+                    ):
+                        quota_reason = (
+                            "an identical read-only call was already executed for the current "
+                            "observation; use the existing ToolResult"
+                        )
+                        break
+                    limit = spec.runtime.max_calls_per_observation
+                    key = (observation_id, call.tool_name)
+                    current_count = read_call_counts.get(key, 0) + pending_counts.get(
+                        key, 0
+                    )
+                    if limit is not None and current_count >= limit:
+                        quota_reason = (
+                            f"{call.tool_name} reached its limit of {limit} call(s) for the "
+                            "current observation; commit from existing evidence or report blocked"
+                        )
+                        break
+                    pending_signatures.append(signature)
+                    pending_signature_set.add(signature)
+                    pending_counts[key] = pending_counts.get(key, 0) + 1
+                if quota_reason is not None:
+                    round_record["runtime_outcome"] = {
+                        "status": "read_only_quota_rejected",
+                        "feedback": quota_reason,
+                        "tool_results": self._rejected_tool_results(
+                            turn.tool_calls, quota_reason
+                        ),
+                    }
+                    model_rounds.append(round_record)
+                    self._reject_native_turn(turn.tool_calls, quota_reason)
+                    consecutive_protocol_rejections += 1
+                    if consecutive_protocol_rejections >= max_consecutive_rejections:
+                        self._pending_failed_model_rounds = model_rounds
+                        raise RuntimeError(
+                            "Agent native tool loop exhausted "
+                            f"{max_consecutive_rejections} consecutive protocol rejections"
+                        )
+                    continue
+                for call, signature in zip(read_calls, pending_signatures):
+                    seen_read_call_signatures.add(signature)
+                    key = (observation_id, call.tool_name)
+                    read_call_counts[key] = read_call_counts.get(key, 0) + 1
                 read_results = self._execute_native_read_calls(
                     scene,
                     agent_id,
@@ -1348,6 +1440,8 @@ class TaskRuntime:
                     "tool_results": read_results,
                 }
                 model_rounds.append(round_record)
+                if read_results and all(item.get("status") == "ok" for item in read_results):
+                    consecutive_protocol_rejections = 0
                 continue
 
             commit_calls = [
@@ -1367,6 +1461,13 @@ class TaskRuntime:
                     turn.tool_calls,
                     reason,
                 )
+                consecutive_protocol_rejections += 1
+                if consecutive_protocol_rejections >= max_consecutive_rejections:
+                    self._pending_failed_model_rounds = model_rounds
+                    raise RuntimeError(
+                        "Agent native tool loop exhausted "
+                        f"{max_consecutive_rejections} consecutive protocol rejections"
+                    )
                 continue
 
             commit = commit_calls[0]
@@ -1398,6 +1499,13 @@ class TaskRuntime:
                 }
                 model_rounds.append(round_record)
                 self._reject_native_turn(turn.tool_calls, reason)
+                consecutive_protocol_rejections += 1
+                if consecutive_protocol_rejections >= max_consecutive_rejections:
+                    self._pending_failed_model_rounds = model_rounds
+                    raise RuntimeError(
+                        "Agent native tool loop exhausted "
+                        f"{max_consecutive_rejections} consecutive protocol rejections"
+                    )
                 continue
             try:
                 plan = self._native_committed_plan(
@@ -1417,6 +1525,13 @@ class TaskRuntime:
                 }
                 model_rounds.append(round_record)
                 self._reject_native_turn(turn.tool_calls, str(exc))
+                consecutive_protocol_rejections += 1
+                if consecutive_protocol_rejections >= max_consecutive_rejections:
+                    self._pending_failed_model_rounds = model_rounds
+                    raise RuntimeError(
+                        "Agent native tool loop exhausted "
+                        f"{max_consecutive_rejections} consecutive protocol rejections"
+                    )
                 continue
             round_record["runtime_outcome"] = {
                 "status": "commit_accepted",
@@ -1702,6 +1817,13 @@ class TaskRuntime:
             if policy.get("after_use") != "current_observation_success":
                 continue
             results = self.agent_transcript.phase_tool_results(phase, tool_name)
+            condition = policy.get("when")
+            if isinstance(condition, dict):
+                results = [
+                    result
+                    for result in results
+                    if _tool_policy_matches_args(condition, result.requested_args)
+                ]
             if not results:
                 continue
             if any(
@@ -3029,6 +3151,17 @@ def _clean_observation_for_semantic_update(observation: dict[str, Any]) -> dict[
     if isinstance(pose, dict):
         data["pose"] = clean_pose_for_model(pose)
     return data
+
+
+def _tool_policy_matches_args(condition: dict[str, Any], args: dict[str, Any]) -> bool:
+    """Evaluate the small generic ToolSpec argument predicate used by policies."""
+
+    field = condition.get("field")
+    if not isinstance(field, str) or not field:
+        return False
+    if "equals" not in condition:
+        return False
+    return args.get(field) == condition["equals"]
 
 
 def _result_artifact_refs(value: Any) -> list[str]:

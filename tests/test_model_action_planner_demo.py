@@ -115,7 +115,7 @@ def test_demo_memory_builds_context_with_schema_fragments_and_action_contract(tm
         "uav.hover",
         "uav.turn_relative",
         "uav.move_body",
-        "skill.metric_depth.sample_region",
+        "skill.visual_grounding.locate",
     ]
 
 

@@ -203,8 +203,8 @@ def test_transcript_projects_each_observation_image_once_in_time_order(tmp_path)
     assert rendered.count("CURRENT observation_id=obs_0003") == 1
     assert rendered.count("scene_size=256x256") == 3
     assert rendered.count("display_size=256x298") == 3
-    assert rendered.count("y_display_pixel/display_height") == 3
-    assert rendered.count("never include the color bar") == 3
+    assert rendered.count("bottom color bar is not scene content") == 3
+    assert rendered.count("cannot establish an exact decimal distance") == 3
 
 
 def test_transcript_defers_repeated_observation_image_to_its_last_checkpoint(tmp_path):
@@ -251,7 +251,7 @@ def test_tool_result_provider_projection_hides_internal_audit_details():
 
 
 def test_tool_result_projects_path_based_visual_evidence_after_tool_role(tmp_path):
-    evidence_path = tmp_path / "roi_confirmation.png"
+    evidence_path = tmp_path / "grounding_candidates.png"
     evidence_bytes = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC"
     )
@@ -265,13 +265,11 @@ def test_tool_result_projects_path_based_visual_evidence_after_tool_role(tmp_pat
             [
                 AgentToolCall(
                     "call_depth",
-                    "skill.metric_depth.sample_region",
+                    "skill.visual_grounding.locate",
                     {
                         "observation_id": "obs_0001",
-                        "x_min": 0.4,
-                        "y_min": 0.4,
-                        "x_max": 0.5,
-                        "y_max": 0.5,
+                        "query": "the visible person",
+                        "include_distance": True,
                     },
                 )
             ],
@@ -279,18 +277,18 @@ def test_tool_result_projects_path_based_visual_evidence_after_tool_role(tmp_pat
     )
     result = ToolResult(
         "call_depth",
-        "skill.metric_depth.sample_region",
+        "skill.visual_grounding.locate",
         "ok",
         data={"observation_id": "obs_0001", "distance_m": 2.9},
         artifact_refs=[str(evidence_path)],
         model_inputs=[
             {
                 "type": "image",
-                "role": "metric_depth_roi_confirmation",
+                "role": "visual_grounding_candidates",
                 "observation_id": "obs_0001",
                 "path": str(evidence_path),
                 "mime_type": "image/png",
-                "usage": "Verify the red ROI.",
+                "usage": "Confirm candidate_01 against the instruction.",
             }
         ],
     )

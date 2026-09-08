@@ -16,12 +16,12 @@ from src.depth_display import depth_legend_height
 
 CURRENT_IMAGE_USAGE = (
     "Use the fused colors for qualitative range only. For an explicit metric "
-    "distance or threshold, call the available metric-depth region tool."
+    "distance or threshold, use an available target-grounding capability with distance enabled."
 )
 CURRENT_RGB_DEPTH_OVERLAY_USAGE = (
     "RGB + METRIC DEPTH OVERLAY. False colors provide qualitative range only; "
     "the bottom color bar uses meters. For an explicit metric distance or "
-    "threshold, sample a small representative ROI with the metric-depth tool."
+    "threshold, use target grounding with distance enabled; do not draw a manual ROI."
 )
 
 _DEFAULT_DEPTH_DISPLAY_MAX_M = 10.0
@@ -164,7 +164,7 @@ class DefaultImageContextModule(ContextModule):
         ]
         if bool(getattr(self, "include_current_depth", False)):
             semantic_evidence.append(
-                "Metric-depth fusion: qualitative range colors only; explicit meter claims require a small-ROI depth tool result."
+                "Metric-depth fusion: qualitative range colors only; explicit meter claims require a grounded-candidate distance result."
             )
         return {
             "summary": "Selected RGB frame roles, attached image count, and visual evidence availability.",

@@ -70,7 +70,8 @@ backend/handler binding
 3. 参数或组合非法时追加 rejected ToolResult 和 protocol feedback。
 4. 模型可依据真实结果再次调用工具。
 5. `runtime.commit_phase_turn` 结束本次内层决策。
-6. `max_tool_rounds=6` 只防止协议无限循环。
+6. `max_tool_rounds=10` 限制总轮次，连续协议拒绝默认最多 3 次；成功 read-only
+   ToolResult 会清零连续拒绝计数。
 
 外层循环绑定真实环境变化：
 
@@ -105,7 +106,8 @@ backend/handler binding
 - [x] 增加 `runtime.commit_phase_turn`。
 - [x] 增加通用 `runtime.report_blocked` 不完整终止及证据引用校验。
 - [x] 增加完整 observation 时间序列视觉上下文与 HISTORY/CURRENT 标签。
-- [x] 增加小 ROI 米制深度工具，并分离模型简报与完整审计数据。
+- [x] 历史阶段曾增加小 ROI 米制深度工具；现已由 JSON 驱动的 Visual Grounding
+  capability 取代，旧结果只保留离线回放兼容。
 - [x] 支持同一窗口 1-3 个有序物理动作、整批一次观察。
 - [x] 从 action context module 移除动作 transcript 代理字段。
 - [x] 为图片增加 observation/frame/artifact 身份。

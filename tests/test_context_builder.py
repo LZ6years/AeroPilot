@@ -178,7 +178,7 @@ def test_semantic_evidence_capabilities_follow_module_order_and_depth_config():
 
     assert capabilities[:2] == [
         "One chronological RGB observation; transcript projection labels it HISTORY or CURRENT.",
-        "Metric-depth fusion: qualitative range colors only; explicit meter claims require a small-ROI depth tool result.",
+        "Metric-depth fusion: qualitative range colors only; explicit meter claims require a grounded-candidate distance result.",
     ]
     assert capabilities[2].startswith("UAV ground clearance")
     assert capabilities[3].startswith("Measured phase-relative UAV self-motion")
@@ -277,7 +277,7 @@ def test_context_builder_includes_mission_phase_observation_actions_and_safety(t
         "uav.hover",
         "uav.turn_relative",
         "uav.move_body",
-        "skill.metric_depth.sample_region",
+        "skill.visual_grounding.locate",
     ]
     assert "observe_step_schema" not in action_constraints
     assert context["observation_policy"] == {
@@ -442,7 +442,7 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     assert image["content"]["selected_frames"][0]["input_id"] == "image_1_current_observation"
     assert image["content"]["selected_frames"][0]["usage"] == (
         "Use the fused colors for qualitative range only. For an explicit metric "
-        "distance or threshold, call the available metric-depth region tool."
+        "distance or threshold, use an available target-grounding capability with distance enabled."
     )
     assert image["content"]["selected_frames"][0]["observation_id"] == "obs_0001"
     assert image["content"]["selected_frames"][0]["frame_id"] == "frame_0001"
@@ -453,7 +453,7 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     assert image["model_inputs"][0]["role"] == "current_observation"
     assert image["model_inputs"][0]["usage"] == (
         "Use the fused colors for qualitative range only. For an explicit metric "
-        "distance or threshold, call the available metric-depth region tool."
+        "distance or threshold, use an available target-grounding capability with distance enabled."
     )
     assert image["model_inputs"][0]["encoding"] == "data_url"
     assert image["model_inputs"][0]["observation_id"] == "obs_0001"

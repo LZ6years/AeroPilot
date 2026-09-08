@@ -182,10 +182,8 @@ def _input_label_text(item: dict[str, Any]) -> str:
                         f"x:[0,{scene_width}) y:[0,{scene_height})"
                     ),
                     (
-                        "ROI coordinates are normalized against the complete attached "
-                        "display_size: x_display_pixel/display_width and "
-                        "y_display_pixel/display_height. The box must remain inside "
-                        "scene_bounds; never include the color bar."
+                        "The bottom color bar is not scene content and cannot establish "
+                        "an exact decimal distance by itself."
                     ),
                 ]
             )

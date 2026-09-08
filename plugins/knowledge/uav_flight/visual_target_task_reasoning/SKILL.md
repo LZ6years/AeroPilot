@@ -15,12 +15,15 @@ or landing progress.
 
 ## Evidence Model
 
-Classify current evidence as target absent, weak candidate, directional target
-cue, or inspection-ready. A directional cue identifies the target and gives
-usable image bearing despite hidden nonessential detail. Clipping or imminent loss
-from view can invalidate bearing; incidental occlusion does not. Motion history
-can reveal oscillation but cannot create target-relative bearing. Usable current
-image bearing is operational evidence for visual alignment.
+Classify evidence as target absent, weak candidate, directional cue, or
+inspection-ready. A directional cue identifies the target and provides usable
+image bearing despite hidden detail. Clipping or imminent loss can invalidate
+bearing; incidental occlusion does not. Motion history can reveal oscillation
+but cannot create bearing. Current usable bearing is alignment evidence.
+
+When RGB is ambiguous, use available grounding without distance. Confirm
+candidates against the instruction rather than confidence alone; request depth
+only for a separate metric decision.
 
 ## Decision Procedure
 

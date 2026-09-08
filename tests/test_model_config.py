@@ -13,12 +13,18 @@ def test_model_config_defaults_to_model_mode_without_env(tmp_path, monkeypatch):
     monkeypatch.delenv("FLYAGENT_MODEL_BASE_URL", raising=False)
     monkeypatch.delenv("FLYAGENT_TASK_PARSER_STRUCTURE_PROMPT_PATH", raising=False)
     monkeypatch.delenv("FLYAGENT_TASK_PARSER_CRITERIA_PROMPT_PATH", raising=False)
+    monkeypatch.delenv("FLYAGENT_AGENT_MAX_TOOL_ROUNDS", raising=False)
+    monkeypatch.delenv(
+        "FLYAGENT_AGENT_MAX_CONSECUTIVE_PROTOCOL_REJECTIONS", raising=False
+    )
 
     config = load_model_config(tmp_path / ".env")
 
     assert config.task_parser_mode == "model"
     assert config.provider == "openai_compatible"
     assert config.api_key == ""
+    assert config.max_tool_rounds == 10
+    assert config.max_consecutive_protocol_rejections == 3
 
 
 def test_model_config_loads_dotenv_and_redacts_api_key(tmp_path, monkeypatch):
@@ -41,6 +47,8 @@ def test_model_config_loads_dotenv_and_redacts_api_key(tmp_path, monkeypatch):
                 "FLYAGENT_TASK_PARSER_STRUCTURE_PROMPT_PATH=prompts/structure.txt",
                 "FLYAGENT_TASK_PARSER_CRITERIA_PROMPT_PATH=prompts/criteria.txt",
                 "FLYAGENT_ACTION_PLANNER_PROMPT_PATH=prompts/action.txt",
+                "FLYAGENT_AGENT_MAX_TOOL_ROUNDS=12",
+                "FLYAGENT_AGENT_MAX_CONSECUTIVE_PROTOCOL_REJECTIONS=4",
             ]
         ),
         encoding="utf-8",
@@ -55,6 +63,9 @@ def test_model_config_loads_dotenv_and_redacts_api_key(tmp_path, monkeypatch):
     assert config.task_parser_structure_prompt_path == "prompts/structure.txt"
     assert config.task_parser_criteria_prompt_path == "prompts/criteria.txt"
     assert config.action_planner_prompt_path == "prompts/action.txt"
+    assert config.max_tool_rounds == 12
+    assert config.max_consecutive_protocol_rejections == 4
+    assert summary["max_consecutive_protocol_rejections"] == 4
     assert summary["has_api_key"] is True
     assert "secret-key" not in str(summary)
 

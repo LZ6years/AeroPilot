@@ -127,6 +127,12 @@ def audit_evaluation(eval_dir: str | Path) -> dict[str, Any]:
         "task_terminal_items": sum(
             item["coverage"]["task_terminal_items"] for item in case_reports
         ),
+        "visual_grounding_successes_requiring_manual_candidate_review": sum(
+            item["coverage"][
+                "visual_grounding_successes_requiring_manual_candidate_review"
+            ]
+            for item in case_reports
+        ),
     }
     return {
         "schema_version": SCHEMA_VERSION,
@@ -252,6 +258,7 @@ def _audit_transcript(
         "reported_blocked_turns": 0,
         "task_terminal_items": 0,
         "metric_depth_successes_requiring_manual_roi_review": 0,
+        "visual_grounding_successes_requiring_manual_candidate_review": 0,
     }
     if not records:
         return coverage
@@ -441,6 +448,20 @@ def _audit_transcript(
                 coverage[
                     "metric_depth_successes_requiring_manual_roi_review"
                 ] += 1
+            if (
+                payload.get("tool_name") == "skill.visual_grounding.locate"
+                and payload.get("status") == "ok"
+            ):
+                coverage[
+                    "visual_grounding_successes_requiring_manual_candidate_review"
+                ] += 1
+                _audit_visual_grounding_result(
+                    payload,
+                    violations,
+                    case_id,
+                    transcript_id,
+                    call_id,
+                )
             if payload.get("status") not in TERMINAL_RESULT_STATUSES:
                 violations.append(
                     Violation(
@@ -757,6 +778,95 @@ def _audit_transcript(
     _audit_portable_html(case_dir, audit, violations, case_id)
     _audit_scene_capabilities(records, case_data, registry, violations, case_id)
     return coverage
+
+
+def _audit_visual_grounding_result(
+    payload: dict[str, Any],
+    violations: list[Violation],
+    case_id: str,
+    transcript_id: str,
+    call_id: str,
+) -> None:
+    """Validate result structure without pretending to judge target identity."""
+
+    requested = payload.get("requested_args")
+    requested = requested if isinstance(requested, dict) else {}
+    include_distance = requested.get("include_distance")
+    data = payload.get("data")
+    data = data if isinstance(data, dict) else {}
+    candidates = data.get("candidates")
+    if not isinstance(candidates, list):
+        violations.append(
+            Violation(
+                "visual_grounding_candidates_invalid",
+                "successful visual grounding result requires a candidates list",
+                case_id,
+                transcript_id,
+                call_id,
+            )
+        )
+        return
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            violations.append(
+                Violation(
+                    "visual_grounding_candidate_invalid",
+                    "each grounded candidate must be an object",
+                    case_id,
+                    transcript_id,
+                    call_id,
+                )
+            )
+            continue
+        candidate_id = candidate.get("candidate_id")
+        if not isinstance(candidate_id, str) or not candidate_id or candidate_id in seen:
+            violations.append(
+                Violation(
+                    "visual_grounding_candidate_id_invalid",
+                    f"candidate_id must be non-empty and unique, received {candidate_id!r}",
+                    case_id,
+                    transcript_id,
+                    call_id,
+                )
+            )
+        else:
+            seen.add(candidate_id)
+        distance = candidate.get("distance_m")
+        distance_status = candidate.get("distance_status")
+        if include_distance is False and (
+            distance is not None or distance_status != "not_requested"
+        ):
+            violations.append(
+                Violation(
+                    "visual_grounding_unrequested_distance",
+                    "detection-only result must not contain a measured distance",
+                    case_id,
+                    transcript_id,
+                    call_id,
+                )
+            )
+        if include_distance is True and distance is not None:
+            if not isinstance(distance, (int, float)) or not math.isfinite(float(distance)) or float(distance) <= 0:
+                violations.append(
+                    Violation(
+                        "visual_grounding_distance_invalid",
+                        f"distance_m must be a finite positive number, received {distance!r}",
+                        case_id,
+                        transcript_id,
+                        call_id,
+                    )
+                )
+            if distance_status != "ok":
+                violations.append(
+                    Violation(
+                        "visual_grounding_distance_status_invalid",
+                        "a numeric distance requires distance_status='ok'",
+                        case_id,
+                        transcript_id,
+                        call_id,
+                    )
+                )
 
 
 def _audit_physical_trace(

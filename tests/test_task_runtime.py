@@ -29,6 +29,8 @@ from src.runtime.configs.task_execution_options import InitialPose, TaskExecutio
 from src.runtime.context import PhaseWindowContextBuilder
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
+from src.plugins.contracts.skill import SkillCapabilityResult
+from src.plugins.skills import dispatcher as skill_dispatcher_module
 from src.plugins.skills.selection import ModelSkillSelector
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.configs.model_config import ModelConfig
@@ -83,9 +85,14 @@ def test_native_completion_requires_fresh_success_after_evidence_tool_use(
     runtime.agent_transcript.append_tool_result(
         ToolResult(
             "call_failed",
-            "skill.metric_depth.sample_region",
+            "skill.visual_grounding.locate",
             "error",
             data={"observation_id": "obs_0002"},
+            requested_args={
+                "observation_id": "obs_0002",
+                "query": "the reference",
+                "include_distance": True,
+            },
         )
     )
 
@@ -95,11 +102,56 @@ def test_native_completion_requires_fresh_success_after_evidence_tool_use(
     runtime.agent_transcript.append_tool_result(
         ToolResult(
             "call_ok",
-            "skill.metric_depth.sample_region",
+            "skill.visual_grounding.locate",
             "ok",
-            data={"observation_id": "obs_0002", "distance_m": 3.5},
+            data={
+                "observation_id": "obs_0002",
+                "candidates": [
+                    {"candidate_id": "candidate_01", "distance_m": 3.5}
+                ],
+            },
+            requested_args={
+                "observation_id": "obs_0002",
+                "query": "the reference",
+                "include_distance": True,
+            },
         )
     )
+    runtime._validate_current_observation_completion_evidence("final_phase")
+    recorder.close()
+
+
+def test_detection_only_grounding_does_not_create_metric_completion_requirement(
+    tmp_path,
+):
+    run_dir = tmp_path / "detection_only_completion"
+    recorder = AsyncRunLogger(run_dir)
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=HoverOnlyPlanner(),
+        shutdown_policy="none",
+    )
+    runtime.agent_transcript.start_instruction("find the reference", "inst")
+    runtime.agent_transcript.append_state(
+        {"current_phase": {"name": "final_phase"}},
+        "obs_0002",
+    )
+    runtime.agent_transcript.append_tool_result(
+        ToolResult(
+            "call_detect",
+            "skill.visual_grounding.locate",
+            "ok",
+            data={"observation_id": "obs_0001", "candidates": []},
+            requested_args={
+                "observation_id": "obs_0001",
+                "query": "the reference",
+                "include_distance": False,
+            },
+        )
+    )
+
     runtime._validate_current_observation_completion_evidence("final_phase")
     recorder.close()
 
@@ -1454,7 +1506,7 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
         "uav.hover",
         "uav.turn_relative",
         "uav.move_body",
-        "skill.metric_depth.sample_region",
+        "skill.visual_grounding.locate",
     ]
     assert "observe_step_schema" not in action_constraints
     assert planner.contexts[0]["observation_policy"]["mode"] == "automatic"
@@ -1462,7 +1514,7 @@ def test_task_runtime_model_planner_path_records_model_action_and_safety(tmp_pat
         "uav.hover",
         "uav.turn_relative",
         "uav.move_body",
-        "skill.metric_depth.sample_region",
+        "skill.visual_grounding.locate",
     }
     assert action_constraints["action_schemas"]["uav.turn_relative"]["limits"] == {
         "yaw_deg_min": -30.0,
@@ -1922,7 +1974,9 @@ def test_task_runtime_model_planner_keeps_memory_module_windows_across_many_inst
     assert "model_action_planned" in event_names
 
 
-def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_calls(tmp_path):
+def test_native_tool_loop_reasons_with_grounding_result_and_batches_physical_calls(
+    tmp_path, monkeypatch
+):
     class NativeSequencePlanner:
         planner_mode = "model"
 
@@ -1964,8 +2018,12 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
                     [
                         AgentToolCall(
                             "call_detect",
-                            "skill.person_detector.detect",
-                            {"observation_id": observation_id, "min_confidence": 0.5},
+                            "skill.visual_grounding.locate",
+                            {
+                                "observation_id": observation_id,
+                                "query": "the person to approach",
+                                "include_distance": False,
+                            },
                         )
                     ],
                 )
@@ -1975,13 +2033,13 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
                     for item in transcript.items
                     if item.kind == "tool_result"
                 ]
-                detector_result = next(
+                grounding_result = next(
                     result for result in tool_results if result.tool_call_id == "call_detect"
                 )
-                assert detector_result.status == "ok"
-                assert detector_result.data["observation_id"] == observation_id
-                assert detector_result.data["frame_id"]
-                assert detector_result.artifact_refs
+                assert grounding_result.status == "ok"
+                assert grounding_result.data["observation_id"] == observation_id
+                assert grounding_result.data["candidates"][0]["candidate_id"] == "candidate_01"
+                assert grounding_result.artifact_refs
                 return AssistantTurn(
                     "assistant_move",
                     "The detector confirmed a person, so I will turn and approach in one window.",
@@ -2050,9 +2108,51 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
         {
             "plugins": {
                 "roots": ["plugins/capabilities"],
-                "enabled": ["capabilities.perception"],
+                "enabled": ["capabilities.visual_grounding"],
             }
         }
+    )
+    def fake_grounding_handler(payload):
+        assert payload["settings"]["grounding_backend"] == "grounding_dino"
+        observation = payload["runtime_context"]["latest_observation"]
+        rgb = observation["frames"]["rgb"]
+        artifact = str(rgb.get("path") or rgb.get("artifact_path"))
+        return SkillCapabilityResult(
+            message="Located 1 candidate(s).",
+            data={
+                "observation_id": observation["observation_id"],
+                "query": payload["args"]["query"],
+                "include_distance": False,
+                "candidates": [
+                    {
+                        "candidate_id": "candidate_01",
+                        "label": "person",
+                        "confidence": 0.91,
+                        "box_normalized": [0.4, 0.2, 0.6, 0.8],
+                        "distance_m": None,
+                        "distance_status": "not_requested",
+                    }
+                ],
+            },
+            artifact_refs=(artifact,),
+            model_inputs=(
+                {
+                    "type": "image",
+                    "role": "visual_grounding_candidates",
+                    "observation_id": observation["observation_id"],
+                    "path": artifact,
+                    "artifact_ref": artifact,
+                    "mime_type": "image/png",
+                },
+            ),
+        )
+
+    monkeypatch.setattr(
+        skill_dispatcher_module,
+        "_load_handler_module",
+        lambda handler_path: type(
+            "HandlerModule", (), {"handle": staticmethod(fake_grounding_handler)}
+        )(),
     )
     run_dir = tmp_path / "native_tool_loop"
     recorder = AsyncRunLogger(run_dir)
@@ -2094,7 +2194,7 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
     assert state.current_phase_window_count == 1
     assert planner.calls == 3
     assert all(
-        "skill.person_detector.detect" in names
+        "skill.visual_grounding.locate" in names
         and "runtime.commit_phase_turn" in names
         for names in planner.allowed_names
     )
@@ -2107,7 +2207,7 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
         ["current_observation"],
     ]
     assert [record["tool"] for record in action_records].count(
-        "skill.person_detector.detect"
+        "skill.visual_grounding.locate"
     ) == 1
     assert [record["tool"] for record in action_records].count("uav.turn_relative") == 1
     assert [record["tool"] for record in action_records].count("uav.move_body") == 1
@@ -2172,6 +2272,135 @@ def test_native_tool_loop_reasons_with_detector_result_and_batches_physical_call
     assert decisions[0]["model_rounds"][0]["runtime_outcome"]["tool_results"][0][
         "tool_call_id"
     ] == "call_detect"
+
+
+def test_native_read_only_quota_rejects_duplicates_and_resets_after_success(
+    tmp_path, monkeypatch
+):
+    class QuotaPlanner:
+        planner_mode = "model"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
+            self.calls += 1
+            observation_id = transcript.latest_observation_id()
+            queries = {
+                1: "candidate wording 1",
+                2: "candidate wording 1",
+                3: "candidate wording 2",
+                4: "candidate wording 3",
+            }
+            if self.calls <= 4:
+                return AssistantTurn(
+                    f"assistant_ground_{self.calls}",
+                    f"Try grounding query {self.calls}.",
+                    [
+                        AgentToolCall(
+                            f"call_ground_{self.calls}",
+                            "skill.visual_grounding.locate",
+                            {
+                                "observation_id": observation_id,
+                                "query": queries[self.calls],
+                                "include_distance": False,
+                            },
+                        )
+                    ],
+                )
+            return AssistantTurn(
+                "assistant_complete",
+                "Use the existing qualitative evidence and finish.",
+                [
+                    AgentToolCall(
+                        "call_commit",
+                        "runtime.commit_phase_turn",
+                        {
+                            "phase": "final_phase",
+                            "completion_assessment": {
+                                "done_when": [
+                                    {
+                                        "index": 0,
+                                        "status": "supported",
+                                        "evidence": "The qualitative result is sufficient for this test.",
+                                    }
+                                ]
+                            },
+                        },
+                    )
+                ],
+            )
+
+    handler_calls: list[dict] = []
+
+    def fake_handler(payload):
+        handler_calls.append(payload)
+        return SkillCapabilityResult(
+            message="no candidate",
+            data={
+                "observation_id": payload["args"]["observation_id"],
+                "query": payload["args"]["query"],
+                "include_distance": False,
+                "candidates": [],
+            },
+        )
+
+    monkeypatch.setattr(
+        skill_dispatcher_module,
+        "_load_handler_module",
+        lambda handler_path: type(
+            "HandlerModule", (), {"handle": staticmethod(fake_handler)}
+        )(),
+    )
+    plugin_registry = PluginRegistry.discover(
+        {
+            "plugins": {
+                "roots": ["plugins/capabilities"],
+                "enabled": ["capabilities.visual_grounding"],
+            }
+        }
+    )
+    run_dir = tmp_path / "read_only_quota"
+    recorder = AsyncRunLogger(run_dir)
+    planner = QuotaPlanner()
+    runtime = TaskRuntime(
+        SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+        recorder,
+        TaskParser(mode="rule_based"),
+        planner=planner,
+        model_config=ModelConfig(
+            task_parser_mode="model",
+            max_tool_rounds=10,
+            max_consecutive_protocol_rejections=2,
+        ),
+        shutdown_policy="none",
+        plugin_registry=plugin_registry,
+    )
+
+    state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    recorder.close()
+    records = [
+        json.loads(line)
+        for line in (run_dir / "memory" / "agent_transcript.jsonl").read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    rejected = [
+        item["payload"]
+        for item in records
+        if item["kind"] == "tool_result"
+        and item["payload"].get("tool_call_id") in {
+            "call_ground_2",
+            "call_ground_4",
+        }
+    ]
+
+    assert state.completed is True
+    assert planner.calls == 5
+    assert len(handler_calls) == 2
+    assert [item["status"] for item in rejected] == ["rejected", "rejected"]
+    assert "identical read-only call" in rejected[0]["message"]
+    assert "reached its limit of 2" in rejected[1]["message"]
 
 
 def test_phase_transition_clears_before_action_anchor_for_new_phase(tmp_path):

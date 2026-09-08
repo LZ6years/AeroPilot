@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 from pathlib import Path
 from typing import Any
@@ -54,6 +55,10 @@ class SkillCapabilityDispatcher:
                     "skill_dir": str(skill.skill_dir),
                 },
                 "capability": capability.listing(),
+                # Runtime settings are deliberately excluded from public skill
+                # listings and provider schemas. Only the selected handler sees
+                # the capability-local JSON configuration.
+                "settings": copy.deepcopy(capability.settings),
             }
             result = handler(payload)
             if isinstance(result, SkillCapabilityResult):

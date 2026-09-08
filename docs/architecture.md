@@ -269,7 +269,10 @@ flowchart TD
     OBS --> MAP
 ```
 
-`max_tool_rounds`（默认 6）只是单个状态上的协议安全阀，不是 token budget。当前版本不做 transcript 摘要、裁剪或静默降级；provider 超限应显式报错。
+`max_tool_rounds`（默认 10）是单个状态上的总协议安全阀；连续协议拒绝另由
+`max_consecutive_protocol_rejections`（默认 3）限制。成功 read-only ToolResult 会清零
+连续拒绝计数。两者都不是 token budget；当前版本不做 transcript 摘要、裁剪或静默降级，
+超限应显式报错。
 
 ## 9. 视觉输入边界
 
@@ -290,16 +293,15 @@ RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image conte
 - `ModelInputAssembler` 按 module 给出的交错顺序把 `model_inputs` 转成
   openai-compatible content parts，最后追加脱敏后的 JSON Context；它不解释
   时间角色。caption 模式下 planner 收到的是 text model input。
-- 融合色条只支持定性远近；显式米制值或阈值使用
-  `skill.metric_depth.sample_region` 对最新图像的小 ROI 做鲁棒中位数测距。
-  图前标签同时给出 `scene_size`、含色条的 `display_size` 和 `scene_bounds`；
-  ROI 按模型实际看到的 `display_size` 归一化，再确定性映射回场景像素，触及色条即拒绝。
-  ToolResult 之后可追加一个普通 user-role 的 ROI 确认图：左侧完整 RGB、中间局部放大、
-  右侧只显示实际参与测距的 ROI 像素。红框仅表示模型自己提交的区域，不包含目标类别推断，
-  也不创建新 observation。
-  该 capability 通过 ToolSpec metadata 声明 `current_observation_success`：一个 phase
-  一旦使用过它，supported 终态必须具有当前 observation 上的成功结果。Runtime 不解析
-  任务语言或目标类别；未调用该 capability 的定性任务不受此门禁影响。
+- 融合色条只支持定性远近。需要显式定位时使用 JSON 启用的
+  `skill.visual_grounding.locate`：身份/方位确认设置 `include_distance=false`，只有显式
+  米制值、接近阈值或定量完成才设置为 `true`。插件负责 detector 候选、可选 segmentation
+  与候选内部的鲁棒深度，模型不再自己提交 ROI。
+- ToolResult 的候选标注图是普通 user-role Tool Evidence，不创建新 observation；模型仍须
+  根据指令确认候选语义，不能把 detector confidence 当作目标真值。
+- capability 通过通用 ToolSpec metadata 声明条件式 `current_observation_success`：仅符合
+  JSON `when` 条件的调用要求 supported 终态在当前 observation 上有成功结果。Runtime
+  不解析任务语言、目标类别或 `include_distance` 这一具体字段名。
 - 视觉层不输出 `recommended_next_observation`、转向、扫描或移动建议。
 - 模型只有在实际收到图片，或 context 中存在明确视觉证据时，才能声称看到了目标。
 

@@ -308,6 +308,80 @@ def test_audit_accepts_closed_multi_action_transcript(tmp_path):
     assert report["coverage"]["multi_action_batches"] == 1
 
 
+def test_audit_accepts_detection_only_visual_grounding_and_marks_manual_review(
+    tmp_path,
+):
+    root = _valid_eval(tmp_path)
+    audit_path = root / "cases" / "case-1" / "audit.json"
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    audit["agent_transcript"][2:2] = [
+        {
+            "id": "grounding_turn",
+            "kind": "assistant_turn",
+            "payload": {
+                "public_intent": "Locate the current visual reference.",
+                "tool_calls": [
+                    {
+                        "tool_call_id": "ground_1",
+                        "tool_name": "skill.visual_grounding.locate",
+                        "args": {
+                            "observation_id": "obs_1",
+                            "query": "the person ahead",
+                            "include_distance": False,
+                        },
+                    }
+                ],
+            },
+        },
+        {
+            "id": "grounding_result",
+            "kind": "tool_result",
+            "payload": {
+                "tool_call_id": "ground_1",
+                "tool_name": "skill.visual_grounding.locate",
+                "status": "ok",
+                "requested_args": {
+                    "observation_id": "obs_1",
+                    "query": "the person ahead",
+                    "include_distance": False,
+                },
+                "executed_args": {
+                    "observation_id": "obs_1",
+                    "query": "the person ahead",
+                    "include_distance": False,
+                },
+                "safety_interventions": [],
+                "data": {
+                    "observation_id": "obs_1",
+                    "query": "the person ahead",
+                    "include_distance": False,
+                    "candidates": [
+                        {
+                            "candidate_id": "candidate_01",
+                            "label": "person",
+                            "confidence": 0.91,
+                            "box_normalized": [0.4, 0.2, 0.6, 0.8],
+                            "distance_m": None,
+                            "distance_status": "not_requested",
+                        }
+                    ],
+                },
+            },
+        },
+    ]
+    _write_json(audit_path, audit)
+
+    report = MODULE.audit_evaluation(root)
+
+    assert report["status"] == "ok", report["violations"]
+    assert (
+        report["coverage"][
+            "visual_grounding_successes_requiring_manual_candidate_review"
+        ]
+        == 1
+    )
+
+
 def test_audit_rejects_legacy_trace_and_unavailable_window_tracking(tmp_path):
     root = _valid_eval(tmp_path)
     case_path = root / "cases" / "case-1" / "case.json"

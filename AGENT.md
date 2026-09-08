@@ -89,25 +89,29 @@ The transcript does not replay phase-start or before-window images. Runtime may
 retain those observation IDs as audit/state anchors, while full image history
 comes from the chronological checkpoints.
 
-The fused color bar supports qualitative range only. Explicit meter values,
-threshold-dependent actions, and quantitative completion claims use the
-read-only `skill.metric_depth.sample_region` capability when available. It
-accepts only a tight ROI on the latest observation, returns a rounded robust
-camera-to-visible-surface distance to the model, and keeps MAD/filter details
-only in durable audit data.
-Because the fused PNG appends its color bar below the scene, ROI coordinates
-are normalized against the actual `display_size` advertised beside the image,
-then mapped into `scene_bounds`; any box touching the color bar is rejected.
-The result may project a target-agnostic ROI confirmation image after the tool
-role message. It shows the model's own rectangle in a full RGB view, a
-magnified neighborhood, and a panel containing only the sampled pixels; the
-model must retry a semantically misplaced box before using the numeric
-distance. This tool evidence is not a new observation and does not change
-`CURRENT`.
-The capability declares `current_observation_success` completion freshness.
-Once it is used in a phase, a supported completion requires one successful
-sample on the current observation; an older or failed sample cannot close the
-phase. This is ToolSpec-driven and does not inspect instruction language.
+The fused color bar supports qualitative range only. Precise target-relative
+evidence comes from an enabled callable capability rather than model-authored
+pixel coordinates. The default `skill.visual_grounding.locate` capability is
+selected through `configs/plugins.json`; its ToolSpec and private detector,
+segmenter, depth, and threshold settings live in the capability's own JSON.
+Runtime and plugin discovery must not hardcode that plugin ID or its model.
+
+Visual grounding accepts the latest observation plus a natural-language query.
+Detection-only calls establish candidates without loading metric depth. Calls
+with distance enabled compute rounded robust camera-to-visible-surface depth
+inside a detector/segmenter-derived candidate region. Candidate masks, raw
+medians, MAD/filter details, backend settings, and model paths remain durable
+audit data and are not replayed to the provider. Candidate tool evidence is not
+a new observation and does not change `CURRENT`; confidence alone is not proof
+that a candidate matches the instruction.
+
+The capability may declare a generic per-observation call limit and a conditional
+`current_observation_success` completion policy through ToolSpec JSON extensions.
+Runtime evaluates those declarations generically from the call arguments. A
+numeric mention alone does not force immediate perception: use qualitative RGB
+and fused-depth evidence while clearly off threshold, and request precise
+candidate distance only when action choice, user-requested measurement, or
+quantitative completion genuinely depends on it.
 
 Human/debug/review data may be larger and more detailed:
 - raw planner context and raw model outputs;

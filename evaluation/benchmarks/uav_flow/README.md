@@ -106,8 +106,9 @@ DowntownWest 的真实运行沿用旧 UAV-Flow Blueprint 视觉契约：
   ordered calls、before/after observation、组合期望位姿、观测执行误差和
   `zero_motion_completion`；旧运行缺少 `physical_window_v2` 时只标记为不支持，
   不使用时间戳推断；
-- 成功的 `skill.metric_depth.sample_region` 会在 Transcript 中标记为需要人工
-  ROI 语义复核；数值只证明所选像素的深度，不证明框内像素属于模型声称的目标；
+- 成功的 `skill.visual_grounding.locate` 会在 Transcript 中标记为需要人工候选
+  语义复核；检测框、mask 与候选表面深度可以审计，但 detector 置信度不证明候选
+  就是指令所指目标。历史 `skill.metric_depth.sample_region` 记录仍可在旧 HTML 中回放；
 - `summary.json`、`summary.md`、case 指标和评测真值文件。
 
 不再生成 case 级 Markdown review；Core HTML 是唯一的可视化审计页面。

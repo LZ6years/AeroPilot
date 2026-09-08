@@ -1,0 +1,3 @@
+# Optional runtime dependencies for the default GroundingDINO + SAM adapters.
+# Install a hardware-appropriate PyTorch build first, then install this file.
+transformers>=4.44,<5

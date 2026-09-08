@@ -30,6 +30,7 @@ class ToolRuntimePolicy:
     result_timing: ToolResultTiming
     batching: ToolBatching
     model_exposed: bool = False
+    max_calls_per_observation: int | None = None
 
     def __post_init__(self) -> None:
         if self.effect not in {"read_only", "physical", "runtime_control", "lifecycle"}:
@@ -43,6 +44,8 @@ class ToolRuntimePolicy:
             raise ValueError(f"unsupported tool result_timing: {self.result_timing}")
         if self.batching not in {"single", "ordered", "parallel_safe", "sidecar"}:
             raise ValueError(f"unsupported tool batching policy: {self.batching}")
+        if self.max_calls_per_observation is not None and self.max_calls_per_observation <= 0:
+            raise ValueError("max_calls_per_observation must be positive when provided")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ToolRuntimePolicy":
@@ -54,20 +57,35 @@ class ToolRuntimePolicy:
             raise ValueError(f"tool runtime policy missing fields: {', '.join(missing)}")
         if not isinstance(data["model_exposed"], bool):
             raise ValueError("tool runtime policy model_exposed must be a boolean")
+        max_calls = data.get("max_calls_per_observation")
+        if max_calls is not None and (
+            not isinstance(max_calls, int) or isinstance(max_calls, bool)
+        ):
+            raise ValueError(
+                "tool runtime policy max_calls_per_observation must be an integer"
+            )
         return cls(
             effect=str(data["effect"]),
             result_timing=str(data["result_timing"]),
             batching=str(data["batching"]),
             model_exposed=data["model_exposed"],
+            max_calls_per_observation=(
+                max_calls
+                if max_calls is not None
+                else None
+            ),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "effect": self.effect,
             "result_timing": self.result_timing,
             "batching": self.batching,
             "model_exposed": self.model_exposed,
         }
+        if self.max_calls_per_observation is not None:
+            result["max_calls_per_observation"] = self.max_calls_per_observation
+        return result
 
 
 @dataclass(frozen=True)

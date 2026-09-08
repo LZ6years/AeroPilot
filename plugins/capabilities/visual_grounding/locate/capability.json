@@ -1,0 +1,56 @@
+{
+  "call_name": "skill.visual_grounding.locate",
+  "wire_name": "skill_visual_grounding_locate",
+  "description": "Locate natural-language visual targets in the latest RGB observation. Set include_distance=false for visibility or location only. Set it true only when a precise metric threshold or completion claim requires robust camera-to-visible-surface depth. Returned candidates require semantic confirmation from the annotated tool evidence.",
+  "input_schema": {
+    "type": "object",
+    "required": ["observation_id", "query", "include_distance"],
+    "additionalProperties": false,
+    "properties": {
+      "observation_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Exact observation_id shown on the CURRENT image label."
+      },
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "description": "Concise natural-language description of the visible target."
+      },
+      "include_distance": {
+        "type": "boolean",
+        "description": "Whether each candidate also needs robust metric depth. Keep false for detection-only questions."
+      }
+    },
+    "x-flyagent-completion-evidence": {
+      "after_use": "current_observation_success",
+      "when": {"field": "include_distance", "equals": true}
+    }
+  },
+  "runtime": {
+    "effect": "read_only",
+    "result_timing": "immediate",
+    "batching": "single",
+    "model_exposed": true,
+    "max_calls_per_observation": 2
+  },
+  "settings": {
+    "grounding_backend": "grounding_dino",
+    "grounding_model": "IDEA-Research/grounding-dino-base",
+    "segmentation_backend": "sam",
+    "segmentation_model": "facebook/sam-vit-base",
+    "device": "auto",
+    "box_threshold": 0.25,
+    "text_threshold": 0.25,
+    "max_candidates": 5,
+    "mask_erosion_ratio": 0.08,
+    "box_inset_ratio": 0.2,
+    "minimum_valid_depth_pixels": 9,
+    "minimum_valid_depth_coverage": 0.5,
+    "maximum_coherent_mad_m": 0.25
+  },
+  "handler": "scripts/handler.py",
+  "mock": false
+}
+

@@ -182,17 +182,39 @@ stop_count    = 1
    仍保持不变。
 
 Planner 图片按 observation 时间排列，每张只发送一次：旧图为 `HISTORY`，最新图为
-`CURRENT`。每张有合法 Depth 时使用融合图，否则回退 raw RGB。显式米制任务必须先
-对 CURRENT 图选择不超过宽高 20% 的内部小 ROI，调用
-`skill.metric_depth.sample_region`；结果是相机到可见表面的约值，不是目标中心距离。
-色条附加在场景下方，因此 ROI 按实际 `display_size` 归一化，但必须完整位于标签给出的
-`scene_bounds` 内；触及色条的框会被拒绝。
-每次测距后还要检查 ToolResult 随附的 ROI 确认图：红框若没有完整落在指令所指的
-可见表面上，必须针对同一 CURRENT observation 重新框选，不能用错误框的数值提交动作。
-确认图依次展示完整 RGB、局部邻域和仅 ROI 像素；失败的测距不能由色条估算或预期位移
-替代为定量完成证据。
-一旦当前 phase 使用过测距 capability，动作后的 supported 终态还必须在最新 observation
-上有成功测量；否则 Runtime 应拒绝该 commit，并要求重新测量或保持 unknown/blocked。
+`CURRENT`。每张有合法 Depth 时使用融合图，否则回退 raw RGB。融合颜色足以支持明显的
+定性远近时，不应调用精确感知工具。
+
+需要确认目标存在、身份或方位，但不需要米制距离时，调用
+`skill.visual_grounding.locate(include_distance=false)`。只有接近明确阈值、动作幅度依赖
+米数、用户要求准确距离，或准备提交定量完成证据时，才设置 `include_distance=true`。
+插件先由开放词汇 detector 生成候选；需要距离时再用 segmentation mask 内部的稳健中位数
+测距，SAM 不可用时回退到收缩后的 detector box。模型不再自己画 ROI，深度跨越多个表面
+时返回 unavailable，而不是输出看似精确的数值。
+
+ToolResult 随附候选 ID、框和可选 mask 标注图。模型必须结合指令与图像确认候选语义，
+不能把 detector 置信度当作目标身份真值。距离表示相机到候选可见表面的约值，不是目标
+几何中心、水平距离或 UAV-Flow 真值。一次 observation 最多调用两次，允许修正一次 query；
+相同参数不会重复执行。只有 `include_distance=true` 的成功调用会触发定量 completion 的
+current-observation freshness 约束。
+
+离线验证 capability 时可直接使用保存的 RGB 与匹配 Depth，不启动 UE 或 Provider：
+
+默认 GroundingDINO/SAM adapter 需要先安装适合本机 CPU/CUDA 的 PyTorch，再执行
+`python -m pip install -r plugins/capabilities/visual_grounding/requirements.txt`。
+`--grounding-model` 与 `--segmentation-model` 可在探针中临时指向本地权重，不会修改
+`capability.json` 或 Runtime 的正式配置。
+
+```powershell
+python tests/manual/visual_grounding_capability_probe.py `
+  --rgb <rgb.png> `
+  --depth <depth.npy> `
+  --query "the person to approach" `
+  --include-distance `
+  --grounding-model F:/hf_models/grounding-dino-tiny `
+  --segmentation-model F:/hf_models/sam-vit-base `
+  --output-dir <probe-output>
+```
 
 ## 5. Runtime 循环上限
 

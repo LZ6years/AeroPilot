@@ -73,3 +73,32 @@ def test_registry_rejects_duplicate_provider_wire_name():
 def test_runtime_policy_requires_all_execution_fields(data, missing):
     with pytest.raises(ValueError, match=missing):
         ToolRuntimePolicy.from_dict(data)
+
+
+def test_runtime_policy_round_trips_optional_observation_quota():
+    policy = ToolRuntimePolicy.from_dict(
+        {
+            "effect": "read_only",
+            "result_timing": "immediate",
+            "batching": "single",
+            "model_exposed": True,
+            "max_calls_per_observation": 2,
+        }
+    )
+
+    assert policy.max_calls_per_observation == 2
+    assert policy.to_dict()["max_calls_per_observation"] == 2
+
+
+@pytest.mark.parametrize("value", [0, -1, True, "2"])
+def test_runtime_policy_rejects_invalid_observation_quota(value):
+    with pytest.raises(ValueError, match="max_calls_per_observation"):
+        ToolRuntimePolicy.from_dict(
+            {
+                "effect": "read_only",
+                "result_timing": "immediate",
+                "batching": "single",
+                "model_exposed": True,
+                "max_calls_per_observation": value,
+            }
+        )

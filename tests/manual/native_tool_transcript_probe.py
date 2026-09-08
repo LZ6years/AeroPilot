@@ -27,7 +27,7 @@ def main() -> None:
         {
             "plugins": {
                 "roots": ["plugins/capabilities"],
-                "enabled": ["capabilities.perception"],
+                "enabled": ["capabilities.visual_grounding"],
             }
         }
     )
@@ -53,8 +53,12 @@ def main() -> None:
                 [
                     AgentToolCall(
                         "call_detect",
-                        "skill.person_detector.detect",
-                        {"observation_id": "obs_0001"},
+                        "skill.visual_grounding.locate",
+                        {
+                            "observation_id": "obs_0001",
+                            "query": "画面中的人",
+                            "include_distance": False,
+                        },
                     )
                 ],
             )
@@ -62,10 +66,29 @@ def main() -> None:
         transcript.append_tool_result(
             ToolResult(
                 "call_detect",
-                "skill.person_detector.detect",
+                "skill.visual_grounding.locate",
                 "ok",
-                "person detected",
-                data={"observation_id": "obs_0001", "confidence": 0.91},
+                "one grounded candidate",
+                data={
+                    "observation_id": "obs_0001",
+                    "query": "画面中的人",
+                    "include_distance": False,
+                    "candidates": [
+                        {
+                            "candidate_id": "candidate_01",
+                            "label": "person",
+                            "confidence": 0.91,
+                            "box_normalized": [0.4, 0.2, 0.6, 0.8],
+                            "distance_m": None,
+                            "distance_status": "not_requested",
+                        }
+                    ],
+                },
+                requested_args={
+                    "observation_id": "obs_0001",
+                    "query": "画面中的人",
+                    "include_distance": False,
+                },
             )
         )
 

@@ -135,10 +135,9 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
     assert "## Evidence Model" in summary["skill_text"]
     assert "target absent" in normalized_summary
     assert "weak candidate" in normalized_summary
-    assert "directional target cue" in normalized_summary
-    assert "inspection-ready" in normalized_summary
+    assert "directional cue" in normalized_summary
     assert "usable image bearing" in normalized_summary
-    assert "Usable current image bearing is operational evidence for visual alignment" in normalized_summary
+    assert "Current usable bearing is alignment evidence" in normalized_summary
     assert "a separate geometric heading measurement is not required" not in normalized_summary
     assert "Moderate left or right offset is explicitly acceptable" in normalized_summary
     assert "exact centering is not required unless explicitly requested" in normalized_summary
@@ -259,8 +258,7 @@ def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmati
 
     assert "target absent" in normalized_skill_text
     assert "weak candidate" in normalized_skill_text
-    assert "directional target cue" in normalized_skill_text
-    assert "inspection-ready" in normalized_skill_text
+    assert "directional cue" in normalized_skill_text
     assert "30-45 degrees" not in normalized_skill_text
     assert "current phase decision" not in normalized_skill_text
     assert "artifact paths" not in normalized_skill_text
@@ -382,7 +380,7 @@ def test_approach_skill_stops_before_overshoot_and_excludes_route_references():
     assert "Target identity and target-relative range are independently assessable facts" not in normalized
     assert "For qualitative requests, form a credible rough range" in normalized
     assert "Assess identity and range separately" not in normalized
-    assert "tight representative interior region" in normalized
+    assert "visual grounding with candidate distance enabled" in normalized
     assert "Yaw cannot reach a distance or side relation" in normalized
     assert "familiar scale, ground contact" not in normalized
     assert "clearly place the UAV too far" in normalized
@@ -390,7 +388,7 @@ def test_approach_skill_stops_before_overshoot_and_excludes_route_references():
     assert "before correcting distance" in normalized
     assert "Completion requires credible target identity. Separately" not in normalized
     assert "broadly near the requested relation" in normalized
-    assert "explicit metric standoff additionally requires a fresh small-ROI measurement" in normalized
+    assert "explicit metric standoff additionally requires a fresh grounded-candidate distance" in normalized
     assert "Do not infer a decimal distance from the color bar" in normalized
     assert "Reverse only when new evidence clearly places the relation on the opposite side" in normalized
     assert "contains the requested value" not in normalized
