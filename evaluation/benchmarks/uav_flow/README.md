@@ -145,6 +145,29 @@ python tests/manual/uav_flow_full_campaign_audit.py `
 它不会调用模型或 UnrealCV，也不会把已经 finalized 的错误行为重新列为续跑案例。
 输出包括统一 JSON/Markdown/HTML 报告以及 `remaining_case_ids.txt/.json`。
 
+若一个 finalized case 因 Provider、网络或模拟器基础设施失败而被后续 segment
+精确补测，可显式加入 `--replace-infrastructure-errors`。默认仍拒绝任何重复 case；
+启用后也只接受同 Git commit、同模型、同配置且 trace/tracking 有效的干净 retry，
+普通 `ok/stopped` 行为结果不能被覆盖。原失败及替换来源会保存在
+`case_replacements.json` 和 Campaign 报告中，而最终指标只统计有效 retry：
+
+Campaign 同时保留 case 原始的 `source_infrastructure_clean`。旧输出曾将
+动作跟踪误差是否落在容差内也折叠到这个字段；离线聚合会将这种情况与真正的
+Provider、UE、相机或执行失败分开，跟踪有效性仍由独立的 trace/tracking gate
+报告。
+
+```powershell
+python tests/manual/uav_flow_full_campaign_audit.py `
+  --config evaluation/benchmarks/uav_flow/configs/uav_flow_full_273.local `
+  --eval-dir H:/UAV-Agent-Evaluation/uav_flow/outputs/<main-id> `
+  --eval-dir H:/UAV-Agent-Evaluation/uav_flow/outputs/<continuation-id> `
+  --eval-dir H:/UAV-Agent-Evaluation/uav_flow/outputs/<retry-id> `
+  --expected-loop-guard-windows 50 `
+  --replace-infrastructure-errors `
+  --output-dir H:/UAV-Agent-Evaluation/uav_flow/outputs/<campaign-id> `
+  --strict
+```
+
 OpenAI-compatible Provider 的模型请求链共用同一传输策略：
 `429/502/503/504` 最多额外重试 4 次，读取超时默认额外重试 1 次，临时断连、
 连接重置和 EOF 默认额外重试 2 次；混合错误仍受 4 次总上限约束。HTTP

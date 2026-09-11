@@ -258,6 +258,159 @@ def test_finalized_error_is_not_returned_as_missing(tmp_path):
     assert report["status_counts"] == {"error": 1, "ok": 1}
 
 
+def test_campaign_explicitly_replaces_infrastructure_error_with_clean_retry(
+    tmp_path,
+):
+    dataset = _dataset(tmp_path)
+    config_path, config = _config(tmp_path, dataset)
+    main = _segment(
+        tmp_path,
+        config,
+        "main",
+        ["case_a", "case_b"],
+        ["case_a", "case_b"],
+        error_case="case_b",
+    )
+    continuation = _segment(
+        tmp_path,
+        config,
+        "cont01",
+        ["case_c"],
+        ["case_c"],
+    )
+    retry = _segment(
+        tmp_path,
+        config,
+        "retry01",
+        ["case_b"],
+        ["case_b"],
+    )
+
+    report = audit_campaign(
+        config_path,
+        [main, continuation, retry],
+        expected_loop_guard_windows=50,
+        segment_auditor=_native_stub,
+        replace_infrastructure_errors=True,
+    )
+
+    assert report["status"] == "ok"
+    assert report["coverage_complete"] is True
+    assert report["infrastructure_clean"] is True
+    assert report["status_counts"] == {"ok": 3}
+    assert report["transcript_coverage"]["assistant_turns"] == 6
+    assert report["case_replacements"] == [
+        {
+            "case_id": "case_b",
+            "reason": (
+                "later clean retry replaced earlier infrastructure failure"
+            ),
+            "original": {
+                "segment": "main",
+                "status": "error",
+                "error": {"error": "provider failed"},
+                "infrastructure_clean": False,
+                "source_infrastructure_clean": True,
+                "review_html": str(main / "cases" / "case_b" / "review.html"),
+            },
+            "replacement": {
+                "segment": "retry01",
+                "status": "ok",
+                "stopped_reason": None,
+                "infrastructure_clean": True,
+                "source_infrastructure_clean": True,
+                "review_html": str(
+                    retry / "cases" / "case_b" / "review.html"
+                ),
+            },
+        }
+    ]
+    by_id = {item["case_id"]: item for item in report["cases"]}
+    assert by_id["case_b"]["segment"] == "retry01"
+
+
+def test_campaign_rejects_failed_or_incompatible_infrastructure_retry(tmp_path):
+    dataset = _dataset(tmp_path)
+    config_path, config = _config(tmp_path, dataset)
+    main = _segment(
+        tmp_path,
+        config,
+        "main",
+        ["case_a", "case_b"],
+        ["case_a", "case_b"],
+        error_case="case_b",
+    )
+    failed_retry = _segment(
+        tmp_path,
+        config,
+        "retry_failed",
+        ["case_b"],
+        ["case_b"],
+        error_case="case_b",
+    )
+    incompatible_retry = _segment(
+        tmp_path,
+        config,
+        "retry_incompatible",
+        ["case_b"],
+        ["case_b"],
+    )
+    manifest_path = incompatible_retry / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["git_commit"] = "different"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+    report = audit_campaign(
+        config_path,
+        [main, failed_retry, incompatible_retry],
+        expected_loop_guard_windows=50,
+        segment_auditor=_native_stub,
+        replace_infrastructure_errors=True,
+    )
+
+    codes = {item["code"] for item in report["violations"]}
+    assert {"infrastructure_retry_invalid", "git_commit_mismatch"}.issubset(
+        codes
+    )
+    assert report["case_replacements"] == []
+    assert report["coverage_complete"] is False
+    by_id = {item["case_id"]: item for item in report["cases"]}
+    assert by_id["case_b"]["segment"] == "main"
+
+
+def test_campaign_does_not_replace_clean_benchmark_outcome(tmp_path):
+    dataset = _dataset(tmp_path)
+    config_path, config = _config(tmp_path, dataset)
+    main = _segment(
+        tmp_path,
+        config,
+        "main",
+        ["case_a", "case_b"],
+        ["case_a", "case_b"],
+    )
+    duplicate = _segment(
+        tmp_path,
+        config,
+        "retry01",
+        ["case_b"],
+        ["case_b"],
+    )
+
+    report = audit_campaign(
+        config_path,
+        [main, duplicate],
+        expected_loop_guard_windows=50,
+        segment_auditor=_native_stub,
+        replace_infrastructure_errors=True,
+    )
+
+    assert report["case_replacements"] == []
+    assert any(
+        item["code"] == "duplicate_finalized_case"
+        for item in report["violations"]
+    )
+
+
 def test_campaign_separates_trace_tracking_and_infrastructure_gates(tmp_path):
     dataset = _dataset(tmp_path)
     config_path, config = _config(tmp_path, dataset)
@@ -288,6 +441,44 @@ def test_campaign_separates_trace_tracking_and_infrastructure_gates(tmp_path):
     assert report["tracking_valid"] is False
     assert report["infrastructure_clean"] is False
     assert report["status"] == "incomplete_or_invalid"
+
+
+def test_campaign_does_not_treat_legacy_tracking_tolerance_as_infrastructure_failure(
+    tmp_path,
+):
+    dataset = _dataset(tmp_path)
+    config_path, config = _config(tmp_path, dataset)
+    main = _segment(
+        tmp_path,
+        config,
+        "main",
+        ["case_a", "case_b", "case_c"],
+        ["case_a", "case_b", "case_c"],
+    )
+    case_path = main / "cases" / "case_b" / "case.json"
+    payload = json.loads(case_path.read_text(encoding="utf-8"))
+    payload["infrastructure_clean"] = False
+    payload["backend_action_tracking"].update(
+        {
+            "all_observed_within_tolerance": False,
+            "failed_window_count": 0,
+            "failed_or_skipped_step_count": 0,
+        }
+    )
+    case_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    report = audit_campaign(
+        config_path,
+        [main],
+        expected_loop_guard_windows=50,
+        segment_auditor=_native_stub,
+    )
+
+    assert report["status"] == "ok"
+    assert report["infrastructure_clean"] is True
+    by_id = {item["case_id"]: item for item in report["cases"]}
+    assert by_id["case_b"]["source_infrastructure_clean"] is False
+    assert by_id["case_b"]["infrastructure_clean"] is True
 
 
 def test_campaign_rejects_duplicate_config_drift_and_dataset_drift(tmp_path):
@@ -335,6 +526,16 @@ def test_campaign_outputs_escape_html_and_write_ordered_remaining_ids(tmp_path):
             }
         ],
         "cases": [],
+        "case_replacements": [
+            {
+                "case_id": "case_a",
+                "original": {"segment": "main"},
+                "replacement": {
+                    "segment": '<retry onmouseover="alert(1)">',
+                    "status": "ok",
+                },
+            }
+        ],
     }
 
     paths = write_campaign_outputs(report, tmp_path / "report")
@@ -343,4 +544,8 @@ def test_campaign_outputs_escape_html_and_write_ordered_remaining_ids(tmp_path):
     assert "<script>" not in page
     assert "&lt;script&gt;" in page
     assert "&lt;img src=x onerror=alert(1)&gt;" in page
+    assert '&lt;retry onmouseover=&quot;alert(1)&quot;&gt;' in page
     assert Path(paths["remaining_case_ids_txt"]).read_text(encoding="utf-8") == "case_b,case_c\n"
+    assert json.loads(
+        Path(paths["case_replacements"]).read_text(encoding="utf-8")
+    )[0]["case_id"] == "case_a"
