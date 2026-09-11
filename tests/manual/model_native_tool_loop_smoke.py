@@ -395,6 +395,9 @@ def _plan_with_protocol_repair(
                 {
                     "attempt": attempt,
                     "status": "protocol_rejected",
+                    "transport": copy.deepcopy(
+                        planner.last_exchange.get("transport", {})
+                    ),
                     "error": str(exc),
                     "request": copy.deepcopy(planner.last_request),
                     "response": copy.deepcopy(exc.rejected_turn),
@@ -410,6 +413,9 @@ def _plan_with_protocol_repair(
             {
                 "attempt": attempt,
                 "status": "ok",
+                "transport": copy.deepcopy(
+                    planner.last_exchange.get("transport", {})
+                ),
                 "request": copy.deepcopy(planner.last_request),
             }
         )
@@ -574,6 +580,10 @@ def _terminal_summary(summary: dict[str, Any], output_dir: Path) -> dict[str, An
         "third_turn_intent_source": summary["third_turn"]["public_intent_source"],
         "response_format_present": False,
         "tool_result_replayed": True,
+        "transport_traces": {
+            name: [attempt.get("transport", {}) for attempt in attempts]
+            for name, attempts in summary["protocol_attempts"].items()
+        },
         "output_dir": str(output_dir),
         "transcript_path": summary["transcript_path"],
         "summary_path": str(output_dir / "probe_summary.json"),

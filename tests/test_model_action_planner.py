@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 
 import pytest
@@ -89,6 +90,65 @@ def test_native_planner_sends_tools_and_parses_canonical_call(tmp_path):
         tool["function"]["name"] == "runtime_commit_phase_turn"
         for tool in payload["tools"]
     )
+
+
+def test_native_planner_transport_retry_is_one_model_round_and_not_transcript(
+    tmp_path, monkeypatch
+):
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return None
+
+        def read(self):
+            return json.dumps(
+                response_with_calls(("call_1", "uav_hover", {}))
+            ).encode("utf-8")
+
+    outcomes = [http.client.RemoteDisconnected("closed"), Response()]
+    sleeps = []
+
+    def fake_urlopen(request, timeout):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(
+        "src.agent.provider_http.urllib.request.urlopen", fake_urlopen
+    )
+    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    planner = ModelActionPlanner(
+        ModelConfig(
+            model_name="stub",
+            api_key="test-key",
+            base_url="https://example.test/v1",
+        )
+    )
+    transcript = make_transcript(tmp_path)
+    registry = default_registry()
+    messages_before = transcript.provider_messages(registry)
+
+    turn = planner.plan_turn(transcript, registry)
+
+    assert turn.tool_calls[0].tool_name == "uav.hover"
+    assert transcript.provider_messages(registry) == messages_before
+    assert sleeps == [2.0]
+    assert planner.last_exchange["transport"] == {
+        "attempt_count": 2,
+        "retry_count": 1,
+        "final_status": "success",
+        "retries": [
+            {
+                "attempt": 1,
+                "category": "connection",
+                "error_type": "RemoteDisconnected",
+                "delay_sec": 2.0,
+            }
+        ],
+    }
 
 
 def test_native_planner_captures_exact_public_exchange_and_hashed_media(tmp_path):

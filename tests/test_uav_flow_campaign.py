@@ -87,6 +87,8 @@ def _manifest(config: UavFlowEvalConfig, selected: list[str]) -> dict:
             "name": "model",
             "max_tool_rounds": 10,
             "max_consecutive_protocol_rejections": 3,
+            "provider_timeout_retries": 1,
+            "provider_connection_retries": 2,
         },
         "selected_case_ids": selected,
         "class_counts": {},
@@ -191,6 +193,8 @@ def test_run_manifest_is_redacted_and_hashes_full_dataset(tmp_path, monkeypatch)
         model_name="model",
         max_tool_rounds=10,
         max_consecutive_protocol_rejections=3,
+        provider_timeout_retries=1,
+        provider_connection_retries=2,
         api_key="secret",
     )
 
@@ -205,6 +209,8 @@ def test_run_manifest_is_redacted_and_hashes_full_dataset(tmp_path, monkeypatch)
     assert payload["dataset_sha256"] == dataset_sha256(config)
     assert payload["model"]["max_tool_rounds"] == 10
     assert payload["model"]["max_consecutive_protocol_rejections"] == 3
+    assert payload["model"]["provider_timeout_retries"] == 1
+    assert payload["model"]["provider_connection_retries"] == 2
     assert "secret" not in Path(path).read_text(encoding="utf-8")
 
 

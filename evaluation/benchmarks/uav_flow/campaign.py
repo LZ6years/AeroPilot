@@ -68,6 +68,12 @@ def write_run_manifest(
                 )
                 or 0
             ),
+            "provider_timeout_retries": int(
+                getattr(model_config, "provider_timeout_retries", 0) or 0
+            ),
+            "provider_connection_retries": int(
+                getattr(model_config, "provider_connection_retries", 0) or 0
+            ),
         },
         "selected_case_ids": [case.case_id for case in selected],
         "class_counts": dict(

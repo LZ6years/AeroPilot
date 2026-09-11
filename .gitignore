@@ -17,6 +17,7 @@ env/
 # Local configuration and secrets
 .env
 .env.*
+!.env.example
 *.local
 
 # Logs and runtime outputs

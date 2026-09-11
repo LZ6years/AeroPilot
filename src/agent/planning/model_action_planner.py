@@ -144,10 +144,16 @@ class ModelActionPlanner:
             ) from exc
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        # Transport attempts are debug evidence, not transcript turns. The
+        # shared helper updates this object in place even when it ultimately
+        # raises, so Runtime can persist an exhausted retry sequence.
+        transport_trace: dict[str, Any] = {}
+        self.last_exchange["transport"] = transport_trace
         return request_openai_compatible_json(
             self.model_config,
             payload,
             error_prefix="Native tool-call request failed",
+            transport_trace=transport_trace,
         )
 
     @staticmethod

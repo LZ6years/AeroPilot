@@ -1216,14 +1216,22 @@ def _infrastructure_error(
     """Identify failures that make continuing a remote batch unsafe.
 
     Planner and metric failures can occur after a valid simulator scene is
-    available and remain benchmark results. Failures before capabilities are
-    established, and all cleanup failures, indicate that later episodes could
-    inherit an unknown simulator state.
+    available and remain benchmark results. Exhausted provider transport
+    failures are different: later episodes would use the same unhealthy model
+    endpoint, so the batch must stop even though the simulator is still valid.
+    Failures before capabilities are established, and all cleanup failures,
+    likewise make continuing unsafe.
     """
 
     cleanup_errors = list(outcome.get("cleanup_errors") or [])
     if cleanup_errors:
         return {"stage": "cleanup", "errors": cleanup_errors}
+    outcome_error = outcome.get("error")
+    if (
+        isinstance(outcome_error, dict)
+        and outcome_error.get("error_type") == "ProviderRequestError"
+    ):
+        return {"stage": "provider", "error": dict(outcome_error)}
     if execution is None:
         return {
             "stage": "case_setup",

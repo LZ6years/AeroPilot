@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
+from src.agent.provider_http import request_openai_compatible_json
 from src.agent.semantic.task_parser import _loads_json_object
 from src.plugins.skills.catalog import SkillCatalog
 from src.runtime.configs.model_config import ModelConfig
@@ -210,23 +209,11 @@ class ModelSkillSelector:
             "max_tokens": 256,
             "response_format": {"type": "json_object"},
         }
-        request = urllib.request.Request(
-            self.model_config.chat_completions_url(),
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.model_config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
+        data = request_openai_compatible_json(
+            self.model_config,
+            payload,
+            error_prefix="Skill selection request failed",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.model_config.timeout_sec) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"Skill selection request failed: HTTP {exc.code} {exc.reason}; body={body}") from exc
-        except urllib.error.URLError as exc:
-            raise RuntimeError(f"Skill selection request failed: {exc}") from exc
         return data["choices"][0]["message"]["content"]
 
 

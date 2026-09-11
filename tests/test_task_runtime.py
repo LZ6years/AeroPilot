@@ -1989,6 +1989,14 @@ def test_native_tool_loop_reasons_with_grounding_result_and_batches_physical_cal
 
         def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
             self.calls += 1
+            self.last_exchange = {
+                "transport": {
+                    "attempt_count": 1,
+                    "retry_count": 0,
+                    "final_status": "success",
+                    "retries": [],
+                }
+            }
             self.allowed_names.append(set(allowed_tool_names or set()))
             self.observation_ids.append(transcript.latest_observation_id())
             provider_messages = transcript.provider_messages(registry)
@@ -2265,6 +2273,17 @@ def test_native_tool_loop_reasons_with_grounding_result_and_batches_physical_cal
         for path in sorted((run_dir / "debug" / "action_planner").glob("*.json"))
     ]
     assert [len(item["model_rounds"]) for item in decisions] == [2, 1]
+    assert all(
+        model_round["transport"]
+        == {
+            "attempt_count": 1,
+            "retry_count": 0,
+            "final_status": "success",
+            "retries": [],
+        }
+        for decision in decisions
+        for model_round in decision["model_rounds"]
+    )
     assert [
         item["runtime_outcome"]["status"]
         for item in decisions[0]["model_rounds"]

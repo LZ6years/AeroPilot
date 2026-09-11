@@ -1568,6 +1568,9 @@ class TaskRuntime:
             "request": exchange.get("request"),
             "response": exchange.get("response"),
         }
+        transport = exchange.get("transport")
+        if isinstance(transport, dict):
+            record["transport"] = transport
         media = exchange.get("media")
         if isinstance(media, list):
             record["request_media"] = media

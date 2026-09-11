@@ -274,6 +274,14 @@ flowchart TD
 连续拒绝计数。两者都不是 token budget；当前版本不做 transcript 摘要、裁剪或静默降级，
 超限应显式报错。
 
+Provider HTTP 重试位于 Tool-Call Self-Repair 之前。容量响应、读取超时和临时断连
+只在尚未形成 AssistantTurn 时重发同一请求；它们不追加 transcript、不消耗
+`max_tool_rounds`，也不会执行或重复执行 UAV ToolCall。默认读取超时额外重试 1 次，
+连接/EOF 类错误额外重试 2 次，分别由
+`FLYAGENT_MODEL_TIMEOUT_RETRIES` 和 `FLYAGENT_MODEL_CONNECTION_RETRIES` 配置。
+重试尝试只进入 provider transport debug trace。收到响应后的 JSON、ToolCall 或
+Runtime 协议错误仍由上面的 transcript feedback 机制处理。
+
 ## 9. 视觉输入边界
 
 RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image context module 保持轻量：不 caption、不调用模型；每个 checkpoint 只产出当次 observation 的图像，并在深度有效时生成带底部米制色条的 RGB/depth 融合图。完整历史由 transcript 按 observation 时间保留。

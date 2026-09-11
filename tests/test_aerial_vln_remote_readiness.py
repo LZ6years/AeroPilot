@@ -43,7 +43,7 @@ class FakeSshRunner:
                     "vehicle_present": True,
                     "camera_present": True,
                     "capture_sizes": {
-                        "0": [224, 224],
+                        "0": [256, 256],
                         "2": [256, 256],
                     },
                 },

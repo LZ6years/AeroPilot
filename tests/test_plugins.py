@@ -592,6 +592,44 @@ def test_enabled_model_skill_selector_requires_explicit_config():
     assert selector.model_config is config
 
 
+def test_model_skill_selector_uses_shared_provider_transport(monkeypatch):
+    captured = {}
+
+    def fake_request(model_config, payload, *, error_prefix, transport_trace=None):
+        captured.update(
+            {
+                "model_config": model_config,
+                "payload": payload,
+                "error_prefix": error_prefix,
+                "transport_trace": transport_trace,
+            }
+        )
+        return {
+            "choices": [
+                {"message": {"content": '{"selected_skills": []}'}}
+            ]
+        }
+
+    monkeypatch.setattr(
+        "src.plugins.skills.selection.request_openai_compatible_json",
+        fake_request,
+    )
+    config = ModelConfig(
+        model_name="test-model",
+        api_key="secret",
+        base_url="https://example.test/v1",
+    )
+    selector = ModelSkillSelector(config)
+
+    content = selector._request_content({"available_skills": []})
+
+    assert content == '{"selected_skills": []}'
+    assert captured["model_config"] is config
+    assert captured["error_prefix"] == "Skill selection request failed"
+    assert captured["payload"]["model"] == "test-model"
+    assert captured["transport_trace"] is None
+
+
 def test_skills_module_does_not_cache_transient_selector_errors():
     class TransientSelector:
         def __init__(self):

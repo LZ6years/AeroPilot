@@ -15,6 +15,8 @@ class ModelConfig:
     api_key: str = ""
     base_url: str = ""
     timeout_sec: float = 60.0
+    provider_timeout_retries: int = 1
+    provider_connection_retries: int = 2
     max_tool_rounds: int = 10
     max_consecutive_protocol_rejections: int = 6
     task_parser_prompt_path: str = ""
@@ -25,6 +27,10 @@ class ModelConfig:
     def __post_init__(self) -> None:
         if self.timeout_sec <= 0:
             raise ValueError("timeout_sec must be positive")
+        if self.provider_timeout_retries < 0:
+            raise ValueError("provider_timeout_retries must be non-negative")
+        if self.provider_connection_retries < 0:
+            raise ValueError("provider_connection_retries must be non-negative")
         if self.max_tool_rounds <= 0:
             raise ValueError("max_tool_rounds must be positive")
         if self.max_consecutive_protocol_rejections <= 0:
@@ -40,6 +46,12 @@ class ModelConfig:
             api_key=env.get("FLYAGENT_MODEL_API_KEY", "").strip(),
             base_url=env.get("FLYAGENT_MODEL_BASE_URL", "").strip(),
             timeout_sec=float(env.get("FLYAGENT_MODEL_TIMEOUT_SEC", "60")),
+            provider_timeout_retries=int(
+                env.get("FLYAGENT_MODEL_TIMEOUT_RETRIES", "1")
+            ),
+            provider_connection_retries=int(
+                env.get("FLYAGENT_MODEL_CONNECTION_RETRIES", "2")
+            ),
             max_tool_rounds=int(env.get("FLYAGENT_AGENT_MAX_TOOL_ROUNDS", "10")),
             max_consecutive_protocol_rejections=int(
                 env.get("FLYAGENT_AGENT_MAX_CONSECUTIVE_PROTOCOL_REJECTIONS", "6")
@@ -54,7 +66,7 @@ class ModelConfig:
             action_planner_prompt_path=env.get("FLYAGENT_ACTION_PLANNER_PROMPT_PATH", "").strip(),
         )
 
-    def redacted_summary(self) -> dict[str, str | float | bool]:
+    def redacted_summary(self) -> dict[str, str | float | int | bool]:
         return {
             "task_parser_mode": self.task_parser_mode,
             "provider": self.provider,
@@ -62,6 +74,8 @@ class ModelConfig:
             "base_url": self.base_url,
             "has_api_key": bool(self.api_key),
             "timeout_sec": self.timeout_sec,
+            "provider_timeout_retries": self.provider_timeout_retries,
+            "provider_connection_retries": self.provider_connection_retries,
             "max_tool_rounds": self.max_tool_rounds,
             "max_consecutive_protocol_rejections": self.max_consecutive_protocol_rejections,
             "task_parser_prompt_path": self.task_parser_prompt_path,

@@ -145,10 +145,12 @@ python tests/manual/uav_flow_full_campaign_audit.py `
 它不会调用模型或 UnrealCV，也不会把已经 finalized 的错误行为重新列为续跑案例。
 输出包括统一 JSON/Markdown/HTML 报告以及 `remaining_case_ids.txt/.json`。
 
-OpenAI-compatible Provider 的三条模型请求链共用同一瞬时容量错误策略：仅对
-`429/502/503/504` 重试，优先遵循 `Retry-After`，否则依次等待
-`2/4/8/16` 秒；其他 HTTP 4xx、网络错误和重试耗尽仍保留原调用方错误并结束
-当前 case。该机制只平滑 Provider 请求，不改变 Planner 决策或重跑 finalized case。
+OpenAI-compatible Provider 的模型请求链共用同一传输策略：
+`429/502/503/504` 最多额外重试 4 次，读取超时默认额外重试 1 次，临时断连、
+连接重置和 EOF 默认额外重试 2 次；混合错误仍受 4 次总上限约束。HTTP
+`Retry-After` 优先，否则依次等待 `2/4/8/16` 秒。其他 HTTP 4xx、证书错误、
+响应 JSON/ToolCall 错误不重试。该机制只重发尚未形成 AssistantTurn 的相同
+Provider 请求，不改变 Planner 轮次、不重启 UE，也不重跑 finalized case。
 
 HTML gallery 默认只渲染 RGB。Depth 仍按 ObservationProfile 采集，并保留在
 `audit.json` 和便携审计资产中，不进入页面图片列表。

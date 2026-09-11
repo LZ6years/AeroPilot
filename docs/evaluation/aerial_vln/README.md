@@ -217,9 +217,12 @@ python evaluation/benchmarks/aerial_vln/scripts/run_eval.py `
   --eval-id aerial_vln_s_val_unseen_quick
 ```
 
-Runner 遇到 scene setup 或 cleanup 错误时写出 partial summary 后中止，防止后续
-案例继承未知远端状态。Planner 或指标失败仍作为真实 benchmark 结果保留并继续。
-本轮不运行 `--all-per-difficulty`，全量配置只作为后续入口维护。
+Runner 遇到 scene setup、cleanup 或 Provider 传输重试耗尽时，会在当前 case
+完整落盘后写出 partial summary 并中止，防止后续案例继承未知远端或模型服务状态。
+普通 Planner 协议/行为错误和指标失败仍作为真实 benchmark 结果保留并继续；
+Provider 中止不会触发整例重跑。批次会正常生成 `batch_status=aborted` 的 manifest、
+summary 和 HTML，不需要人工 Ctrl+C。本轮不运行 `--all-per-difficulty`，全量配置
+只作为后续入口维护。
 
 ## 输出
 

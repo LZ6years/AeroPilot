@@ -251,7 +251,7 @@ def _snapshot_errors(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     endpoint = snapshot.get("remote_endpoint", {})
     capture_sizes = settings.get("capture_sizes", {})
     if (
-        capture_sizes.get("0") != [224, 224]
+        capture_sizes.get("0") != [256, 256]
         or capture_sizes.get("2") != [256, 256]
         or settings.get("api_server_port") != endpoint.get("port")
     ):

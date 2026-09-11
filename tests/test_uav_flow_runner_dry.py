@@ -220,6 +220,12 @@ def test_simulator_recovery_classifier_does_not_restart_for_model_network_errors
             "error": "TaskParser model provider SSL EOF at dashscope",
         }
     )
+    assert not _is_recoverable_simulator_error(
+        {
+            "error_type": "ProviderRequestError",
+            "error": "Native tool-call request failed: connection closed",
+        }
+    )
 
 
 def test_runner_retries_one_case_after_in_place_simulator_recovery(

@@ -15,6 +15,7 @@ from evaluation.benchmarks.aerial_vln.protocol import (
 )
 from evaluation.benchmarks.aerial_vln.runner import (
     AerialVlnBenchmarkRunner,
+    _infrastructure_error,
 )
 from plugins.research.stmr_map.online import StmrOnlineMapResult
 from src.agent.phase import COMPLETE_TASK, PhaseTransition
@@ -410,6 +411,58 @@ def test_runner_aborts_after_infrastructure_failure_and_writes_partial_summary(
     assert result["summary"]["abort_reason"]["episode_id"] == "ep_2"
     assert Path(result["summary_paths"]["summary_json"]).exists()
     assert Path(result["summary_paths"]["manifest"]).exists()
+
+
+def test_provider_request_error_is_infrastructure_after_scene_setup():
+    error = {
+        "error_type": "ProviderRequestError",
+        "error": "Native tool-call request failed: read operation timed out",
+    }
+
+    result = _infrastructure_error(
+        execution=object(),
+        setup_error=None,
+        outcome={"error": error, "cleanup_errors": []},
+        capabilities={"protocol": "airsim"},
+    )
+
+    assert result == {"stage": "provider", "error": error}
+
+
+def test_runner_aborts_before_next_case_after_provider_failure(
+    tmp_path, monkeypatch
+):
+    runner = _runner_with_three_cases(tmp_path)
+    seen: list[str] = []
+
+    def fake_run_case(case, eval_dir, **kwargs):
+        seen.append(case.episode_id)
+        return _fake_case_result(
+            case,
+            {
+                "stage": "provider",
+                "error": {
+                    "error_type": "ProviderRequestError",
+                    "error": "provider transport retry exhausted",
+                },
+            },
+        )
+
+    monkeypatch.setattr(runner, "run_case", fake_run_case)
+
+    result = runner.run(eval_id="provider_abort")
+
+    assert seen == ["ep_1"]
+    assert result["summary"]["batch_status"] == "aborted"
+    assert result["summary"]["completed_case_count"] == 1
+    assert result["summary"]["abort_reason"] == {
+        "episode_id": "ep_1",
+        "stage": "provider",
+        "error": {
+            "error_type": "ProviderRequestError",
+            "error": "provider transport retry exhausted",
+        },
+    }
 
 
 def test_runner_continues_after_benchmark_failure(tmp_path, monkeypatch):
