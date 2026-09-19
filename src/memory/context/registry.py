@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import copy
 from pathlib import Path
 from typing import Any
 
@@ -28,10 +29,32 @@ class ContextModuleRegistry:
         modules: dict[str, ContextModule],
         disabled: list[str] | None = None,
         module_order: list[str] | None = None,
+        history_policies: dict[str, dict[str, Any]] | None = None,
     ) -> None:
         self.modules = dict(modules)
         self.disabled = list(disabled or [])
         self.module_order = list(module_order or modules.keys())
+        self.history_policies = copy.deepcopy(history_policies or {})
+        for slot, policy in self.history_policies.items():
+            if slot not in self.modules or slot in self.disabled:
+                raise ContextModuleConfigError(f"History policy requires enabled module: {slot}")
+            if not isinstance(policy, dict):
+                raise ContextModuleConfigError(f"History policy must be an object: {slot}")
+            try:
+                self.modules[slot].validate_history_policy(policy)
+            except ValueError as exc:
+                raise ContextModuleConfigError(f"Invalid history policy for {slot}: {exc}") from exc
+
+    def history_bindings(self) -> dict[str, tuple[ContextModule, dict[str, Any]]]:
+        """Bind configured policies to the actual enabled module instances.
+
+        No agent dependency: the composition root passes these to its projector.
+        A missing policy deliberately means full history for that fragment.
+        """
+        return {
+            slot: (self.modules[slot], copy.deepcopy(policy))
+            for slot, policy in self.history_policies.items()
+        }
 
     @classmethod
     def from_config(
@@ -102,7 +125,10 @@ class ContextModuleRegistry:
             modules[key] = load_plugin_context_module(contribution)
             if modules[key].name != key:
                 modules[key].name = key
-        return cls(modules, disabled, module_order=module_order)
+        history = data.get("context_history", {})
+        if not isinstance(history, dict):
+            raise ContextModuleConfigError("context_history must be a JSON object")
+        return cls(modules, disabled, module_order=module_order, history_policies=history)
 
     def build_fragments(self, sources: MemorySourceBundle, stage_context: StageContextInput):
         fragments = []

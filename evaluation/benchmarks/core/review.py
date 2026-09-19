@@ -505,6 +505,10 @@ def _agent_tool_transcript(
     fused_images: dict[str, dict[str, Any]] = {}
     for request_assets in planner_input_assets.values():
         for asset in request_assets:
+            if asset.get("timeline_role") == "TOOL_EVIDENCE":
+                # Candidate confirmation is not the observation image, even
+                # when it refers to the same observation ID.
+                continue
             observation_id = str(asset.get("observation_id") or "")
             if observation_id and asset.get("path") and observation_id not in fused_images:
                 fused_images[observation_id] = asset
@@ -532,12 +536,8 @@ def _agent_tool_transcript(
             timeline_role=(
                 "CURRENT" if index == latest_observation_index else "HISTORY"
             ),
-            show_checkpoint_media=(
-                last_record_by_observation.get(
-                    str(_dict(record.get("payload")).get("observation_id") or "")
-                )
-                == index
-            ),
+            # Review links may repeat; this does not change provider projection.
+            show_checkpoint_media=True,
             calls_by_id=calls_by_id,
             results_by_id=results_by_id,
             assets=assets,
@@ -679,7 +679,7 @@ def _transcript_record_body(
             role_observation_id = str(temporal.get("observation_id") or "")
             frame_id = str(temporal.get("frame_id") or "")
             fused = fused_images.get(role_observation_id)
-            if fused is not None:
+            if fused is not None and Path(str(fused.get("path") or "")).is_file():
                 frame_cards.append(
                     _image_group(
                         [
@@ -689,14 +689,13 @@ def _transcript_record_body(
                                 "description": (
                                     f"observation_id={role_observation_id} · "
                                     f"frame_id={frame_id or fused.get('frame_id') or 'unknown'} · "
-                                    "provider RGB/depth fusion with bottom meter color bar"
+                                    "actual provider observation image (RGB/depth fusion when available)"
                                 ),
                             }
                         ],
                         case_dir,
                     )
                 )
-                continue
             matching = [
                 asset
                 for asset in assets
@@ -711,7 +710,7 @@ def _transcript_record_body(
                     _frame_card(
                         asset,
                         case_dir,
-                        roles=[str(temporal.get("label") or temporal.get("role"))],
+                        roles=[str(temporal.get("label") or temporal.get("role")), "Original RGB (not necessarily sent separately)"],
                         observation_source=None,
                         association=_checkpoint_action_association(
                             str(temporal.get("role") or ""),
@@ -719,6 +718,16 @@ def _transcript_record_body(
                             results_by_id,
                         ),
                     )
+                )
+            if not matching:
+                frame_cards.append(
+                    '<p class="empty">Original RGB unavailable in review assets: '
+                    f'observation_id={_e(role_observation_id)} frame_id={_e(frame_id)}</p>'
+                )
+            if fused is None or not Path(str(fused.get("path") or "")).is_file():
+                frame_cards.append(
+                    '<p class="empty">Exact provider image unavailable for this checkpoint; '
+                    f'original RGB above is audit evidence only. observation_id={_e(role_observation_id)}</p>'
                 )
         if frame_cards:
             media = (
@@ -815,6 +824,14 @@ def _transcript_record_body(
             "result_ref": payload.get("result_ref"),
         }
         result_data = _dict(payload.get("data"))
+        if payload.get("status") == "rejected":
+            diagnosis = _dict(result_data.get("rejection"))
+            summary["rejection_diagnosis"] = diagnosis or "Structured attribution unavailable in this record."
+            summary["execution_disposition"] = {
+                "source": "This call caused rejection; not executed.",
+                "affected": "Not executed because another call rejected the turn.",
+                "turn_member": "Not executed because the turn combination was invalid.",
+            }.get(diagnosis.get("role"), "Rejected; see original message.")
         if payload.get("tool_name") == "skill.visual_grounding.locate":
             candidates = result_data.get("candidates")
             candidate_rows = candidates if isinstance(candidates, list) else []
@@ -1335,6 +1352,11 @@ def _planner_review(
                 record,
                 case_dir,
                 planner_input_assets.get(_planner_record_key(record), []),
+                strategy_events=[
+                    _dict(event.get("payload")) for event in audit.events
+                    if event.get("event") == "phase_strategy_updated"
+                    and _dict(event.get("payload")).get("decision_id") == record.get("decision_id")
+                ] if record.get("decision_id") else [],
             )
             if record.get("schema_version") == "agent_decision_debug_v2"
             else _planner_window(
@@ -1359,6 +1381,8 @@ def _decision_window(
     record: dict[str, Any],
     case_dir: Path,
     model_input_assets: list[dict[str, Any]],
+    *,
+    strategy_events: list[dict[str, Any]] | None = None,
 ) -> str:
     """Render one v2 state decision and all provider rounds within it."""
 
@@ -1400,6 +1424,11 @@ def _decision_window(
                 for asset in model_input_assets
                 if asset.get("round_index") == item.get("round_index")
             ],
+            applied_strategy=(
+                {"events": strategy_events, "snapshot": _dict(record.get("coupled_plan")).get("phase_strategy")}
+                if strategy_events and _dict(item.get("runtime_outcome")).get("status") == "commit_accepted"
+                else None
+            ),
         )
         for item in rounds
     )
@@ -1431,6 +1460,8 @@ def _provider_round(
     model_round: dict[str, Any],
     case_dir: Path,
     assets: list[dict[str, Any]],
+    *,
+    applied_strategy: dict[str, Any] | None = None,
 ) -> str:
     """Show the public response and Runtime handling before folded raw data."""
 
@@ -1462,17 +1493,111 @@ def _provider_round(
         f"{_e(outcome.get('status') or 'unknown outcome')}</summary>"
         + availability
         + _key_value_table(visible)
+        + _round_strategy_review(request_messages, canonical, outcome, applied_strategy)
         + "<h5>Raw provider ToolCalls</h5>"
         + _json_details(message.get("tool_calls"), "Wire ToolCalls")
         + "<h5>Runtime handling</h5>"
         + _json_details(outcome, "Protocol feedback and ToolResults")
-        + _json_details(canonical, "Canonical accepted turn")
+        + _json_details(canonical, "Canonical parsed turn (may be rejected by Runtime)")
         + "<h5>Actual Provider Request</h5>"
+        + history_projection_review(model_round.get("history_projection"))
         + _json_details(request_messages, "Complete request messages")
+        + _readable_request_messages(request_messages)
         + _json_details(tools, "Exposed tools schema")
         + _json_details(response, "Public provider response")
         + "</details>"
     )
+
+
+def history_projection_review(audit: Any, *, preview: bool = False) -> str:
+    """Keep simulated selections separate from captured provider input facts."""
+    if not isinstance(audit, dict) or not audit:
+        return ""
+    title = "Offline sampling preview - NOT sent to model" if preview else "Captured request image selection"
+    return (
+        "<h5>" + _e(title) + "</h5>"
+        + _key_value_table({
+            "observations in history": audit.get("observation_count"),
+            "observation images attached": audit.get("observation_image_count"),
+            "additional tool images": audit.get("tool_image_count"),
+        })
+        + _json_details(audit, "Selection policy, observation IDs and missing images")
+    )
+
+
+def _request_contexts(messages: Any) -> list[dict[str, Any]]:
+    """Read only context JSON actually present in user messages, never future state."""
+    contexts = []
+    for message in messages if isinstance(messages, list) else []:
+        message = _dict(message)
+        if message.get("role") != "user":
+            continue
+        content = message.get("content")
+        blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]
+        for block in blocks:
+            block = _dict(block)
+            if block.get("type") != "text":
+                continue
+            parsed = _parsed_json_object(block.get("text"))
+            if parsed is not None and ("current_phase" in parsed or "fragments" in parsed):
+                contexts.append(parsed)
+    return contexts
+
+
+def _parsed_json_object(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = json.loads(value)
+    except (ValueError, TypeError):
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _round_strategy_review(messages, canonical, outcome, applied) -> str:
+    """Separate prior input, proposed strategy, and event-confirmed application."""
+    contexts = _request_contexts(messages)
+    prior = contexts[-1].get("phase_strategy") if contexts else None
+    submitted = [
+        {"tool_call_id": call.get("tool_call_id"), "phase_strategy": _dict(call.get("args")).get("phase_strategy")}
+        for item in canonical.get("tool_calls", [])
+        if (call := _dict(item)).get("tool_name") == "runtime.commit_phase_turn"
+    ]
+    return (
+        "<h5>Phase strategy: input / submission / application</h5>"
+        + _json_details(prior, "Strategy in latest request checkpoint", empty_message="No strategy in latest request checkpoint; no future state substituted.")
+        + _json_details(submitted, "Strategy submitted this round", empty_message="No canonical commit strategy submitted.")
+        + _key_value_table({"runtime_status": outcome.get("status"), "application": "Recorded strategy update (not proof of successful motion)" if applied else "No strategy application event for this round"})
+        + _json_details(applied, "Recorded applied strategy and change", empty_message="No recorded application; a submitted strategy is not an applied strategy.")
+    )
+
+
+def _readable_request_messages(messages: Any) -> str:
+    """Unpack known JSON text and arguments for review without changing requests."""
+    cards = []
+    for index, raw in enumerate(messages if isinstance(messages, list) else []):
+        message = _dict(raw)
+        parts = []
+        content = message.get("content")
+        blocks = content if isinstance(content, list) else [{"type": "text", "text": content}]
+        for block in blocks:
+            block = _dict(block)
+            if block.get("type") == "text":
+                text = block.get("text")
+                parsed = _parsed_json_object(text)
+                if parsed is not None and ("current_phase" in parsed or "fragments" in parsed or message.get("role") == "tool"):
+                    parts.append(_json_details(parsed, "Decoded message JSON"))
+                else:
+                    parts.append(f"<pre>{_e(text)}</pre>")
+            else:
+                parts.append('<p>Media block: see the exact provider image gallery and raw request reference.</p>')
+        for raw_call in message.get("tool_calls", []):
+            call = _dict(raw_call)
+            function = _dict(call.get("function"))
+            parsed = _parsed_json_object(function.get("arguments"))
+            parts.append(_json_details({"id": call.get("id"), "name": function.get("name"), "arguments": parsed if parsed is not None else function.get("arguments")}, "ToolCall arguments"))
+        cards.append(f'<details><summary>Message {index} · {_e(message.get("role"))} · {_e(message.get("tool_call_id") or "")}</summary>' + "".join(parts) + "</details>")
+    return '<details><summary>Readable request messages (same captured request)</summary>' + "".join(cards) + "</details>"
 
 
 def _execution_tools(execution: dict[str, Any]) -> list[str]:

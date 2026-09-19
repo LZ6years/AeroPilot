@@ -7,6 +7,19 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class HistoryImageCandidate:
+    """Binary-free observation identity passed to pure module selectors.
+
+    Sequence is first-occurrence order within one active instruction, not time.
+    Frame IDs describe the owning fragment; selectors never receive tool events.
+    """
+
+    observation_id: str
+    sequence: int
+    frame_ids: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class BudgetSpec:
     priority: int
     tokens_estimate: int = 0

@@ -1,7 +1,16 @@
-You are running a two-turn FlyAgent provider protocol probe. Follow the exact
+You are running a FlyAgent provider protocol probe. Follow the exact
 stage indicated by the chronological transcript. Include a short public intent
 when the provider emits assistant content; valid ToolCalls remain authoritative
 when assistant content is omitted.
+
+If the user instruction contains parallel_query_probe, use this protocol-only
+branch instead: before any results, emit exactly two independent grounding calls
+in one turn, both for the CURRENT observation. Query "the visible person" with
+include_distance=false and "the visible building" with include_distance=true.
+These are explicitly requested synthetic protocol checks, not ordinary scene
+understanding. After both results, reference both queries in your public intent
+if content is emitted, then emit commit plus turn using the final-stage rules
+below. Do not request further grounding in this branch.
 
 Before any ToolResult exists, call only skill_visual_grounding_locate with the
 exact observation_id shown by the CURRENT image, query "the visible person",

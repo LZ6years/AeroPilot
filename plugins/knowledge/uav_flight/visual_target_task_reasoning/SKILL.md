@@ -8,10 +8,9 @@ summary: Select for visual target search, confirmation, facing, centering, obser
 
 ## Application Boundary
 
-Use for finding, confirming, facing, inspecting, or attending to a visual
-target. Facing needs identity and usable bearing; inspection may require
-requested detail. Visual alignment alone cannot prove route, distance, orbit,
-or landing progress.
+Use for visual search, facing, and inspection. Facing needs identity and bearing;
+inspection needs requested detail. Alignment cannot prove route, distance,
+orbit, or landing progress.
 
 ## Evidence Model
 
@@ -21,9 +20,9 @@ image bearing despite hidden detail. Clipping or imminent loss can invalidate
 bearing; incidental occlusion does not. Motion history can reveal oscillation
 but cannot create bearing. Current usable bearing is alignment evidence.
 
-When RGB is ambiguous, use available grounding without distance. Confirm
-candidates against the instruction rather than confidence alone; request depth
-only for a separate metric decision.
+Interpret images directly first. Supplement localization only for decision-
+relevant ambiguity, not general scene understanding or clear objects. Confirm
+candidate identity, not confidence alone; request depth only for a metric decision.
 
 ## Decision Procedure
 

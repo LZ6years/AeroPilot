@@ -1,7 +1,7 @@
 {
   "call_name": "skill.visual_grounding.locate",
   "wire_name": "skill_visual_grounding_locate",
-  "description": "Locate natural-language visual targets in the latest RGB observation. Set include_distance=false for visibility or location only. Set it true only when a precise metric threshold or completion claim requires robust camera-to-visible-surface depth. Returned candidates require semantic confirmation from the annotated tool evidence.",
+  "description": "Supplement direct visual reasoning only when a decision-relevant target cannot be reliably localized or distinguished, or its measured distance is necessary. Do not delegate general scene understanding or already clear visibility/location to this detector. Use include_distance=false for unresolved localization and true for decision-critical measurement. Confirm candidate identity from the annotated evidence; distance is camera-to-visible-surface depth, not horizontal or target-center distance.",
   "input_schema": {
     "type": "object",
     "required": ["observation_id", "query", "include_distance"],
@@ -16,11 +16,11 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 256,
-        "description": "Concise natural-language description of the visible target."
+        "description": "Concise description of a decision-relevant target requiring localization or measurement, not a general scene inventory."
       },
       "include_distance": {
         "type": "boolean",
-        "description": "Whether each candidate also needs robust metric depth. Keep false for detection-only questions."
+        "description": "Enable only for a measured-distance request, a nearby metric threshold affecting action, or a quantitative completion claim; a numeric mention alone does not require measurement."
       }
     },
     "x-flyagent-completion-evidence": {
@@ -31,7 +31,7 @@
   "runtime": {
     "effect": "read_only",
     "result_timing": "immediate",
-    "batching": "single",
+    "batching": "parallel_safe",
     "model_exposed": true,
     "max_calls_per_observation": 2
   },
@@ -53,4 +53,3 @@
   "handler": "scripts/handler.py",
   "mock": false
 }
-

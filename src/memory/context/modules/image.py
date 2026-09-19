@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import math
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -10,7 +11,7 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 from src.memory.context.modules.base import ContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import BudgetSpec, ContextFragment, HistoryImageCandidate, MemorySourceBundle, StageContextInput
 from src.depth_display import depth_legend_height
 
 
@@ -40,6 +41,44 @@ class DefaultImageContextModule(ContextModule):
     name = "image"
     priority = 80
     max_items = 3
+
+    def validate_history_policy(self, config: dict[str, Any]) -> None:
+        """Validate module-owned selection options, never provider settings."""
+        mode = config.get("mode", "all")
+        if mode == "all":
+            return super().validate_history_policy(config)
+        fields = {"mode", "max_observation_images", "keep_recent_observations"}
+        if mode != "recency_log" or set(config) != fields:
+            raise ValueError("recency_log requires mode and both observation limits")
+        budget = config["max_observation_images"]
+        recent = config["keep_recent_observations"]
+        if type(budget) is not int or type(recent) is not int:
+            raise ValueError("history image limits must be integers")
+        if recent < 1 or budget < recent + 2:
+            raise ValueError("history image budget must be >= recent + 2, recent >= 1")
+
+    def select_history_images(
+        self, candidates: tuple[HistoryImageCandidate, ...], config: dict[str, Any]
+    ) -> tuple[str, ...]:
+        """Retain recent consecutive frames and log-spaced older observations.
+
+        Selection is recomputed from identities only. Clamp each rounded age
+        to leave distinct slots for the remainder, including the first frame.
+        This is an API-layer slow/fast approximation, not visual token pooling.
+        """
+        self.validate_history_policy(config)
+        total = len(candidates)
+        if config.get("mode", "all") == "all" or total <= config["max_observation_images"]:
+            return tuple(item.observation_id for item in candidates)
+        budget, recent = config["max_observation_images"], config["keep_recent_observations"]
+        slots = budget - recent
+        ages = list(range(recent))
+        for j in range(slots):
+            x = math.log(recent + 1) + j / (slots - 1) * (math.log(total) - math.log(recent + 1))
+            rounded = math.floor(math.exp(x) - 1 + 0.5)
+            ages.append(min(max(rounded, ages[-1] + 1), total - slots + j))
+        indices = sorted(total - age - 1 for age in ages)
+        return tuple(candidates[index].observation_id for index in indices)
 
     def __init__(
         self,

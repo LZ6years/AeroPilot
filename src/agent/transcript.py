@@ -1,4 +1,4 @@
-"""Canonical, append-only Agent transcript and provider-message projection.
+"""Canonical, append-only Agent transcript and isolated history snapshots.
 
 The transcript is the single owner of model intent, tool calls, tool results,
 and observation checkpoints. Context modules still build current-state data;
@@ -8,14 +8,8 @@ they do not retain conversational history.
 from __future__ import annotations
 
 import copy
-import base64
-import hashlib
-import json
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
-
-from src.agent.planning.model_inputs import build_model_user_content
 
 if TYPE_CHECKING:
     from src.memory.stores.event_store import MemoryEventWriter
@@ -112,7 +106,8 @@ class ToolResult:
 
 
 @dataclass(frozen=True)
-class _TranscriptItem:
+class TranscriptEvent:
+    """One canonical event; snapshot() isolates nested payloads for readers."""
     kind: str
     payload: Any
 
@@ -122,7 +117,7 @@ class AgentTranscript:
 
     def __init__(self, writer: "MemoryEventWriter") -> None:
         self.writer = writer
-        self.items: list[_TranscriptItem] = []
+        self.items: list[TranscriptEvent] = []
         self.instruction_id: str | None = None
 
     def start_instruction(self, instruction: str, instruction_id: str | None) -> None:
@@ -238,107 +233,15 @@ class AgentTranscript:
             and item.payload.tool_name == tool_name
         ]
 
-    def provider_messages(self, registry: "ToolRegistry") -> list[dict[str, Any]]:
-        """Render the complete active transcript without compaction."""
+    def snapshot(self) -> tuple[TranscriptEvent, ...]:
+        """Return isolated events so request projections cannot mutate history."""
+        return tuple(copy.deepcopy(self.items))
 
-        messages: list[dict[str, Any]] = []
-        seen_media: set[str] = set()
-        last_state_index_by_observation: dict[str, int] = {}
-        for index, candidate in enumerate(self.items):
-            if candidate.kind != "state_checkpoint":
-                continue
-            observation_id = candidate.payload.get("observation_id")
-            if observation_id:
-                last_state_index_by_observation[str(observation_id)] = index
-        latest_image_state_index = max(
-            last_state_index_by_observation.values(), default=-1
-        )
-        for item_index, item in enumerate(self.items):
-            if item.kind == "user_instruction":
-                messages.append({"role": "user", "content": item.payload["instruction"]})
-                continue
-            if item.kind == "state_checkpoint":
-                observation_id = item.payload.get("observation_id") or "unknown"
-                provider_context = _provider_state_context(
-                    item.payload["context"],
-                    seen_media=seen_media,
-                    include_media=(
-                        last_state_index_by_observation.get(str(observation_id))
-                        == item_index
-                    ),
-                    timeline_role=(
-                        "CURRENT"
-                        if item_index == latest_image_state_index
-                        else "HISTORY"
-                    ),
-                )
-                content = build_model_user_content(
-                    provider_context, include_memory_documents=False
-                )
-                prefix = {
-                    "type": "text",
-                    "text": (
-                        f"STATE CHECKPOINT observation_id={observation_id}. "
-                        "Treat this as a new chronological state."
-                    ),
-                }
-                if isinstance(content, list):
-                    content = [prefix, *content]
-                else:
-                    content = [prefix, {"type": "text", "text": content}]
-                messages.append({"role": "user", "content": content})
-                continue
-            if item.kind == "assistant_turn":
-                turn: AssistantTurn = item.payload
-                tool_calls = []
-                for call in turn.tool_calls:
-                    spec = registry.get(call.tool_name)
-                    tool_calls.append(
-                        {
-                            "id": call.tool_call_id,
-                            "type": "function",
-                            "function": {
-                                "name": spec.wire_name,
-                                "arguments": json.dumps(call.args, ensure_ascii=False),
-                            },
-                        }
-                    )
-                message: dict[str, Any] = {
-                    "role": "assistant",
-                    # A fallback intent helps Runtime and reviewers, but it was
-                    # not emitted by the provider and must not be fabricated
-                    # in the provider conversation history.
-                    "content": (
-                        turn.public_intent or None
-                        if turn.public_intent_source == "provider_content"
-                        else None
-                    ),
-                }
-                if tool_calls:
-                    message["tool_calls"] = tool_calls
-                messages.append(message)
-                continue
-            if item.kind == "tool_result":
-                result: ToolResult = item.payload
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": result.tool_call_id,
-                        "content": json.dumps(
-                            result.to_provider_dict(), ensure_ascii=False
-                        ),
-                    }
-                )
-                evidence_message = _tool_evidence_message(result)
-                if evidence_message is not None:
-                    messages.append(evidence_message)
-                continue
-            if item.kind == "protocol_feedback":
-                messages.append({"role": "user", "content": item.payload["message"]})
-            # provider_turn_rejected is audit-only. Replaying malformed or
-            # unknown ToolCalls without ToolResults can itself violate the
-            # provider protocol; the following feedback is the repair input.
-        return messages
+    def provider_messages(self, registry: "ToolRegistry") -> list[dict[str, Any]]:
+        """Compatibility entry: full history, using the shared projector."""
+        from src.agent.history_projection import HistoryProjector
+
+        return HistoryProjector().project(self, registry).messages
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -353,7 +256,7 @@ class AgentTranscript:
         }
 
     def _append(self, kind: str, payload: Any) -> None:
-        self.items.append(_TranscriptItem(kind, payload))
+        self.items.append(TranscriptEvent(kind, payload))
         self.writer.write_transcript_event(
             instruction_id=self.instruction_id,
             kind=kind,
@@ -382,131 +285,3 @@ def _strip_binary(value: Any) -> Any:
     if isinstance(value, list):
         return [_strip_binary(item) for item in value]
     return value
-
-
-def _provider_state_context(
-    context: dict[str, Any],
-    *,
-    seen_media: set[str],
-    include_media: bool,
-    timeline_role: str,
-) -> dict[str, Any]:
-    """Remove capability declarations already represented by provider tools.
-
-    The complete Runtime/debug checkpoint remains available in the canonical
-    transcript record. Only its provider projection drops duplicate schemas and
-    availability lists. Dynamic runtime-control status remains state evidence.
-    """
-
-    projected = copy.deepcopy(context)
-    projected.pop("allowed_action_constraints", None)
-    runtime_control = projected.get("runtime_control")
-    if isinstance(runtime_control, dict):
-        runtime_control.pop("available", None)
-        runtime_control.pop("contracts", None)
-        if not runtime_control:
-            projected.pop("runtime_control", None)
-    _drop_duplicate_media(
-        projected,
-        seen_media,
-        include_media=include_media,
-        timeline_role=timeline_role,
-    )
-    return projected
-
-
-def _drop_duplicate_media(
-    context: dict[str, Any],
-    seen_media: set[str],
-    *,
-    include_media: bool,
-    timeline_role: str,
-) -> None:
-    """Attach each observation image once and label its chronological role."""
-    checkpoint_media: set[str] = set()
-    fragments = context.get("fragments")
-    if not isinstance(fragments, list):
-        return
-    for fragment in fragments:
-        if not isinstance(fragment, dict):
-            continue
-        inputs = fragment.get("model_inputs")
-        if not isinstance(inputs, list):
-            continue
-        unique_inputs = []
-        for item in inputs:
-            if not isinstance(item, dict) or item.get("type") != "image":
-                unique_inputs.append(item)
-                continue
-            if not include_media:
-                continue
-            identities = _media_identities(item)
-            if identities & checkpoint_media:
-                continue
-            if identities & seen_media:
-                continue
-            seen_media.update(identities)
-            checkpoint_media.update(identities)
-            item["timeline_role"] = timeline_role
-            unique_inputs.append(item)
-        fragment["model_inputs"] = unique_inputs
-
-
-def _media_identities(item: dict[str, Any]) -> set[str]:
-    identities: set[str] = set()
-    data = item.get("data")
-    if isinstance(data, str) and data.startswith("data:image/"):
-        digest = hashlib.sha256(data.encode("utf-8")).hexdigest()
-        identities.add(f"provider_media_sha256:{digest}")
-    for key in ("artifact_ref", "frame_id"):
-        value = item.get(key)
-        if isinstance(value, str) and value:
-            identities.add(f"{key}:{value}")
-    observation_id = item.get("observation_id")
-    if isinstance(observation_id, str) and observation_id:
-        identities.add(f"observation:{observation_id}")
-    return identities
-
-
-def _tool_evidence_message(result: ToolResult) -> dict[str, Any] | None:
-    """Project safe path-based ToolResult evidence as a following user turn.
-
-    Provider tool messages stay compact JSON strings for broad compatibility.
-    The assistant ToolCall is closed by that tool message before this ordinary
-    multimodal user message asks the model to verify its own selected region.
-    """
-
-    content: list[dict[str, Any]] = []
-    for item in result.model_inputs:
-        if not isinstance(item, dict) or item.get("type") != "image":
-            continue
-        path = Path(str(item.get("path") or item.get("artifact_ref") or ""))
-        if not path.is_file():
-            continue
-        try:
-            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-        except OSError:
-            continue
-        mime_type = str(item.get("mime_type") or "image/png")
-        observation_id = str(item.get("observation_id") or "unknown")
-        usage = str(item.get("usage") or "Verify this tool evidence.")
-        content.extend(
-            [
-                {
-                    "type": "text",
-                    "text": (
-                        f"TOOL EVIDENCE tool_call_id={result.tool_call_id} "
-                        f"observation_id={observation_id}. {usage}"
-                    ),
-                },
-                {
-                    "type": "image_url",
-                    "image_url": {
-                        "url": f"data:{mime_type};base64,{encoded}"
-                    },
-                },
-            ]
-        )
-    if not content:
-        return None
-    return {"role": "user", "content": content}

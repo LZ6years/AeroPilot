@@ -730,6 +730,7 @@ def test_audit_excludes_closed_runtime_rejection_from_committed_windows(tmp_path
                 "tool_name": "runtime.commit_phase_turn",
                 "status": "rejected",
                 "message": "incomplete phase requires a physical call",
+                "data": {"rejection": {"scope": "turn", "code": "invalid_turn_combination", "role": "turn_member", "executed": False}},
             },
         },
         {

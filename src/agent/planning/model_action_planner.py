@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from src.agent.provider_http import request_openai_compatible_json
+from src.agent.history_projection import HistoryProjector
 from src.agent.transcript import (
     AgentToolCall,
     AgentTranscript,
@@ -60,12 +61,16 @@ class ModelActionPlanner:
         *,
         max_repair_attempts: int | None = None,
         repair_planner: Any | None = None,
+        history_projector: HistoryProjector | None = None,
     ) -> None:
         if max_repair_attempts is not None or repair_planner is not None:
             raise ModelActionPlannerConfigError(
                 "The native tool loop repairs errors in transcript; separate repair planners are unsupported."
             )
         self.model_config = model_config or load_model_config()
+        # Standalone callers default to full history. Runtime injects the
+        # configured projector bound to its actual Context Module instances.
+        self.history_projector = history_projector or HistoryProjector()
         configured_prompt = prompt_path or self.model_config.action_planner_prompt_path or None
         self.system_prompt = self._load_system_prompt(configured_prompt)
         self.last_request: dict[str, Any] = {}
@@ -98,10 +103,11 @@ class ModelActionPlanner:
                 "runtime.commit_phase_turn must be exposed in every mission turn"
             )
         context = transcript.latest_context()
+        projection = self.history_projector.project(transcript, registry)
         messages = [
             *_memory_system_messages(context),
             {"role": "system", "content": self.system_prompt},
-            *transcript.provider_messages(registry),
+            *projection.messages,
         ]
         payload = {
             "model": self.model_config.model_name,
@@ -117,6 +123,7 @@ class ModelActionPlanner:
             "request": copy.deepcopy(request_snapshot),
             "media": media,
             "response": None,
+            "history_projection": projection.audit,
         }
         data = self._request(payload)
         self.last_response = dict(data)

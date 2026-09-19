@@ -83,7 +83,8 @@ def main() -> None:
         color=(30, 180, 255),
     )
     transcript.start_instruction(
-        "Locate the visible person, measure it only when needed, then request one small right turn.",
+        ("parallel_query_probe: request independent person localization and building measurement, then one small right turn."
+         if args.parallel_queries else "Locate the visible person, measure it only when needed, then request one small right turn."),
         "provider_protocol_probe",
     )
     for observation_id in ("obs_probe_start", "obs_probe_before", "obs_probe_0001"):
@@ -93,6 +94,9 @@ def main() -> None:
         )
 
     planner = ModelActionPlanner(config, prompt_path=str(PROBE_PROMPT))
+    if args.parallel_queries:
+        _parallel_query_probe(planner, transcript, registry, output_dir, detection_evidence_path)
+        return
     first_turn, first_request, first_attempts = _plan_with_protocol_repair(
         planner,
         transcript,
@@ -256,12 +260,49 @@ def _parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--env-path", default=".env")
+    parser.add_argument("--parallel-queries", action="store_true", help="Probe two independent same-turn queries and replay both results before commit (two paid model requests).")
     parser.add_argument(
         "--output-dir",
         default=None,
         help="New output directory; omitted uses a timestamped directory under runs/.",
     )
     return parser
+
+
+def _parallel_query_probe(planner, transcript, registry, output_dir, evidence_path):
+    """Protocol-only double-call probe; synthetic candidates do not test detection quality."""
+    first, first_request, first_attempts = _plan_with_protocol_repair(planner, transcript, registry, stage="parallel_queries")
+    calls = first.tool_calls
+    if len(calls) != 2 or any(call.tool_name != "skill.visual_grounding.locate" for call in calls):
+        raise RuntimeError("Parallel probe did not produce two independent grounding calls; branch not observed.")
+    if {call.args.get("include_distance") for call in calls} != {False, True}:
+        raise RuntimeError("Parallel probe must cover both localization and measurement.")
+    if any(call.args.get("observation_id") != "obs_probe_0001" for call in calls):
+        raise RuntimeError("Parallel probe referenced stale observation.")
+    transcript.append_assistant(first)
+    for call in calls:
+        distance = call.args["include_distance"]
+        transcript.append_tool_result(ToolResult(
+            tool_call_id=call.tool_call_id, tool_name=call.tool_name, status="ok",
+            message="Synthetic protocol evidence only; no detector or UAV executed.",
+            data={"observation_id": "obs_probe_0001", "query": call.args["query"], "candidates": [{"candidate_id": "candidate_01", "distance_m": 2.9 if distance else None, "distance_status": "ok" if distance else "not_requested"}]},
+            requested_args=dict(call.args), executed_args=dict(call.args),
+            model_inputs=[{"type": "image", "role": "visual_grounding_candidates", "observation_id": "obs_probe_0001", "path": str(evidence_path), "artifact_ref": str(evidence_path), "mime_type": "image/png", "usage": "Synthetic probe evidence, not detector accuracy validation."}],
+        ))
+    second, second_request, second_attempts = _plan_with_protocol_repair(planner, transcript, registry, stage="commit_after_parallel_queries")
+    _assert_commit_turn(second, registry)
+    replay = [message.get("tool_call_id") for message in second_request["messages"] if message.get("role") == "tool"]
+    if replay != [call.tool_call_id for call in calls]:
+        raise RuntimeError("Provider request did not replay both results exactly once in order.")
+    if any("response_format" in request for request in (first_request, second_request)):
+        raise RuntimeError("Unexpected response_format in native probe.")
+    transcript.append_assistant(second)
+    for call in second.tool_calls:
+        transcript.append_tool_result(ToolResult(tool_call_id=call.tool_call_id, tool_name=call.tool_name, status="ok", message="Protocol accepted; execution intentionally skipped.", data={"probe_only": True, "executed": False}))
+    _assert_closed_transcript(transcript.to_dict())
+    summary = {"status": "ok", "probe_only": True, "parallel_queries": True, "physical_execution": False, "attempts": [first_attempts, second_attempts], "requests": [first_request, second_request], "turns": [first.to_dict(), second.to_dict()]}
+    (output_dir / "probe_summary.json").write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(json.dumps({"status": "ok", "parallel_queries": True, "output_dir": str(output_dir)}))
 
 
 def _output_dir(value: str | None) -> Path:

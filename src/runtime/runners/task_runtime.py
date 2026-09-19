@@ -167,6 +167,13 @@ class TaskRuntime:
                 else ModelSkillSelector(enabled=False)
             ),
         )
+        if actual_model_planner:
+            from src.agent.history_projection import HistoryProjector
+
+            context_registry = getattr(getattr(self.context_builder, "composer", None), "registry", None)
+            if context_registry is None or not callable(getattr(context_registry, "history_bindings", None)):
+                raise ValueError("Model-backed context builder must expose its ContextModuleRegistry for history projection")
+            self.planner.history_projector = HistoryProjector(context_registry.history_bindings())
         self.semantic_evidence_capabilities: list[str] = []
         # Initialize compatibility for callers that provide an already-parsed
         # plan, then refresh again before every model parse. Context builders
@@ -1291,19 +1298,26 @@ class TaskRuntime:
                         state.latest_observation,
                     )
             except ToolArgumentError as exc:
+                rejection = {
+                    "code": exc.code,
+                    "scope": "call",
+                    "source_tool_call_id": call.tool_call_id,
+                    "parameter_path": exc.path,
+                }
                 feedback = (
                     "The previous tool-call turn was rejected: "
-                    f"{exc}. Correct it using the available tools."
+                    f"call {call.tool_call_id}: {exc}. No calls in this turn executed. "
+                    "Correct it using the available tools."
                 )
                 round_record["runtime_outcome"] = {
                     "status": "arguments_rejected",
                     "feedback": feedback,
                     "tool_results": self._rejected_tool_results(
-                        turn.tool_calls, str(exc)
+                        turn.tool_calls, str(exc), rejection=rejection
                     ),
                 }
                 model_rounds.append(round_record)
-                self._reject_native_turn(turn.tool_calls, str(exc))
+                self._reject_native_turn(turn.tool_calls, str(exc), rejection=rejection)
                 consecutive_protocol_rejections += 1
                 if consecutive_protocol_rejections >= max_consecutive_rejections:
                     self._pending_failed_model_rounds = model_rounds
@@ -1516,15 +1530,25 @@ class TaskRuntime:
                     control_calls,
                 )
             except (TypeError, ValueError) as exc:
+                rejection = (
+                    {
+                        "code": exc.code,
+                        "scope": "call",
+                        "source_tool_call_id": commit.tool_call_id,
+                        "parameter_path": exc.path,
+                    }
+                    if isinstance(exc, ToolArgumentError)
+                    else None
+                )
                 round_record["runtime_outcome"] = {
                     "status": "commit_rejected",
                     "feedback": str(exc),
                     "tool_results": self._rejected_tool_results(
-                        turn.tool_calls, str(exc)
+                        turn.tool_calls, str(exc), rejection=rejection
                     ),
                 }
                 model_rounds.append(round_record)
-                self._reject_native_turn(turn.tool_calls, str(exc))
+                self._reject_native_turn(turn.tool_calls, str(exc), rejection=rejection)
                 consecutive_protocol_rejections += 1
                 if consecutive_protocol_rejections >= max_consecutive_rejections:
                     self._pending_failed_model_rounds = model_rounds
@@ -1569,6 +1593,9 @@ class TaskRuntime:
             "response": exchange.get("response"),
         }
         transport = exchange.get("transport")
+        projection = exchange.get("history_projection")
+        if isinstance(projection, dict):
+            record["history_projection"] = projection
         if isinstance(transport, dict):
             record["transport"] = transport
         media = exchange.get("media")
@@ -1582,16 +1609,31 @@ class TaskRuntime:
 
     @staticmethod
     def _rejected_tool_results(
-        calls: list[AgentToolCall], reason: str
+        calls: list[AgentToolCall],
+        reason: str,
+        *,
+        rejection: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         """Describe Runtime-generated rejection results for decision review."""
 
+        diagnosis = dict(rejection or {"code": "invalid_turn_combination", "scope": "turn"})
+        source = diagnosis.get("source_tool_call_id")
         return [
             ToolResult(
                 tool_call_id=call.tool_call_id,
                 tool_name=call.tool_name,
                 status="rejected",
                 message=reason,
+                data={
+                    "rejection": {
+                        **diagnosis,
+                        "role": (
+                            ("source" if call.tool_call_id == source else "affected")
+                            if source else "turn_member"
+                        ),
+                        "executed": False,
+                    }
+                },
                 requested_args=dict(call.args),
             ).to_dict()
             for call in calls
@@ -1690,14 +1732,21 @@ class TaskRuntime:
         data = commit.args
         phase = str(data.get("phase", "")).strip()
         if phase != state.current_phase_name:
-            raise ValueError(
-                f"commit phase mismatch: expected {state.current_phase_name}, got {phase}"
+            raise ToolArgumentError(
+                f"commit phase mismatch: expected {state.current_phase_name}, got {phase}",
+                code="phase_mismatch", path="args.phase",
             )
         assessment = CompletionAssessment.from_dict(
             dict(data.get("completion_assessment") or {})
         )
         current_phase = state.semantic_plan.phases[state.current_phase_index]
-        assessment.validate_coverage(len(current_phase.done_when))
+        try:
+            assessment.validate_coverage(len(current_phase.done_when))
+        except ValueError as exc:
+            raise ToolArgumentError(
+                str(exc), code="assessment_coverage",
+                path="args.completion_assessment.done_when",
+            ) from exc
         complete = all(item.status == "supported" for item in assessment.done_when)
         if complete:
             self._validate_current_observation_completion_evidence(phase)
@@ -1772,7 +1821,12 @@ class TaskRuntime:
         window_data = data.get("action_window")
         if not isinstance(strategy_data, dict) or not isinstance(window_data, dict):
             raise ValueError("an incomplete phase requires phase_strategy and action_window")
-        strategy = PhaseStrategy.from_dict(dict(strategy_data))
+        try:
+            strategy = PhaseStrategy.from_dict(dict(strategy_data))
+        except ValueError as exc:
+            raise ToolArgumentError(
+                str(exc), code="invalid_strategy", path="args.phase_strategy",
+            ) from exc
         window = ActionWindow(
             intent=str(window_data.get("intent", "")).strip(),
             expected_effect=str(window_data.get("expected_effect", "")).strip(),
@@ -1842,19 +1896,29 @@ class TaskRuntime:
                 "unknown and report blocked"
             )
 
-    def _reject_native_turn(self, calls: list[AgentToolCall], reason: str) -> None:
-        for call in calls:
+    def _reject_native_turn(
+        self,
+        calls: list[AgentToolCall],
+        reason: str,
+        *,
+        rejection: dict[str, Any] | None = None,
+    ) -> None:
+        # Use exactly the same result construction as the debug snapshot.
+        for record in self._rejected_tool_results(calls, reason, rejection=rejection):
             self.agent_transcript.append_tool_result(
                 ToolResult(
-                    tool_call_id=call.tool_call_id,
-                    tool_name=call.tool_name,
+                    tool_call_id=record["tool_call_id"],
+                    tool_name=record["tool_name"],
                     status="rejected",
                     message=reason,
-                    requested_args=dict(call.args),
+                    data=record["data"],
+                    requested_args=record["requested_args"],
                 )
             )
+        source = rejection.get("source_tool_call_id") if rejection else None
+        feedback_reason = f"call {source}: {reason}" if source else reason
         self.agent_transcript.append_protocol_feedback(
-            self._native_protocol_correction_feedback(reason)
+            self._native_protocol_correction_feedback(feedback_reason)
         )
 
     @staticmethod
@@ -1872,9 +1936,11 @@ class TaskRuntime:
             f"{prefix}: {reason}. Return corrected native tool calls using only "
             "the exact exposed wire names. Every function.name must be non-empty, "
             "and every function.arguments value must be a JSON object rather than "
-            "a JSON-encoded string. For an incomplete phase, place "
-            "runtime_commit_phase_turn first and include one to three physical tool "
-            "calls in the same assistant turn."
+            "a JSON-encoded string. For a decision, place runtime_commit_phase_turn first. "
+            "If all done_when are supported, emit commit only. Otherwise include "
+            "strategy/window and one to three physical calls, or report_blocked alone "
+            "after commit. Read-only calls belong in a separate turn; obey their "
+            "advertised batching and observation quota."
         )
 
     def _append_native_control_results(

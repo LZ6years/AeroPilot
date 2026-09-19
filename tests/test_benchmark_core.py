@@ -30,6 +30,60 @@ from src.env_client import ObservationProfile, SceneCapabilities, SceneInstance
 from src.runtime.configs import TaskExecutionOptions
 
 
+def test_readable_provider_request_keeps_latest_strategy_and_escapes_text(tmp_path):
+    from evaluation.benchmarks.core.review import _provider_round
+    old = {"current_phase": {"name": "old"}, "phase_strategy": {"stages": ["OLD"], "active_stage": 0}}
+    latest = {"current_phase": {"name": "new"}}
+    messages = [{"role": "user", "content": [{"type": "text", "text": json.dumps(c)}]} for c in (old, latest)]
+    messages.append({"role": "assistant", "content": "<script>evil</script>", "tool_calls": [{"id": "x", "function": {"name": "inspect", "arguments": '{"query":"<img>"}'}}]})
+    original = json.dumps(messages)
+    rendered = _provider_round({"request": {"messages": messages}, "canonical_turn": {"tool_calls": [{"tool_name": "runtime.commit_phase_turn", "args": {"phase_strategy": {"stages": ["PROPOSED"]}}}]}, "runtime_outcome": {"status": "arguments_rejected"}}, tmp_path, [])
+    assert "No strategy in latest request checkpoint" in rendered
+    assert "PROPOSED" in rendered
+    assert "No recorded application" in rendered
+    assert "Readable request messages" in rendered
+    assert "&lt;script&gt;" in rendered and "<script>evil" not in rendered
+    assert json.dumps(messages) == original
+
+
+def test_provider_round_applied_strategy_requires_event_evidence(tmp_path):
+    from evaluation.benchmarks.core.review import _provider_round
+    rendered = _provider_round({"runtime_outcome": {"status": "commit_accepted"}}, tmp_path, [],
+                               applied_strategy={"events": [{"update_kind": "advance"}], "snapshot": {"active_stage": 1}})
+    assert "Recorded strategy update (not proof of successful motion)" in rendered
+    assert "advance" in rendered
+
+
+def test_state_checkpoints_repeat_safe_image_links_and_report_missing_assets(tmp_path):
+    from evaluation.benchmarks.core.review import _agent_tool_transcript
+    image_path = tmp_path / "review_assets" / "same.png"
+    image_path.parent.mkdir()
+    image_path.write_bytes(b"fixture")
+    records = [{"kind": "state_checkpoint", "payload": {"observation_id": "obs1", "context": {"current_phase": {"name": "p"}}}} for _ in range(2)]
+    audit = SimpleNamespace(agent_transcript=records)
+    rendered = _agent_tool_transcript(audit, (), tmp_path, {"request": [
+        {"observation_id": "obs1", "timeline_role": "TOOL_EVIDENCE", "path": str(tmp_path / "candidate.png")},
+        {"observation_id": "obs1", "path": str(image_path)},
+    ]})
+    assert rendered.count('<img ') == 2
+    assert rendered.count('src="review_assets/same.png"') == 2
+    assert "Original RGB unavailable" in rendered
+    missing = _agent_tool_transcript(audit, (), tmp_path, {})
+    assert missing.count("Exact provider image unavailable") == 2
+
+
+def test_rejection_card_distinguishes_affected_call_and_legacy_message(tmp_path):
+    from evaluation.benchmarks.core.review import _agent_tool_transcript
+    payload = {"tool_call_id": "commit", "tool_name": "runtime.commit_phase_turn", "status": "rejected", "message": "bad <yaw>", "data": {"rejection": {"role": "affected", "source_tool_call_id": "turn", "parameter_path": "args.yaw_deg"}}}
+    audit = SimpleNamespace(agent_transcript=[{"kind": "tool_result", "payload": payload}])
+    rendered = _agent_tool_transcript(audit, (), tmp_path, {})
+    assert "Not executed because another call" in rendered
+    assert "args.yaw_deg" in rendered and "bad &lt;yaw&gt;" in rendered
+    payload["data"] = {}
+    legacy = _agent_tool_transcript(audit, (), tmp_path, {})
+    assert "Structured attribution unavailable" in legacy
+
+
 def test_prepared_episode_requires_profile_options_alignment():
     with pytest.raises(ValueError, match="modalities must match"):
         make_episode(

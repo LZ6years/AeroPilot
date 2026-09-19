@@ -76,18 +76,38 @@ Model-facing state checkpoints should be current and decision useful:
   last-window UAV self-motion;
 - compact phase completion evidence.
 
-The provider receives every checkpoint together with the complete active-task
-assistant/tool transcript in chronological order. Each observation image is
-sent once; earlier labels say `HISTORY`, and only the newest says `CURRENT`.
+The provider receives every checkpoint's state text together with the complete
+active-task assistant/tool transcript in chronological order. Observation images
+may be sampled by an explicit `context_history` policy in `configs/plugins.json`.
+The default experiment caps observation images at 20 and retains the latest 3
+consecutively, with log-spaced older frames including the first. Tool evidence
+images are additional; this is not a total image or token budget.
+Each selected observation image is sent once at its original checkpoint;
+earlier labels say `HISTORY`, and only the newest says `CURRENT`.
 Labels carry `observation_id`, `frame_id`, and scene dimensions outside the
 image pixels. Tool results pair to calls through
 `tool_call_id`. Tool availability, argument schemas, runtime effects, result
 timing, and batching come from `ToolSpec` plus the provider `tools` array, not
 from duplicate context fields or name-prefix inference. Version 1 performs no
-application-level token budgeting, summarization, or silent history truncation.
+application-level token budgeting, text summarization, or silent history truncation.
 The transcript does not replay phase-start or before-window images. Runtime may
 retain those observation IDs as audit/state anchors, while full image history
-comes from the chronological checkpoints.
+comes from the chronological checkpoints and remains fully stored even when
+the request view omits images.
+
+`src/agent/history_projection.py` owns the request view, not durable events.
+Transcript snapshots are deep-copy isolated. Context modules may provide pure
+history-image selectors through the base interface: candidates contain only
+observation IDs, order and frame IDs. The Image module owns `recency_log`;
+Registry validates JSON and binds the actual enabled instance; Runtime only
+injects these bindings into ModelActionPlanner and persists selection audit.
+Do not import agent/transcript types in module selectors, access files there,
+or let selectors mutate state or execute tools. Unknown configured modes fail
+initialization. Missing history configuration means `all`. Legacy
+`AgentTranscript.provider_messages()` delegates to the same full-history
+projector; standalone planners likewise default to full history unless injected.
+Historical state must never be overwritten with future state. Reports separate
+complete history, captured requests and explicitly labeled offline simulations.
 
 The fused color bar supports qualitative range only. Precise target-relative
 evidence comes from an enabled callable capability rather than model-authored
@@ -112,6 +132,17 @@ numeric mention alone does not force immediate perception: use qualitative RGB
 and fused-depth evidence while clearly off threshold, and request precise
 candidate distance only when action choice, user-requested measurement, or
 quantitative completion genuinely depends on it.
+
+Direct visual reasoning precedes supplementary localization: request detection
+only for decision-relevant ambiguity, not as a general scene-description proxy.
+ToolSpec projects public execution constraints into provider tool descriptions;
+private plugin settings remain handler-only. `parallel_safe` permits independent
+read-only calls in the same turn, without requiring concurrent backend execution.
+Rejected turns identify the source call when known, distinguish affected calls,
+and retain terminal rejected results for every submitted call.
+Review pages may repeat links to an observation image without changing provider
+image deduplication. Requested, submitted, and actually applied strategies must
+remain separate; missing records must never be reconstructed from future state.
 
 Human/debug/review data may be larger and more detailed:
 - raw planner context and raw model outputs;

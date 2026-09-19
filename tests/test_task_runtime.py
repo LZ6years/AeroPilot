@@ -218,6 +218,28 @@ def test_task_runtime_rejects_model_planner_without_explicit_model_config(tmp_pa
     recorder.close()
 
 
+def test_runtime_injects_actual_context_history_and_persists_audit(tmp_path):
+    config = ModelConfig(model_name="stub", api_key="test-key", base_url="https://example.test/v1")
+    recorder = AsyncRunLogger(tmp_path / "history_injection")
+    server = SimulationServer([make_package()], run_dir=tmp_path)
+    try:
+        runtime = TaskRuntime(
+            SimulatorEnvClient(server), recorder, TaskParser(mode="rule_based"),
+            model_config=config, shutdown_policy="none",
+        )
+        registry = runtime.context_builder.composer.registry
+        module, policy = runtime.planner.history_projector.bindings["image"]
+        assert module is registry.modules["image"]
+        assert policy["max_observation_images"] == 20
+        runtime.planner.last_exchange = {"history_projection": {"observation_image_count": 20}}
+        snapshot = runtime._native_model_round_snapshot(1)
+        assert snapshot["history_projection"] == {"observation_image_count": 20}
+        snapshot["history_projection"]["observation_image_count"] = 999
+        assert runtime.planner.last_exchange["history_projection"]["observation_image_count"] == 20
+    finally:
+        recorder.close()
+
+
 def test_task_runtime_planner_skill_trace_is_compact_and_auditable():
     trace = TaskRuntime._planner_skill_selection_trace(
         {
@@ -2291,6 +2313,70 @@ def test_native_tool_loop_reasons_with_grounding_result_and_batches_physical_cal
     assert decisions[0]["model_rounds"][0]["runtime_outcome"]["tool_results"][0][
         "tool_call_id"
     ] == "call_detect"
+
+
+@pytest.mark.parametrize("first_fails", [False, True])
+def test_native_independent_queries_return_both_results_before_commit(tmp_path, monkeypatch, first_fails):
+    class Planner:
+        planner_mode = "model"
+        calls = 0
+
+        def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
+            self.calls += 1
+            if self.calls == 1:
+                return AssistantTurn("queries", "Resolve two independent ambiguities.", [
+                    AgentToolCall(f"query_{i}", "skill.visual_grounding.locate", {
+                        "observation_id": transcript.latest_observation_id(),
+                        "query": f"object {i}", "include_distance": False,
+                    }) for i in range(2)
+                ])
+            results = [item.payload for item in transcript.items if item.kind == "tool_result"]
+            assert [r.tool_call_id for r in results] == ["query_0", "query_1"]
+            assert [r.status for r in results] == ["error" if first_fails else "ok", "ok"]
+            return AssistantTurn("done", "Qualitative evidence sufficient.", [AgentToolCall(
+                "commit", "runtime.commit_phase_turn", {"phase": "final_phase", "completion_assessment": {
+                    "done_when": [{"index": 0, "status": "supported", "evidence": "Qualitative fixture evidence."}]
+                }}
+            )])
+
+    calls = []
+    def handler(payload):
+        calls.append(payload["args"]["query"])
+        if first_fails and len(calls) == 1:
+            from src.plugins.contracts.skill import SkillCapabilityFailure
+            raise SkillCapabilityFailure("injected perception failure")
+        return SkillCapabilityResult(message="fixture result", data={})
+    monkeypatch.setattr(skill_dispatcher_module, "_load_handler_module", lambda path: type("Handler", (), {"handle": staticmethod(handler)})())
+    run_dir = tmp_path / "dual_queries"
+    recorder = AsyncRunLogger(run_dir)
+    planner = Planner()
+    runtime = TaskRuntime(SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)), recorder,
+                          TaskParser(mode="rule_based"), planner=planner, shutdown_policy="none")
+    try:
+        state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    finally:
+        recorder.close()
+    assert state.completed
+    assert calls == ["object 0", "object 1"]
+    assert planner.calls == 2
+
+
+def test_native_rejection_diagnostics_are_identical_in_debug_and_transcript(tmp_path):
+    from src.agent.transcript import AgentTranscript
+    from src.memory.stores import MemoryEventWriter
+    runtime = object.__new__(TaskRuntime)
+    runtime.agent_transcript = AgentTranscript(MemoryEventWriter(tmp_path))
+    calls = [AgentToolCall("commit", "runtime.commit_phase_turn", {}), AgentToolCall("turn", "uav.turn_relative", {"yaw_deg": 91})]
+    diagnosis = {"scope": "call", "code": "invalid_arguments", "source_tool_call_id": "turn", "parameter_path": "args.yaw_deg"}
+    expected = runtime._rejected_tool_results(calls, "bad yaw", rejection=diagnosis)
+    runtime._reject_native_turn(calls, "bad yaw", rejection=diagnosis)
+    actual = [item.payload.to_dict() for item in runtime.agent_transcript.items if item.kind == "tool_result"]
+    assert actual == expected
+    assert [r["data"]["rejection"]["role"] for r in actual] == ["affected", "source"]
+    assert all(r["status"] == "rejected" for r in actual)
+    group = runtime._rejected_tool_results(calls, "inconsistent combination")
+    assert all(r["data"]["rejection"]["scope"] == "turn" for r in group)
+    assert all("source_tool_call_id" not in r["data"]["rejection"] for r in group)
 
 
 def test_native_read_only_quota_rejects_duplicates_and_resets_after_success(

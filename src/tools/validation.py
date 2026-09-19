@@ -16,6 +16,11 @@ from src.depth_display import display_normalized_roi_to_scene_pixels
 class ToolArgumentError(ValueError):
     """Raised when native tool arguments violate their ToolSpec schema."""
 
+    def __init__(self, message: str, *, code: str = "invalid_arguments", path: str | None = None):
+        super().__init__(message)
+        self.code = code
+        self.path = path
+
 
 def validate_tool_args(args: dict[str, Any], schema: dict[str, Any], path: str = "args") -> None:
     _validate(args, schema, path)
@@ -78,6 +83,16 @@ def validate_runtime_bound_tool_args(
 
 
 def _validate(value: Any, schema: dict[str, Any], path: str) -> None:
+    """Attach the deepest validator path without parsing human error text."""
+    try:
+        _validate_at_path(value, schema, path)
+    except ToolArgumentError as exc:
+        if exc.path is None:
+            exc.path = path
+        raise
+
+
+def _validate_at_path(value: Any, schema: dict[str, Any], path: str) -> None:
     expected = schema.get("type")
     if expected == "object":
         if not isinstance(value, dict):

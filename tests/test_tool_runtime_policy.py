@@ -19,6 +19,42 @@ class RecordingEnvClient:
         return ActionResult(ok=True, action=action, message="done")
 
 
+def test_provider_projection_exposes_execution_policy_not_private_metadata():
+    spec = ToolSpec("custom.inspect", "custom_inspect", "skill_capability", "Inspect.",
+                    {"type": "object"},
+                    ToolRuntimePolicy("read_only", "immediate", "parallel_safe", True, 2),
+                    {"settings": {"model": "PRIVATE_MODEL"}})
+    projected = spec.to_provider_tool()
+    description = projected["function"]["description"]
+    assert "Independent read-only calls" in description
+    assert "sequential" in description
+    assert "At most 2 calls per observation" in description
+    assert "PRIVATE_MODEL" not in str(projected)
+    assert spec.description == "Inspect."
+
+
+def test_grounding_config_permits_independent_calls_without_changing_quota():
+    from src.tools.registry import default_registry
+    spec = default_registry().get("skill.visual_grounding.locate")
+    assert spec.runtime.batching == "parallel_safe"
+    assert spec.runtime.max_calls_per_observation == 2
+    assert "general scene understanding" in spec.description
+    blocked = default_registry().get("runtime.report_blocked").to_provider_tool()
+    assert "required commit combination" in blocked["function"]["description"]
+    assert "only call in its batch" not in blocked["function"]["description"]
+
+
+@pytest.mark.parametrize("args,path", [({"nested": {"yaw": 91}}, "args.nested.yaw"), ({"nested": {"yaw": "bad"}}, "args.nested.yaw")])
+def test_validation_error_carries_deepest_path_without_changing_message(args, path):
+    from src.tools.validation import ToolArgumentError, validate_tool_args
+    schema = {"type": "object", "properties": {"nested": {"type": "object", "properties": {"yaw": {"type": "number", "maximum": 90}}}}}
+    with pytest.raises(ToolArgumentError) as error:
+        validate_tool_args(args, schema)
+    assert error.value.path == path
+    assert error.value.code == "invalid_arguments"
+    assert str(error.value).startswith(path)
+
+
 def test_dispatch_uses_explicit_backend_binding_not_name_prefix():
     registry = ToolRegistry()
     registry.register(

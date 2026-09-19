@@ -8,6 +8,14 @@ from src.plugins.skills.semantic_criteria import SEMANTIC_CRITERIA_SKILL_SELECTI
 from src.plugins.skills.selection import SKILL_SELECTION_SYSTEM_PROMPT
 
 
+def test_native_prompt_prefers_direct_vision_without_forcing_detection_only():
+    prompt = Path("src/agent/planning/prompts/agent_tool_loop_system.txt").read_text(encoding="utf-8")
+    assert "decision-relevant visual ambiguity" in prompt
+    assert "rough\nlocation is the only question" not in prompt
+    assert "If every done_when item is supported" in prompt
+    assert "runtime_report_blocked" in prompt
+
+
 def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     prompt_dir = Path("src") / "agent" / "semantic" / "prompts"
     structure = (prompt_dir / "task_parser_structure_system.txt").read_text(encoding="utf-8")

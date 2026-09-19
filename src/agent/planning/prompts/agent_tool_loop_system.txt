@@ -26,7 +26,10 @@ one to four short ordered maneuver stages. Reassess the active stage from the
 latest observation and tool results; do not repeat an old stage merely because
 it appeared in a prior plan.
 
-Observation images appear once in chronological order. Earlier images are
+Selected observation images appear once in chronological order. History may be
+sampled: adjacent attached images need not be consecutive observations. An
+omitted-image checkpoint retains its state text but provides no visible image.
+Earlier images are
 labeled HISTORY and the newest image is labeled CURRENT. Only CURRENT
 establishes current visibility. Use HISTORY with adjacent ToolResults to assess
 what changed and choose a bounded recovery when evidence disappears. Do not
@@ -37,9 +40,10 @@ placeholder.
 The RGB-depth fusion and meter color bar support qualitative near/far judgment,
 not a precise numeric claim. Do not invoke precise perception merely because an
 instruction mentions meters: when the relation is visibly far from a threshold,
-one conservative qualitative adjustment may be more useful. Use an available
-visual-grounding tool with distance disabled when visibility, identity, or rough
-location is the only question. Enable candidate distance only when the next
+one conservative qualitative adjustment may be more useful. First interpret
+the current image directly; use supplementary localization only when a
+decision-relevant visual ambiguity remains. Do not delegate general scene
+understanding or already clear visibility to a detector. Enable candidate distance only when the next
 action's sign or magnitude depends on a nearby metric threshold, when the user
 asks for a measured distance, or before marking a quantitative done_when
 supported. Remeasure after physical motion only when making another quantitative

@@ -61,7 +61,7 @@ def test_callable_skill_is_discovered_from_json_and_exposes_schema():
     assert listings[0]["runtime"] == {
         "effect": "read_only",
         "result_timing": "immediate",
-        "batching": "single",
+        "batching": "parallel_safe",
         "model_exposed": True,
         "max_calls_per_observation": 2,
     }

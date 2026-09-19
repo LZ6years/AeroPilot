@@ -105,10 +105,31 @@ class ToolSpec:
             "type": "function",
             "function": {
                 "name": self.wire_name,
-                "description": self.description,
+                "description": self.description + "\nExecution: " + self._execution_description(),
                 "parameters": _provider_schema(self.input_schema),
             },
         }
+
+    def _execution_description(self) -> str:
+        """Project public execution rules, never private plugin metadata.
+
+        parallel_safe permits independent calls in one turn; it does not promise
+        concurrent backend execution. Configuration remains the single source.
+        """
+        batching = {
+            "single": ("At most one instance of this control tool; follow its required commit combination."
+                       if self.runtime.effect == "runtime_control"
+                       else "This must be the only call in its batch."),
+            "ordered": "Execute in the submitted physical batch order.",
+            "parallel_safe": "Independent read-only calls may share a turn; execution may be sequential. Wait for all results before dependent decisions.",
+            "sidecar": "Submit with the associated decision as required by the control protocol.",
+        }
+        text = f"effect={self.runtime.effect}; result_timing={self.runtime.result_timing}. {batching[self.runtime.batching]}"
+        if self.runtime.effect == "read_only":
+            text += " Do not mix with commit or physical calls. Reuse identical current-observation results."
+        if self.runtime.max_calls_per_observation is not None:
+            text += f" At most {self.runtime.max_calls_per_observation} calls per observation, including same-turn calls."
+        return text
 
 
 @dataclass(frozen=True)

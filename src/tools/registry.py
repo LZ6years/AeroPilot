@@ -166,8 +166,10 @@ def default_registry(
             wire_name="runtime_commit_phase_turn",
             kind="runtime_control",
             description=(
-                "Commit the current phase assessment and, when incomplete, describe the physical "
-                "action window emitted in the same assistant turn."
+                "Submit exactly one assessment for the current phase, first in a decision turn. "
+                "If all done_when are supported, emit this call only. Otherwise emit either "
+                "one to three ordered physical calls with strategy/window, or report_blocked "
+                "without physical calls. This control tool does not move the UAV."
             ),
             input_schema=_commit_phase_schema(),
             runtime=ToolRuntimePolicy(
@@ -316,10 +318,11 @@ def _commit_phase_schema() -> dict:
         "type": "object",
         "required": ["phase", "completion_assessment"],
         "properties": {
-            "phase": {"type": "string"},
+            "phase": {"type": "string", "description": "Exact current phase name, not a strategy stage."},
             "completion_assessment": assessment,
             "phase_strategy": {
                 "type": "object",
+                "description": "Required when continuing with physical actions. Revisable plan, not evidence of completed motion; active_stage is a zero-based index into stages.",
                 "required": ["stages", "active_stage", "reason"],
                 "properties": {
                     "stages": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string"}},
@@ -330,6 +333,7 @@ def _commit_phase_schema() -> dict:
             },
             "action_window": {
                 "type": "object",
+                "description": "Intent and expected effect of the physical calls in this turn; does not execute actions itself.",
                 "required": ["intent", "expected_effect"],
                 "properties": {
                     "intent": {"type": "string"},

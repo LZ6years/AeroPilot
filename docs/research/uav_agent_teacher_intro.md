@@ -1,5 +1,9 @@
 # 面向多类 UAV-VLN 任务的统一 UAV-Agent 框架
 
+> **论文定位更新（2026-09）：** “统一 UAV-Agent Runtime”现在作为工程基础与
+> 跨 Benchmark 证据，不再作为首要算法创新。当前 CVPR 主线为
+> Execution-Grounded Agent Loop，详见 `flyagent_cvpr_execution_grounded_loop.md`。
+
 本文关注无人机视觉语言导航（UAV Vision-and-Language Navigation, UAV-VLN）场景下的统一智能体框架设计。现有 UAV-VLN 研究已经在数据集构建、模型训练、空间记忆、对话交互和端到端控制等方向取得进展，但多数方法仍与特定任务、平台、动作空间或交互形式绑定。本文希望探索一种统一 UAV-Agent 框架，使不同 UAV-VLN 任务能够通过知识、记忆、视觉能力和通信协议注入完成适配，而不是为每一种任务重新构建完整系统。
 
 ## 1. 研究目标
