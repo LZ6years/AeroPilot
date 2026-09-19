@@ -1,0 +1,29 @@
+{
+  "index_path": ".external_refs/TravelUAV/data/travel_uav_index.json",
+  "split": "test_unseen_map",
+  "expected_index_sha256": null,
+  "difficulties": ["easy", "hard"],
+  "limit_per_difficulty": 3,
+  "case_ids": null,
+  "output_dir": "evaluation/benchmarks/travel_uav/outputs",
+  "run_root": "runs",
+  "map_config_path": "configs/maps/travel_uav_remote.example.json",
+  "scene_map": {
+    "Carla_Town03": "travel_uav_carla_town03",
+    "ModularPark": "travel_uav_modular_park"
+  },
+  "observation_profile_path": null,
+  "execution_mode": "managed",
+  "abort_on_infrastructure_error": true,
+  "headless": true,
+  "save_artifacts": true,
+  "generate_html_review": true,
+  "enable_action_planner_debug": true,
+  "env_path": ".env",
+  "parser_mode": "model",
+  "shutdown_policy": "hover",
+  "runtime_loop_guard_windows": 100,
+  "initialization_min_settle_sec": 0.0,
+  "dataset_version": "traveluav-official",
+  "upstream_reference_commit": "prince687028/TravelUAV"
+}

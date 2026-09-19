@@ -150,4 +150,22 @@ python tests/manual/aerial_vln_real_engine_probe.py `
   --execution-mode attach
 ```
 
-TravelUAV 尚未接入。
+## TravelUAV
+
+实现目录：`evaluation/benchmarks/travel_uav/`。
+
+- 官方逐帧 split 先转换为可移植的 compact episode index；
+- Adapter 显式执行 AirSim NED、XYZW quaternion 到 Runtime canonical pose 的
+  转换；
+- `TravelUavScenarioController` 通过当前 scene endpoint 布置并 readback 验证
+  动态目标；
+- 复用现有 remote SSH、tunnel、managed process ownership、TaskRuntime 与
+  Benchmark Core，不维护第二套 EnvClient、Backend 或远端控制；
+- 协议固定记录为
+  `travel_uav.flyagent_native_actions.front_view.no_assistant.v1`。
+
+该协议使用前视 RGB/depth/pose、FlyAgent native actions，并且不使用官方
+L1/L2/L3 assistant。它是 TravelUAV 数据和环境上的 transfer evaluation，不
+宣称与官方五视角 assistant-guided leaderboard 协议等价。指标包括 NE、
+Success、OracleSuccess、SPL 和 PathLength；target position、reference path 与
+spawn pose 始终留在 evaluation payload，不进入 Planner context。

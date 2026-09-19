@@ -1,0 +1,173 @@
+{
+  "port_policy": {
+    "control_port_start": 30001,
+    "max_scene_num": 1
+  },
+  "maps": [
+    {
+      "map_id": "travel_uav_nyc_megapa",
+      "provider": "packaged_unreal",
+      "scene_id": "NYCEnvironmentMegapa",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/closeloop_envs/NYCEnvironmentMegapa/NYCEnvironmentMegapa.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_tropical_island",
+      "provider": "packaged_unreal",
+      "scene_id": "TropicalIsland",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/closeloop_envs/TropicalIsland/TropicalIsland.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_new_york_city",
+      "provider": "packaged_unreal",
+      "scene_id": "NewYorkCity",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/closeloop_envs/NewYorkCity/NewYorkCity.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_modular_park",
+      "provider": "packaged_unreal",
+      "scene_id": "ModularPark",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/closeloop_envs/ModularPark/ModularPark.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_modular_european",
+      "provider": "packaged_unreal",
+      "scene_id": "ModularEuropean",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/closeloop_envs/ModularEuropean/ModularEuropean.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_modern_city",
+      "provider": "packaged_unreal",
+      "scene_id": "ModernCityMap",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/closeloop_envs/ModernCityMap/ModernCityMap.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_carla_town01",
+      "provider": "packaged_unreal",
+      "scene_id": "Carla_Town01",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/carla_town_envs/Town01/LinuxNoEditor/CarlaUE4.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_carla_town02",
+      "provider": "packaged_unreal",
+      "scene_id": "Carla_Town02",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/carla_town_envs/Town02/LinuxNoEditor/CarlaUE4.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_carla_town03",
+      "provider": "packaged_unreal",
+      "scene_id": "Carla_Town03",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/carla_town_envs/Town03/LinuxNoEditor/CarlaUE4.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_carla_town04",
+      "provider": "packaged_unreal",
+      "scene_id": "Carla_Town04",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/carla_town_envs/Town04/LinuxNoEditor/CarlaUE4.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_carla_town05",
+      "provider": "packaged_unreal",
+      "scene_id": "Carla_Town05",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/carla_town_envs/Town05/LinuxNoEditor/CarlaUE4.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_carla_town06",
+      "provider": "packaged_unreal",
+      "scene_id": "Carla_Town06",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/carla_town_envs/Town06/LinuxNoEditor/CarlaUE4.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_carla_town07",
+      "provider": "packaged_unreal",
+      "scene_id": "Carla_Town07",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/carla_town_envs/Town07/LinuxNoEditor/CarlaUE4.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_carla_town10hd",
+      "provider": "packaged_unreal",
+      "scene_id": "Carla_Town10HD",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/carla_town_envs/Town10HD/LinuxNoEditor/CarlaUE4.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    },
+    {
+      "map_id": "travel_uav_carla_town15",
+      "provider": "packaged_unreal",
+      "scene_id": "Carla_Town15",
+      "root": null,
+      "connection": {"mode": "remote", "data_transport": "ssh_tunnel", "machine_id": "travel_uav_linux"},
+      "ssh": {"host": "10.68.240.49", "port": 10182, "user": "wzq", "key_path": "${FLYAGENT_SSH_KEY}", "connect_timeout_sec": 10},
+      "launch": {"method": "linux_bash", "linux_executable": "/path/to/TravelUAV/envs/carla_town_envs/Town15/LinuxNoEditor/CarlaUE4.sh", "args": ["-RenderOffscreen", "-NoSound", "-NoVSync", "-GraphicsAdapter=0"], "settings_arg_style": "double_dash", "existing_process_policy": "reject", "remote_run_root": ".flyagent/scenes", "ready_timeout_sec": 120, "post_launch_wait_sec": 5},
+      "control": {"protocol": "airsim"},
+      "airsim": {"remote_host": "127.0.0.1", "port": 30001, "mode": "Multirotor", "settings_template_source": "remote", "settings_template": "/path/to/TravelUAV/airsim_plugin/settings/1/settings.json", "vehicle_name": "Drone_1", "camera_name": "FrontCamera"}
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "trajectory_raw_detailed": [
+    {"position": [0.0, 0.0, -10.0], "orientation": [0.0, 0.0, 0.0, 1.0]},
+    {"position": [30.0, 0.0, -10.0], "orientation": [0.0, 0.0, 0.0, 1.0]}
+  ],
+  "conversations": [
+    {"from": "human", "value": "<image>\nFind the red vehicle near the road."}
+  ]
+}
