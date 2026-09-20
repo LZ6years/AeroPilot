@@ -588,6 +588,9 @@ def _infrastructure_error(
     if execution is None:
         return setup_error or {"error_type": "SetupError", "error": "case setup failed"}
     if capabilities is None:
+        scene_error = getattr(execution.outcome, "error", None)
+        if scene_error:
+            return dict(scene_error)
         return {"error_type": "SceneCapabilityError", "error": "scene capabilities unavailable"}
     if cleanup_errors:
         return {"error_type": "CleanupError", "error": "scene cleanup failed", "details": cleanup_errors}

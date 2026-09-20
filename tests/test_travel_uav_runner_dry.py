@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from evaluation.benchmarks.travel_uav.config import TravelUavEvalConfig
 from evaluation.benchmarks.travel_uav.protocol import TRAVEL_UAV_PARSER_PROTOCOL_CONTEXT
-from evaluation.benchmarks.travel_uav.runner import TravelUavBenchmarkRunner
+from evaluation.benchmarks.travel_uav.runner import (
+    TravelUavBenchmarkRunner,
+    _infrastructure_error,
+)
 from src.agent.phase import COMPLETE_TASK, PhaseTransition
 from src.agent.planning.schemas import CoupledActionPhasePlan
 from src.agent.semantic.schemas import TaskParseResult
@@ -109,6 +113,23 @@ def test_missing_map_is_reported_offline_and_rejected_for_run(tmp_path):
     assert validated.execution_readiness["missing_maps"] == ["Other"]
     with pytest.raises(ValueError, match="not execution-ready"):
         runner.prepare_evaluation(require_execution_ready=True)
+
+
+def test_scene_start_error_is_preserved_as_infrastructure_abort_reason():
+    scene_error = {
+        "error_type": "RuntimeError",
+        "error": "SSH command failed before scene capabilities were available",
+    }
+    result = _infrastructure_error(
+        execution=SimpleNamespace(
+            outcome=SimpleNamespace(error=scene_error),
+        ),
+        setup_error=None,
+        capabilities=None,
+        cleanup_errors=[],
+    )
+
+    assert result == scene_error
 
 
 def _runner(tmp_path, execution_mode="dry"):
