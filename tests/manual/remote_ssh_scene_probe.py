@@ -1,8 +1,9 @@
 """Run the real remote AirSim safety loop through SimulatorEnvClient.
 
 The probe attaches to a healthy UE or starts it through the uploaded one-shot
-Worker, captures observations, moves 0.5 m, restores the initial pose, resets,
-and stops only a process owned by this SceneInstance.
+Worker, captures observations, verifies paused-physics hold when configured,
+moves 0.5 m, restores the initial pose, resets, and stops only a process owned
+by this SceneInstance.
 """
 
 from __future__ import annotations
@@ -11,6 +12,7 @@ import argparse
 import hashlib
 import json
 import math
+import os
 import sys
 import time
 from datetime import datetime
@@ -26,6 +28,52 @@ from src.perception.raw_observation import RawObservation
 from src.runtime.configs.map_config import load_map_config
 from src.sim_server import SimulationExecutionMode
 from src.sim_server.server import SimulationServer
+
+
+_REMOTE_SETTINGS_ARGUMENT_SNAPSHOT = r"""
+import json
+import os
+from pathlib import Path
+import sys
+
+pgid = os.getpgid(int(sys.argv[1]))
+settings_path = str(Path(sys.argv[2]).expanduser().resolve())
+style = sys.argv[3]
+if style == "single_dash_equals":
+    expected_tokens = ["-settings=" + settings_path]
+elif style == "double_dash":
+    expected_tokens = ["--settings", settings_path]
+else:
+    raise ValueError(f"unsupported settings argument style: {style}")
+matches = []
+for process_dir in Path("/proc").iterdir():
+    if not process_dir.name.isdigit():
+        continue
+    try:
+        if os.getpgid(int(process_dir.name)) != pgid:
+            continue
+        raw_command = (process_dir / "cmdline").read_bytes()
+        tokens = [
+            token.decode(errors="replace")
+            for token in raw_command.split(b"\0")
+            if token
+        ]
+        command = " ".join(tokens)
+    except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
+        continue
+    present = any(
+        tokens[index:index + len(expected_tokens)] == expected_tokens
+        for index in range(len(tokens) - len(expected_tokens) + 1)
+    )
+    if present:
+        matches.append({"pid": int(process_dir.name), "command": command})
+print(json.dumps({
+    "style": style,
+    "expected_tokens": expected_tokens,
+    "present": bool(matches),
+    "matches": matches,
+}))
+""".strip()
 
 
 def main() -> int:
@@ -59,10 +107,29 @@ def main() -> int:
         default=1.0,
         help="Settle time after applying an explicit probe pose.",
     )
+    parser.add_argument(
+        "--hold-check-sec",
+        type=float,
+        default=2.0,
+        help=(
+            "Real-time delay used to verify that paused_multirotor does not "
+            "drift between action windows."
+        ),
+    )
+    parser.add_argument(
+        "--hold-tolerance-m",
+        type=float,
+        default=0.02,
+        help="Maximum paused_multirotor position drift during the hold check.",
+    )
     args = parser.parse_args()
     probe_pose = args.probe_pose_canonical
     if args.pose_settle_sec < 0:
         parser.error("--pose-settle-sec must be non-negative")
+    if args.hold_check_sec < 0:
+        parser.error("--hold-check-sec must be non-negative")
+    if args.hold_tolerance_m < 0:
+        parser.error("--hold-tolerance-m must be non-negative")
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     run_dir = Path(args.run_root) / run_id
@@ -98,12 +165,18 @@ def main() -> int:
         json.dumps(scene_payload, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
-    source_settings = (
-        run_dir
-        / "scenes"
-        / scene.scene_instance_id
-        / "source.settings.json"
+    scene_dir = run_dir / "scenes" / scene.scene_instance_id
+    rendered_settings = scene_dir / "settings.json"
+    settings_source = str(
+        selected.airsim.get("settings_template_source", "local")
     )
+    if settings_source == "remote":
+        source_settings = scene_dir / "source.settings.json"
+    else:
+        source_settings = _local_settings_path(
+            str(selected.airsim["settings_template"])
+        )
+    source_sha256_before = _sha256(source_settings)
     report: dict = {
         "scene": scene_payload,
         "deployment": {
@@ -116,11 +189,11 @@ def main() -> int:
             },
         },
         "settings": {
+            "source": settings_source,
             "source_path": selected.airsim.get("settings_template"),
+            "rendered_path": str(rendered_settings),
             "rendered_sha256": scene.settings_sha256,
-            "source_sha256_before": (
-                _sha256(source_settings) if source_settings.is_file() else None
-            ),
+            "source_sha256_before": source_sha256_before,
         },
         "cleanup": {},
     }
@@ -131,12 +204,38 @@ def main() -> int:
             raise AssertionError(
                 "Remote probe refuses to exercise an external AirSim process"
             )
+        if selected.connection_mode == "remote":
+            launch_settings = _remote_settings_argument_snapshot(
+                service, selected, scene
+            )
+            report["settings"]["launch_argument"] = launch_settings
+            if not launch_settings["present"]:
+                raise AssertionError(
+                    "Remote Unreal command line does not contain the expected "
+                    "settings argument tokens: "
+                    f"{launch_settings['expected_tokens']}"
+                )
         connected = client.execute_action(
             scene.scene_instance_id, "Drone_1", "connect", {}
         )
         if not connected.ok:
             raise RuntimeError(connected.message)
+        takeoff_result = None
+        hover_result = None
+        if scene.capabilities and scene.capabilities.requires_takeoff:
+            takeoff_result = client.execute_action(
+                scene.scene_instance_id, "Drone_1", "takeoff", {}
+            )
+            if not takeoff_result.ok:
+                raise RuntimeError(takeoff_result.message)
+            if "hover" in scene.capabilities.supported_actions:
+                hover_result = client.execute_action(
+                    scene.scene_instance_id, "Drone_1", "hover", {}
+                )
+                if not hover_result.ok:
+                    raise RuntimeError(hover_result.message)
         initial_pose_result = None
+        hover_after_set_pose = None
         if probe_pose is not None:
             initial_pose_result = client.execute_action(
                 scene.scene_instance_id,
@@ -146,6 +245,12 @@ def main() -> int:
             )
             if not initial_pose_result.ok:
                 raise RuntimeError(initial_pose_result.message)
+            if scene.capabilities and "hover" in scene.capabilities.supported_actions:
+                hover_after_set_pose = client.execute_action(
+                    scene.scene_instance_id, "Drone_1", "hover", {}
+                )
+                if not hover_after_set_pose.ok:
+                    raise RuntimeError(hover_after_set_pose.message)
             if args.pose_settle_sec:
                 time.sleep(args.pose_settle_sec)
         before = client.get_observation(
@@ -162,10 +267,23 @@ def main() -> int:
         report.update(
             {
                 "connect": connected.to_dict(),
+                "takeoff": (
+                    takeoff_result.to_dict()
+                    if takeoff_result is not None
+                    else None
+                ),
+                "hover_after_takeoff": (
+                    hover_result.to_dict() if hover_result is not None else None
+                ),
                 "probe_pose_canonical": probe_pose,
                 "initial_pose_result": (
                     initial_pose_result.to_dict()
                     if initial_pose_result is not None
+                    else None
+                ),
+                "hover_after_set_pose": (
+                    hover_after_set_pose.to_dict()
+                    if hover_after_set_pose is not None
                     else None
                 ),
                 "before": before.to_dict(),
@@ -174,11 +292,58 @@ def main() -> int:
         _validate_frames(raw_before.frames)
         report["frame_contract"] = _validate_dimensions(
             raw_before.frames,
-            source_settings,
+            rendered_settings,
             vehicle_name=str(selected.airsim["vehicle_name"]),
             camera_name=str(selected.airsim["camera_name"]),
         )
         initial = _pose_args(raw_before.pose)
+        if probe_pose is not None:
+            initial_position_error = _distance(probe_pose, initial)
+            initial_yaw_error = _angular_error_deg(
+                float(probe_pose["yaw_deg"]), float(initial["yaw_deg"])
+            )
+            report["initial_pose_validation"] = {
+                "position_error_m": initial_position_error,
+                "yaw_error_deg": initial_yaw_error,
+            }
+            if initial_position_error > 0.05:
+                raise AssertionError(
+                    "Initial pose position error exceeds 0.05m: "
+                    f"{initial_position_error:.3f}m"
+                )
+            if initial_yaw_error > 1.0:
+                raise AssertionError(
+                    "Initial pose yaw error exceeds 1 degree: "
+                    f"{initial_yaw_error:.3f}deg"
+                )
+
+        control_mode = (
+            scene.capabilities.control_mode if scene.capabilities else None
+        )
+        if control_mode == "paused_multirotor":
+            if args.hold_check_sec:
+                time.sleep(args.hold_check_sec)
+            held_observation = client.get_observation(
+                scene.scene_instance_id, "Drone_1", ["pose"]
+            )
+            held_pose = _pose_args(
+                RawObservation.from_env_observation(
+                    held_observation,
+                    source="remote_probe_paused_hold",
+                ).pose
+            )
+            hold_drift = _distance(initial, held_pose)
+            report["paused_hold_validation"] = {
+                "duration_sec": args.hold_check_sec,
+                "position_drift_m": hold_drift,
+                "tolerance_m": args.hold_tolerance_m,
+                "observation": held_observation.to_dict(),
+            }
+            if hold_drift > args.hold_tolerance_m:
+                raise AssertionError(
+                    "Paused Multirotor drift exceeds hold tolerance: "
+                    f"{hold_drift:.3f}m > {args.hold_tolerance_m:.3f}m"
+                )
 
         moved = client.execute_action(
             scene.scene_instance_id,
@@ -226,10 +391,18 @@ def main() -> int:
 
         reset_scene = client.reset_scene(scene.scene_instance_id)
         reset_pose_result = None
+        reset_takeoff_result = None
+        reset_hover_result = None
         if probe_pose is not None:
             # AirSim reset returns the ComputerVision vehicle to the map
             # origin, which is not guaranteed to be a renderable camera pose.
             # Reapply the verified episode pose before validating capture.
+            if scene.capabilities and scene.capabilities.requires_takeoff:
+                reset_takeoff_result = client.execute_action(
+                    scene.scene_instance_id, "Drone_1", "takeoff", {}
+                )
+                if not reset_takeoff_result.ok:
+                    raise RuntimeError(reset_takeoff_result.message)
             reset_pose_result = client.execute_action(
                 scene.scene_instance_id,
                 "Drone_1",
@@ -238,6 +411,12 @@ def main() -> int:
             )
             if not reset_pose_result.ok:
                 raise RuntimeError(reset_pose_result.message)
+            if scene.capabilities and "hover" in scene.capabilities.supported_actions:
+                reset_hover_result = client.execute_action(
+                    scene.scene_instance_id, "Drone_1", "hover", {}
+                )
+                if not reset_hover_result.ok:
+                    raise RuntimeError(reset_hover_result.message)
             if args.pose_settle_sec:
                 time.sleep(args.pose_settle_sec)
         after_reset = client.get_observation(
@@ -256,9 +435,19 @@ def main() -> int:
                 "after_restore": after_restore.to_dict(),
                 "restore_error_m": restore_error,
                 "reset": reset_scene.to_dict(),
+                "reset_takeoff_result": (
+                    reset_takeoff_result.to_dict()
+                    if reset_takeoff_result is not None
+                    else None
+                ),
                 "reset_pose_result": (
                     reset_pose_result.to_dict()
                     if reset_pose_result is not None
+                    else None
+                ),
+                "reset_hover_result": (
+                    reset_hover_result.to_dict()
+                    if reset_hover_result is not None
                     else None
                 ),
                 "after_reset": after_reset.to_dict(),
@@ -294,10 +483,7 @@ def main() -> int:
                     f"{type(exc).__name__}: {exc}"
                 )
                 cleanup_mismatch = "Remote AirSim port release was not verified"
-        if (
-            selected.connection_mode == "remote"
-            and selected.airsim.get("settings_template_source") == "remote"
-        ):
+        if selected.connection_mode == "remote" and settings_source == "remote":
             try:
                 source_after = run_dir / "source.settings.after.json"
                 service.remote_scene_control.download_settings_template(
@@ -315,6 +501,24 @@ def main() -> int:
                 if not unchanged:
                     settings_mismatch = (
                         "Remote source settings SHA-256 changed during probe"
+                    )
+            except Exception as exc:
+                report["settings"]["post_cleanup_verification_error"] = (
+                    f"{type(exc).__name__}: {exc}"
+                )
+        elif settings_source == "local":
+            try:
+                after_hash = _sha256(source_settings)
+                unchanged = source_sha256_before == after_hash
+                report["settings"].update(
+                    {
+                        "source_sha256_after": after_hash,
+                        "local_source_unchanged": unchanged,
+                    }
+                )
+                if not unchanged:
+                    settings_mismatch = (
+                        "Local source settings SHA-256 changed during probe"
                     )
             except Exception as exc:
                 report["settings"]["post_cleanup_verification_error"] = (
@@ -385,6 +589,10 @@ def _distance(first: dict, second: dict) -> float:
             for axis in ("x", "y", "z")
         )
     )
+
+
+def _angular_error_deg(expected: float, actual: float) -> float:
+    return abs((actual - expected + 180.0) % 360.0 - 180.0)
 
 
 def _validate_frames(frames: dict) -> None:
@@ -483,6 +691,47 @@ def _remote_port_released(service, package) -> bool:
         ],
     )
     return not bool(json.loads(output.strip().splitlines()[-1])["listening"])
+
+
+def _remote_settings_argument_snapshot(service, package, scene) -> dict:
+    """Verify the live remote process group received the rendered settings.
+
+    The worker owns a process group whose launcher may spawn the final Unreal
+    binary.  Scanning that group avoids assuming the shell PID is the engine
+    PID while still proving that `-settings=<rendered path>` reached Unreal.
+    """
+
+    style = str(package.launch.get("settings_arg_style", "double_dash"))
+    if style not in {"single_dash_equals", "double_dash"}:
+        raise AssertionError(
+            "Remote AirSim probe requires a settings argument style that "
+            f"carries the rendered path; got {style}"
+        )
+    if not scene.settings_path or scene.remote_process_id is None:
+        raise AssertionError("Remote scene is missing settings/process ownership")
+    settings_path = str(scene.settings_path)
+    target = service.remote_scene_control.target(package)
+    output = service.remote_scene_control.runner.run(
+        target,
+        [
+            "python3",
+            "-c",
+            _REMOTE_SETTINGS_ARGUMENT_SNAPSHOT,
+            str(scene.remote_process_id),
+            settings_path,
+            style,
+        ],
+    )
+    return json.loads(output.strip().splitlines()[-1])
+
+
+def _local_settings_path(value: str) -> Path:
+    path = Path(os.path.expandvars(value)).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    if not path.is_file():
+        raise FileNotFoundError(f"Local AirSim settings template not found: {path}")
+    return path
 
 
 def _sha256(path: Path) -> str:

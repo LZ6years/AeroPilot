@@ -9,7 +9,6 @@
   "run_root": "runs",
   "map_config_path": "configs/maps/travel_uav_remote.example.json",
   "scene_map": {
-    "Carla_Town03": "travel_uav_carla_town03",
     "ModularPark": "travel_uav_modular_park"
   },
   "observation_profile_path": null,

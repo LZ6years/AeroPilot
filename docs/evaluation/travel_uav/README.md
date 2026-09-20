@@ -42,7 +42,8 @@ Planner context 或 Runtime benchmark manifest。
 支持三个互斥 split：
 
 - `test_seen`
-- `test_unseen_map`：官方 Unseen 中的 `Carla_Town03`、`ModularPark`
+- `test_unseen_map`：官方 Unseen Map 集合；当前 3005-case index 的 958 条均来自
+  `ModularPark`，因此当前执行配置不需要 `Carla_Town03`
 - `test_unseen_object`：官方 Unseen 的其他地图
 
 难度沿用官方规则：三维 reference path `<=250m` 为 Easy，`>250m` 为 Hard。
@@ -51,10 +52,13 @@ Planner context 或 Runtime benchmark manifest。
 ## 远端配置
 
 复制 `configs/maps/travel_uav_remote.example.json` 为被 Git 忽略的 `.local`
-配置，并替换所有 `/path/to/TravelUAV/...` 路径。MapPackage 必须保持：
+配置，并将 `/path/to/TravelUAV/ENVs` 替换为远端解压根目录。当前 index 实际
+使用 12 个地图；close-loop 脚本直接位于 `closeloop_envs/<Map>.sh`，CARLA
+脚本位于 `carla_town_envs/TownXX/LinuxNoEditor/CarlaUE4.sh`。MapPackage 必须保持：
 
 ```text
 mode=Multirotor
+control_strategy=paused_multirotor
 vehicle_name=Drone_1
 camera_name=FrontCamera
 control_port_start=35000
@@ -62,16 +66,32 @@ airsim.port=35000
 launch.args includes -GraphicsAdapter=3
 existing_process_policy=reject
 max_scene_num=1
+settings_template_source=local
+settings_arg_style=single_dash_equals
 ```
 
-`35000` 是 AirSim RPC 端口，必须同时出现在 port policy、MapPackage 和远端
-settings 的 `ApiServerPort` 中。`-GraphicsAdapter=3` 选择远端物理 GPU3；readiness
+`paused_multirotor` 不执行 Runtime 自动 takeoff。episode initial pose 通过完整
+Kinematics（位置、姿态、零线速度和零角速度）写入；正式 move/turn 期间临时
+恢复物理，结束后在实际终点清零速度并再次暂停。因此动作路径仍经过 AirSim
+物理和地图碰撞，而 observation 之间不会继续漂移。地图缺少 collision mesh 时
+仍不能由控制层凭空产生墙体碰撞。
+
+仓库内的 `configs/airsim/travel_uav_official.settings.example.json` 是从官方
+`AIRSIM_SETTINGS_TEMPLATE` 提取的只读源模板。SimulationServer 会为每个 scene
+复制并渲染 `ApiServerPort=35000`，上传到该 scene 的独立远端目录，并通过官方
+要求的 `-settings=<path>` 参数启动 Unreal；不会修改源模板。
+
+`35000` 是 AirSim RPC 端口，必须同时出现在 port policy、MapPackage 和渲染后的
+settings 中。`-GraphicsAdapter=3` 选择远端物理 GPU3；readiness
 会按照 MapPackage 中声明的 adapter 检查对应 GPU，而不是固定检查 GPU0。
 
 Hugging Face 使用 `local_dir` 下载时，`.cache/huggingface/download/` 只是断点下载
 缓存，不是可执行环境目录。全部压缩分卷完成后还需要解压为官方目录结构，例如
 `closeloop_envs/`、`carla_town_envs/`；MapPackage 的 `linux_executable` 应指向
-这些解压目录中的 `.sh`，不能指向 `.incomplete` 缓存文件。
+这些解压目录中的 `.sh`，不能指向 `.incomplete` 缓存文件。`linux_bash` 由
+远端 worker 以 `bash script.sh` 启动，因此脚本要求存在、可读且通过 `bash -n`，
+不要求脚本自身有 executable bit；脚本引用的实际 Unreal binary 仍会在启动时
+得到验证。
 
 SSH 私钥只通过环境变量提供：
 
@@ -96,6 +116,17 @@ python -m evaluation.benchmarks.travel_uav.scripts.run_eval `
 
 ```powershell
 python tests/manual/travel_uav_remote_readiness.py --config path/to/travel_uav.local.json
+```
+
+readiness 是只读检查：验证所选地图脚本、bash 语法、本地 settings contract、
+GPU3、35000 和残留进程，不上传 settings，也不启动 Unreal。随后分别对一个
+CARLA 和一个 close-loop 地图运行通用基础 probe：
+
+```powershell
+python tests/manual/remote_ssh_scene_probe.py `
+  --config path/to/travel_uav_maps.local.json `
+  --map-id travel_uav_carla_town01 `
+  --probe-pose-canonical x,y,z,yaw,pitch,roll
 ```
 
 单案例真实 FlyAgent probe：
