@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -97,6 +98,7 @@ print(json.dumps({
         "scene_id": item["scene_id"],
         "map_id": item["map_id"],
         "executable": item["executable"],
+        "graphics_adapter": item.get("graphics_adapter"),
         "is_file": Path(item["executable"]).is_file(),
         "is_executable": os.access(item["executable"], os.X_OK),
     } for item in packages],
@@ -147,6 +149,7 @@ def inspect_remote_readiness(
                                 "scene_id": package.scene_id,
                                 "map_id": package.map_id,
                                 "executable": package.launch["linux_executable"],
+                                "graphics_adapter": _graphics_adapter(package),
                                 "vehicle_name": package.airsim["vehicle_name"],
                                 "camera_name": package.airsim["camera_name"],
                             }
@@ -204,6 +207,14 @@ def _require_private_key(target: SshTarget) -> None:
         raise FileNotFoundError("SSH private key is not configured or missing")
 
 
+def _graphics_adapter(package: MapPackage) -> int | None:
+    for argument in package.launch.get("args", []):
+        match = re.fullmatch(r"-GraphicsAdapter=(\d+)", str(argument), re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
+
+
 def _snapshot_errors(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     errors = []
     for scene in snapshot.get("scenes", []):
@@ -229,10 +240,29 @@ def _snapshot_errors(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     if endpoint.get("listening") or snapshot.get("airsim_processes"):
         errors.append({"stage": "existing_process", **endpoint})
     gpu = snapshot.get("gpu", {})
-    if not gpu.get("ok") or not any(
-        str(row).split(",", 1)[0].strip() == "0" for row in gpu.get("rows", [])
+    expected_gpu_indices = sorted(
+        {
+            int(scene["graphics_adapter"])
+            for scene in snapshot.get("scenes", [])
+            if scene.get("graphics_adapter") is not None
+        }
+    )
+    available_gpu_indices = {
+        int(str(row).split(",", 1)[0].strip())
+        for row in gpu.get("rows", [])
+        if str(row).split(",", 1)[0].strip().isdigit()
+    }
+    if not gpu.get("ok") or not set(expected_gpu_indices).issubset(
+        available_gpu_indices
     ):
-        errors.append({"stage": "gpu0", **gpu})
+        errors.append(
+            {
+                "stage": "gpu",
+                "expected_indices": expected_gpu_indices,
+                "available_indices": sorted(available_gpu_indices),
+                **gpu,
+            }
+        )
     return errors
 
 

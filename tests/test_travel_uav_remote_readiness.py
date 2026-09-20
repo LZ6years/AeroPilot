@@ -13,9 +13,10 @@ from tests.travel_uav_test_support import case, write_index
 
 
 class FakeSshRunner:
-    def __init__(self, *, listening=False, processes=None):
+    def __init__(self, *, listening=False, processes=None, gpu_rows=None):
         self.listening = listening
         self.processes = processes or []
+        self.gpu_rows = gpu_rows or ["3, RTX, 24000, 0, 0"]
         self.commands = []
 
     def run(self, target, remote_args, timeout_sec=30):
@@ -29,6 +30,7 @@ class FakeSshRunner:
                         "scene_id": item["scene_id"],
                         "map_id": item["map_id"],
                         "executable": item["executable"],
+                        "graphics_adapter": item["graphics_adapter"],
                         "is_file": True,
                         "is_executable": True,
                     }
@@ -39,17 +41,17 @@ class FakeSshRunner:
                     "sha256": "a" * 64,
                     "error": None,
                     "sim_mode": "Multirotor",
-                    "api_server_port": 30001,
+                    "api_server_port": 35000,
                     "vehicle_present": True,
                     "camera_present": True,
                     "capture_sizes": {"0": [256, 256], "2": [256, 256]},
                 },
                 "remote_endpoint": {
                     "host": "127.0.0.1",
-                    "port": 30001,
+                    "port": 35000,
                     "listening": self.listening,
                 },
-                "gpu": {"ok": True, "rows": ["0, RTX, 24000, 0, 0"]},
+                "gpu": {"ok": True, "rows": self.gpu_rows},
                 "airsim_processes": self.processes,
             }
         )
@@ -87,6 +89,15 @@ def test_remote_process_detection_uses_executable_not_probe_arguments():
     assert "pgrep" not in _REMOTE_SNAPSHOT
 
 
+def test_readiness_checks_configured_graphics_adapter(tmp_path):
+    result = inspect_remote_readiness(
+        _config(tmp_path),
+        ssh_runner=FakeSshRunner(gpu_rows=["0, RTX, 24000, 0, 0"]),
+    )
+    assert result["ready"] is False
+    assert any(item["stage"] == "gpu" for item in result["errors"])
+
+
 def _config(tmp_path, *, create_key=True):
     index = write_index(tmp_path / "index.json", [case("ready")])
     key = tmp_path / "secret-private-key"
@@ -112,11 +123,12 @@ def _config(tmp_path, *, create_key=True):
                         "launch": {
                             "linux_executable": "/remote/Travel.sh",
                             "existing_process_policy": "reject",
+                            "args": ["-GraphicsAdapter=3"],
                         },
                         "control": {"protocol": "airsim"},
                         "airsim": {
                             "remote_host": "127.0.0.1",
-                            "port": 30001,
+                            "port": 35000,
                             "mode": "Multirotor",
                             "settings_template_source": "remote",
                             "settings_template": "/remote/settings/1/settings.json",

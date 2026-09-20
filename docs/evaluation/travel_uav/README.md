@@ -57,9 +57,21 @@ Planner context 或 Runtime benchmark manifest。
 mode=Multirotor
 vehicle_name=Drone_1
 camera_name=FrontCamera
+control_port_start=35000
+airsim.port=35000
+launch.args includes -GraphicsAdapter=3
 existing_process_policy=reject
 max_scene_num=1
 ```
+
+`35000` 是 AirSim RPC 端口，必须同时出现在 port policy、MapPackage 和远端
+settings 的 `ApiServerPort` 中。`-GraphicsAdapter=3` 选择远端物理 GPU3；readiness
+会按照 MapPackage 中声明的 adapter 检查对应 GPU，而不是固定检查 GPU0。
+
+Hugging Face 使用 `local_dir` 下载时，`.cache/huggingface/download/` 只是断点下载
+缓存，不是可执行环境目录。全部压缩分卷完成后还需要解压为官方目录结构，例如
+`closeloop_envs/`、`carla_town_envs/`；MapPackage 的 `linux_executable` 应指向
+这些解压目录中的 `.sh`，不能指向 `.incomplete` 缓存文件。
 
 SSH 私钥只通过环境变量提供：
 
