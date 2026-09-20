@@ -86,7 +86,7 @@ def _parse_difficulties(value: str) -> list[str]:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run AerialVLN with UAV-Agent native continuous actions"
+        description="Run AerialVLN with configured UAV-Agent AirSim actions"
     )
     parser.add_argument(
         "--config",

@@ -9,8 +9,10 @@ does not include the resolved SSH private-key path.
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +31,7 @@ from src.sim_server.remote.ssh import SshCommandRunner, SshTarget
 
 
 _REMOTE_SNAPSHOT = r"""
+import base64
 import hashlib
 import json
 import os
@@ -38,13 +41,23 @@ import subprocess
 import sys
 
 packages = json.loads(sys.argv[1])
-settings_path = Path(sys.argv[2])
-remote_host = sys.argv[3]
-remote_port = int(sys.argv[4])
+settings_source = sys.argv[2]
+settings_value = sys.argv[3]
+remote_host = sys.argv[4]
+remote_port = int(sys.argv[5])
 settings = {}
 settings_error = None
+settings_bytes = b""
+settings_path = None
 try:
-    settings = json.loads(settings_path.read_text(encoding="utf-8-sig"))
+    if settings_source == "local":
+        settings_bytes = base64.b64decode(settings_value.encode("ascii"))
+    elif settings_source == "remote":
+        settings_path = Path(settings_value)
+        settings_bytes = settings_path.read_bytes()
+    else:
+        raise ValueError(f"unsupported settings source: {settings_source}")
+    settings = json.loads(settings_bytes.decode("utf-8-sig"))
 except Exception as exc:
     settings_error = f"{type(exc).__name__}: {exc}"
 
@@ -95,22 +108,48 @@ payload = {
             "scene_id": item["scene_id"],
             "map_id": item["map_id"],
             "executable": item["executable"],
+            "launch_method": item["launch_method"],
+            "graphics_adapter": item.get("graphics_adapter"),
+            "expected_mode": item["expected_mode"],
+            "control_strategy": item["control_strategy"],
             "is_file": Path(item["executable"]).is_file(),
+            "is_readable": os.access(item["executable"], os.R_OK),
             "is_executable": os.access(item["executable"], os.X_OK),
+            "bash_syntax_ok": (
+                subprocess.run(
+                    ["bash", "-n", item["executable"]],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                ).returncode == 0
+                if item["launch_method"] == "linux_bash"
+                and Path(item["executable"]).is_file()
+                else None
+            ),
+            "launchable": (
+                Path(item["executable"]).is_file()
+                and (
+                    os.access(item["executable"], os.R_OK)
+                    if item["launch_method"] == "linux_bash"
+                    else os.access(item["executable"], os.X_OK)
+                )
+            ),
         }
         for item in packages
     ],
     "settings": {
-        "path": str(settings_path),
-        "readable": os.access(settings_path, os.R_OK),
+        "source": settings_source,
+        "template": settings_value if settings_source == "remote" else "local payload",
+        "readable": bool(settings_bytes),
         "sha256": (
-            hashlib.sha256(settings_path.read_bytes()).hexdigest()
-            if settings_path.is_file()
+            hashlib.sha256(settings_bytes).hexdigest()
+            if settings_bytes
             else None
         ),
         "error": settings_error,
         "sim_mode": settings.get("SimMode"),
         "api_server_port": settings.get("ApiServerPort"),
+        "rendered_api_server_port": remote_port,
         "vehicle_present": bool(vehicle),
         "camera_present": bool(camera),
         "capture_sizes": capture_sizes,
@@ -164,6 +203,14 @@ def inspect_remote_readiness(
                     "scene_id": package.scene_id,
                     "map_id": package.map_id,
                     "executable": str(package.launch["linux_executable"]),
+                    "launch_method": str(
+                        package.launch.get("method", "linux_bash")
+                    ),
+                    "graphics_adapter": _graphics_adapter(package),
+                    "expected_mode": str(package.airsim["mode"]),
+                    "control_strategy": str(
+                        package.airsim["control_strategy"]
+                    ),
                     "vehicle_name": str(package.airsim["vehicle_name"]),
                     "camera_name": str(package.airsim["camera_name"]),
                 }
@@ -176,7 +223,7 @@ def inspect_remote_readiness(
                     "-c",
                     _REMOTE_SNAPSHOT,
                     json.dumps(package_payload, separators=(",", ":")),
-                    str(group[0].airsim["settings_template"]),
+                    *_settings_arguments(group[0]),
                     str(group[0].airsim.get("remote_host", "127.0.0.1")),
                     str(group[0].airsim["port"]),
                 ],
@@ -213,7 +260,7 @@ def _package_groups(
     packages: list[MapPackage],
 ) -> list[list[MapPackage]]:
     grouped: dict[
-        tuple[str, int, str, str, int, str], list[MapPackage]
+        tuple[str, int, str, str, int, str, str, str, str], list[MapPackage]
     ] = {}
     for package in packages:
         key = (
@@ -222,7 +269,10 @@ def _package_groups(
             str(package.ssh["user"]),
             str(package.airsim.get("remote_host", "127.0.0.1")),
             int(package.airsim["port"]),
+            str(package.airsim.get("settings_template_source", "local")),
             str(package.airsim["settings_template"]),
+            str(package.airsim["mode"]),
+            str(package.airsim["control_strategy"]),
         )
         grouped.setdefault(key, []).append(package)
     return [grouped[key] for key in sorted(grouped)]
@@ -234,36 +284,102 @@ def _require_private_key(target: SshTarget) -> None:
         raise FileNotFoundError("SSH private key is not configured or missing")
 
 
+def _settings_arguments(package: MapPackage) -> list[str]:
+    """Return settings to the read-only remote snapshot without uploading.
+
+    Local templates are inspected from the repository and transported as an
+    in-memory base64 payload. Remote templates retain their path contract.
+    """
+
+    source = str(package.airsim.get("settings_template_source", "local"))
+    template = str(package.airsim["settings_template"])
+    if source == "remote":
+        return [source, template]
+    if source != "local":
+        raise ValueError(f"Unsupported settings_template_source: {source}")
+    path = Path(os.path.expandvars(template)).expanduser()
+    if not path.is_absolute():
+        path = REPO_ROOT / path
+    payload = path.read_bytes()
+    return [source, base64.b64encode(payload).decode("ascii")]
+
+
+def _graphics_adapter(package: MapPackage) -> int | None:
+    """Read the configured GPU index from the Unreal launch arguments."""
+
+    for argument in package.launch.get("args", []):
+        match = re.fullmatch(
+            r"-GraphicsAdapter=(\d+)", str(argument), re.IGNORECASE
+        )
+        if match:
+            return int(match.group(1))
+    return None
+
+
 def _snapshot_errors(snapshot: dict[str, Any]) -> list[dict[str, Any]]:
     errors: list[dict[str, Any]] = []
     for scene in snapshot.get("scenes", []):
-        if not scene.get("is_file") or not scene.get("is_executable"):
+        if not scene.get("launchable"):
             errors.append({"stage": "scene_executable", **scene})
+        elif scene.get("launch_method") == "linux_bash" and not scene.get(
+            "bash_syntax_ok"
+        ):
+            errors.append({"stage": "scene_script_syntax", **scene})
     settings = snapshot.get("settings", {})
     if not settings.get("readable") or settings.get("error"):
         errors.append({"stage": "settings", **settings})
     elif (
-        settings.get("sim_mode") != "ComputerVision"
+        settings.get("sim_mode")
+        not in {
+            scene.get("expected_mode")
+            for scene in snapshot.get("scenes", [])
+        }
         or not settings.get("vehicle_present")
         or not settings.get("camera_present")
     ):
         errors.append({"stage": "settings_contract", **settings})
     endpoint = snapshot.get("remote_endpoint", {})
     capture_sizes = settings.get("capture_sizes", {})
+    rgb_size = capture_sizes.get("0", [0, 0])
+    depth_size = capture_sizes.get("2", [0, 0])
     if (
-        capture_sizes.get("0") != [256, 256]
-        or capture_sizes.get("2") != [256, 256]
-        or settings.get("api_server_port") != endpoint.get("port")
+        len(rgb_size) != 2
+        or any(int(value or 0) <= 0 for value in rgb_size)
+        or len(depth_size) != 2
+        or any(int(value or 0) <= 0 for value in depth_size)
+        or (
+            settings.get("source") == "remote"
+            and settings.get("api_server_port") != endpoint.get("port")
+        )
+        or settings.get("rendered_api_server_port") != endpoint.get("port")
     ):
         errors.append({"stage": "capture_contract", **settings})
     if endpoint.get("listening"):
         errors.append({"stage": "existing_process", **endpoint})
     gpu = snapshot.get("gpu", {})
-    if not gpu.get("ok") or not any(
-        str(row).split(",", 1)[0].strip() == "0"
+    expected_gpu_indices = sorted(
+        {
+            int(scene["graphics_adapter"])
+            for scene in snapshot.get("scenes", [])
+            if scene.get("graphics_adapter") is not None
+        }
+    )
+    available_gpu_indices = {
+        int(str(row).split(",", 1)[0].strip())
         for row in gpu.get("rows", [])
+        if str(row).split(",", 1)[0].strip().isdigit()
+    }
+    if not gpu.get("ok") or not set(expected_gpu_indices).issubset(
+        available_gpu_indices
     ):
-        errors.append({"stage": "gpu0", **gpu})
+        errors.append(
+            {
+                "stage": "gpu",
+                "expected_indices": expected_gpu_indices,
+                "available_indices": sorted(available_gpu_indices),
+                **gpu,
+            }
+        )
     return errors
 
 

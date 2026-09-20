@@ -121,7 +121,7 @@
         "settings_arg_style": "double_dash",
         "existing_process_policy": "reject",
         "remote_run_root": ".flyagent/scenes",
-        "ready_timeout_sec": 120,
+        "ready_timeout_sec": 300,
         "post_launch_wait_sec": 5
       },
       "control": {
@@ -351,7 +351,7 @@
         "settings_arg_style": "double_dash",
         "existing_process_policy": "reject",
         "remote_run_root": ".flyagent/scenes",
-        "ready_timeout_sec": 120,
+        "ready_timeout_sec": 300,
         "post_launch_wait_sec": 5
       },
       "control": {
@@ -443,7 +443,7 @@
         "settings_arg_style": "double_dash",
         "existing_process_policy": "reject",
         "remote_run_root": ".flyagent/scenes",
-        "ready_timeout_sec": 120,
+        "ready_timeout_sec": 300,
         "post_launch_wait_sec": 5
       },
       "control": {
@@ -535,7 +535,7 @@
         "settings_arg_style": "double_dash",
         "existing_process_policy": "reject",
         "remote_run_root": ".flyagent/scenes",
-        "ready_timeout_sec": 120,
+        "ready_timeout_sec": 300,
         "post_launch_wait_sec": 5
       },
       "control": {
@@ -627,7 +627,7 @@
         "settings_arg_style": "double_dash",
         "existing_process_policy": "reject",
         "remote_run_root": ".flyagent/scenes",
-        "ready_timeout_sec": 120,
+        "ready_timeout_sec": 300,
         "post_launch_wait_sec": 5
       },
       "control": {
@@ -765,7 +765,7 @@
         "settings_arg_style": "double_dash",
         "existing_process_policy": "reject",
         "remote_run_root": ".flyagent/scenes",
-        "ready_timeout_sec": 120,
+        "ready_timeout_sec": 300,
         "post_launch_wait_sec": 5
       },
       "control": {
