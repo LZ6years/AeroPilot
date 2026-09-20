@@ -2364,6 +2364,49 @@ def test_native_independent_queries_return_both_results_before_commit(tmp_path, 
     assert planner.calls == 2
 
 
+@pytest.mark.parametrize("failure", ["missing_commit", "multiple_commits", "commit_not_first"])
+def test_native_commit_rejection_types_close_calls_without_motion(tmp_path, failure):
+    class Planner:
+        planner_mode = "model"
+        calls = 0
+
+        def plan_turn(self, transcript, registry, *, allowed_tool_names=None):
+            self.calls += 1
+            args = {"phase": "final_phase", "completion_assessment": {
+                "done_when": [{"index": 0, "status": "supported", "evidence": "Fixture complete."}]
+            }}
+            if self.calls == 1:
+                move = AgentToolCall("turn", "uav.turn_relative", {"yaw_deg": 15})
+                commit = AgentToolCall("commit", "runtime.commit_phase_turn", args)
+                calls = {
+                    "missing_commit": [move],
+                    "multiple_commits": [commit, AgentToolCall("commit2", "runtime.commit_phase_turn", args)],
+                    "commit_not_first": [move, commit],
+                }[failure]
+                return AssistantTurn("bad", "Invalid fixture turn.", calls)
+            results = [item.payload for item in transcript.items if item.kind == "tool_result"]
+            assert all(r.status == "rejected" and r.data["rejection"]["code"] == failure for r in results)
+            return AssistantTurn("fixed", "Complete fixture.", [AgentToolCall("done", "runtime.commit_phase_turn", args)])
+
+    run_dir = tmp_path / failure
+    recorder = AsyncRunLogger(run_dir)
+    parser = TaskParser(mode="rule_based", protocol_context="fixture episode semantics")
+    runtime = TaskRuntime(SimulatorEnvClient(SimulationServer([make_package()], run_dir=run_dir)),
+                          recorder, parser, planner=Planner(), shutdown_policy="none")
+    try:
+        state = runtime.run_parsed_task("m1", make_single_phase_parse_result())
+    finally:
+        recorder.close()
+    assert state.completed
+    events = load_event_records(run_dir)
+    assert not any(e["event"] == "phase_window_recorded" for e in events)
+    snapshot = next(e["payload"] for e in events if e["event"] == "initial_semantic_plan")
+    assert snapshot["protocol_context"] == "fixture episode semantics"
+    assert snapshot["parse_result"]["plan"]["phases"][0]["name"] == "final_phase"
+    state.semantic_plan.phases[0].done_when.append("late mutation")
+    assert "late mutation" not in json.dumps(snapshot)
+
+
 def test_native_rejection_diagnostics_are_identical_in_debug_and_transcript(tmp_path):
     from src.agent.transcript import AgentTranscript
     from src.memory.stores import MemoryEventWriter

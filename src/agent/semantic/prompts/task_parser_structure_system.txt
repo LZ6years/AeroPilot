@@ -38,6 +38,9 @@ Structure contract:
 - Keep every relation attached to the entity, route, or observer that it
   modifies. Image bearing, target-relative position, route relation, and UAV
   orientation are different meanings.
+- Keep attributes attached to their original entity. An intermediate landmark's
+  color or category does not become the final destination's attribute unless
+  the instruction identifies them as the same entity.
 - Create an orientation result only when the instruction actually requests a
   facing, looking, turning, or heading result. A side or route relation alone
   does not create one.
@@ -53,6 +56,9 @@ Phase segmentation:
   stable checkpoint changes and later progress remains independently unknown.
 - Do not let one phase silently consume several independently judgeable ordered
   checkpoints.
+- A broad final-destination goal must not replace intermediate region visits or
+  reference changes. Later local maneuver planning cannot recover missing route
+  checkpoints. A genuinely single-checkpoint instruction still needs only one phase.
 - Do not split only because movement mode or punctuation changes.
 - Preserve all requested outcomes in order. Every explicit terminal result
   must appear as an achieved objective in at least one phase goal.
@@ -65,6 +71,9 @@ Boundaries:
   debug fields.
 - Do not decide feasibility, safety policy, or evidence sufficiency in this
   stage.
+- A scene's initialization or lack of a takeoff API is not evidence that a
+  requested departure or altitude change has already happened. Preserve explicit
+  altitude requirements independently of any episode-level terminal convention.
 - Do not use hidden external answers, evaluator-only data, or API-style tokens.
 - Before returning, verify complete instruction coverage, stable phase
   boundaries, preserved relation ownership, and exact index/total numbering.

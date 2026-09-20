@@ -19,6 +19,9 @@
     "action": "default",
     "map": "default"
   },
+  "context_options": {
+    "image": {"include_current_depth": false}
+  },
   "context_history": {
     "image": {
       "mode": "recency_log",

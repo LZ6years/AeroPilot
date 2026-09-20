@@ -16,8 +16,8 @@ from src.depth_display import depth_legend_height
 
 
 CURRENT_IMAGE_USAGE = (
-    "Use the fused colors for qualitative range only. For an explicit metric "
-    "distance or threshold, use an available target-grounding capability with distance enabled."
+    "Original RGB preserves scene colors. Interpret the image directly; request "
+    "grounded distance only when a measurement is needed for the next decision or claim."
 )
 CURRENT_RGB_DEPTH_OVERLAY_USAGE = (
     "RGB + METRIC DEPTH OVERLAY. False colors provide qualitative range only; "
@@ -83,13 +83,28 @@ class DefaultImageContextModule(ContextModule):
     def __init__(
         self,
         *,
-        include_current_depth: bool = True,
+        include_current_depth: bool = False,
         depth_display_max_m: float = _DEFAULT_DEPTH_DISPLAY_MAX_M,
     ) -> None:
-        self.include_current_depth = bool(include_current_depth)
+        if type(include_current_depth) is not bool:
+            raise ValueError("include_current_depth must be boolean")
+        self.include_current_depth = include_current_depth
         self.depth_display_max_m = float(depth_display_max_m)
-        if self.depth_display_max_m <= 0.0:
+        if not math.isfinite(self.depth_display_max_m) or self.depth_display_max_m <= 0.0:
             raise ValueError("depth_display_max_m must be positive")
+
+    def configure(self, options: dict[str, Any]) -> None:
+        """Image processing options do not affect sensor acquisition or sampling."""
+        if set(options) - {"include_current_depth", "depth_display_max_m"}:
+            raise ValueError("Unknown image context option")
+        include_depth = options.get("include_current_depth", getattr(self, "include_current_depth", False))
+        maximum = options.get("depth_display_max_m", getattr(self, "depth_display_max_m", _DEFAULT_DEPTH_DISPLAY_MAX_M))
+        if type(include_depth) is not bool:
+            raise ValueError("include_current_depth must be boolean")
+        if type(maximum) not in (int, float) or not math.isfinite(maximum) or maximum <= 0:
+            raise ValueError("depth_display_max_m must be a positive finite number")
+        self.include_current_depth = include_depth
+        self.depth_display_max_m = float(maximum)
 
     def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
         memory = sources.flight_memory
@@ -216,6 +231,9 @@ class DefaultImageContextModule(ContextModule):
                 "Exactly one image for this checkpoint, using the pixel-aligned RGB-depth "
                 "overlay plus a bottom meter color bar when configured and valid, otherwise "
                 "raw RGB. Temporal roles are text labels added by transcript projection."
+                if getattr(self, "include_current_depth", False) else
+                "Exactly one original RGB image for this checkpoint. No depth colors or color bar. "
+                "Temporal roles are text labels added by transcript projection."
             ),
             "risk_fields": {
                 "visual_evidence_missing": "No recent RGB evidence is available.",

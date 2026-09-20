@@ -70,8 +70,7 @@ capability, do not make it in the shared runtime, prompts, or knowledge base.
 
 Model-facing state checkpoints should be current and decision useful:
 - current instruction and semantic phase;
-- one current observation image, preferring an aligned RGB-depth overlay with
-  a bottom meter color bar when depth is valid;
+- one current original RGB observation image, preserving scene colors;
 - one compact motion summary containing only measured phase-start-relative and
   last-window UAV self-motion;
 - compact phase completion evidence.
@@ -109,7 +108,15 @@ projector; standalone planners likewise default to full history unless injected.
 Historical state must never be overwritten with future state. Reports separate
 complete history, captured requests and explicitly labeled offline simulations.
 
-The fused color bar supports qualitative range only. Precise target-relative
+`context_options` in `configs/plugins.json` is routed generically to enabled
+modules through `configure(options)`. Modules validate their own options;
+unknown or disabled module options fail initialization. Image defaults to
+`include_current_depth=false`; explicit true retains the experimental aligned
+overlay and meter color bar. This option does not disable Depth acquisition or
+grounding distance tools. Historical captured inputs must never be regenerated
+as if a new image mode had been used in an old request.
+
+The optional fused color bar supports qualitative range only. Precise target-relative
 evidence comes from an enabled callable capability rather than model-authored
 pixel coordinates. The default `skill.visual_grounding.locate` capability is
 selected through `configs/plugins.json`; its ToolSpec and private detector,
@@ -129,7 +136,7 @@ The capability may declare a generic per-observation call limit and a conditiona
 `current_observation_success` completion policy through ToolSpec JSON extensions.
 Runtime evaluates those declarations generically from the call arguments. A
 numeric mention alone does not force immediate perception: use qualitative RGB
-and fused-depth evidence while clearly off threshold, and request precise
+and optional fused-depth evidence while clearly off threshold, and request precise
 candidate distance only when action choice, user-requested measurement, or
 quantitative completion genuinely depends on it.
 
@@ -225,6 +232,21 @@ An intermediate strategy stage may advance while phase completion remains
 unknown. Strategy updates must assess the active stage's own observable cue
 before selecting the next action; they must not use the final `done_when` result
 as the stage-advance gate.
+
+Strategy stages remain strings: the native planner prompt asks for one concise,
+situated natural sentence per stage, with its problem and observable progress
+understandable together. Evidence, not merely an executed maneuver, supports
+keeping or changing the strategy. This is prompt-level guidance, not a new
+schema validation, fixed sentence template, visual task sequence, or termination
+condition; `reason` briefly explains the current evidence without repeating the plan.
+
+Initial task plans are recorded before execution in the append-only
+`initial_semantic_plan` event, including the parser's actual protocol context.
+Reports use this frozen snapshot, never a future strategy, as the full initial
+plan. Default review contains that plan and ID-linked Phase/Decision cards;
+complete requests and detailed histories remain in folded Advanced audit.
+Missing/ambiguous associations remain visible. Semantic route coverage and
+entity ownership belong to parser contracts, not keyword fixes in Runtime.
 
 `last_window_uav_motion` means measured UAV self-motion during the immediately
 preceding completed action window. A planning-time refresh with no new window

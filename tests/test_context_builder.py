@@ -440,10 +440,8 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     assert image["content"]["visual_evidence"]["interpretation_status"] == "image_attached_not_interpreted"
     assert image["content"]["selected_frames"][0]["role"] == "current_observation"
     assert image["content"]["selected_frames"][0]["input_id"] == "image_1_current_observation"
-    assert image["content"]["selected_frames"][0]["usage"] == (
-        "Use the fused colors for qualitative range only. For an explicit metric "
-        "distance or threshold, use an available target-grounding capability with distance enabled."
-    )
+    assert "Original RGB" in image["content"]["selected_frames"][0]["usage"]
+    assert "fused colors" not in image["content"]["selected_frames"][0]["usage"]
     assert image["content"]["selected_frames"][0]["observation_id"] == "obs_0001"
     assert image["content"]["selected_frames"][0]["frame_id"] == "frame_0001"
     assert image["metadata"]["selected_frame_metadata"][0]["path"] == str(rgb_path)
@@ -451,10 +449,7 @@ def test_context_builder_default_image_attaches_real_rgb_without_caption(tmp_pat
     assert image["model_inputs"][0]["type"] == "image"
     assert image["model_inputs"][0]["input_id"] == "image_1_current_observation"
     assert image["model_inputs"][0]["role"] == "current_observation"
-    assert image["model_inputs"][0]["usage"] == (
-        "Use the fused colors for qualitative range only. For an explicit metric "
-        "distance or threshold, use an available target-grounding capability with distance enabled."
-    )
+    assert image["model_inputs"][0]["usage"] == image["content"]["selected_frames"][0]["usage"]
     assert image["model_inputs"][0]["encoding"] == "data_url"
     assert image["model_inputs"][0]["observation_id"] == "obs_0001"
     assert image["model_inputs"][0]["frame_id"] == "frame_0001"

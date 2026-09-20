@@ -126,6 +126,16 @@ class ContextModuleRegistry:
             if modules[key].name != key:
                 modules[key].name = key
         history = data.get("context_history", {})
+        options = data.get("context_options", {})
+        if not isinstance(options, dict):
+            raise ContextModuleConfigError("context_options must be a JSON object")
+        for slot, values in options.items():
+            if slot not in modules or not isinstance(values, dict):
+                raise ContextModuleConfigError(f"Options require an enabled module and object: {slot}")
+            try:
+                modules[slot].configure(copy.deepcopy(values))
+            except ValueError as exc:
+                raise ContextModuleConfigError(f"Invalid options for {slot}: {exc}") from exc
         if not isinstance(history, dict):
             raise ContextModuleConfigError("context_history must be a JSON object")
         return cls(modules, disabled, module_order=module_order, history_policies=history)

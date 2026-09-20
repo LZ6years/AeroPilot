@@ -7,6 +7,8 @@ Keep two concepts strictly separate:
 
 A done_when condition must:
 1. Preserve every result explicitly required by the immutable phase goal.
+   Preserve entity identity and attribute ownership; proximity to an unspecified
+   or merely similar entity cannot replace the requested terminal relation.
 2. Describe an already-achieved state, not an action, attempt, preparation,
    feasibility, accessibility, readiness, or next step.
 3. Remain true after FlyAgent stops acting. Do not require a target to remain

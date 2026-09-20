@@ -337,12 +337,12 @@ def _probe_context(image_path: Path, observation_id: str) -> dict[str, Any]:
         "input_id": frame_id,
         "frame_id": frame_id,
         "observation_id": observation_id,
-        "role": "current_rgb_depth_overlay",
-        "usage": "RGB + METRIC DEPTH OVERLAY. Use grounding only when the next decision requires it.",
+        "role": "current_observation",
+        "usage": "Original RGB preserves scene colors. Use grounding only when the next decision requires it.",
         "scene_width": 240,
         "scene_height": 180,
         "display_width": 240,
-        "display_height": 222,
+        "display_height": 180,
         "mime_type": "image/png",
         "encoding": "data_url",
         "data": f"data:image/png;base64,{encoded}",
@@ -383,16 +383,12 @@ def _write_probe_images(directory: Path) -> dict[str, Path]:
         start=1,
     ):
         path = directory / f"provider_probe_{index}.png"
-        image = Image.new("RGB", (240, 222), (255, 255 - index * 12, 255 - index * 7))
+        image = Image.new("RGB", (240, 180), (255, 255 - index * 12, 255 - index * 7))
         draw = ImageDraw.Draw(image)
         draw.ellipse((102, 22, 138, 58), fill=(42, 72, 110))
         draw.rectangle((96, 58, 144, 128), fill=(49, 105, 158))
         draw.line((106, 128, 88, 166), fill=(42, 72, 110), width=10)
         draw.line((134, 128, 152, 166), fill=(42, 72, 110), width=10)
-        draw.rectangle((0, 180, 239, 221), fill=(20, 24, 30))
-        for x in range(10, 230):
-            fraction = (x - 10) / 219
-            draw.line((x, 188, x, 201), fill=(round(255 * (1 - fraction)), round(210 * fraction), round(180 * fraction)))
         image.save(path)
         paths[observation_id] = path
     return paths
@@ -517,11 +513,11 @@ def _assert_provider_requests(
         "CURRENT observation_id=obs_probe_0001"
     ) != 1:
         raise RuntimeError("Provider image labels do not identify two HISTORY images and one CURRENT image")
-    if serialized.count("display_size=240x222") != 3 or serialized.count(
-        "bottom color bar is not scene content"
-    ) != 3:
+    if serialized.count("display_size=240x180") != 3 or serialized.count(
+        "Original RGB preserves scene colors"
+    ) != 3 or "bottom color bar" in serialized:
         raise RuntimeError(
-            "Provider image labels do not distinguish scene content from the color bar"
+            "Provider image labels do not match the original RGB probe images"
         )
     if _count_provider_media(second_request) < 4:
         raise RuntimeError(

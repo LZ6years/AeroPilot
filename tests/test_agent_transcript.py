@@ -145,6 +145,7 @@ def test_transcript_projects_each_observation_image_once_in_time_order(tmp_path)
                             "scene_height": 256,
                             "display_width": 256,
                             "display_height": 298,
+                            "color_bar_height": 42,
                         },
                     ],
                 }
@@ -164,6 +165,7 @@ def test_transcript_projects_each_observation_image_once_in_time_order(tmp_path)
             "scene_height": 256,
             "display_width": 256,
             "display_height": 298,
+            "color_bar_height": 42,
         }
 
     obs1 = "data:image/png;base64,OBS1"

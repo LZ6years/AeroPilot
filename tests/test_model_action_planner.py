@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import http.client
 import json
+from pathlib import Path
 
 import pytest
 
@@ -90,6 +91,42 @@ def test_native_planner_sends_tools_and_parses_canonical_call(tmp_path):
         tool["function"]["name"] == "runtime_commit_phase_turn"
         for tool in payload["tools"]
     )
+
+
+@pytest.mark.parametrize("stages", [
+    ["Continue the remaining forward displacement using measured self-motion."],
+    ["Inspect the obscured entrance so its relation to the road becomes visible."],
+    ["move_forward"],  # Prompt quality is not a new structural rejection gate.
+])
+def test_strategy_strings_and_updated_prompt_reach_provider_unchanged(tmp_path, stages):
+    from src.agent.planning.schemas import PhaseStrategy
+    from src.tools.validation import validate_tool_args
+
+    strategy = {"stages": stages, "active_stage": 0,
+                "reason": "The current evidence leaves the phase incomplete."}
+    assert PhaseStrategy.from_dict(strategy).to_dict() == strategy
+    args = {"phase": "approach", "phase_strategy": strategy,
+            "completion_assessment": {"done_when": [
+                {"index": 0, "status": "unknown", "evidence": "Not yet established."}
+            ]}}
+    planner = StubPlanner(response_with_calls(
+        ("strategy_call", "runtime_commit_phase_turn", args)))
+    transcript = make_transcript(tmp_path)
+    registry = default_registry()
+    validate_tool_args(args, registry.get("runtime.commit_phase_turn").input_schema)
+    turn = planner.plan_turn(transcript, registry)
+    assert turn.tool_calls[0].args["phase_strategy"] == strategy
+    expected_prompt = Path("src/agent/planning/prompts/agent_tool_loop_system.txt").read_text(
+        encoding="utf-8").strip()
+    assert any(message["role"] == "system" and message["content"].strip() == expected_prompt
+               for message in planner.payloads[0]["messages"])
+    transcript.append_assistant(turn)
+    transcript.append_tool_result(ToolResult(
+        "strategy_call", "runtime.commit_phase_turn", "ok", "Recorded by test fixture."))
+    replay = transcript.provider_messages(registry)
+    submitted = next(message for message in replay if message["role"] == "assistant")
+    assert json.loads(submitted["tool_calls"][0]["function"]["arguments"])["phase_strategy"] == strategy
+    assert replay[-1]["tool_call_id"] == "strategy_call"
 
 
 def test_native_planner_transport_retry_is_one_model_round_and_not_transcript(

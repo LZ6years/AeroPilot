@@ -13,6 +13,11 @@ class ContextModule(ABC):
     priority: int = 50
     max_items: int = 5
 
+    def configure(self, options: dict[str, Any]) -> None:
+        """Apply module-owned JSON options before use; legacy modules accept none."""
+        if options:
+            raise ValueError(f"{self.name} does not support options: {sorted(options)}")
+
     def validate_history_policy(self, config: dict[str, Any]) -> None:
         """Optional extension: legacy modules support only full-history mode."""
         if set(config) - {"mode"} or config.get("mode", "all") != "all":

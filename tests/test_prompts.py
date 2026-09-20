@@ -296,6 +296,24 @@ def test_native_agent_tool_loop_prompt_has_clear_boundaries():
     assert "response_format" not in prompt
 
 
+def test_strategy_guidance_is_situated_sentence_and_evidence_based():
+    prompt = (Path("src/agent/planning/prompts/agent_tool_loop_system.txt")
+              .read_text(encoding="utf-8"))
+    normalized = " ".join(prompt.split())
+    for requirement in (
+        "natural sentence grounded in the current situation",
+        "observable progress", "without separate action/condition",
+        "Avoid bare action labels", "keep, advance, or revise",
+        "Executing an action is not evidence", "unresolved uncertainty",
+        "keeping or changing the strategy in reason",
+        "Do not impose a visual confirmation sequence",
+        "Finishing its last stage does not complete the phase",
+    ):
+        assert requirement in normalized
+    for added_field in ("advance_when", "target_evidence", "success_condition"):
+        assert added_field not in prompt
+
+
 def test_orbit_skill_stays_compact_and_action_oriented():
     skill = (Path("plugins") / "knowledge" / "uav_flight" / "orbit_and_surround" / "SKILL.md").read_text(
         encoding="utf-8"

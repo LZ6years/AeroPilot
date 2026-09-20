@@ -454,10 +454,8 @@ def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
     assert model_input["type"] == "image"
     assert model_input["input_id"] == "image_1_current_observation"
     assert model_input["role"] == "current_observation"
-    assert model_input["usage"] == (
-        "Use the fused colors for qualitative range only. For an explicit metric "
-        "distance or threshold, use an available target-grounding capability with distance enabled."
-    )
+    assert "Original RGB" in model_input["usage"]
+    assert "fused colors" not in model_input["usage"]
     assert model_input["encoding"] == "data_url"
     assert model_input["data"].startswith("data:image/png;base64,")
     assert model_input["data"] == "data:image/png;base64," + base64.b64encode(rgb_path.read_bytes()).decode("ascii")

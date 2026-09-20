@@ -181,12 +181,13 @@ def _input_label_text(item: dict[str, Any]) -> str:
                         "scene_bounds_in_display_pixels="
                         f"x:[0,{scene_width}) y:[0,{scene_height})"
                     ),
-                    (
-                        "The bottom color bar is not scene content and cannot establish "
-                        "an exact decimal distance by itself."
-                    ),
                 ]
             )
+            if item.get("color_bar_height", 0):
+                lines.append(
+                    "The bottom color bar is not scene content and cannot establish "
+                    "an exact decimal distance by itself."
+                )
         usage = item.get("usage")
         if isinstance(usage, str) and usage.strip():
             lines.append(usage.strip())

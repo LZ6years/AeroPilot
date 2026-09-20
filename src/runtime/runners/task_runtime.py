@@ -257,6 +257,13 @@ class TaskRuntime:
         self._debug_event("task_execution_options_resolved", options.to_dict())
         self.recorder.write_json("state/semantic_plan.json", parse_result.to_dict())
         self._debug_event("task_parsed", parse_result.to_dict())
+        # Immutable initial audit evidence lives in the frozen append-only stream,
+        # not in the mutable semantic_plan.json or a future strategy checkpoint.
+        initial_plan_snapshot = {
+            "schema_version": "initial_semantic_plan_v1",
+            "parse_result": copy.deepcopy(parse_result.to_dict()),
+            "protocol_context": getattr(self.task_parser, "protocol_context", None),
+        }
         self._debug_event(
             "model_dependency_status",
             self._model_dependency_status(),
@@ -302,6 +309,10 @@ class TaskRuntime:
             parse_result.instruction,
             flight_memory.active_instruction_id,
         )
+        self._event("initial_semantic_plan", {
+            **initial_plan_snapshot,
+            "instruction_id": flight_memory.active_instruction_id,
+        })
         try:
             self._validate_execution_options(scene, options)
             self._prepare_scene_for_task(scene, agent_id, state, options)
@@ -1462,18 +1473,27 @@ class TaskRuntime:
                 call for call in turn.tool_calls if call.tool_name == "runtime.commit_phase_turn"
             ]
             if len(commit_calls) != 1 or turn.tool_calls[0].tool_name != "runtime.commit_phase_turn":
-                reason = "exactly one runtime.commit_phase_turn must be the first call"
+                if not commit_calls:
+                    code, reason = "missing_commit", "missing runtime.commit_phase_turn; place one commit before decision actions"
+                elif len(commit_calls) > 1:
+                    code, reason = "multiple_commits", "multiple runtime.commit_phase_turn calls; submit exactly one commit"
+                else:
+                    code, reason = "commit_not_first", "runtime.commit_phase_turn is not first; place it before decision actions"
+                rejection = {"code": code, "scope": "turn"}
+                if code == "commit_not_first":
+                    rejection["source_tool_call_id"] = commit_calls[0].tool_call_id
                 round_record["runtime_outcome"] = {
                     "status": "commit_rejected",
                     "feedback": reason,
                     "tool_results": self._rejected_tool_results(
-                        turn.tool_calls, reason
+                        turn.tool_calls, reason, rejection=rejection
                     ),
                 }
                 model_rounds.append(round_record)
                 self._reject_native_turn(
                     turn.tool_calls,
                     reason,
+                    rejection=rejection,
                 )
                 consecutive_protocol_rejections += 1
                 if consecutive_protocol_rejections >= max_consecutive_rejections:

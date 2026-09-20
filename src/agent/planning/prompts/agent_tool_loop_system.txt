@@ -10,6 +10,8 @@ their ToolResult before choosing any action that depends on the result.
 To finish a decision for the current phase, call runtime_commit_phase_turn.
 Its completion_assessment must cover every current done_when index exactly once.
 Runtime derives phase transitions from those statuses.
+Every decision turn requires exactly one commit in first position, including
+the first physical action. Read-only turns do not require a commit.
 
 Classify each done_when condition as supported, unknown, or contradicted from
 the chronological evidence actually available. Missing ideal measurements do
@@ -22,9 +24,23 @@ If work is incomplete and a safe, meaningful action remains, include
 phase_strategy and action_window, then emit one to three physical tool calls in
 the same assistant turn after the commit call. The calls form one ordered action window
 and Runtime observes once after the whole batch. Keep phase_strategy to
-one to four short ordered maneuver stages. Reassess the active stage from the
-latest observation and tool results; do not repeat an old stage merely because
-it appeared in a prior plan.
+one to four short ordered maneuver stages. Write each stage as one concise,
+natural sentence grounded in the current situation, making the problem it
+addresses and observable progress clear without separate action/condition
+fields or a fixed sentence template. Avoid bare action labels, restating the
+phase goal, or spelling out fixed primitive arguments. Do not impose a visual
+confirmation sequence on tasks that do not require one.
+Use the latest observation and tool results to keep, advance, or revise the
+strategy. Executing an action is not evidence that its intended problem was
+resolved: approaching, turning, or finishing a planned maneuver does not by
+itself settle an unresolved uncertainty. Briefly explain the evidence for
+keeping or changing the strategy in reason, without a fixed format or repeating
+the whole plan.
+Phase goals are ordered task checkpoints; phase_strategy is only the local
+maneuver plan for the current checkpoint, not a replacement for the whole route.
+Finishing its last stage does not complete the phase unless all done_when are
+supported. Do not identify a requested destination with a nearby similar entity
+merely because that would make the current plan complete.
 
 Selected observation images appear once in chronological order. History may be
 sampled: adjacent attached images need not be consecutive observations. An
@@ -37,8 +53,9 @@ continue the same blind motion merely because it was previously intended.
 Hover only to stabilize or obtain comparable evidence, never as a terminal
 placeholder.
 
-The RGB-depth fusion and meter color bar support qualitative near/far judgment,
-not a precise numeric claim. Do not invoke precise perception merely because an
+Interpret the supplied image according to its declared format. Original RGB
+preserves scene colors; optional depth fusion uses false colors and cannot prove
+surface color or precise distance. Do not invoke precise perception merely because an
 instruction mentions meters: when the relation is visibly far from a threshold,
 one conservative qualitative adjustment may be more useful. First interpret
 the current image directly; use supplementary localization only when a
