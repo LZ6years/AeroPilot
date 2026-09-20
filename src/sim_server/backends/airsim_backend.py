@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.adapters.airsim_uav import AirSimUavAdapter
+from src.adapters.airsim_uav import (
+    AirSimUavAdapter,
+    resolve_airsim_control_strategy,
+)
+from src.adapters.airsim_client import close_airsim_client
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter, UavPrimitiveAdapter
 from src.env_client.schemas import (
     ActionResult,
@@ -44,22 +48,25 @@ class AirSimBackend:
 
         if not self.use_real_uav:
             return BackendProbe(True, "in-memory AirSim test backend")
+        client = None
         try:
             import airsim
 
             client = airsim.VehicleClient(ip=host, port=port, timeout_value=2)
             ready = bool(client.ping())
-            close = getattr(client, "close", None)
-            if callable(close):
-                close()
             return BackendProbe(ready, "AirSim RPC ping succeeded" if ready else "AirSim ping returned false")
         except Exception as exc:
             return BackendProbe(False, f"{type(exc).__name__}: {exc}")
+        finally:
+            close_airsim_client(client)
 
     def describe_capabilities(self, package: MapPackage) -> SceneCapabilities:
         mode = str(package.airsim.get("mode", "Multirotor"))
-        is_cv = mode.lower() in {"computervision", "computer_vision", "cv"}
-        shared = (
+        strategy = resolve_airsim_control_strategy(
+            mode,
+            package.airsim.get("control_strategy"),
+        )
+        actions = (
             "connect",
             "hover",
             "move_body",
@@ -70,13 +77,14 @@ class AirSimBackend:
             "get_pose",
             "get_frames",
         )
-        actions = shared if is_cv else (*shared[:1], "takeoff", *shared[1:2], "land", *shared[2:])
         return SceneCapabilities(
             protocol="airsim",
-            control_mode="ComputerVision" if is_cv else "Multirotor",
+            # Runtime needs the actual action semantics, not merely the server's
+            # SimMode. The MapPackage retains ComputerVision/Multirotor.
+            control_mode=strategy,
             supported_actions=actions,
             observation_modalities=("rgb", "depth", "pose", "segmentation"),
-            requires_takeoff=not is_cv,
+            requires_takeoff=False,
             supports_soft_reset=True,
         )
 
@@ -89,6 +97,9 @@ class AirSimBackend:
                 vehicle_name=package.airsim["vehicle_name"],
                 camera_name=package.airsim["camera_name"],
                 mode=str(package.airsim.get("mode", "Multirotor")),
+                control_strategy=str(
+                    package.airsim.get("control_strategy", "")
+                ) or None,
                 artifact_dir=self.artifact_dir,
                 save_artifacts=self.save_artifacts,
             )

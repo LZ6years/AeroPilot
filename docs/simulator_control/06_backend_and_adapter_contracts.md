@@ -16,8 +16,8 @@ UavPrimitiveAdapter
     NullUavPrimitiveAdapter
 
 AirSimControlStrategy
-    ComputerVisionControlStrategy
-    MultirotorControlStrategy
+    PoseKinematicControlStrategy
+    PausedMultirotorControlStrategy
 
 UnrealCvPoseControl
     CameraPoseControl
@@ -55,11 +55,11 @@ classDiagram
         hover()
     }
 
-    class ComputerVisionControlStrategy
-    class MultirotorControlStrategy
+    class PoseKinematicControlStrategy
+    class PausedMultirotorControlStrategy
 
-    AirSimControlStrategy <|.. ComputerVisionControlStrategy
-    AirSimControlStrategy <|.. MultirotorControlStrategy
+    AirSimControlStrategy <|.. PoseKinematicControlStrategy
+    AirSimControlStrategy <|.. PausedMultirotorControlStrategy
 
     class UnrealCvPoseControl {
         <<Protocol>>
@@ -123,14 +123,14 @@ control_port
 
 动作映射：
 
-| 动作 | ComputerVision | Multirotor | UnrealCV |
+| 动作 | pose_kinematic | paused_multirotor | UnrealCV |
 |---|---|---|---|
 | connect | VehicleClient | MultirotorClient | UnrealCV Client |
-| move_body | simSetVehiclePose | velocity API | configured camera/actor pose |
-| turn_relative | pose yaw | yaw API | configured camera/actor yaw |
-| hover | keep pose | hoverAsync | reapply configured target pose |
-| takeoff | unsupported | takeoffAsync | unsupported |
-| land | unsupported | landAsync | unsupported |
+| move_body | simSetVehiclePose | unpause + velocity API + freeze | configured camera/actor pose |
+| turn_relative | pose yaw | unpause + yaw API + freeze | configured camera/actor yaw |
+| hover | keep pose | zero kinematics + pause | reapply configured target pose |
+| takeoff | unsupported | unsupported; use episode initial pose | unsupported |
+| land | unsupported | unsupported | unsupported |
 | get pose | simGetVehiclePose | getMultirotorState | configured camera/actor pose |
 | RGB/depth | simGetImages | simGetImages | vget camera |
 
@@ -143,6 +143,10 @@ dz_ned = -vz * duration
 ```
 
 计算后通过 `simSetVehiclePose`更新位置，同时保留未修改的姿态分量。
+
+paused Multirotor 只在正式动作期间恢复物理。episode placement 和动作终点使用
+零速度 Kinematics，并在采集 observation 前保持 pause；零速度稳定命令不会再次
+打开物理窗口。这样保留动作路径上的 AirSim 碰撞，同时避免 idle hover 漂移。
 
 ## UnrealCV camera 与 actor 控制
 
@@ -237,10 +241,10 @@ Simulator-specific NED、UE 坐标或 camera rotation 必须在 Adapter 边界�
 ```json
 {
   "ok": false,
-  "message": "uav.takeoff is not supported by AirSim ComputerVision",
+  "message": "uav.takeoff is not supported by pose_kinematic",
   "data": {
     "error_code": "unsupported_action",
-    "control_mode": "ComputerVision"
+    "control_mode": "pose_kinematic"
   }
 }
 ```

@@ -90,8 +90,8 @@ scene_instance_id → Backend instance
 ```text
 SceneCapabilities
 AirSimControlStrategy
-ComputerVisionControlStrategy
-MultirotorControlStrategy
+PoseKinematicControlStrategy
+PausedMultirotorControlStrategy
 ```
 
 修改：
@@ -104,8 +104,8 @@ MultirotorControlStrategy
 
 测试：
 
-- Multirotor 执行 takeoff/hover/land；
-- ComputerVision 跳过 takeoff，支持 move/turn/hover；
+- paused Multirotor 跳过 takeoff/land，支持物理 move/turn 和冻结 hover；
+- pose kinematic 跳过 takeoff/land，支持 move/turn/hover；
 - UnrealCV 跳过 takeoff/land；
 - MissionState 不把 pose-control scene 标记 airborne；
 - capability 与实际 action 一致。
@@ -206,8 +206,8 @@ flyagent-remote-launcher
 
 | 场景 | 部署 | 协议/模式 | 必须通过 |
 |---|---|---|---|
-| Local AirSim | local | Multirotor | start、takeoff、move、observe、land、stop |
-| Remote AirSim | remote | ComputerVision | attach/start、pose move、observe、reset、stop |
+| Local/Remote AirSim | 任意 | paused Multirotor | start、initial pose、physical move、freeze、observe、reset、stop |
+| Remote AirSim | remote | pose kinematic | attach/start、pose move、observe、reset、stop |
 | Local UnrealCV | local | UnrealCV | start、camera move、observe、stop |
 | Dry run | local/in-process | Null adapter | deterministic actions 和 tests |
 | 两个 AirSim scene | 任意 | 同 protocol | Backend/Adapter 状态隔离 |

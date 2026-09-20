@@ -269,7 +269,12 @@ def test_execute_smoke_actions_and_observation(tmp_path):
     scene = server.start_scene("m1")
 
     assert server.execute_action(scene.scene_instance_id, "uav_1", "connect", {}).ok
-    assert server.execute_action(scene.scene_instance_id, "uav_1", "takeoff", {}).ok
+    assert scene.capabilities is not None
+    assert scene.capabilities.control_mode == "paused_multirotor"
+    assert scene.capabilities.requires_takeoff is False
+    assert not server.execute_action(
+        scene.scene_instance_id, "uav_1", "takeoff", {}
+    ).ok
     set_pose = server.execute_action(
         scene.scene_instance_id,
         "uav_1",

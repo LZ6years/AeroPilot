@@ -7,18 +7,18 @@ from tests.manual.aerial_vln_real_engine_probe import (
 
 def test_computer_vision_probe_does_not_require_takeoff():
     assert capability_contract_checks(
-        "ComputerVision",
-        {"control_mode": "ComputerVision", "requires_takeoff": False},
+        "pose_kinematic",
+        {"control_mode": "pose_kinematic", "requires_takeoff": False},
     ) == {
         "control_mode_matches_map_package": True,
         "takeoff_requirement_matches_control_mode": True,
     }
 
 
-def test_multirotor_probe_requires_takeoff_capability():
+def test_paused_multirotor_probe_does_not_require_takeoff_capability():
     assert capability_contract_checks(
-        "Multirotor",
-        {"control_mode": "Multirotor", "requires_takeoff": True},
+        "paused_multirotor",
+        {"control_mode": "paused_multirotor", "requires_takeoff": False},
     ) == {
         "control_mode_matches_map_package": True,
         "takeoff_requirement_matches_control_mode": True,

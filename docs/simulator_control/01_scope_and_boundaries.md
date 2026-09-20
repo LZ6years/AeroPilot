@@ -114,7 +114,8 @@ Backend 负责把统一动作和观测请求映射到一个模拟器协议，例
 AirSimBackend
 UnrealCvBackend
 SshRemoteSceneControl
-ComputerVisionControlStrategy
+PoseKinematicControlStrategy
+PausedMultirotorControlStrategy
 ```
 
 不能使用 `AirVlnBackend` 或 `TravelUavBackend` 表达通用能力。
@@ -126,10 +127,11 @@ ComputerVisionControlStrategy
 控制协议：airsim | unrealcv | future
 ```
 
-AirSim 内部还有独立的控制模式：
+AirSim 内部同时声明车辆模式和控制策略：
 
 ```text
-ComputerVision | Multirotor
+ComputerVision + pose_kinematic
+Multirotor + paused_multirotor
 ```
 
 因此“远程 AirSim ComputerVision”表示三个组合条件，而不是一种新的 Backend 类型。

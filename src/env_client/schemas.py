@@ -33,7 +33,7 @@ class MapPackage:
         if missing:
             raise ValueError(f"MapPackage missing required fields: {', '.join(missing)}")
         provider = str(data["provider"])
-        airsim = data.get("airsim", {})
+        airsim = dict(data.get("airsim", {}))
         unrealcv = dict(data.get("unrealcv", {}))
         control = dict(data.get("control", {}))
         if not control.get("protocol"):
@@ -46,6 +46,50 @@ class MapPackage:
             for key in ("vehicle_name", "camera_name"):
                 if key not in airsim:
                     raise ValueError(f"MapPackage {data['map_id']} missing airsim.{key}")
+            raw_mode = str(airsim.get("mode", "Multirotor")).strip().lower()
+            mode_aliases = {
+                "computervision": "ComputerVision",
+                "computer_vision": "ComputerVision",
+                "cv": "ComputerVision",
+                "multirotor": "Multirotor",
+            }
+            try:
+                mode = mode_aliases[raw_mode]
+            except KeyError as exc:
+                raise ValueError(
+                    f"MapPackage {data['map_id']} has unsupported "
+                    f"airsim.mode: {airsim.get('mode')}"
+                ) from exc
+            airsim["mode"] = mode
+
+            # AirSim's simulator mode and FlyAgent's control semantics are
+            # related but intentionally explicit. Missing values adopt the new
+            # two-strategy contract, so legacy Multirotor packages migrate to
+            # paused physical stepping instead of the removed live controller.
+            inferred_strategy = (
+                "pose_kinematic"
+                if mode == "ComputerVision"
+                else "paused_multirotor"
+            )
+            strategy = str(
+                airsim.get("control_strategy", inferred_strategy)
+            ).strip().lower()
+            expected_mode = {
+                "pose_kinematic": "ComputerVision",
+                "paused_multirotor": "Multirotor",
+            }
+            if strategy not in expected_mode:
+                raise ValueError(
+                    f"MapPackage {data['map_id']} has unsupported "
+                    f"airsim.control_strategy: {strategy}"
+                )
+            if mode != expected_mode[strategy]:
+                raise ValueError(
+                    f"MapPackage {data['map_id']} requires airsim.mode="
+                    f"{expected_mode[strategy]} when "
+                    f"airsim.control_strategy={strategy}; got {mode}"
+                )
+            airsim["control_strategy"] = strategy
             source = str(airsim.get("settings_template_source", "local"))
             if source not in {"local", "remote"}:
                 raise ValueError(

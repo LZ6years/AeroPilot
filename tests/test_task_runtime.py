@@ -638,7 +638,7 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
 
     assert state.completed
     assert state.connected
-    assert state.airborne
+    assert state.airborne is False
     assert state.latest_observation
     assert (run_dir / "state/semantic_plan.json").exists()
     assert (run_dir / "state/scene_capabilities.json").exists()
@@ -684,8 +684,9 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     flight_memory = json.loads((run_dir / "state/flight_memory.json").read_text(encoding="utf-8"))
 
     assert "control_connected" in event_names
-    assert "preflight_takeoff_started" in event_names
-    assert "preflight_takeoff_completed" in event_names
+    assert "preflight_takeoff_started" not in event_names
+    assert "preflight_takeoff_completed" not in event_names
+    assert "preflight_takeoff_skipped" in event_names
     assert "preflight_hover_completed" in event_names
     assert "initial_observation_updated" in event_names
     assert "short_horizon_planned" in event_names
@@ -698,7 +699,7 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert "uav.connect" not in short_horizon_tools
     assert "uav.takeoff" not in short_horizon_tools
     assert mission_state["connected"] is True
-    assert mission_state["airborne"] is True
+    assert mission_state["airborne"] is False
     assert "recent_observations" not in mission_state
     assert mission_state["latest_observation"]["source"] == "automatic_phase_window"
     assert "pose" in mission_state["latest_observation"]
@@ -707,7 +708,7 @@ def test_task_runtime_completes_dry_run_and_writes_records(tmp_path):
     assert latest_observation["source"] == "automatic_phase_window"
     assert latest_context["active_instruction"]
     assert scene_capabilities["protocol"] == "airsim"
-    assert scene_capabilities["control_mode"] == "Multirotor"
+    assert scene_capabilities["control_mode"] == "paused_multirotor"
     assert "simulator_contract" not in latest_context
     assert "simulator_contract" not in latest_model_context
     assert latest_context["current_phase"] is not None
@@ -1069,7 +1070,7 @@ def test_task_runtime_discards_semantic_update_with_invented_numeric_threshold(t
     assert "unsupported numeric" in discarded[0]["payload"]["error"]
 
 
-def test_task_runtime_can_land_on_shutdown(tmp_path):
+def test_task_runtime_skips_unsupported_land_on_shutdown(tmp_path):
     run_dir = tmp_path / "task_run_land"
     recorder = AsyncRunLogger(run_dir)
     server = SimulationServer([make_package()], run_dir=run_dir)
@@ -1093,9 +1094,10 @@ def test_task_runtime_can_land_on_shutdown(tmp_path):
     assert state.airborne is False
     assert mission_state["airborne"] is False
     assert "recent_actions" not in mission_state
-    assert any(record["event"] == "shutdown_land_completed" for record in events)
-    assert "shutdown_land_started" in event_names
-    assert "shutdown_land_completed" in event_names
+    assert not any(record["event"] == "shutdown_land_completed" for record in events)
+    assert "shutdown_land_started" not in event_names
+    assert "shutdown_land_completed" not in event_names
+    assert "shutdown_land_skipped" in event_names
 
 
 def test_task_runtime_can_reuse_existing_parse_result(tmp_path):
@@ -1838,7 +1840,7 @@ def test_task_runtime_reuse_running_scene_does_not_repeat_preflight(tmp_path):
     assert first_state.completed
     assert second_state.completed
     assert second_state.connected
-    assert second_state.airborne
+    assert second_state.airborne is False
     assert second_state.latest_observation["source"] == "automatic_phase_window"
     flight_memory = json.loads((run_dir / "state/flight_memory.json").read_text(encoding="utf-8"))
     latest_context = json.loads((run_dir / "contexts/latest_context.json").read_text(encoding="utf-8"))
@@ -1857,7 +1859,8 @@ def test_task_runtime_reuse_running_scene_does_not_repeat_preflight(tmp_path):
     assert "instruction_history" not in latest_context
     assert "recent_actions" not in latest_context
     assert event_names.count("control_connected") == 1
-    assert event_names.count("preflight_takeoff_completed") == 1
+    assert event_names.count("preflight_takeoff_completed") == 0
+    assert event_names.count("preflight_takeoff_skipped") == 1
     assert "instruction_start_observation_updated" in event_names
     assert len(scene_started) == 1
     assert len(scene_reused) == 1

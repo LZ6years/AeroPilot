@@ -1,4 +1,4 @@
-"""Run AerialVLN episodes through native continuous UAV-Agent primitives."""
+"""Run AerialVLN episodes through configured UAV-Agent AirSim primitives."""
 
 from __future__ import annotations
 
@@ -316,6 +316,11 @@ class AerialVlnBenchmarkRunner:
                 self.config.upstream_reference_commit
             ),
             "scene_map": dict(self.config.scene_map),
+            "airsim_control_strategies": {
+                package.map_id: package.airsim.get("control_strategy")
+                for package in self.map_packages
+                if package.map_id in set(self.config.scene_map.values())
+            },
             "observation_profile": self.observation_profile.to_dict(),
             "runtime_loop_guard_windows": (
                 self.config.runtime_loop_guard_windows
@@ -367,6 +372,16 @@ class AerialVlnBenchmarkRunner:
                             ]
                         )
                         or "none",
+                        "control_strategies": ", ".join(
+                            sorted(
+                                {
+                                    str(package.airsim["control_strategy"])
+                                    for package in self.map_packages
+                                    if package.map_id
+                                    in set(self.config.scene_map.values())
+                                }
+                            )
+                        ),
                         "batch_status": summary["batch_status"],
                         "requested_case_count": summary[
                             "requested_case_count"
@@ -550,6 +565,11 @@ class AerialVlnBenchmarkRunner:
             "metric_error": metric_error,
             "infrastructure_error": infrastructure_error,
             "scene_capabilities": capabilities,
+            "control_strategy": (
+                capabilities.get("control_mode")
+                if capabilities is not None
+                else None
+            ),
             "observation_profile": self.observation_profile.to_dict(),
             "audit_path": audit_path,
             "stmr": stmr_summary,
@@ -589,6 +609,11 @@ class AerialVlnBenchmarkRunner:
                 "protocol_variant": AERIAL_VLN_PROTOCOL,
                 "semantic_plan_diagnostics": semantic_plan_diagnostics,
                 "scene_capabilities": capabilities,
+                "control_strategy": (
+                    capabilities.get("control_mode")
+                    if capabilities is not None
+                    else None
+                ),
                 "observation_profile": self.observation_profile.to_dict(),
                 "runtime_loop_guard_windows": (
                     self.config.runtime_loop_guard_windows
@@ -676,6 +701,22 @@ class AerialVlnBenchmarkRunner:
                     },
                 ),
                 ReviewSection(
+                    "AirSim Control",
+                    "key_value",
+                    {
+                        "control_strategy": (
+                            capabilities.get("control_mode")
+                            if capabilities is not None
+                            else None
+                        ),
+                        "requires_takeoff": (
+                            capabilities.get("requires_takeoff")
+                            if capabilities is not None
+                            else None
+                        ),
+                    },
+                ),
+                ReviewSection(
                     "Semantic Plan Diagnostics",
                     "key_value",
                     semantic_plan_diagnostics,
@@ -701,7 +742,8 @@ class AerialVlnBenchmarkRunner:
                     "text",
                     (
                         "AerialVLN data and metrics with UAV-Agent native "
-                        "continuous actions; coordinates are reported in "
+                        "tools under the declared AirSim control strategy; "
+                        "coordinates are reported in "
                         "AirSim NED meters. Landing language denotes reaching "
                         "the requested target region and ending the episode; "
                         "it does not require physical ground contact."

@@ -17,6 +17,7 @@ from src.env_client.schemas import (
 )
 from src.env_client.simulator_client import SimulatorEnvClient
 from src.sim_server.backends.base import BackendProbe
+from src.sim_server.backends.airsim_backend import AirSimBackend
 from src.sim_server.backends.registry import BackendRegistry
 from src.sim_server.execution import SimulationExecutionMode
 from src.sim_server.remote.ssh import SshTarget
@@ -316,6 +317,57 @@ def test_map_package_rejects_unknown_existing_process_policy(tmp_path):
     payload["launch"]["existing_process_policy"] = "replace"
 
     with pytest.raises(ValueError, match="existing_process_policy"):
+        MapPackage.from_dict(payload)
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_strategy"),
+    [
+        ("ComputerVision", "pose_kinematic"),
+        ("Multirotor", "paused_multirotor"),
+    ],
+)
+def test_map_package_infers_two_strategy_airsim_contract(
+    tmp_path,
+    mode,
+    expected_strategy,
+):
+    package = _package("strategy", "local", "airsim", _template(tmp_path))
+    payload = package.to_dict()
+    payload["airsim"]["mode"] = mode
+    payload["airsim"].pop("control_strategy", None)
+
+    parsed = MapPackage.from_dict(payload)
+
+    assert parsed.airsim["mode"] == mode
+    assert parsed.airsim["control_strategy"] == expected_strategy
+    capabilities = AirSimBackend().describe_capabilities(parsed)
+    assert capabilities.control_mode == expected_strategy
+    assert capabilities.requires_takeoff is False
+    assert "takeoff" not in capabilities.supported_actions
+    assert "land" not in capabilities.supported_actions
+
+
+@pytest.mark.parametrize(
+    ("mode", "strategy"),
+    [
+        ("ComputerVision", "paused_multirotor"),
+        ("Multirotor", "pose_kinematic"),
+        ("ComputerVision", "native_continuous"),
+    ],
+)
+def test_map_package_rejects_invalid_airsim_strategy_pair(
+    tmp_path,
+    mode,
+    strategy,
+):
+    package = _package("strategy", "local", "airsim", _template(tmp_path))
+    payload = package.to_dict()
+    payload["airsim"].update(
+        {"mode": mode, "control_strategy": strategy}
+    )
+
+    with pytest.raises(ValueError, match="control_strategy|requires airsim.mode"):
         MapPackage.from_dict(payload)
 
 

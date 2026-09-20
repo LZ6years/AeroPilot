@@ -38,6 +38,7 @@
         "remote_host": "127.0.0.1",
         "port": 30001,
         "mode": "ComputerVision",
+        "control_strategy": "pose_kinematic",
         "settings_template_source": "remote",
         "settings_template": "/home/Newdisk/wzq/data/airvln/AirVLN/airsim_plugin/settings/1/settings.json",
         "vehicle_name": "Drone_1",

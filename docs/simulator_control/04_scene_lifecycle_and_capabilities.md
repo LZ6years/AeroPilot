@@ -51,11 +51,13 @@ supports_soft_reset
 
 | 场景类型 | requires_takeoff | 主要动作 | 观测 |
 |---|---:|---|---|
-| AirSim Multirotor | true | connect、takeoff、hover、land、move、turn、set_pose | RGB、Depth、Pose |
-| AirSim ComputerVision | false | connect、hover、move、turn、set_pose、ascend、descend | RGB、Depth、Pose |
+| AirSim paused Multirotor | false | connect、hover、move、turn、set_pose、ascend、descend | RGB、Depth、Pose |
+| AirSim pose kinematic | false | connect、hover、move、turn、set_pose、ascend、descend | RGB、Depth、Pose |
 | UnrealCV Camera | false | connect、hover、move、turn、set_pose、ascend、descend | RGB、Depth、Pose |
 
-ComputerVision 和 UnrealCV 的 hover 表示保持当前 pose；takeoff 和 land 不伪造成功。
+两种 AirSim 策略和 UnrealCV 都由 episode initial pose 建立起点，不暴露自动
+takeoff/land。pose kinematic 与 UnrealCV 的 hover 表示保持当前 pose；paused
+Multirotor 的 hover 会先暂停物理，再在当前实际 pose 清零速度和加速度。
 
 ## 场景启动
 
@@ -103,7 +105,7 @@ Runtime 规则：
 
 - connect 成功后 `connected=true`；
 - 只有真实 takeoff 成功后 `airborne=true`；
-- ComputerVision 和 UnrealCV 保持 `airborne=false`；
+- 当前两种 AirSim 策略和 UnrealCV 都保持 `airborne=false`；
 - capability skip 写入 debug event，但不是动作失败；
 - Planner 的 `planner_tools`与 action schemas 从同一 capability snapshot 过滤；
 - 自定义 Planner 即使绕过模型 contract，Runtime 仍会在 ToolDispatcher 前拒绝

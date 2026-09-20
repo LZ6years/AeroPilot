@@ -11,10 +11,23 @@
 connection.mode = local | remote
 control.protocol = airsim | unrealcv
 airsim.mode = ComputerVision | Multirotor
+airsim.control_strategy = pose_kinematic | paused_multirotor
 unrealcv.control_target = camera | actor
 ```
 
-`connection.mode`决定进程位置，`control.protocol`决定 Backend，AirSim mode 决定动作策略。
+`connection.mode`决定进程位置，`control.protocol`决定 Backend，`airsim.mode`
+决定 AirSim 车辆类型，`airsim.control_strategy`决定动作执行语义。
+
+AirSim 只支持两种组合：
+
+```text
+ComputerVision + pose_kinematic
+Multirotor + paused_multirotor
+```
+
+缺少 `control_strategy` 时按上述组合推导。旧的持续 Multirotor 控制已被
+`paused_multirotor` 替代：动作期间恢复物理，动作结束后清零速度并暂停；
+因此 Runtime 不自动 takeoff/land，数据集评测应提供 initial pose。
 
 图像 capture source 不属于 MapPackage。`scene`、`depth_vis`和
 `depth_perspective`由上层运行时注入的 ObservationProfile 选择，参见
@@ -90,6 +103,7 @@ depth_image_type
 
   "airsim": {
     "mode": "Multirotor",
+    "control_strategy": "paused_multirotor",
     "settings_template_source": "local",
     "settings_template": "configs/airsim/cityenviron.settings.json",
     "vehicle_name": "Drone1",
@@ -147,6 +161,7 @@ depth_image_type
     "remote_host": "127.0.0.1",
     "port": 30001,
     "mode": "ComputerVision",
+    "control_strategy": "pose_kinematic",
     "settings_template_source": "remote",
     "settings_template": "/home/Newdisk/wzq/data/airvln/AirVLN/airsim_plugin/settings/1/settings.json",
     "vehicle_name": "Drone_1",
@@ -160,7 +175,7 @@ Remote 规则：
 - SSH key 通过环境变量提供；
 - `remote_host`是从 Linux 主机视角访问的协议 endpoint；
 - Tunnel 对 Runtime 暴露本机动态 `control_host/control_port`；
-- settings 中的 SimMode 必须与 `airsim.mode`一致；
+- settings 中的 SimMode 必须与 `airsim.mode`一致；策略也必须与 mode 形成合法组合；
 - attach 到外部 UE 时，只能记录 expected settings hash，不能声称实际 settings 已验证。
 
 ## Local UnrealCV

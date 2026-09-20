@@ -19,6 +19,7 @@
       },
       "airsim": {
         "mode": "Multirotor",
+        "control_strategy": "paused_multirotor",
         "vehicle_name": "Drone_1",
         "camera_name": "front_0",
         "image_width": 224,
@@ -48,6 +49,7 @@
       },
       "airsim": {
         "mode": "Multirotor",
+        "control_strategy": "paused_multirotor",
         "vehicle_name": "Drone_1",
         "camera_name": "front_0",
         "image_width": 224,
@@ -77,6 +79,7 @@
       },
       "airsim": {
         "mode": "Multirotor",
+        "control_strategy": "paused_multirotor",
         "settings_profile": "camera_defaults",
         "vehicle_name": "Drone1",
         "camera_name": "front_center",

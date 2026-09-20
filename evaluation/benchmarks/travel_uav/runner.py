@@ -198,6 +198,11 @@ class TravelUavBenchmarkRunner:
                 "case_selection": prepared.selection.to_dict(),
                 "execution_readiness": prepared.execution_readiness,
                 "scene_map": dict(self.config.scene_map),
+                "airsim_control_strategies": {
+                    package.map_id: package.airsim.get("control_strategy")
+                    for package in self.map_packages
+                    if package.map_id in set(self.config.scene_map.values())
+                },
                 "observation_profile": self.observation_profile.to_dict(),
                 "upstream_reference_commit": self.config.upstream_reference_commit,
                 "batch_status": summary["batch_status"],
@@ -218,6 +223,16 @@ class TravelUavBenchmarkRunner:
                         "batch_status": summary["batch_status"],
                         "requested_case_count": len(prepared.cases),
                         "completed_case_count": len(results),
+                        "control_strategies": ", ".join(
+                            sorted(
+                                {
+                                    str(package.airsim["control_strategy"])
+                                    for package in self.map_packages
+                                    if package.map_id
+                                    in set(self.config.scene_map.values())
+                                }
+                            )
+                        ),
                         **{
                             f"population_{key}": value
                             for key, value in prepared.selection.population_counts.items()
@@ -342,6 +357,11 @@ class TravelUavBenchmarkRunner:
             "metric_error": metric_error,
             "infrastructure_error": infrastructure_error,
             "scene_capabilities": capabilities,
+            "control_strategy": (
+                capabilities.get("control_mode")
+                if capabilities is not None
+                else None
+            ),
             "observation_profile": self.observation_profile.to_dict(),
             "audit_path": audit_path,
         }
@@ -385,6 +405,22 @@ class TravelUavBenchmarkRunner:
                         "executed_samples": len(metrics.get("trajectory_ned", [])),
                         "reference_samples": len(metrics.get("reference_path_ned", [])),
                         "path_length": metrics.get("path_length"),
+                    },
+                ),
+                ReviewSection(
+                    "AirSim Control",
+                    "key_value",
+                    {
+                        "control_strategy": (
+                            capabilities.get("control_mode")
+                            if capabilities is not None
+                            else None
+                        ),
+                        "requires_takeoff": (
+                            capabilities.get("requires_takeoff")
+                            if capabilities is not None
+                            else None
+                        ),
                     },
                 ),
                 ReviewSection(

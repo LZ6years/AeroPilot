@@ -157,6 +157,21 @@ scene（`1-18, 20-26`）。第一版固定使用 GPU0 和远端 AirSim 端口 30
 `max_scene_num=1`，所有 episode 串行。正式配置拒绝附着到已经存在的 AirSim
 进程，以免把上一张地图误认为当前 scene。
 
+默认 MapPackage 使用：
+
+```text
+mode=ComputerVision
+control_strategy=pose_kinematic
+```
+
+这保持现有 AerialVLN 位姿式动作语义。通用 AirSim Backend 同时支持
+`paused_multirotor`，但当前远端 AirVLN packaged build 在以 Multirotor 模式启动时
+会在 AirSim RPC 就绪前崩溃，因此仓库不提供一份会误导为可运行的 AerialVLN
+Multirotor MapPackage。若后续换用确认支持 Multirotor 的 AirVLN build，可按
+TravelUAV 的 MapPackage 声明该策略，并先执行单 scene probe。物理变体能否阻挡
+墙体仍取决于对应 Unreal 地图的 collision mesh；两种策略的评测目录和汇总不得
+混合。
+
 在当前 PowerShell 会话设置 SSH 私钥：
 
 ```powershell

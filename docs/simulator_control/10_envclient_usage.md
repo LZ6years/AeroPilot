@@ -308,8 +308,8 @@ if caps.supports("hover"):
 
 不要根据 `map_id`猜测动作：
 
-- Multirotor 需要 takeoff/land；
-- AirSim ComputerVision 使用 pose control，不支持 takeoff/land；
+- AirSim paused Multirotor 使用 episode initial pose，不自动 takeoff/land；
+- AirSim pose kinematic 使用直接位姿控制，不支持 takeoff/land；
 - UnrealCV 控制 camera pose，不支持 takeoff/land；
 - soft reset 必须检查 `supports_soft_reset`。
 
