@@ -68,6 +68,7 @@ class RemoteSceneControl:
         local_port: int,
         remote_host: str,
         remote_port: int,
+        log_path: Path | None = None,
     ) -> SshTunnel:
         return SshTunnel.open(
             self.runner,
@@ -76,6 +77,7 @@ class RemoteSceneControl:
             remote_host,
             remote_port,
             timeout_sec=float(package.ssh.get("connect_timeout_sec", 10)),
+            log_path=log_path,
         )
 
     def download_settings_template(
@@ -102,6 +104,11 @@ class RemoteSceneControl:
     ) -> dict[str, Any]:
         paths = self._paths(package, scene_instance_id)
         self._prepare_worker(package, paths, local_scene_dir)
+        return self.probe_prepared_port(package, scene_instance_id, host, port)
+
+    def probe_prepared_port(self, package, scene_instance_id, host, port):
+        """Read endpoint status without re-uploading the worker on each poll."""
+        paths = self._paths(package, scene_instance_id)
         output = self.runner.run(
             self.target(package),
             [

@@ -238,7 +238,7 @@ class AttachRemoteControl:
     def preflight(self, package):
         return {"python": "3.10"}
 
-    def open_tunnel(self, package, local_port, remote_host, remote_port):
+    def open_tunnel(self, package, local_port, remote_host, remote_port, log_path=None):
         return self.tunnel
 
     def start(self, *args):

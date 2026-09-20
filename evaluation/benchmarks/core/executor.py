@@ -106,8 +106,10 @@ class BenchmarkEpisodeExecutor:
                 )
             except Exception as exc:
                 error = _error_payload(exc)
+                cleanup_errors.extend(getattr(exc, "cleanup_errors", ()))
         except Exception as exc:
             error = _error_payload(exc)
+            cleanup_errors.extend(getattr(exc, "cleanup_errors", ()))
         finally:
             # Both cursors are frozen before Runtime shutdown so reports and
             # benchmark trajectories exclude cleanup hover/land observations.
@@ -122,6 +124,7 @@ class BenchmarkEpisodeExecutor:
                         scene_id=episode.scene_id,
                     )
                 except Exception as exc:
+                    cleanup_errors.extend(getattr(exc, "cleanup_errors", ()))
                     cleanup_errors.append(
                         {"stage": "runtime_shutdown", **_error_payload(exc)}
                     )
@@ -177,6 +180,7 @@ def _outcome_from_state(
 
 
 def _error_payload(exc: Exception) -> dict[str, str]:
+    exc = getattr(exc, "original_error", exc)
     return {"error_type": type(exc).__name__, "error": str(exc)}
 
 

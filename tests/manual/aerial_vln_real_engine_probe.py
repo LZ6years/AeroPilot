@@ -10,6 +10,7 @@ import argparse
 import json
 import math
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 
@@ -100,6 +101,18 @@ def main() -> int:
             f"scene_id={case.scene_id!r} is not execution-ready"
         )
     map_package = runner.map_packages_by_id[map_id]
+    original_timeout = float(map_package.launch.get("ready_timeout_sec", 120))
+    if args.ready_timeout_sec is not None:
+        if args.ready_timeout_sec <= 0:
+            raise ValueError("ready timeout must be positive")
+        # This runner owns its package objects. Never rewrite source map JSON
+        # merely to run a diagnostic with a longer observation ceiling.
+        map_package.launch["ready_timeout_sec"] = args.ready_timeout_sec
+        map_package.launch["diagnostic_independent_tunnel"] = True
+        # Production may reserve just one serial slot. The diagnostic needs a
+        # second local forwarding port, not a second simulator or remote slot.
+        runner.port_policy = replace(runner.port_policy,
+                                     max_scene_num=max(2, runner.port_policy.max_scene_num))
     if str(map_package.scene_id) != case.scene_id:
         raise ValueError(
             f"scene_id={case.scene_id!r} routes to map_id={map_id!r}, "
@@ -150,14 +163,46 @@ def main() -> int:
         if item.get("observation_id") == "obs_0001"
     }
     capabilities = execution.scene_capabilities or {}
+    lifecycle = [record for path in (run_dir / "scenes").glob("*/lifecycle.jsonl")
+                 for record in _read_jsonl(path)]
+    server = runtime.env_client.service
+    remote = server.remote_scene_control
+    scene_ids = list(server.lifecycle)
+    cleanup_checks = []
+    for scene_id in scene_ids:
+        try:
+            status = remote.status(map_package, scene_id)
+            host, port = server._remote_endpoint(map_package)
+            endpoint = remote.probe_prepared_port(map_package, scene_id, host, port)
+            cleanup_checks.append({"scene_id": scene_id, "process": status,
+                                   "port": endpoint,
+                                   "verified": status.get("status") == "stopped"
+                                   and endpoint.get("status") == "unreachable"})
+        except Exception as exc:
+            cleanup_checks.append({"scene_id": scene_id, "verified": False, "error": str(exc)})
+    from PIL import Image
+    import numpy as np
+    dimensions = []
+    for frame in frames:
+        path = Path(str(frame.get("path") or frame.get("metadata", {}).get("artifact_path", "")))
+        if not path.is_file():
+            continue
+        if frame.get("modality") == "rgb":
+            with Image.open(path) as image:
+                dimensions.append(list(image.size))
+        elif frame.get("modality") == "depth" and path.suffix == ".npy":
+            dimensions.append(list(np.load(path).shape[:2][::-1]))
     expected_control_mode = str(
-        map_package.airsim.get("mode", "Multirotor")
+        map_package.airsim.get("control_strategy", "pose_kinematic")
     )
     checks = {
         "runtime_status_ok": execution.outcome.status == "ok",
         "cleanup_errors_empty": not execution.outcome.cleanup_errors,
         "initial_ned_roundtrip_lte_0_05m": roundtrip_error <= 0.05,
         "front_rgb_depth_present": {"rgb", "depth"}.issubset(modalities),
+        "owned_process_and_remote_port_released": bool(cleanup_checks) and all(item["verified"] for item in cleanup_checks),
+        "captured_dimensions_256": bool(dimensions) and all(size == [256, 256] for size in dimensions),
+        "local_tunnel_port_released": server.port_manager._is_available(server.port_policy.control_port_start),
         **capability_contract_checks(expected_control_mode, capabilities),
     }
     summary = {
@@ -175,6 +220,15 @@ def main() -> int:
         "scene_capabilities": capabilities,
         "metrics": execution.metrics,
         "metric_error": execution.metric_error,
+        "outcome": execution.outcome.to_dict(),
+        "lifecycle": lifecycle,
+        "cleanup_verification": cleanup_checks,
+        "original_ready_timeout_sec": original_timeout,
+        "diagnostic_ready_timeout_sec": args.ready_timeout_sec,
+        "rpc_exceeded_original_timeout": any(
+            item["stage"] == "rpc_ready" and item["elapsed_sec"] - next(
+                (start["elapsed_sec"] for start in lifecycle if start["stage"] == "process_started"), 0
+            ) > original_timeout for item in lifecycle),
     }
     audit = BenchmarkAuditReader().read(execution.audit_cursor)
     case_dir = probe_dir / "cases" / case.episode_id
@@ -269,6 +323,8 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--scene-id", default="1")
     parser.add_argument("--episode-id", default=None)
+    parser.add_argument("--ready-timeout-sec", type=float, default=None,
+                        help="Diagnostic override only; source map JSON is unchanged.")
     parser.add_argument(
         "--output-dir",
         default="tests/manual_outputs/aerial_vln_real_engine_probe",
@@ -290,19 +346,15 @@ def capability_contract_checks(
     expected_control_mode: str,
     capabilities: dict,
 ) -> dict[str, bool]:
-    """Validate takeoff semantics against the configured AirSim mode."""
+    """Validate no-takeoff semantics against the configured strategy."""
 
-    expected_requires_takeoff = (
-        expected_control_mode.strip().lower()
-        not in {"computervision", "computer_vision", "cv"}
-    )
     return {
         "control_mode_matches_map_package": (
             capabilities.get("control_mode") == expected_control_mode
         ),
         "takeoff_requirement_matches_control_mode": (
             capabilities.get("requires_takeoff")
-            is expected_requires_takeoff
+            is False
         ),
     }
 

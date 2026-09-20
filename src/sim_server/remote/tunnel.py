@@ -6,6 +6,9 @@ import socket
 import subprocess
 import time
 from dataclasses import dataclass
+from pathlib import Path
+from typing import BinaryIO
+import tempfile
 
 from .ssh import SshCommandRunner, SshTarget
 
@@ -17,6 +20,8 @@ class SshTunnel:
     process: subprocess.Popen
     local_host: str
     local_port: int
+    log_file: BinaryIO | None = None
+    log_path: Path | None = None
 
     @classmethod
     def open(
@@ -27,6 +32,7 @@ class SshTunnel:
         remote_host: str,
         remote_port: int,
         timeout_sec: float = 10,
+        log_path: Path | None = None,
     ) -> "SshTunnel":
         command = [
             "ssh",
@@ -42,36 +48,54 @@ class SshTunnel:
             f"127.0.0.1:{local_port}:{remote_host}:{remote_port}",
             target.destination,
         ]
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        tunnel = cls(process, "127.0.0.1", local_port)
-        tunnel._wait_until_listening(timeout_sec)
+        # A file cannot fill an unread PIPE and stall OpenSSH. Standalone callers
+        # may use a temporary file; managed scenes always supply a durable path.
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_file = log_path.open("a+b") if log_path else tempfile.TemporaryFile()
+        try:
+            process = subprocess.Popen(
+                command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=log_file,
+            )
+        except Exception:
+            log_file.close()
+            raise
+        tunnel = cls(process, "127.0.0.1", local_port, log_file, log_path)
+        try:
+            tunnel._wait_until_listening(timeout_sec)
+        except Exception:
+            tunnel.close()
+            raise
         return tunnel
 
     def close(self) -> None:
-        if self.process.poll() is not None:
-            return
-        self.process.terminate()
         try:
-            self.process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            self.process.kill()
-            self.process.wait(timeout=5)
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+        finally:
+            if self.log_file is not None:
+                self.log_file.close()
+
+    def check_alive(self) -> None:
+        code = self.process.poll()
+        if code is not None:
+            tail = ""
+            if self.log_file is not None and not self.log_file.closed:
+                self.log_file.seek(0, 2)
+                self.log_file.seek(max(0, self.log_file.tell() - 4096))
+                tail = self.log_file.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"SSH tunnel exited ({code}): {tail}")
 
     def _wait_until_listening(self, timeout_sec: float) -> None:
         deadline = time.monotonic() + timeout_sec
         while time.monotonic() < deadline:
-            return_code = self.process.poll()
-            if return_code is not None:
-                stderr = self.process.stderr.read().strip() if self.process.stderr else ""
-                raise RuntimeError(
-                    f"SSH tunnel exited before ready ({return_code}): {stderr}"
-                )
+            self.check_alive()
             try:
                 with socket.create_connection(
                     (self.local_host, self.local_port), timeout=0.2

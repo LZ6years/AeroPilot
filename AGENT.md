@@ -281,6 +281,15 @@ evaluation plumbing instead of asking the model to ignore unavailable fields.
 
 ## Change Discipline
 
+Scene lifecycle ownership belongs to `src/sim_server`, not benchmark or model
+policy. Register launch ownership before readiness; roll back backend clients,
+owned processes and transports independently. AirSim wrapper/inner RPC release
+is shared at the adapter boundary. Never infer process cleanup from an empty
+error list or a dead launch-script parent: verify the owned group and endpoint.
+Scene lifecycle timing and SSH logs are human diagnostics, never model context.
+Longer startup ceilings require measured readiness/cleanup evidence, not a
+benchmark-specific retry or silent relaunch.
+
 Before changing behavior, identify which layer owns the behavior. Do not put a
 runtime/context field name into a reusable plugin. Do not put benchmark-specific
 repairs into general planner prompts. Do not make SafetySupervisor solve semantic

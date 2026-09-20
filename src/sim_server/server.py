@@ -26,6 +26,8 @@ from .process_control import LocalSceneControl
 from .remote.control import RemoteSceneControl
 from .remote.tunnel import SshTunnel
 from .scene_manager import SceneManager
+from .lifecycle import SceneLifecycle, SceneLifecycleError
+from src.adapters.airsim_client import close_airsim_client
 
 
 class SimulationServer:
@@ -66,6 +68,10 @@ class SimulationServer:
         self.backends: dict[str, SimulationBackend] = {}
         self.tunnels: dict[str, SshTunnel] = {}
         self._reserved_ports: dict[str, int] = {}
+        self._preparing: dict[str, SceneInstance] = {}
+        self._owned: dict[str, str] = {}
+        self.lifecycle: dict[str, SceneLifecycle] = {}
+        self._observed_modalities: dict[str, set[str]] = {}
 
     def health_check(self) -> bool:
         return True
@@ -91,40 +97,36 @@ class SimulationServer:
                 save_artifacts=self.save_artifacts,
             ),
         )
-        remote_owned = False
-        local_owned = False
-        backend_started = False
+        self.lifecycle[instance_id] = SceneLifecycle(scene_dir)
+        self.lifecycle[instance_id].record("start_requested")
 
         try:
             if package.connection_mode == "remote":
-                scene, remote_owned = self._prepare_remote_scene(
+                scene, _ = self._prepare_remote_scene(
                     package, instance_id, scene_dir, backend
                 )
             else:
-                scene, local_owned = self._prepare_local_scene(
+                scene, _ = self._prepare_local_scene(
                     package, instance_id, scene_dir, backend
                 )
 
             scene.capabilities = backend.describe_capabilities(package)
             scene = backend.start(package, scene)
-            backend_started = True
             self.backends[instance_id] = backend
             self.scene_manager.add(scene)
+            self._preparing.pop(instance_id, None)
+            self.lifecycle[instance_id].record("scene_ready")
             return scene
-        except Exception:
-            if backend_started:
-                try:
-                    backend.stop(scene)  # type: ignore[possibly-undefined]
-                except Exception:
-                    pass
-            if remote_owned:
-                try:
-                    self.remote_scene_control.stop(package, instance_id)
-                except Exception:
-                    pass
-            if local_owned:
-                self.local_scene_control.stop(instance_id)
-            self._close_transport(instance_id)
+        except Exception as exc:
+            errors = self._cleanup(instance_id, package, backend,
+                                   self._preparing.pop(instance_id, None))
+            errors[:0] = getattr(exc, "cleanup_errors", ())
+            try:
+                self.lifecycle[instance_id].record("startup_failed", "error", error=str(exc), cleanup_errors=errors)
+            except Exception as log_error:
+                errors.append({"stage": "lifecycle_log", "error_type": type(log_error).__name__, "error": str(log_error)})
+            if errors:
+                raise SceneLifecycleError(exc, errors) from exc
             raise
 
     def get_or_start_scene(
@@ -137,15 +139,45 @@ class SimulationServer:
         scene = self.scene_manager.get(scene_instance_id)
         package = self._get_package(scene.map_id)
         backend = self.backends.pop(scene_instance_id)
-        backend.stop(scene)
-        try:
-            if scene.process_ownership == "remote_managed":
-                self.remote_scene_control.stop(package, scene_instance_id)
-            elif scene.process_ownership == "local":
-                self.local_scene_control.stop(scene_instance_id)
-        finally:
-            self._close_transport(scene_instance_id)
-            self.scene_manager.remove(scene_instance_id)
+        errors = self._cleanup(scene_instance_id, package, backend, scene)
+        self.scene_manager.remove(scene_instance_id)
+        if errors:
+            raise SceneLifecycleError(RuntimeError("Scene cleanup incomplete"), errors)
+
+    def _cleanup(self, instance_id, package, backend, scene) -> list[dict]:
+        """Attempt every release independently; never hide partial cleanup."""
+        errors = []
+        def attempt(stage, operation):
+            status, details = "ok", {}
+            started = time.monotonic()
+            try:
+                operation()
+            except Exception as exc:
+                errors.append({"stage": stage, "error_type": type(exc).__name__, "error": str(exc)})
+                status, details = "error", {"error": str(exc)}
+            try:
+                self.lifecycle[instance_id].record(stage, status,
+                    duration_sec=time.monotonic() - started, **details)
+            except Exception as exc:
+                # A full disk must not prevent process/tunnel release either.
+                errors.append({"stage": "lifecycle_log", "error_type": type(exc).__name__, "error": str(exc)})
+
+        if scene is not None:
+            attempt("backend_closed", lambda: backend.stop(scene))
+        ownership = self._owned.get(instance_id)
+        if ownership == "remote_managed":
+            attempt("owned_process_stopped", lambda: self.remote_scene_control.stop(package, instance_id))
+        elif ownership == "local":
+            attempt("owned_process_stopped", lambda: self.local_scene_control.stop(instance_id))
+        tunnel = self.tunnels.pop(instance_id, None)
+        if tunnel is not None:
+            attempt("tunnel_closed", tunnel.close)
+        port = self._reserved_ports.pop(instance_id, None)
+        if port is not None:
+            attempt("port_reservation_released", lambda: self.port_manager.release(port))
+        if not errors:
+            self._owned.pop(instance_id, None)
+        return errors
 
     def reset_scene(self, scene_instance_id: str) -> SceneInstance:
         scene = self.scene_manager.get(scene_instance_id)
@@ -182,9 +214,18 @@ class SimulationServer:
         capture_sources: dict[str, str] | None = None,
     ) -> Observation:
         scene = self.scene_manager.get(scene_instance_id)
-        return self.backends[scene_instance_id].get_observation(
+        observation = self.backends[scene_instance_id].get_observation(
             scene, agent_id, modalities, capture_sources
         )
+        seen = self._observed_modalities.setdefault(scene_instance_id, set())
+        for modality in modalities:
+            value = observation.data.get(modality)
+            if value is None:
+                value = observation.data.get("frames", {}).get("frames", {}).get(modality)
+            if modality not in seen and value:
+                self.lifecycle[scene_instance_id].record("first_observation", modality=modality)
+                seen.add(modality)
+        return observation
 
     def execute_action(
         self,
@@ -227,7 +268,8 @@ class SimulationServer:
         )
 
         tunnel = self.remote_scene_control.open_tunnel(
-            package, local_port, remote_host, remote_port
+            package, local_port, remote_host, remote_port,
+            log_path=scene_dir / "ssh-tunnel.log",
         )
         self.tunnels[instance_id] = tunnel
 
@@ -282,10 +324,14 @@ class SimulationServer:
                 f"{remote_host}:{remote_port}, and managed launch is disabled"
             )
 
+        # A lost SSH response may follow a successful remote launch. The unique
+        # scene registry is the authority; rollback must query it even then.
+        self._owned[instance_id] = "remote_managed"
         result = self.remote_scene_control.start(
             package, instance_id, settings_path, scene_dir
         )
         scene.process_ownership = "remote_managed"
+        self.lifecycle[instance_id].record("process_started", pid=result.get("pid"))
         scene.remote_process_id = int(result["pid"])
         if result.get("remote_settings_path"):
             scene.settings_path = str(result["remote_settings_path"])
@@ -328,6 +374,7 @@ class SimulationServer:
         )
 
         if managed:
+            self._owned[instance_id] = "local"
             result = self.local_scene_control.start(
                 package,
                 instance_id,
@@ -335,6 +382,7 @@ class SimulationServer:
                 scene_dir / "process.log",
             )
             scene.process_id = result.process_id
+            self.lifecycle[instance_id].record("process_started", pid=result.process_id)
             self._wait_for_backend(
                 backend, package, configured_host, control_port
             )
@@ -401,7 +449,7 @@ class SimulationServer:
         settings_sha256: str | None,
         ownership: str,
     ) -> SceneInstance:
-        return SceneInstance(
+        scene = SceneInstance(
             scene_instance_id=instance_id,
             map_id=package.map_id,
             scene_id=package.scene_id,
@@ -419,14 +467,8 @@ class SimulationServer:
             process_ownership=ownership,
             settings_sha256=settings_sha256,
         )
-
-    def _close_transport(self, scene_instance_id: str) -> None:
-        tunnel = self.tunnels.pop(scene_instance_id, None)
-        if tunnel is not None:
-            tunnel.close()
-        port = self._reserved_ports.pop(scene_instance_id, None)
-        if port is not None:
-            self.port_manager.release(port)
+        self._preparing[instance_id] = scene
+        return scene
 
     def _wait_for_backend(
         self,
@@ -438,11 +480,49 @@ class SimulationServer:
         timeout = float(package.launch.get("ready_timeout_sec", 90))
         deadline = time.monotonic() + timeout
         last_detail = ""
+        instance_id = next((key for key, scene in self._preparing.items()
+                            if scene.control_host == host and scene.control_port == port), None)
+        remote_tcp_ready = False
+        comparison_done = False
         while time.monotonic() < deadline:
+            if instance_id in self.tunnels:
+                self.tunnels[instance_id].check_alive()
+                if not remote_tcp_ready:
+                    remote_host, remote_port = self._remote_endpoint(package)
+                    status = self.remote_scene_control.probe_prepared_port(
+                        package, instance_id, remote_host, remote_port)
+                    remote_tcp_ready = status.get("status") == "reachable"
+                    if remote_tcp_ready:
+                        self.lifecycle[instance_id].record("remote_tcp_ready")
             probe = backend.probe(package, host, port)
             if probe.ready:
+                if instance_id:
+                    self.lifecycle[instance_id].record("rpc_ready")
                 return
             last_detail = probe.detail
+            # Opt-in diagnostic probe only: compare the same live UE over a
+            # fresh transport once, without replacing the primary connection.
+            if (instance_id and remote_tcp_ready and not comparison_done
+                    and package.launch.get("diagnostic_independent_tunnel", False)
+                    and time.monotonic() >= deadline - timeout + 120):
+                comparison_done = True
+                comparison_port = self.port_manager.allocate_control_port()
+                alternate = None
+                try:
+                    alternate = self.remote_scene_control.open_tunnel(
+                        package, comparison_port, remote_host, remote_port,
+                        log_path=self.lifecycle[instance_id].path.parent / "ssh-comparison.log")
+                    comparison = backend.probe(package, host, comparison_port)
+                    self.lifecycle[instance_id].record("independent_tunnel_rpc",
+                        "ok" if comparison.ready else "not_ready", detail=comparison.detail)
+                    if comparison.ready:
+                        raise ConnectionError("Independent tunnel RPC succeeded while primary failed")
+                finally:
+                    try:
+                        if alternate is not None:
+                            alternate.close()
+                    finally:
+                        self.port_manager.release(comparison_port)
             time.sleep(1)
         raise TimeoutError(
             f"{package.control_protocol} did not become ready at {host}:{port} "
@@ -568,6 +648,7 @@ class SimulationServer:
         deadline = time.monotonic() + timeout
         last_error: Exception | None = None
         while time.monotonic() < deadline:
+            client = None
             try:
                 import airsim
 
@@ -579,6 +660,8 @@ class SimulationServer:
             except Exception as exc:
                 last_error = exc
                 time.sleep(1)
+            finally:
+                close_airsim_client(client)
         raise TimeoutError(
             f"AirSim RPC did not become ready: {host}:{port} within "
             f"{timeout:.0f}s; settings={settings_path}; last_error={last_error}"

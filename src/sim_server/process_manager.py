@@ -29,13 +29,17 @@ class ProcessManager:
             Path(log_path).parent.mkdir(parents=True, exist_ok=True)
             stdout = open(log_path, "ab")
         cwd = None if method == "wsl_bash" else str(Path(executable).resolve().parent)
-        proc = subprocess.Popen(command, stdout=stdout, stderr=subprocess.STDOUT, cwd=cwd)
+        try:
+            proc = subprocess.Popen(command, stdout=stdout, stderr=subprocess.STDOUT, cwd=cwd)
+        finally:
+            if log_path is not None:
+                stdout.close()
         self._processes[instance_id] = proc
         return proc.pid
 
     def stop(self, instance_id: str) -> None:
         # Terminate a remembered scene process if it is still alive.
-        proc = self._processes.pop(instance_id, None)
+        proc = self._processes.get(instance_id)
         if proc is None:
             return
         if proc.poll() is None:
@@ -48,6 +52,12 @@ class ProcessManager:
                 )
             else:
                 proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=5)
+        self._processes.pop(instance_id, None)
 
     def build_command(
         self, executable: str, args: list[str], method: str = "direct", settings_path: str | None = None

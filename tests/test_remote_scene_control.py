@@ -112,6 +112,9 @@ class FakeTunnel:
     def close(self) -> None:
         self.closed = True
 
+    def check_alive(self) -> None:
+        assert not self.closed
+
 
 class FakeRemoteControl:
     def __init__(self) -> None:
@@ -122,7 +125,7 @@ class FakeRemoteControl:
     def preflight(self, package):
         return {"python": "3.10"}
 
-    def open_tunnel(self, package, local_port, remote_host, remote_port):
+    def open_tunnel(self, package, local_port, remote_host, remote_port, log_path=None):
         return self.tunnel
 
     def remote_port_status(
@@ -144,6 +147,9 @@ class FakeRemoteControl:
     def stop(self, package, scene_instance_id):
         self.stops.append(scene_instance_id)
         return {"ok": True, "status": "stopped"}
+
+    def probe_prepared_port(self, package, scene_instance_id, host, port):
+        return {"status": "reachable" if self.starts else "unreachable"}
 
 
 class ManagedRemoteBackend:
