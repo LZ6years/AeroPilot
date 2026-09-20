@@ -208,10 +208,10 @@ class BenchmarkReviewRenderer:
                 f'<p class="instruction">{_e(case.instruction)}</p>'
                 '<p class="muted">Protocol: '
                 f"<code>{_e(case.protocol_variant)}</code></p>"
-                "<section><h2>Outcome</h2>"
-                f"{_key_value_table(case.outcome)}</section>"
-                "<section><h2>Metrics</h2>"
-                f"{_key_value_table(case.metrics)}</section>"
+                + _compact_outcome(case)
+                + _initial_plan_review(case.audit)
+                + _phase_decision_review(case.audit, case.frame_assets, case_dir, planner_input_assets)
+                + '<details class="advanced-audit"><summary>Advanced audit · 完整记录与实际请求</summary>'
                 "<section><h2>Observation Gallery</h2>"
                 f"{gallery}</section>"
                 "<section><h2>Agent Tool Transcript</h2>"
@@ -244,8 +244,187 @@ class BenchmarkReviewRenderer:
                 "</section>"
                 "<section><h2>Audit Diagnostics</h2>"
                 f"{diagnostics}</section>"
+                "</details>"
             ),
         )
+
+
+def _compact_outcome(case: BenchmarkCaseReview) -> str:
+    """Keep result categories distinct without a screen of repeated key tables."""
+    def line(values):
+        return ' · '.join(f'<strong>{_e(k)}</strong>: {_e(v)}' for k, v in values.items()
+                          if v is not None and not isinstance(v, (list, dict)))
+    outcome_keys = ("status", "completed", "stopped", "stopped_reason", "error")
+    metric_keys = ("success", "oracle_success", "ndtw", "sdtw", "distance_to_goal")
+    return ('<section><h2>Outcome / Metrics</h2><p>Agent / Runtime self-report: '
+            + line({k: case.outcome.get(k) for k in outcome_keys}) + '</p>'
+            + '<p>Benchmark metrics (independent of self-report): '
+            + line({k: case.metrics.get(k) for k in metric_keys}) + '</p>'
+            + _json_details({"outcome": case.outcome, "metrics": case.metrics}, "All result fields") + '</section>')
+
+
+def _initial_plan_review(audit: BenchmarkAuditLog) -> str:
+    """Only the pre-execution event is authoritative for the initial full plan."""
+    snapshots = [
+        _dict(event.get("payload")) for event in audit.events
+        if event.get("event") == "initial_semantic_plan"
+    ]
+    if len(snapshots) != 1:
+        return ('<section><h2>Initial task plan</h2><p class="empty">'
+                'Initial plan snapshot unavailable or ambiguous. Historical checkpoints '
+                'below are observed phases, not a reconstructed complete initial plan.</p></section>')
+    snapshot = snapshots[0]
+    plan = _dict(_dict(snapshot.get("parse_result")).get("plan"))
+    cards = []
+    for phase in plan.get("phases", []):
+        phase = _dict(phase)
+        cards.append(f'<li><strong>Phase {_e(phase.get("index"))}: {_e(phase.get("name"))}</strong>'
+                     f'<p>{_e(phase.get("goal"))}</p>'
+                     + _key_value_table({"done_when": phase.get("done_when")}) + '</li>')
+    return ('<section><h2>Initial task plan</h2><ol>' + ''.join(cards) + '</ol>'
+            + _json_details(snapshot.get("protocol_context"), "Recorded episode interpretation rules",
+                            empty_message="No additional episode interpretation rules recorded.")
+            + _json_details(snapshot, "Immutable initial plan snapshot") + '</section>')
+
+
+def _phase_decision_review(audit, frame_assets, case_dir, input_assets) -> str:
+    """Join primary review by explicit phase/decision/call/observation IDs only.
+
+    The detailed legacy view remains in Advanced audit. Missing IDs are visible,
+    never inferred from timestamps, and request images are never regenerated.
+    """
+    groups: dict[str, list[dict[str, Any]]] = {}
+    ungrouped = []
+    ids = [r.get("decision_id") for r in audit.planner_debug]
+    for record in audit.planner_debug:
+        if not record.get("phase_key") or not record.get("decision_id") or ids.count(record.get("decision_id")) != 1:
+            ungrouped.append(record)
+            continue
+        groups.setdefault(str(record["phase_key"]), []).append(record)
+    _, results = _transcript_indexes(list(audit.agent_transcript))
+    parts = ['<section class="phase-timeline"><h2>Phase execution timeline</h2>']
+    for phase_key, records in groups.items():
+        phase = _dict(_dict(records[0].get("model_context")).get("current_phase"))
+        parts.append(f'<section><h3>Phase {_e(phase_key)}</h3><p>{_e(phase.get("goal"))}</p>')
+        parts.append(_json_details(phase.get("done_when"), "Observed completion conditions at phase entry"))
+        for record in records:
+            parts.append(_compact_decision(record, audit, frame_assets, case_dir,
+                                           input_assets.get(_planner_record_key(record), []), results))
+        parts.append('</section>')
+    if not groups:
+        parts.append('<p class="empty">No ID-linked decisions available; see full audit.</p>')
+    if ungrouped:
+        parts.append(_json_details(ungrouped, "Audit anomaly: ungrouped or duplicate-ID decisions"))
+    linked_calls = {str(c.get("tool_call_id")) for r in audit.planner_debug
+                    for model_round in r.get("model_rounds", [])
+                    for c in _dict(model_round.get("canonical_turn")).get("tool_calls", [])}
+    unlinked = sorted(set(results) - linked_calls)
+    if unlinked:
+        parts.append(_json_details(unlinked, "Audit anomaly: ToolResults without captured decision association"))
+    parts.append('</section>')
+    return ''.join(parts)
+
+
+def _compact_decision(record, audit, frame_assets, case_dir, assets, results) -> str:
+    """One current frame, short public intent, nested corrections and applied state."""
+    decision_id = record["decision_id"]
+    obs = record.get("checkpoint_observation_id")
+    rounds = [r for r in record.get("model_rounds", []) if isinstance(r, dict)]
+    parts = [f'<article class="transcript-card" id="decision-{_e(decision_id)}">'
+             f'<h4>Decision {_e(record.get("decision_index"))} · CURRENT {_e(obs)}</h4>']
+    current = next((a for a in assets if a.get("observation_id") == obs
+                    and a.get("timeline_role") != "TOOL_EVIDENCE" and a.get("path")), None)
+    if current:
+        parts.append(_image_group([{"path": current["path"], "label": f"Captured CURRENT {obs}",
+                                    "description": current.get("image_mode") or "Actual request image"}], case_dir))
+    else:
+        parts.append(f'<p class="empty">Captured CURRENT image unavailable: {_e(obs)}. No substitute.</p>')
+    rgb = [a for a in frame_assets if a.modality == "rgb" and a.observation_id == obs and a.display_path]
+    if rgb:
+        parts.append('<details><summary>Original RGB · sensor audit, not a replacement request</summary>'
+                     + _image_group([{"path": rgb[0].display_path, "label": str(obs)}], case_dir) + '</details>')
+    context = _dict(record.get("model_context"))
+    prior = _dict(context.get("phase_strategy"))
+    def stage_label(strategy):
+        index = strategy.get("active_stage")
+        stages = strategy.get("stages", [])
+        if isinstance(index, int) and 0 <= index < len(stages):
+            return f"{index}: {stages[index]}"
+        return str(index) if strategy else "尚未初始化"
+    parts.append('<p>Strategy at checkpoint: ' + _e(stage_label(prior)) + '</p>')
+    applied = [_dict(e.get("payload")) for e in audit.events if e.get("event") == "phase_strategy_updated"
+               and _dict(e.get("payload")).get("decision_id") == decision_id]
+    if applied:
+        strategy = _dict(_dict(record.get("coupled_plan")).get("phase_strategy"))
+        parts.append('<p>Recorded active stage: ' + _e(stage_label(strategy)) + '</p>')
+        changed = applied[-1].get("update_kind") not in {"keep", "unchanged", "continue"}
+        parts.append(('<details open>' if changed else '<details>')
+                     + '<summary>Recorded strategy change (not completion evidence)</summary>'
+                     + _key_value_table({"change": applied[-1].get("update_kind"), "stages": strategy.get("stages")})
+                     + _json_details(applied, "Application events") + '</details>')
+    for index, model_round in enumerate(rounds):
+        canonical = _dict(model_round.get("canonical_turn"))
+        outcome = _dict(model_round.get("runtime_outcome"))
+        intent = str(canonical.get("public_intent") or "No public intent captured")
+        # Non-final rounds (including corrections) stay inside this decision.
+        if index < len(rounds) - 1:
+            parts.append(f'<details><summary>Round {_e(model_round.get("round_index"))} · {_e(outcome.get("status"))}</summary>')
+        parts.append(f'<p>{_e(intent[:280])}{"…" if len(intent) > 280 else ""}</p>')
+        parts.append(_json_details({"source": canonical.get("public_intent_source"), "text": intent}, "Full public intent"))
+        if outcome.get("feedback"):
+            parts.append(_json_details(outcome["feedback"], "Original protocol feedback"))
+        for call in canonical.get("tool_calls", []):
+            call_id = call.get("tool_call_id")
+            matches = results.get(str(call_id), [])
+            result = matches[0][1] if len(matches) == 1 else {}
+            args = _dict(call.get("args"))
+            parts.append(f'<p><code>{_e(call.get("tool_name"))}</code> · {_e(call_id)} · '
+                         f'{_e(result.get("status") or "Audit anomaly: missing/duplicate terminal result")}</p>')
+            if call.get("tool_name") == "runtime.commit_phase_turn":
+                parts.append(_record_table(_dict(args.get("completion_assessment")).get("done_when") or [],
+                                           ("index", "status", "evidence")))
+                parts.append(_json_details(args, "Completion assessment and proposed local strategy"
+                                           + (" · 未应用" if result.get("status") != "ok" else "")))
+            else:
+                parts.append(_key_value_table(args))
+            diagnosis = _dict(_dict(result.get("data")).get("rejection"))
+            explanation = {
+                "missing_commit": "缺少阶段决策提交；本轮动作未执行。",
+                "multiple_commits": "本轮有多个阶段决策提交；动作未执行。",
+                "commit_not_first": "阶段决策提交不在首位；本轮动作未执行。",
+            }.get(diagnosis.get("code"))
+            if explanation:
+                parts.append(f'<p class="transcript-feedback">{_e(explanation)}</p>')
+            elif result.get("status") in {"error", "rejected"}:
+                parts.append(f'<p class="transcript-feedback">{_e(str(result.get("message") or "")[:240])}</p>')
+            if result.get("safety_interventions"):
+                parts.append('<strong>Safety modified execution</strong>' + _key_value_table({
+                    "requested": result.get("requested_args"), "executed": result.get("executed_args"),
+                    "interventions": result.get("safety_interventions")}))
+            data = _dict(result.get("data"))
+            if "candidates" in data:
+                parts.append(_record_table(data.get("candidates") or [],
+                                           ("candidate_id", "label", "distance_m", "distance_status")))
+            parts.append(_json_details(result, "Terminal ToolResult / internal audit"))
+        evidence = [a for a in assets if a.get("timeline_role") == "TOOL_EVIDENCE"
+                    and a.get("round_index") == model_round.get("round_index")]
+        if evidence:
+            parts.append('<details><summary>Captured tool candidate images</summary>'
+                         + _model_input_images(evidence, case_dir) + '</details>')
+        if index < len(rounds) - 1:
+            parts.append('</details>')
+    windows = [_dict(e.get("payload")) for e in audit.events if e.get("event") == "phase_window_recorded"
+               and _dict(e.get("payload")).get("decision_id") == decision_id]
+    for window in windows:
+        after = window.get("observation_after_id")
+        parts.append(f'<p>After physical batch: {_e(after)}</p>')
+        following = [r for r in audit.planner_debug if r.get("checkpoint_observation_id") == after and r.get("decision_id")]
+        if following:
+            parts.append(f'<a href="#decision-{_e(following[0]["decision_id"])}">Next observation / decision</a>')
+    parts.append(_key_value_table({"phase outcome": _decision(record).get("decision"),
+                                   "reason": _decision(record).get("reason")}))
+    parts.append('</article>')
+    return ''.join(parts)
 
 
 def _section_html(section: ReviewSection, case_dir: Path) -> str:

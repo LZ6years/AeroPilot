@@ -268,9 +268,69 @@ debug 和轨迹。Depth 保留在 audit 资产中，不进入默认 gallery。
 
 ## 测试
 
+### RGB 与 Phase 审查
+
+默认模型图片由 `configs/plugins.json` 的
+`context_options.image.include_current_depth=false` 控制。Depth 仍采集，按需供
+Grounding 测距；显式设为 `true` 才使用融合图。20 张 observation 抽样与最近
+3 张连续保留独立配置，不受此开关影响。
+
+新 HTML 默认显示初始完整 SemanticPlan 和按 Phase/Decision 分组的时间线。
+初始计划来自执行前的 `initial_semantic_plan` 事件；旧记录缺失时明确标记，
+不从局部 strategy 回填。完整请求和详细事件在 Advanced audit 内。历史融合图
+仍是历史真实输入，不能用现在的 RGB 配置重绘后冒充原请求。
+
+只预览已有单例（不调用模型或模拟器，输出目录必须不存在）：
+
+```powershell
+python tests/manual/rgb_phase_review_probe.py --case-dir "<existing-case>" --output-dir "<new-preview>"
+```
+
+精确复验原抽样中的某一例时，不要改成 `--limit-per-difficulty 1`：该参数会
+重新抽样，可能选择不同 episode。使用手动单例入口，保留原配置的抽样口径，
+再按 ID 限定；该入口仅用于回归实验，不替代正式批测 CLI：
+
+```powershell
+python tests/manual/aerial_vln_selected_case_probe.py `
+  --config evaluation/benchmarks/aerial_vln/configs/aerial_vln_s_val_seen_probe.local `
+  --episode-id 3G0WWMR1U4IB7QGQVGGALABHGGXNQO `
+  --eval-id "<new-eval-id>" --validate-only
+```
+
+确认 ID、远端进程/端口、Provider 和 RGB/Depth 后移除 `--validate-only` 才会执行。
+该入口复用正常 Runner 生命周期、指标与输出，并在 selection 清单记录显式
+子集筛选。completed 仍只是 Agent 自报终态，不等同 SR/OSR。
+
 ```powershell
 python -m pytest tests/test_aerial_vln_cases.py `
   tests/test_aerial_vln_adapter.py `
   tests/test_aerial_vln_metrics.py `
   tests/test_aerial_vln_runner_dry.py -q
 ```
+# Scene startup and cleanup diagnostics
+
+Managed scenes write `runs/<run>/scenes/<scene>/lifecycle.jsonl` and
+`ssh-tunnel.log`. Lifecycle timings use a monotonic clock; timestamps are for
+cross-log correlation only. Process launch, remote TCP readiness, forwarded RPC,
+first modalities and independent cleanup attempts are separate evidence.
+An empty benchmark cleanup-error list alone does not establish process exit.
+
+The no-model engine probe accepts `--ready-timeout-sec 300` as an in-memory
+diagnostic override. It does not rewrite map configuration. If the remote TCP
+endpoint is reachable but primary RPC remains unavailable after 120 seconds, it
+makes one independent tunnel comparison without restarting UE. A successful
+comparison with a failed primary is an infrastructure failure, not a fallback.
+
+Example (requires the configured SSH key environment variable):
+
+```powershell
+python tests/manual/aerial_vln_real_engine_probe.py `
+  --config evaluation/benchmarks/aerial_vln/configs/aerial_vln_s_val_seen_probe.local `
+  --scene-id 12 --execution-mode managed --ready-timeout-sec 300 `
+  --output-dir tests/manual_outputs/airsim_lifecycle_scene12_unique
+```
+
+Before a fresh navigation batch, check scenes 12 and 8 twice and the other four
+selected maps once. Stop on any timeout, cleanup residue or incomplete evidence.
+Only verified normal slow startup justifies changing the selected maps' JSON
+readiness ceiling. Provider timeouts, navigation windows and metrics are separate.

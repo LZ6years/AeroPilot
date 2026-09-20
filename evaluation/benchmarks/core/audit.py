@@ -251,6 +251,17 @@ class BenchmarkAuditReader:
         events = _timestamp_slice(
             records["events.jsonl"], cursor.started_at, cursor.ended_at
         )
+        # Initial plans precede the task-initial camera observation. Retain them
+        # by instruction identity, not a guessed earlier timestamp. Frozen line
+        # bounds still exclude later tasks and post-freeze mutations.
+        instruction_ids = {item.get("instruction_id") for item in transcript
+                           if item.get("instruction_id")}
+        early_plans = [item for item in records["events.jsonl"]
+                       if item.get("event") == "initial_semantic_plan"
+                       and isinstance(item.get("payload"), dict)
+                       and item["payload"].get("instruction_id") in instruction_ids
+                       and item not in events]
+        events = early_plans + events
         actions = _formal_planner_actions(candidate_actions, events)
         debug_events = _timestamp_slice(
             records["debug/debug_events.jsonl"],
