@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Any
 
-from src.agent.provider_http import request_openai_compatible_json
+from src.llm import DefaultModelClient, MessageBuilder, ModelClient, ModelRequest
 from src.agent.semantic.task_parser import _loads_json_object
 from src.plugins.skills.catalog import SkillCatalog
 from src.runtime.configs.model_config import ModelConfig
@@ -115,6 +115,7 @@ class ModelSkillSelector:
         *,
         enabled: bool = True,
         system_prompt: str | None = None,
+        client: ModelClient | None = None,
     ) -> None:
         self.enabled = bool(enabled)
         if self.enabled and model_config is None:
@@ -126,6 +127,9 @@ class ModelSkillSelector:
         # rule-based runtimes and tests.  It must not search the current working
         # directory for a .env file as a hidden side effect.
         self.model_config = model_config or ModelConfig()
+        self.client = client if client is not None else DefaultModelClient(
+            self.model_config.to_provider_settings()
+        )
         self.system_prompt = system_prompt or SKILL_SELECTION_SYSTEM_PROMPT
 
     def select(self, selection_context: dict[str, Any], catalog: SkillCatalog) -> SkillSelectionResult:
@@ -199,21 +203,21 @@ class ModelSkillSelector:
                 }
 
     def _request_content(self, selection_context: dict[str, Any]) -> str:
-        payload = {
-            "model": self.model_config.model_name,
-            "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": json.dumps(selection_context, ensure_ascii=False)},
-            ],
-            "temperature": 0,
-            "max_tokens": 256,
-            "response_format": {"type": "json_object"},
-        }
-        data = request_openai_compatible_json(
-            self.model_config,
-            payload,
-            error_prefix="Skill selection request failed",
+        builder = MessageBuilder().extend([
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": json.dumps(selection_context, ensure_ascii=False)},
+        ])
+        request = ModelRequest(
+            messages=builder.build(),
+            parameters={
+                "temperature": 0,
+                "max_tokens": 256,
+                "response_format": {"type": "json_object"},
+            },
         )
+        data = self.client.request(
+            request, error_prefix="Skill selection request failed",
+        ).data
         return data["choices"][0]["message"]["content"]
 
 

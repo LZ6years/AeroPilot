@@ -136,15 +136,15 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
     assert "target absent" in normalized_summary
     assert "weak candidate" in normalized_summary
     assert "directional cue" in normalized_summary
-    assert "usable image bearing" in normalized_summary
-    assert "Current usable bearing is alignment evidence" in normalized_summary
+    assert "usable bearing" in normalized_summary
+    assert "Current bearing supports alignment" in normalized_summary
     assert "a separate geometric heading measurement is not required" not in normalized_summary
     assert "Moderate left or right offset is explicitly acceptable" in normalized_summary
-    assert "exact centering is not required unless explicitly requested" in normalized_summary
+    assert "exact centering needs an explicit request" in normalized_summary
     assert "Do not correct merely for lateral offset" in normalized_summary
     assert "correct only when the cue is near the frame boundary" not in normalized_summary
     assert "broad usable forward region" not in normalized_summary
-    assert "unless explicitly requested" in normalized_summary
+    assert "an explicit request" in normalized_summary
     assert "Do not restart or reverse broad search" in normalized_summary
     assert "alternate around an already usable bearing" in normalized_summary
     assert "left/negative yaw" not in normalized_summary
@@ -283,19 +283,18 @@ def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_refe
     ).read_text(encoding="utf-8")
     normalized_reference = " ".join(reference_text.split())
 
-    assert "controlled landing" in normalized
+    assert "landing" in normalized
     assert "angled ascent/descent" in normalized
     assert "Stop descending" in normalized
-    assert "requested drop is reached" in normalized
-    assert "landing surface is near enough" in normalized
+    assert "at the requested drop" in normalized
+    assert "near the landing surface" in normalized
     assert "shorten adjustments" in normalized
     assert "hover or use a smaller adjustment" in normalized
     assert "landing region" in normalized
-    assert "vertical progress" in normalized
-    assert "available clearance or surface cues" in normalized
-    assert "near a surface" in normalized
-    assert "vertical error" in normalized
-    assert "deviation from the vertical ascent/descent axis" in normalized
+    assert "height change, progress, clearance and surface cues" in normalized
+    assert "near a surface" in normalized  # recovery still limits downward steps
+    assert "risk or error" in normalized
+    assert "Angled paths deviate from the vertical axis" in normalized
     assert "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))" not in normalized
     assert "sqrt(vx^2 + vy^2) = abs(vz) * tan(angle)" not in normalized
     assert "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))" in normalized_reference
@@ -304,10 +303,10 @@ def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_refe
     assert "non-zero horizontal component" in normalized_reference
     assert "relative to the horizontal plane" not in normalized
     assert "abs(vertical_speed) / horizontal_speed = tan(angle)" not in normalized
-    assert "yaw, heading, vehicle pitch, or camera angle" in normalized
+    assert "yaw, heading, pitch or camera angle" in normalized
     assert "effective bounded progress" in normalized
     assert "reasonable tolerance" in normalized
-    assert "decimal-level correction" in normalized
+    assert "not decimal correction" in normalized
     assert "contact sensor" not in normalized
     assert "hidden benchmark" not in normalized
     forbidden_terms = [
@@ -337,15 +336,15 @@ def test_route_traversal_skill_keeps_completion_core_and_optional_examples():
     assert "gap" in normalized
     assert "bounded translation" in normalized
     assert "first useful route view with the latest view" in normalized
-    assert "cue as a destination" in normalized
-    assert "exact geometric boundary" in normalized
+    assert "cue is not necessarily a destination" in normalized
+    assert "exact unseen boundary" in normalized
     assert "not a fixed maneuver sequence" in normalized
     assert "Yaw can inspect a route or change image bearing" in normalized
     assert "Cue absence alone is ambiguous" in normalized
-    assert "Passage completion is a terminal route relation" in normalized
-    assert "cue moves from ahead toward a side, rearward" in normalized
-    assert "cue leaves the forward view" in normalized
-    assert "Do not demand every evidence form, reacquisition, continued visibility" in normalized
+    assert "Passage completion requires a terminal route relation" in normalized
+    assert "cue moving sideways, rearward" in normalized
+    assert "cue leaves view" in normalized
+    assert "Do not require every source, reacquisition, continued visibility" in normalized
     assert "done_when" not in normalized
     assert "continue_when" not in normalized
     assert "schema" not in normalized
@@ -592,41 +591,27 @@ def test_enabled_model_skill_selector_requires_explicit_config():
     assert selector.model_config is config
 
 
-def test_model_skill_selector_uses_shared_provider_transport(monkeypatch):
+def test_model_skill_selector_uses_shared_provider_transport():
+    from src.llm import ModelResponse
+
     captured = {}
 
-    def fake_request(model_config, payload, *, error_prefix, transport_trace=None):
-        captured.update(
-            {
-                "model_config": model_config,
-                "payload": payload,
-                "error_prefix": error_prefix,
-                "transport_trace": transport_trace,
-            }
-        )
-        return {
-            "choices": [
-                {"message": {"content": '{"selected_skills": []}'}}
-            ]
-        }
+    class FakeClient:
+        def request(self, request, *, error_prefix, transport_trace=None):
+            captured.update(request=request, error_prefix=error_prefix,
+                            transport_trace=transport_trace)
+            return ModelResponse({
+                "choices": [{"message": {"content": '{"selected_skills": []}'}}]
+            })
 
-    monkeypatch.setattr(
-        "src.plugins.skills.selection.request_openai_compatible_json",
-        fake_request,
-    )
-    config = ModelConfig(
-        model_name="test-model",
-        api_key="secret",
-        base_url="https://example.test/v1",
-    )
-    selector = ModelSkillSelector(config)
-
+    config = ModelConfig(model_name="test-model", api_key="secret")
+    selector = ModelSkillSelector(config, client=FakeClient())
     content = selector._request_content({"available_skills": []})
 
     assert content == '{"selected_skills": []}'
-    assert captured["model_config"] is config
     assert captured["error_prefix"] == "Skill selection request failed"
-    assert captured["payload"]["model"] == "test-model"
+    assert captured["request"].parameters["max_tokens"] == 256
+    assert captured["request"].messages[0]["role"] == "system"
     assert captured["transport_trace"] is None
 
 

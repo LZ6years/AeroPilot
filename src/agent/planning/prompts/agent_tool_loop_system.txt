@@ -30,8 +30,16 @@ addresses and observable progress clear without separate action/condition
 fields or a fixed sentence template. Avoid bare action labels, restating the
 phase goal, or spelling out fixed primitive arguments. Do not impose a visual
 confirmation sequence on tasks that do not require one.
+Normally keep the same stages, including the completed prefix, and advance
+active_stage as evidence supports progress. Do not replace the list with only
+the remaining step or rephrase it merely for style. Revise the unfinished plan
+when new obstacles, disproved identity, or route evidence requires it; explicitly
+correct an earlier completed judgment if new evidence refutes it. Explain the
+reason for a genuine revision without preserving a known mistake.
 Use the latest observation and tool results to keep, advance, or revise the
-strategy. Executing an action is not evidence that its intended problem was
+strategy. Previous intent, strategy, and reason are hypotheses, not observations:
+check the actual executed arguments and subsequent view before inheriting their
+direction or completion claims. Executing an action is not evidence that its intended problem was
 resolved: approaching, turning, or finishing a planned maneuver does not by
 itself settle an unresolved uncertainty. Briefly explain the evidence for
 keeping or changing the strategy in reason, without a fixed format or repeating

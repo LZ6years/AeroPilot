@@ -1,0 +1,15 @@
+[
+  {"id":"3VE8AYVF8VVTDU3DBYGXREH8D748FB","protocol":"aerial_vln","instruction":"lift off above the buildings and head straight on the road. veer off the road near the shipping containers. stop near the shipping containers."},
+  {"id":"34FNN24DCV7GQ316IQ1I4FEXPXX5YP","protocol":"aerial_vln","instruction":"taking off from the houses and turning to the right. flying up over the house with tarp on the roof. descending to stop over the roof and the front of the house."},
+  {"id":"37UEWGM5H2685KO1387CTT8J3Y61RV","protocol":"aerial_vln","instruction":"lift off over the building in front of you and head straight. lower after the building and turn right facing the white building. head straight and stop in front of the white building."},
+  {"id":"3MD9PLUKKRCKLIHHICZNC3NLE6HZNW","protocol":"aerial_vln","instruction":"take off and turn right towards the brown roof. once at the edge of the roof, turn left and head towards the airline hanger. land to the right of the front of the hanger."},
+  {"id":"3YWRV122C1XIWC036NBWDEIBVDV8UW","protocol":"aerial_vln","instruction":"take off and look far left and start travelling. stop above the tree ahead and travel left. travel to the long house. land in front of the long house near the tires on the floor."},
+  {"id":"34PGFRQONX9K8XLRSRNOKSCMRL2JWL","protocol":"aerial_vln","instruction":"turn right and go down the road. turn left after the park and visit the park benches along the side. stop by the trees near the benches on the other side of the park."},
+  {"id":"3QFUFYSY97DSUTGBZVQKA213IYV4FK","protocol":"aerial_vln","instruction":"rise up turn around and head down the road to the roundabout. turn left and fly under the bridge. land at the end of the tunnel."},
+  {"id":"37TRT2X24ZPSKUNGX0RSXEZ1NRTJBY","protocol":"aerial_vln","instruction":"rise up turn right and head to the junction behind you. take the right hand road and head to the next junction. head up to the roof of the white building over the road on your right and land."},
+  {"id":"3VBEN272MTXHAEEH0GSKQQHLOO8SG5","protocol":"aerial_vln","instruction":"turn around completely facing the road with the canal on the right then head straight. at the next corner turn right. land at the tan canopy on the left."},
+  {"id":"3OWEPKL08IA118BBZH74LJUM4SMN74","protocol":"aerial_vln","instruction":"lift off and head straight towards the neon lights. at the end of the road turn right. at the next intersection go straight across the canal and land in front of the white building."},
+  {"id":"control_route","protocol":"generic","instruction":"Climb above the arch, pass through the courtyard to the sculpture, then go around it to the yellow kiosk."},
+  {"id":"control_endpoint","protocol":"generic","instruction":"Hover beside the blue buoy facing the lighthouse."},
+  {"id":"control_single","protocol":"generic","instruction":"Move forward approximately 4 meters."}
+]

@@ -8,10 +8,9 @@ summary: Select for through, past, between, passage, gap, corridor, opening, or 
 
 ## Application Boundary
 
-Use this guidance to pass through, past, between, beyond, or along one side of a
-passage, gap, corridor, or cue. Do not treat the cue as a destination
-when route progress is the concern. Use approach reasoning when the task ends
-at a target-relative position.
+Use for through, past, between, beyond, or along-side traversal. A route cue
+is not necessarily a destination. Use approach reasoning for a target-relative
+terminal position.
 
 ## Evidence Model
 
@@ -31,24 +30,25 @@ Once usable, prefer bounded translation through or past it over repeated
 centering. Compare the first useful route view with the latest view and
 accumulated translation. Reacquire only if that evidence is insufficient or
 contradictory.
+An upcoming landmark being absent is not loss of the current route. While the
+road, heading and free space remain usable, continue bounded progress toward
+new evidence rather than declaring failure after a few moves. Reconsider when
+route evidence conflicts, a boundary appears, or motion produces no useful view.
 
-Request [route progress examples](references/route_progress_examples.md) when a
-complex side passage or disappearing cue needs more detailed interpretation.
+Request [route examples](references/route_progress_examples.md) for complex
+side passages or disappearing cues.
 
 ## Completion And Stop
 
-Passage completion is a terminal route relation supported by agreeing evidence.
-Strong evidence includes meaningful translation while a cue moves from ahead
-toward a side, rearward, or beyond the blocking route. Once the route relation
-is established, consistent translation still supports passage when the cue
-leaves the forward view unless reversal, blockage, or conflict appears. Do not
-demand every evidence form, reacquisition, continued visibility, or a particular
-final image side after sufficient route progress. Do not wait for an exact
-geometric boundary the camera cannot establish.
+Passage completion requires a terminal route relation. Meaningful translation
+with a cue moving sideways, rearward or beyond the blocking route supports it.
+Once established, consistent translation remains evidence after the cue leaves
+view unless reversal, blockage or conflict appears. Do not require every source,
+reacquisition, continued visibility, a final image side or an exact unseen boundary.
 
 ## Recovery
 
 If a required route cue disappears unexpectedly, compare pre-maneuver and
-current views with measured motion. Try one bounded retrace and re-observe; do
+current views with measured motion. Try a bounded retrace and re-observe; do
 not continue blind motion. Hover only to compare. If no safe evidence-producing
 recovery remains, stop and cite why. Do not replace translation evidence with repeated yaw.

@@ -6,6 +6,20 @@ logic.
 
 ## Responsibility Boundaries
 
+- `src/llm/` owns stateless model communication, wire adapters, HTTP retries
+  and generic in-memory request audits. It must not import Agent, Runtime,
+  Context or plugins. ModelConfig converts only transport settings into
+  ProviderSettings; business loop limits and prompt paths stay upstream.
+- Model callers own prompt loading, message order, generation parameters and
+  response semantics. MessageBuilder is optional ordered-copy tooling with
+  caller-defined keys, not a recipe/profile registry. It never inserts prompts,
+  samples history, merges system messages or edits durable Transcript events.
+- Communication audits separate image bytes without interpreting evidence.
+  CURRENT/HISTORY labels and observation associations remain Agent-owned.
+  Runtime/report callers own persistence. No hidden provider reasoning enters
+  audit snapshots. The legacy Agent HTTP implementation has been removed;
+  all production model callers use the shared client/injection contract.
+
 - `src/memory/context/modules/*.py` builds compact model-facing context from
   runtime memory. It owns field names, compression, role labels, and the split
   between model-facing summaries and debug metadata. An enabled module may
@@ -302,6 +316,30 @@ the model, such as hidden benchmark truth. Enforce that boundary in context and
 evaluation plumbing instead of asking the model to ignore unavailable fields.
 
 ## Change Discipline
+
+Route phases preserve independently judgeable handoffs, including explicit
+departure/altitude requirements. Preserve those requirements without making each
+setup maneuver a separate phase: group by meaningful exit state and route handoff.
+Completion conditions express exit results rather than verb-by-verb action
+receipts; necessary relative-motion and route constraints still use history.
+Neither current-image-only proof nor a grammatical tense is a semantic rule.
+Completion conditions separate independently required results without imposing
+counts or intermediate stops. Local strategies
+normally retain their completed prefix and advance the active stage; revisions
+need new evidence, and prior narratives never override actual tool arguments.
+These are prompt contracts, not new Runtime validators.
+
+Visual grounding uses the capability JSON box threshold (currently 0.4). Empty
+candidates mean uncertain detection, not confirmed absence; empty evidence images
+are not emitted. Competing identity queries reuse the same observation quota.
+Route and vertical knowledge favor evidence-scaled progress, not fixed small
+steps or a fixed recovery-attempt limit. Safety limits are unchanged.
+
+Review defaults to a compact plan/decision timeline with human-only trajectory
+comparisons. Full requests and duplicate histories are available only through
+explicit detailed-audit generation; raw audit files are preserved. The AerialVLN
+landing protocol remains parser-only in this change: Planner reinterpretation
+of landing is a known deferred issue, not a solved behavior claim.
 
 Scene lifecycle ownership belongs to `src/sim_server`, not benchmark or model
 policy. Register launch ownership before readiness; roll back backend clients,

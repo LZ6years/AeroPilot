@@ -67,8 +67,12 @@ class VisualGroundingService:
         with Image.open(rgb_path) as source:
             width, height = source.size
 
+        raw_candidates = self.grounding_backend.locate(rgb_path, query)
+        # Replacement backends obey the same JSON-configured public threshold.
+        eligible = [c for c in raw_candidates if np.isfinite(c.confidence)
+                    and c.confidence >= self.settings.box_threshold]
         candidates = sorted(
-            self.grounding_backend.locate(rgb_path, query),
+            eligible,
             key=lambda item: item.confidence,
             reverse=True,
         )[: self.settings.max_candidates]
@@ -157,6 +161,9 @@ class VisualGroundingService:
                 "include_distance": include_distance,
                 "candidates": model_candidates,
                 "audit_details": {
+                    "box_threshold": self.settings.box_threshold,
+                    "backend_candidate_count": len(raw_candidates),
+                    "filtered_candidate_count": len(raw_candidates) - len(eligible),
                     "rgb_frame_id": rgb_frame.get("id"),
                     "depth_frame_id": depth_frame.get("id") if depth_frame else None,
                     "grounding_backend": self.settings.grounding_backend,
@@ -211,7 +218,7 @@ def _write_candidate_evidence(
     candidates: list[GroundedCandidate],
     masks: dict[int, CandidateMask],
 ) -> tuple[tuple[str, ...], tuple[dict[str, Any], ...]]:
-    if not run_dir:
+    if not run_dir or not candidates:
         return (), ()
     with Image.open(rgb_path) as source:
         image = source.convert("RGB")
@@ -280,4 +287,3 @@ def _clamped_box(box: tuple[float, float, float, float], width: int, height: int
     right = max(left + 1, min(width, int(np.ceil(max(x0, x1)))))
     bottom = max(top + 1, min(height, int(np.ceil(max(y0, y1)))))
     return left, top, right, bottom
-

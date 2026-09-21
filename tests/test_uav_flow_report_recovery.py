@@ -87,7 +87,9 @@ def test_recover_existing_evaluation_writes_partial_html_idempotently(
     case_html = (complete / "review.html").read_text(encoding="utf-8")
     assert "Evaluation State: INTERRUPTED" in root_html
     assert "case_complete" in root_html
-    assert "Recover the saved transcript." in case_html
+    assert "Recover the saved transcript." not in case_html  # raw transcript is opt-in
+    assert "audit.json" in case_html
+    assert "Recover the saved transcript." in (complete / "audit.json").read_text(encoding="utf-8")
     assert "call_recovered" in case_html
     summary = json.loads((eval_dir / "summary.json").read_text("utf-8"))
     assert summary["run_status"] == "interrupted"
@@ -118,7 +120,7 @@ def test_recovery_accepts_legacy_audit_without_agent_transcript(
 
     assert result["finalized_case_count"] == 1
     html = (case_dir / "review.html").read_text(encoding="utf-8")
-    assert "No agent tool transcript was recorded for this episode." in html
+    assert "Initial plan snapshot unavailable" in html and "audit.json" in html
 
 
 def test_strict_recovery_rejects_missing_declared_asset(tmp_path: Path) -> None:

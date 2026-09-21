@@ -11,11 +11,21 @@ from email.message import Message
 
 import pytest
 
-from src.agent.provider_http import (
-    ProviderRequestError,
-    request_openai_compatible_json,
-)
+from src.llm import DefaultModelClient, ModelRequest, ProviderRequestError
 from src.runtime.configs.model_config import ModelConfig
+
+
+def _request_json(config, payload, *, error_prefix, transport_trace=None):
+    """Exercise the real shared client; only HTTP is stubbed by these tests."""
+    request = ModelRequest(
+        messages=payload.get("messages", []),
+        tools=payload.get("tools"),
+        parameters={key: value for key, value in payload.items()
+                    if key not in {"model", "messages", "tools"}},
+    )
+    return DefaultModelClient(config.to_provider_settings()).request(
+        request, error_prefix=error_prefix, transport_trace=transport_trace,
+    ).data
 
 
 class _Response:
@@ -73,10 +83,10 @@ def test_transient_errors_use_exponential_delays_then_succeed(monkeypatch):
             raise outcome
         return outcome
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
-    result = request_openai_compatible_json(
+    result = _request_json(
         _config(), {"messages": []}, error_prefix="Planner failed"
     )
 
@@ -101,10 +111,10 @@ def test_retry_after_takes_precedence_and_is_bounded(monkeypatch):
             raise outcome
         return outcome
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
-    request_openai_compatible_json(
+    _request_json(
         _config(), {"messages": []}, error_prefix="Parser failed"
     )
 
@@ -118,14 +128,14 @@ def test_non_transient_http_error_fails_without_sleep(monkeypatch, status_code):
     def fake_urlopen(request, timeout):
         raise _http_error(status_code)
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
     with pytest.raises(
         ProviderRequestError,
         match=rf"Parser failed: HTTP {status_code}",
     ) as raised:
-        request_openai_compatible_json(
+        _request_json(
             _config(), {"messages": []}, error_prefix="Parser failed"
         )
 
@@ -142,11 +152,11 @@ def test_transient_error_exhaustion_keeps_final_body_and_prefix(monkeypatch):
         calls += 1
         raise _http_error(429)
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
     with pytest.raises(RuntimeError, match=r"Native request failed: HTTP 429") as raised:
-        request_openai_compatible_json(
+        _request_json(
             _config(), {"messages": []}, error_prefix="Native request failed"
         )
 
@@ -168,10 +178,10 @@ def test_timeout_retries_once_then_succeeds_with_safe_trace(monkeypatch):
             raise outcome
         return outcome
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
-    result = request_openai_compatible_json(
+    result = _request_json(
         _config(),
         {"messages": [{"content": "data:image/png;base64,private"}]},
         error_prefix="Updater failed",
@@ -208,11 +218,11 @@ def test_timeout_retry_exhaustion_raises_typed_error(monkeypatch):
         calls += 1
         raise TimeoutError("read operation timed out")
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
     with pytest.raises(ProviderRequestError, match="read operation timed out") as raised:
-        request_openai_compatible_json(
+        _request_json(
             _config(),
             {"messages": []},
             error_prefix="Planner failed",
@@ -242,10 +252,10 @@ def test_remote_disconnect_retries_twice_then_succeeds(monkeypatch):
             raise outcome
         return outcome
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
-    result = request_openai_compatible_json(
+    result = _request_json(
         _config(), {"messages": []}, error_prefix="Planner failed"
     )
 
@@ -273,10 +283,10 @@ def test_supported_connection_failures_retry_then_succeed(monkeypatch, failure):
             raise outcome
         return outcome
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
-    result = request_openai_compatible_json(
+    result = _request_json(
         _config(), {"messages": []}, error_prefix="Planner failed"
     )
 
@@ -293,11 +303,11 @@ def test_connection_retry_exhaustion_wraps_remote_disconnect(monkeypatch):
         calls += 1
         raise http.client.RemoteDisconnected("closed")
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
     with pytest.raises(ProviderRequestError) as raised:
-        request_openai_compatible_json(
+        _request_json(
             _config(), {"messages": []}, error_prefix="Planner failed"
         )
 
@@ -321,11 +331,11 @@ def test_mixed_transient_failures_respect_global_retry_ceiling(monkeypatch):
     def fake_urlopen(request, timeout):
         raise outcomes.pop(0)
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
     with pytest.raises(ProviderRequestError) as raised:
-        request_openai_compatible_json(
+        _request_json(
             _config(), {"messages": []}, error_prefix="Planner failed"
         )
 
@@ -345,11 +355,11 @@ def test_certificate_verification_error_is_not_retried(monkeypatch):
             ssl.SSLCertVerificationError("certificate verify failed")
         )
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
     with pytest.raises(ProviderRequestError) as raised:
-        request_openai_compatible_json(
+        _request_json(
             _config(), {"messages": []}, error_prefix="Planner failed"
         )
 
@@ -373,11 +383,11 @@ def test_invalid_json_response_is_not_retried(monkeypatch):
         calls += 1
         return InvalidResponse({})
 
-    monkeypatch.setattr("src.agent.provider_http.urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
 
     with pytest.raises(json.JSONDecodeError):
-        request_openai_compatible_json(
+        _request_json(
             _config(),
             {"messages": []},
             error_prefix="Planner failed",

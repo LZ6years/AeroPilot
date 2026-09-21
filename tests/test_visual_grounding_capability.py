@@ -79,6 +79,42 @@ def _candidate() -> GroundedCandidate:
     return GroundedCandidate((4.0, 3.0, 16.0, 18.0), "person", 0.91)
 
 
+def test_configured_threshold_filters_before_evidence_and_depth(tmp_path):
+    candidates = [GroundedCandidate((4, 3, 16, 18), str(score), score)
+                  for score in (0.399, 0.4, 0.401)]
+    service = VisualGroundingService(FakeGrounder(candidates), None,
+                                     _settings(box_threshold=0.4))
+    result = service.locate(observation=_observation(tmp_path), observation_id="obs_0001",
+                            query="object", include_distance=False,
+                            run_dir=str(tmp_path), tool_call_id="threshold")
+    assert [c["confidence"] for c in result["data"]["candidates"]] == [0.401, 0.4]
+    assert result["data"]["audit_details"]["filtered_candidate_count"] == 1
+    assert len(result["model_inputs"]) == 1
+
+
+def test_all_low_candidates_do_not_segment_or_emit_empty_image(tmp_path):
+    segmenter = FakeSegmenter(error=AssertionError("must not segment"))
+    service = VisualGroundingService(
+        FakeGrounder([GroundedCandidate((1, 1, 10, 10), "weak", 0.399)]),
+        segmenter, _settings(box_threshold=0.4))
+    result = service.locate(observation=_observation(tmp_path), observation_id="obs_0001",
+                            query="object", include_distance=True,
+                            run_dir=str(tmp_path), tool_call_id="empty")
+    assert result["data"]["candidates"] == []
+    assert not result["artifact_refs"] and not result["model_inputs"]
+    assert segmenter.calls == 0
+
+
+def test_empty_detection_handler_reports_uncertainty(monkeypatch, tmp_path):
+    from plugins.capabilities.visual_grounding.locate.scripts import handler
+    service = VisualGroundingService(FakeGrounder([]), None, _settings())
+    monkeypatch.setattr(handler, "service_from_settings", lambda _: service)
+    result = handler.handle({"args": {"observation_id": "obs_0001", "query": "object"},
+                             "runtime_context": {"latest_observation": _observation(tmp_path)}})
+    assert "remains uncertain" in result.message
+    assert result.data["candidates"] == []
+
+
 def test_detection_only_never_invokes_segmentation_or_depth(tmp_path):
     grounder = FakeGrounder([_candidate()])
     segmenter = FakeSegmenter(error=AssertionError("segmentation should not run"))

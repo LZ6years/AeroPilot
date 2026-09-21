@@ -334,3 +334,25 @@ Before a fresh navigation batch, check scenes 12 and 8 twice and the other four
 selected maps once. Stop on any timeout, cleanup residue or incomplete evidence.
 Only verified normal slow startup justifies changing the selected maps' JSON
 readiness ceiling. Provider timeouts, navigation windows and metrics are separate.
+# Compact navigation review experiment
+
+Default case HTML contains outcomes, actual/reference 2D and 3D trajectories,
+the frozen initial plan, and Phase/Decision cards. Public intent is excerpted
+to 180 characters with the original text expandable. Raw audit/trace/metrics
+remain separate files; detailed requests and duplicate histories are opt-in.
+
+Offline preview (a new output directory is required):
+
+```powershell
+python tests/manual/rgb_phase_review_probe.py --case-dir <existing-case> --output-dir <new-preview>
+# Add --detailed-audit to also write cases/<id>/audit_review.html.
+```
+
+The preview also writes `grounding_threshold_preview.json`: a 0.4 filter of
+historically rounded scores, explicitly NOT a new detector run or model input.
+The live capability uses its JSON `box_threshold`; empty candidates express
+uncertainty, not target absence. NED-to-positive-up conversion is display-only.
+
+The current change does not propagate AerialVLN landing semantics beyond its
+existing parser injection. Unrequested descent or landing reinterpretation
+remains a known deferred issue and must be reported separately in comparisons.

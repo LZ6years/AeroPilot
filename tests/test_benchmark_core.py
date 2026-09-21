@@ -492,7 +492,7 @@ def test_core_review_writes_portable_case_index_and_audit(tmp_path):
             ReviewSection("Notes", "text", "portable review"),
         ),
     )
-    paths = BenchmarkReviewRenderer().write(
+    paths = BenchmarkReviewRenderer(detailed_audit=True).write(
         tmp_path / "eval",
         summary,
         (case_review,),
@@ -500,7 +500,7 @@ def test_core_review_writes_portable_case_index_and_audit(tmp_path):
 
     assert Path(audit_path).exists()
     assert Path(paths["html_review"]).exists()
-    case_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    case_html = (case_dir / "audit_review.html").read_text(encoding="utf-8")
     audit_text = Path(audit_path).read_text(encoding="utf-8")
     assert "../../review_assets/benchmark_review.css" in case_html
     assert "review_assets/frames/frame.png" in case_html
@@ -514,7 +514,7 @@ def test_core_review_writes_portable_case_index_and_audit(tmp_path):
     assert "No agent messages were emitted for this episode." in case_html
     assert "No audit diagnostics were recorded." in case_html
 
-    BenchmarkReviewRenderer().write(
+    BenchmarkReviewRenderer(detailed_audit=True).write(
         tmp_path / "eval",
         summary,
         (
@@ -526,7 +526,7 @@ def test_core_review_writes_portable_case_index_and_audit(tmp_path):
             ),
         ),
     )
-    opted_in_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    opted_in_html = (case_dir / "audit_review.html").read_text(encoding="utf-8")
     assert "review_assets/frames/depth.npy" in opted_in_html
     assert "download raw asset" in opted_in_html
 
@@ -878,7 +878,7 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
     )
     _write_case_review(tmp_path / "eval", audit, assets)
 
-    html = (case_dir / "review.html").read_text(encoding="utf-8")
+    html = (case_dir / "audit_review.html").read_text(encoding="utf-8")
     assert "Agent Tool Transcript" in html
     assert "Find &lt;person&gt; and turn safely." in html
     assert "Provider public intent" in html
@@ -964,7 +964,7 @@ def test_core_review_reports_unclosed_duplicate_and_orphan_tool_records(
     _write_case_review(tmp_path / "eval", audit, ())
 
     html = (
-        tmp_path / "eval" / "cases" / "transcript" / "review.html"
+        tmp_path / "eval" / "cases" / "transcript" / "audit_review.html"
     ).read_text(encoding="utf-8")
     assert "duplicate ToolCall id: duplicate" in html
     assert "ToolCall has no terminal ToolResult: open" in html
@@ -1048,7 +1048,7 @@ def test_core_review_labels_fallback_intent_and_provider_rejection(tmp_path):
     _write_case_review(tmp_path / "eval", audit, ())
 
     html = (
-        tmp_path / "eval" / "cases" / "transcript" / "review.html"
+        tmp_path / "eval" / "cases" / "transcript" / "audit_review.html"
     ).read_text(encoding="utf-8")
     assert "Provider Turn Rejected" in html
     assert "Not executed; audit only." in html
@@ -1173,7 +1173,7 @@ def test_core_review_correlates_completion_and_renders_planner_window(
     ] is False
 
     eval_dir = tmp_path / "eval"
-    BenchmarkReviewRenderer().write(
+    BenchmarkReviewRenderer(detailed_audit=True).write(
         eval_dir,
         BenchmarkSummaryReview(
             benchmark_name="Test",
@@ -1202,7 +1202,7 @@ def test_core_review_correlates_completion_and_renders_planner_window(
     )
 
     case_html = (
-        eval_dir / "cases" / "planner" / "review.html"
+        eval_dir / "cases" / "planner" / "audit_review.html"
     ).read_text(encoding="utf-8")
     assert "No RGB frame assets available." in case_html
     assert "Completion Assessment" in case_html
@@ -1401,7 +1401,7 @@ def test_core_review_renders_exact_successful_model_images_and_steps(tmp_path):
         audit=audit,
         frame_assets=(),
     )
-    renderer = BenchmarkReviewRenderer()
+    renderer = BenchmarkReviewRenderer(detailed_audit=True)
     renderer.write(
         eval_dir,
         BenchmarkSummaryReview(
@@ -1414,7 +1414,7 @@ def test_core_review_renders_exact_successful_model_images_and_steps(tmp_path):
     )
 
     case_dir = eval_dir / "cases" / "planner"
-    case_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    case_html = (case_dir / "audit_review.html").read_text(encoding="utf-8")
     assets = sorted((case_dir / "review_assets" / "planner_inputs").glob("*.png"))
     assert len(assets) == 4
     assert [item.name for item in assets if item.name.startswith("window_001")] == [
@@ -1645,10 +1645,10 @@ def test_core_review_renders_provider_rounds_and_keeps_terminal_decision_separat
         audit=audit,
         frame_assets=(),
     )
-    renderer = BenchmarkReviewRenderer()
+    renderer = BenchmarkReviewRenderer(detailed_audit=True)
     renderer.write_case(eval_dir, case)
     renderer.write_case(eval_dir, case)
-    page = (eval_dir / "cases" / "decision" / "review.html").read_text(
+    page = (eval_dir / "cases" / "decision" / "audit_review.html").read_text(
         encoding="utf-8"
     )
 
@@ -1779,7 +1779,7 @@ def test_legacy_tool_transcript_reconstructs_three_decisions_without_overwrite(
 
     audit = BenchmarkAuditReader().read(EpisodeAuditCursor.freeze(run_dir))
     eval_dir = tmp_path / "eval"
-    BenchmarkReviewRenderer().write_case(
+    BenchmarkReviewRenderer(detailed_audit=True).write_case(
         eval_dir,
         BenchmarkCaseReview(
             case_id="legacy",
@@ -1792,7 +1792,7 @@ def test_legacy_tool_transcript_reconstructs_three_decisions_without_overwrite(
             frame_assets=(),
         ),
     )
-    page = (eval_dir / "cases" / "legacy" / "review.html").read_text(
+    page = (eval_dir / "cases" / "legacy" / "audit_review.html").read_text(
         encoding="utf-8"
     )
 
@@ -2277,7 +2277,7 @@ def _write_case_review(
     audit: BenchmarkAuditLog,
     assets: tuple[ResolvedFrameAsset, ...],
 ) -> None:
-    BenchmarkReviewRenderer().write_case(
+    BenchmarkReviewRenderer(detailed_audit=True).write_case(
         eval_dir,
         BenchmarkCaseReview(
             case_id="transcript",

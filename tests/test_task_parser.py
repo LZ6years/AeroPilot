@@ -153,14 +153,13 @@ def test_model_parser_prompts_split_structure_from_phase_criteria():
     assert "Keep every relation attached" in structure_prompt
     assert "Image bearing, target-relative position, route relation, and UAV" in structure_prompt
     assert "Create an orientation result only when" in structure_prompt
-    assert "One phase is one local route leg" in structure_prompt
-    assert "It is not one primitive action" in structure_prompt
-    assert "Do not split only because movement mode or punctuation changes" in structure_prompt
-    assert "Preserve all requested outcomes in order" in structure_prompt
-    assert "one minimum sufficient user-required terminal result" in criteria_prompt
-    assert "configured evidence capabilities only to avoid an inherently" in criteria_prompt
-    assert "terminal obligations" in criteria_prompt
-    assert "continue_when is a concise missing or contradicted user result" in criteria_prompt
+    assert "local result at its exit" in structure_prompt
+    assert "Neither punctuation nor primitive action count" in structure_prompt
+    assert "user-required results in order" in structure_prompt
+    assert "sample array illustrates the type, not an entry limit" in criteria_prompt
+    assert "shared terminal-state contract to done_when and continue_when" in criteria_prompt
+    assert "does not add obligations" in criteria_prompt
+    assert "import another phase's results" in criteria_prompt
     assert "Preserve user-provided numeric requirements in natural language" in criteria_prompt
     assert '"metrics"' not in criteria_prompt
     assert "Keep target-relative distance distinct from UAV self-motion" in criteria_prompt
@@ -303,6 +302,10 @@ def test_model_parser_injects_configured_evidence_only_into_phase_criteria():
     assert "not facts already observed in the current scene" in criteria_messages[3]["content"]
     assert criteria_messages[4]["content"] == parser.done_when_rules
     assert criteria_messages[5]["content"] == parser.criteria_prompt
+    prompt_root = Path("src/agent/semantic/prompts")
+    assert parser.structure_prompt == (prompt_root / "task_parser_structure_system.txt").read_text(encoding="utf-8").strip()
+    assert parser.done_when_rules == (prompt_root / "done_when_generation_system.txt").read_text(encoding="utf-8").strip()
+    assert parser.criteria_prompt == (prompt_root / "task_parser_phase_criteria_system.txt").read_text(encoding="utf-8").strip()
 
 
 def test_model_parser_custom_contracts_keep_default_flyagent_rules(tmp_path):

@@ -303,6 +303,12 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
         "stop_source": None,
     }
     review_html = (case_dir / "review.html").read_text(encoding="utf-8")
+    assert "Trajectory" in review_html and "trajectory_2d.png" in review_html
+    assert "Dataset And Difficulty" not in review_html
+    from evaluation.benchmarks.core import BenchmarkReviewRenderer
+    full = BenchmarkReviewRenderer(detailed_audit=True).write_case(
+        result["eval_dir"], runner._case_reviews[case_result["episode_id"]])
+    review_html = Path(full["case_html"]).read_text(encoding="utf-8")
     assert "Dataset And Difficulty" in review_html
     assert "aerialvln-s" in review_html
     assert "Validation Seen" in review_html
@@ -907,8 +913,12 @@ def test_multi_scene_dry_runner_executes_selected_cases_without_scene_one_limit(
     case_html = (
         Path(result["results"][0]["case_dir"]) / "review.html"
     ).read_text(encoding="utf-8")
-    assert "val_unseen" in case_html
-    assert "Validation Unseen" in case_html
+    assert "Trajectory" in case_html and "metrics.json" in case_html
+    from evaluation.benchmarks.core import BenchmarkReviewRenderer
+    full = BenchmarkReviewRenderer(detailed_audit=True).write_case(
+        result["eval_dir"], runner._case_reviews[result["results"][0]["episode_id"]])
+    detail = Path(full["case_html"]).read_text(encoding="utf-8")
+    assert "val_unseen" in detail and "Validation Unseen" in detail
 
 
 def test_validate_only_cli_does_not_require_execution_ready(

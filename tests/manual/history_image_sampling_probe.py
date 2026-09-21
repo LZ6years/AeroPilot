@@ -28,7 +28,7 @@ sys.path.insert(0, str(REPO))
 from evaluation.benchmarks.core.report_io import atomic_write_text
 from evaluation.benchmarks.core.review import history_projection_review
 from src.agent.history_projection import HistoryProjector
-from src.agent.planning.model_action_planner import _snapshot_request
+from src.llm.audit import snapshot_request
 from src.agent.transcript import AgentToolCall, AssistantTurn, ToolResult, TranscriptEvent
 from src.memory.context.registry import ContextModuleRegistry
 from src.tools.registry import default_registry
@@ -158,7 +158,7 @@ def run_probe(case_dir: Path, output_dir: Path, config: Path) -> dict:
                 "projection": selected.audit, "errors": sorted(set(errors)),
             }
             reports.append(summary)
-            snapshot, _ = _snapshot_request({"messages": selected.messages})
+            snapshot, _ = snapshot_request({"messages": selected.messages})
             atomic_write_text(output_dir / f"request_{request_index:03d}.json", json.dumps({**summary, "simulated_request": snapshot}, ensure_ascii=False, indent=2))
             ids = list(dict.fromkeys(e.payload.get("observation_id") for e in events if e.kind == "state_checkpoint"))
             selected_ids = set(selected.audit["policies"].get("image", {}).get("selected_observation_ids", ids))

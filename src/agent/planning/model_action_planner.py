@@ -7,15 +7,14 @@ FlyAgent's canonical ToolSpec names.
 
 from __future__ import annotations
 
-import base64
-import binascii
 import copy
-import hashlib
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.agent.provider_http import request_openai_compatible_json
+from src.llm import DefaultModelClient, MessageBuilder, ModelClient, ModelRequest
+from src.llm.audit import snapshot_request, redact_provider_value
+from src.llm.providers.openai_compatible import encode_request, public_response_snapshot
 from src.agent.history_projection import HistoryProjector
 from src.agent.transcript import (
     AgentToolCall,
@@ -62,12 +61,16 @@ class ModelActionPlanner:
         max_repair_attempts: int | None = None,
         repair_planner: Any | None = None,
         history_projector: HistoryProjector | None = None,
+        client: ModelClient | None = None,
     ) -> None:
         if max_repair_attempts is not None or repair_planner is not None:
             raise ModelActionPlannerConfigError(
                 "The native tool loop repairs errors in transcript; separate repair planners are unsupported."
             )
         self.model_config = model_config or load_model_config()
+        self.client = client if client is not None else DefaultModelClient(
+            self.model_config.to_provider_settings()
+        )
         # Standalone callers default to full history. Runtime injects the
         # configured projector bound to its actual Context Module instances.
         self.history_projector = history_projector or HistoryProjector()
@@ -104,19 +107,20 @@ class ModelActionPlanner:
             )
         context = transcript.latest_context()
         projection = self.history_projector.project(transcript, registry)
-        messages = [
-            *_memory_system_messages(context),
-            {"role": "system", "content": self.system_prompt},
-            *projection.messages,
-        ]
-        payload = {
-            "model": self.model_config.model_name,
-            "messages": messages,
-            "tools": [spec.to_provider_tool() for spec in specs],
-            "tool_choice": "auto",
-            "temperature": 0,
-        }
-        request_snapshot, media = _snapshot_request(payload)
+        builder = MessageBuilder()
+        builder.extend(_memory_system_messages(context), key="memory_documents")
+        builder.add_system(self.system_prompt, key="planner_instruction")
+        builder.extend(projection.messages, key="history")
+        request = ModelRequest(
+            messages=builder.build(),
+            tools=[spec.to_provider_tool() for spec in specs],
+            parameters={"tool_choice": "auto", "temperature": 0},
+        )
+        # Preserve the existing subclass hook and failed-request audit, while
+        # delegating wire-envelope construction to the provider adapter.
+        payload = encode_request(self.model_config.to_provider_settings(), request)
+        request_snapshot, media = snapshot_request(payload)
+        annotate_request_media(payload, media)
         self.last_request = request_snapshot
         self.last_response = {}
         self.last_exchange = {
@@ -127,7 +131,7 @@ class ModelActionPlanner:
         }
         data = self._request(payload)
         self.last_response = dict(data)
-        self.last_exchange["response"] = _public_response_snapshot(data)
+        self.last_exchange["response"] = public_response_snapshot(data)
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -156,12 +160,16 @@ class ModelActionPlanner:
         # raises, so Runtime can persist an exhausted retry sequence.
         transport_trace: dict[str, Any] = {}
         self.last_exchange["transport"] = transport_trace
-        return request_openai_compatible_json(
-            self.model_config,
-            payload,
-            error_prefix="Native tool-call request failed",
-            transport_trace=transport_trace,
+        request = ModelRequest(
+            messages=payload["messages"],
+            tools=payload.get("tools"),
+            parameters={key: value for key, value in payload.items()
+                        if key not in {"model", "messages", "tools"}},
         )
+        return self.client.request(
+            request, error_prefix="Native tool-call request failed",
+            transport_trace=transport_trace,
+        ).data
 
     @staticmethod
     def _load_system_prompt(prompt_path: str | None) -> str:
@@ -293,7 +301,7 @@ def _provider_rejection_snapshot(
                 "tool_call_id": str(raw.get("id") or ""),
                 "type": raw.get("type"),
                 "wire_name": str(function.get("name") or ""),
-                "arguments": _redact_provider_value(parsed_arguments),
+                "arguments": redact_provider_value(parsed_arguments),
                 "arguments_status": arguments_status,
             }
         )
@@ -301,19 +309,9 @@ def _provider_rejection_snapshot(
         "error": error,
         "finish_reason": choice.get("finish_reason"),
         "content_present": bool(content.strip()) if isinstance(content, str) else False,
-        "content": _redact_provider_value(content) if isinstance(content, str) else None,
+        "content": redact_provider_value(content) if isinstance(content, str) else None,
         "tool_calls": tool_calls,
     }
-
-
-def _redact_provider_value(value: Any) -> Any:
-    if isinstance(value, str) and value.startswith("data:image/"):
-        return "[image_data_url]"
-    if isinstance(value, list):
-        return [_redact_provider_value(item) for item in value]
-    if isinstance(value, dict):
-        return {key: _redact_provider_value(item) for key, item in value.items()}
-    return value
 
 
 def _memory_system_messages(context: dict[str, Any]) -> list[dict[str, str]]:
@@ -330,64 +328,12 @@ def _memory_system_messages(context: dict[str, Any]) -> list[dict[str, str]]:
     return messages
 
 
-def _redact_request(payload: dict[str, Any]) -> dict[str, Any]:
-    """Compatibility wrapper returning the exact request with media references."""
-
-    request, _ = _snapshot_request(payload)
-    return request
-
-
-def _snapshot_request(
-    payload: dict[str, Any],
-) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    """Separate provider image bytes from an otherwise exact request snapshot.
-
-    The returned media entries remain in memory only. Runtime persists each
-    digest once, replaces ``data`` with an asset reference, and only then writes
-    the decision JSON. Message order and image positions are retained so review
-    can reproduce what the provider received without exposing base64.
-    """
-
-    media: list[dict[str, Any]] = []
-
-    def clean(value: Any, path: tuple[Any, ...] = ()) -> Any:
-        if isinstance(value, str) and value.startswith("data:image/"):
-            decoded = _decode_image_data_url(value)
-            if decoded is None:
-                digest = hashlib.sha256(value.encode("utf-8")).hexdigest()
-                media.append(
-                    {
-                        "sha256": digest,
-                        "mime_type": None,
-                        "suffix": ".bin",
-                        "data": None,
-                        "request_path": list(path),
-                        "unavailable_reason": "invalid_image_data_url",
-                    }
-                )
-            else:
-                content, mime_type, suffix = decoded
-                digest = hashlib.sha256(content).hexdigest()
-                media.append(
-                    {
-                        "sha256": digest,
-                        "mime_type": mime_type,
-                        "suffix": suffix,
-                        "data": content,
-                        "request_path": list(path),
-                    }
-                )
-            return f"[provider_media sha256={digest}]"
-        if isinstance(value, list):
-            return [clean(item, (*path, index)) for index, item in enumerate(value)]
-        if isinstance(value, dict):
-            return {key: clean(item, (*path, key)) for key, item in value.items()}
-        return value
-
-    snapshot = clean(payload)
+def annotate_request_media(
+    payload: dict[str, Any], media: list[dict[str, Any]],
+) -> None:
+    """Add agent-owned temporal/frame labels to generic communication snapshots."""
     for item in media:
         item.update(_request_media_label(payload, item.get("request_path")))
-    return snapshot, media
 
 
 def _request_media_label(
@@ -428,50 +374,3 @@ def _request_media_label(
             if line.startswith(prefix):
                 result[key] = line.removeprefix(prefix)
     return result
-
-
-def _decode_image_data_url(value: str) -> tuple[bytes, str, str] | None:
-    try:
-        header, encoded = value.split(",", 1)
-    except ValueError:
-        return None
-    if ";base64" not in header.lower():
-        return None
-    mime_type = header[5:].split(";", 1)[0].lower()
-    suffix = {
-        "image/png": ".png",
-        "image/jpeg": ".jpg",
-        "image/jpg": ".jpg",
-        "image/webp": ".webp",
-    }.get(mime_type)
-    if suffix is None:
-        return None
-    try:
-        data = base64.b64decode(encoded, validate=True)
-    except (binascii.Error, ValueError):
-        return None
-    return (data, mime_type, suffix) if data else None
-
-
-def _public_response_snapshot(response: dict[str, Any]) -> dict[str, Any]:
-    """Persist only provider fields that are public protocol evidence."""
-
-    choices = response.get("choices")
-    choices = choices if isinstance(choices, list) else []
-    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
-    raw_message = choice.get("message")
-    raw_message = raw_message if isinstance(raw_message, dict) else {}
-    message: dict[str, Any] = {
-        "role": raw_message.get("role") or "assistant",
-        "content": _redact_provider_value(raw_message.get("content")),
-    }
-    if "tool_calls" in raw_message:
-        message["tool_calls"] = _redact_provider_value(raw_message.get("tool_calls"))
-    snapshot = {
-        "finish_reason": choice.get("finish_reason"),
-        "message": message,
-    }
-    usage = response.get("usage")
-    if isinstance(usage, dict):
-        snapshot["usage"] = _redact_provider_value(usage)
-    return snapshot

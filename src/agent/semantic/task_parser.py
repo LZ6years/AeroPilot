@@ -7,7 +7,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from src.agent.provider_http import request_openai_compatible_json
+from src.llm import DefaultModelClient, MessageBuilder, ModelClient, ModelRequest
 from src.agent.semantic.parser_contracts import (
     SemanticPlanStructure,
     merge_semantic_plan,
@@ -37,8 +37,12 @@ class TaskParser:
         *,
         phase_skill_resolver: Any | None = None,
         protocol_context: str | None = None,
+        client: ModelClient | None = None,
     ) -> None:
         self.model_config = model_config or load_model_config()
+        self.client = client if client is not None else DefaultModelClient(
+            self.model_config.to_provider_settings()
+        )
         self.mode = mode or self.model_config.task_parser_mode
         self.config_warnings: list[str] = []
         self.last_parse_trace: dict[str, Any] = {}
@@ -299,17 +303,17 @@ class TaskParser:
             return validator(_loads_json_object(second_content))
 
     def _request_model_content(self, messages: list[dict[str, str]]) -> str:
-        payload = {
-            "model": self.model_config.model_name,
-            "messages": messages,
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-        }
-        data = request_openai_compatible_json(
-            self.model_config,
-            payload,
-            error_prefix="Model task parser request failed",
+        builder = MessageBuilder().extend(messages)
+        request = ModelRequest(
+            messages=builder.build(),
+            parameters={
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+            },
         )
+        data = self.client.request(
+            request, error_prefix="Model task parser request failed",
+        ).data
         content = data["choices"][0]["message"]["content"]
         return str(content)
 

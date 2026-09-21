@@ -11,6 +11,7 @@ from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.metrics import summarize_metrics
 from evaluation.benchmarks.uav_flow.trajectory import target_local_from_case
 from evaluation.benchmarks.core.report_io import atomic_write_text
+from evaluation.benchmarks.core.trajectory_plots import plot_trajectory
 
 
 def create_eval_dir(output_root: str | Path, eval_id: str | None = None) -> Path:
@@ -253,25 +254,7 @@ def _plot_2d(
     path: Path,
     reference_points: list[list[float]] | None = None,
 ) -> None:
-    xs = [point[0] for point in points]
-    ys = [point[1] for point in points]
-    plt.figure(figsize=(8, 8))
-    if reference_points:
-        ref_xs = [point[0] for point in reference_points]
-        ref_ys = [point[1] for point in reference_points]
-        plt.plot(ref_ys, ref_xs, marker="x", linestyle="--", color="gray", label="reference_path")
-    plt.plot(ys, xs, marker="o", color="blue", label="uav_agent")
-    plt.scatter([ys[0]], [xs[0]], color="green", label="agent_start")
-    plt.scatter([ys[-1]], [xs[-1]], color="blue", marker="s", label="agent_end")
-    if target:
-        plt.scatter([target[1]], [target[0]], color="red", label="target")
-    plt.xlabel("Y local cm")
-    plt.ylabel("X local cm")
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(path)
-    plt.close()
+    plot_trajectory(plt, points, target, path, reference_points, dimension=2, unit="cm")
 
 
 def _plot_3d(
@@ -281,25 +264,4 @@ def _plot_3d(
     path: Path,
     reference_points: list[list[float]] | None = None,
 ) -> None:
-    fig = plt.figure(figsize=(9, 7))
-    ax = fig.add_subplot(111, projection="3d")
-    xs = [point[0] for point in points]
-    ys = [point[1] for point in points]
-    zs = [point[2] for point in points]
-    if reference_points:
-        ref_xs = [point[0] for point in reference_points]
-        ref_ys = [point[1] for point in reference_points]
-        ref_zs = [point[2] for point in reference_points]
-        ax.plot(ref_ys, ref_xs, ref_zs, marker="x", linestyle="--", color="gray", label="reference_path")
-    ax.plot(ys, xs, zs, marker="o", color="blue", label="uav_agent")
-    ax.scatter([ys[0]], [xs[0]], [zs[0]], color="green", label="agent_start")
-    ax.scatter([ys[-1]], [xs[-1]], [zs[-1]], color="blue", marker="s", label="agent_end")
-    if target:
-        ax.scatter([target[1]], [target[0]], [target[2]], color="red", label="target")
-    ax.set_xlabel("Y local cm")
-    ax.set_ylabel("X local cm")
-    ax.set_zlabel("Z local cm")
-    ax.legend()
-    plt.tight_layout()
-    plt.savefig(path)
-    plt.close()
+    plot_trajectory(plt, points, target, path, reference_points, dimension=3, unit="cm")

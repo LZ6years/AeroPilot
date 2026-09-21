@@ -688,8 +688,10 @@ class AerialVlnBenchmarkRunner:
                 ),
                 ReviewSection(
                     "Trajectory",
-                    "key_value",
+                    "trajectory_ned",
                     {
+                        "actual": metrics.get("trajectory_ned", []),
+                        "reference": metrics.get("reference_path_ned", []),
                         "coordinate_frame": "airsim_ned_m",
                         "executed_samples": len(
                             metrics.get("trajectory_ned", [])

@@ -41,7 +41,7 @@
     "segmentation_backend": "sam",
     "segmentation_model": "facebook/sam-vit-base",
     "device": "auto",
-    "box_threshold": 0.25,
+    "box_threshold": 0.4,
     "text_threshold": 0.25,
     "max_candidates": 5,
     "mask_erosion_ratio": 0.08,

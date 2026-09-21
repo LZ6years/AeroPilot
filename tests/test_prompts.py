@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import json
 
 from src.plugins.skills.semantic_criteria import SEMANTIC_CRITERIA_SKILL_SELECTION_PROMPT
 from src.plugins.skills.selection import SKILL_SELECTION_SYSTEM_PROMPT
@@ -32,9 +33,8 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     assert '"observe"' not in structure_shape
     assert '"continue_when"' not in structure_shape
     assert '"metrics"' not in structure_shape
-    assert "One phase is one local route leg" in structure
-    assert "It is not one primitive action" in structure
-    assert "Do not split only because movement mode or punctuation changes" in structure
+    assert "handoff" in structure and "local result at its exit" in structure
+    assert "Neither punctuation nor primitive action count" in structure
     assert "Never weaken a result into preparing" in structure
     assert "Create an orientation result only when" in structure
     assert '"done_when"' in criteria_shape
@@ -44,13 +44,13 @@ def test_task_parser_prompts_keep_structure_and_criteria_contracts_separate():
     assert '"intent"' not in criteria_shape
     assert '"task_goal"' not in criteria_shape
     assert "Preserve user-provided numeric requirements in natural language" in criteria
-    assert "configured evidence capabilities only to avoid an inherently" in criteria
-    assert "terminal obligations" in criteria
-    assert "continue_when is a concise missing or contradicted user result" in criteria
+    assert "shared terminal-state contract to done_when and continue_when" in criteria
+    assert "Use configured evidence capabilities only" in done_when
+    assert "continue_when briefly states" in done_when
     assert "Keep target-relative distance distinct from UAV self-motion" in criteria
     assert "minimum sufficient user result" in done_when
-    assert "Never split by evidence source" in done_when
-    assert "Split only when" in done_when
+    assert "evidence source or alternative proof" in done_when
+    assert "one can be" in " ".join(done_when.split()) and "another remains unmet" in " ".join(done_when.split())
     assert "invented axes" in done_when
     assert "Add a final heading only when" in done_when
     assert '"as judged by"' in done_when
@@ -163,14 +163,18 @@ def test_task_parser_keeps_general_spatial_roles_and_optional_agl_evidence():
     criteria = Path(
         "src/agent/semantic/prompts/task_parser_phase_criteria_system.txt"
     ).read_text(encoding="utf-8")
-    compact_criteria = " ".join(criteria.split())
+    terminal = Path(
+        "src/agent/semantic/prompts/done_when_generation_system.txt"
+    ).read_text(encoding="utf-8")
+    compact_terminal = " ".join(terminal.split())
 
     assert "Image bearing, target-relative position, route relation, and UAV" in structure
     assert "Create an orientation result only when" in structure
     assert "side or route relation alone" in structure
     assert "does not create one" in structure
-    assert "configured evidence capabilities only to avoid an inherently" in compact_criteria
-    assert "Capability names and anticipated observations must not appear" in compact_criteria
+    assert "Use configured evidence capabilities only" in compact_terminal
+    assert "Never copy capability names or anticipated observations" in compact_terminal
+    assert "shared terminal-state contract" in criteria
     assert "Do not output extra fields" in criteria
     assert "completion confidence" not in structure + criteria
     assert "single-frame" not in structure + criteria
@@ -401,3 +405,61 @@ def test_semantic_criteria_skill_selection_has_no_hard_count_or_reference_reques
     assert "requested_references" not in prompt
     assert "at most" not in prompt
     assert "Default to 0-1" not in prompt
+
+
+def test_route_handoffs_and_strategy_continuity_are_prompt_contracts():
+    root = Path("src/agent")
+    structure = (root / "semantic/prompts/task_parser_structure_system.txt").read_text(encoding="utf-8")
+    terminal = (root / "semantic/prompts/done_when_generation_system.txt").read_text(encoding="utf-8")
+    strategy = (root / "planning/prompts/agent_tool_loop_system.txt").read_text(encoding="utf-8")
+    assert "handoff" in structure and "does not request a pause" in structure
+    assert "independently required results" in " ".join(terminal.split())
+    assert "Do not add arrival" in terminal
+    assert "including the completed prefix" in strategy
+    assert "hypotheses, not observations" in strategy
+    assert "new evidence refutes it" in strategy
+
+
+def test_exit_state_prompts_preserve_process_without_action_receipts():
+    """Lock prompt responsibilities, not the model's semantic success rate."""
+    root = Path("src/agent/semantic/prompts")
+    structure = " ".join((root / "task_parser_structure_system.txt").read_text(encoding="utf-8").split())
+    terminal = " ".join((root / "done_when_generation_system.txt").read_text(encoding="utf-8").split())
+    criteria = " ".join((root / "task_parser_phase_criteria_system.txt").read_text(encoding="utf-8").split())
+    assert "same exit result" in structure
+    assert "without automatically creating a separate takeoff phase" in structure
+    assert "Neither punctuation nor primitive action count" in structure
+    assert "subsequent progress can still be incomplete" not in structure
+    assert 'each verb into a separate "has done" item' in terminal
+    assert "Retain necessary process constraints" in terminal
+    assert "do not ban a grammatical tense" in terminal
+    assert "Remain true after FlyAgent stops acting" not in terminal
+    assert "shared terminal-state contract to done_when and continue_when" in criteria
+    assert "import another phase's results" in criteria
+
+
+def test_parser_examples_are_separate_from_diagnostic_instructions():
+    root = Path("src/agent/semantic/prompts")
+    prompts = "\n".join((root / name).read_text(encoding="utf-8") for name in (
+        "task_parser_structure_system.txt", "done_when_generation_system.txt",
+        "task_parser_phase_criteria_system.txt"))
+    rows = json.loads(Path("tests/manual/phase_prompt_comparison_instructions.json").read_text(encoding="utf-8"))
+    for row in rows:
+        assert row["instruction"] not in prompts
+        assert row["id"] not in prompts
+    assert "tarp" not in prompts
+
+
+def test_criteria_assembler_delegates_quality_rules_to_shared_prompt():
+    """Keep JSON assembly from growing a second completion-quality policy."""
+    root = Path("src/agent/semantic/prompts")
+    criteria = (root / "task_parser_phase_criteria_system.txt").read_text(encoding="utf-8")
+    terminal = (root / "done_when_generation_system.txt").read_text(encoding="utf-8")
+    structure = (root / "task_parser_structure_system.txt").read_text(encoding="utf-8")
+    assert "Contrast examples" in structure
+    assert "Contrast examples" not in terminal + criteria
+    for shared_rule in ("minimum sufficient", "as judged by", "Retain necessary process constraints"):
+        assert shared_rule in terminal
+        assert shared_rule not in criteria
+    assert "Copy index and name exactly" in criteria
+    assert "import another phase's results" in criteria

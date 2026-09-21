@@ -154,9 +154,9 @@ def test_native_planner_transport_retry_is_one_model_round_and_not_transcript(
         return outcome
 
     monkeypatch.setattr(
-        "src.agent.provider_http.urllib.request.urlopen", fake_urlopen
+        "src.llm.transport.urllib.request.urlopen", fake_urlopen
     )
-    monkeypatch.setattr("src.agent.provider_http.time.sleep", sleeps.append)
+    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
     planner = ModelActionPlanner(
         ModelConfig(
             model_name="stub",

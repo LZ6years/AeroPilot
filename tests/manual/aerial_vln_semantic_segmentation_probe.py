@@ -8,11 +8,24 @@ medium, and high route-difficulty examples.
 
 Generated files live under ``tests/manual_outputs`` and are ignored by git.
 They are human diagnostic artifacts, not benchmark scores or stable fixtures.
+
+For a paired prompt experiment, supply --instructions-file (ordered objects
+with id/instruction/protocol), --before-prompts (the three pre-edit text files)
+and a new --output-dir. This mode bypasses dataset loading and keyword review
+flags, records public parser exchanges, and stops on the first request failure.
+Add --structure-only to stop after the production structure contract, without
+skill selection or criteria generation. This is a probe mode, not a new
+production parser mode. The two criteria prompt snapshots must remain equal.
+Example:
+  python tests/manual/aerial_vln_semantic_segmentation_probe.py --env-path .env \
+    --instructions-file tests/manual/phase_prompt_comparison_instructions.json \
+    --before-prompts BEFORE_DIRECTORY --output-dir NEW_DIRECTORY
 """
 
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import html
 import json
@@ -33,6 +46,7 @@ from evaluation.benchmarks.aerial_vln.protocol import (
     AERIAL_VLN_PROTOCOL,
 )
 from src.agent.semantic.task_parser import TaskParser
+from src.agent.semantic.parser_contracts import SemanticPlanStructure
 from src.runtime.configs.model_config import ModelConfig, load_model_config
 
 
@@ -86,15 +100,54 @@ _RESULT_FAMILY_TERMS: dict[str, tuple[str, ...]] = {
 class RecordingTaskParser(TaskParser):
     """Record validated parser contracts without changing parser behavior."""
 
-    def __init__(self, model_config: ModelConfig, instruction: str) -> None:
+    def __init__(self, model_config: ModelConfig, instruction: str, *,
+                 protocol_context: str = AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
+                 prompts: dict[str, str] | None = None) -> None:
         super().__init__(
             mode="model",
             model_config=model_config,
-            protocol_context=AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
+            protocol_context=protocol_context,
         )
+        for attribute, content in (prompts or {}).items():
+            if attribute not in PROMPT_FILES:
+                raise ValueError(f"Unknown prompt slot: {attribute}")
+            setattr(self, attribute, content)
         self._diagnostic_instruction = instruction
         self.contract_calls: list[dict[str, Any]] = []
         self.model_input_checks: list[dict[str, Any]] = []
+        self.exchanges: list[dict[str, Any]] = []
+        self.stop_on_selection_failure = prompts is not None
+
+    def parse_structure(self, instruction: str) -> SemanticPlanStructure:
+        """Exercise only the existing first-stage contract, including repairs."""
+        clean_instruction = instruction.strip()
+        if not clean_instruction:
+            raise ValueError("instruction must not be empty")
+        return self._call_json_contract(
+            self._build_structure_messages(clean_instruction),
+            SemanticPlanStructure.from_dict,
+            contract_name="semantic structure",
+        )
+
+    def _resolve_phase_guidance(self, instruction, structure, phase):
+        guidance, trace = super()._resolve_phase_guidance(instruction, structure, phase)
+        if self.stop_on_selection_failure and trace.get("selection_status") in {"model_error", "resolver_error"}:
+            self.contract_calls.append({"stage": "skill_selection", "status": "error", "trace": trace})
+            raise RuntimeError("Parser skill selection failed; see recorded contract trace")
+        return guidance, trace
+
+    def _request_model_content(self, messages):
+        # Capture only public text contracts, never provider-private reasoning
+        # or HTTP headers. Preserve ordinary contract-repair attempts as well.
+        exchange = {"messages": copy.deepcopy(messages)}
+        self.exchanges.append(exchange)
+        try:
+            content = super()._request_model_content(messages)
+            exchange["content"] = content
+            return content
+        except Exception as exc:
+            exchange["error"] = f"{type(exc).__name__}: {exc}"
+            raise
 
     def _call_json_contract(
         self,
@@ -150,6 +203,12 @@ class RecordingTaskParser(TaskParser):
 
 def main(argv: list[str] | None = None) -> int:
     args = _argument_parser().parse_args(argv)
+    if args.instructions_file:
+        return run_comparison(args)
+    if args.structure_only:
+        raise ValueError("--structure-only requires --instructions-file and --before-prompts")
+    if args.before_prompts:
+        raise ValueError("--before-prompts requires --instructions-file")
     model_config = load_model_config(args.env_path)
     _validate_model_config(model_config)
     cases, provenance = load_aerial_vln_dataset(
@@ -560,12 +619,149 @@ def _argument_parser() -> argparse.ArgumentParser:
         default=".external_refs/AirVLN/DATA/data/aerialvln-s",
     )
     parser.add_argument("--env-path", default=".env")
+    parser.add_argument("--instructions-file", type=Path,
+                        help="Ordered instruction-only JSON list; compare before/current prompts without loading the dataset.")
+    parser.add_argument("--before-prompts", type=Path,
+                        help="Directory containing the three pre-edit prompt snapshots; required for comparison.")
+    parser.add_argument("--structure-only", action="store_true",
+                        help="Explicit-list comparison only: no skill selection or completion criteria.")
     parser.add_argument(
         "--output-dir",
         default=None,
         help="Optional exact output directory; defaults to a timestamped manual_outputs path.",
     )
     return parser
+
+
+# The comparison path deliberately bypasses legacy dataset loading and keyword
+# review flags. This is an experiment adapter, not a production parser mode.
+PROMPT_FILES = {
+    "structure_prompt": "task_parser_structure_system.txt",
+    "done_when_rules": "done_when_generation_system.txt",
+    "criteria_prompt": "task_parser_phase_criteria_system.txt",
+}
+
+
+def load_instruction_list(path: Path) -> list[dict[str, str]]:
+    rows = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(rows, list) or not rows:
+        raise ValueError("Expected a non-empty ordered instruction list")
+    seen, result = set(), []
+    for row in rows:
+        if not isinstance(row, dict) or set(row) != {"id", "instruction", "protocol"}:
+            raise ValueError("Each row contains only id, instruction, protocol")
+        if any(not isinstance(v, str) or not v.strip() for v in row.values()):
+            raise ValueError("Instruction fields must be non-empty strings")
+        if row["id"] in seen or row["protocol"] not in {"aerial_vln", "generic"}:
+            raise ValueError("Duplicate ID or unknown protocol")
+        seen.add(row["id"])
+        result.append(dict(row))
+    return result
+
+
+def _redacted(value: Any, api_key: str) -> Any:
+    """Defense in depth for provider error strings; no config object is saved."""
+    if isinstance(value, str):
+        return value.replace(api_key, "[REDACTED]") if api_key else value
+    if isinstance(value, dict):
+        return {k: _redacted(v, api_key) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redacted(v, api_key) for v in value]
+    return value
+
+
+def _comparison_html(rows, results, mode="full_parse"):
+    """Render structures as structures, never as synthetic completed plans."""
+    structure_only = mode == "structure_only"
+    cards = []
+    for row in rows:
+        columns = []
+        for version in ("before", "after"):
+            item = next((r for r in results if r["id"] == row["id"] and r["version"] == version), None)
+            if item is None:
+                body = "Not run"
+            elif item["status"] != "ok":
+                body = f'<pre class="error">{_e(item.get("error"))}</pre>'
+            else:
+                parsed = item["structure" if structure_only else "plan"]
+                task_goal = parsed.get("task_goal", {})
+                body = ("<h4>Task goal</h4><pre>"
+                        + _e(json.dumps(task_goal, ensure_ascii=False, indent=2))
+                        + "</pre><ol>" + "".join(
+                    f'<li><strong>{_e(p["name"])}</strong><p>{_e(p["goal"])}</p>'
+                    + ("" if structure_only else _list_html(p["done_when"])) + "</li>"
+                    for p in parsed["phases"]) + "</ol>")
+            link = f'<a href="cases/{item["artifact"]}">Raw request/result</a>' if item else ""
+            columns.append(f'<article class="revision"><h3>{version}</h3>{body}{link}</article>')
+        cards.append(f'<section class="case"><h2>{_e(row["id"])}</h2>'
+                     f'<p class="instruction">{_e(row["instruction"])}</p>'
+                     '<div class="revisions">' + ''.join(columns) + '</div></section>')
+    title = "Phase structure only" if structure_only else "Phase + done_when"
+    return ('<!doctype html><html><meta charset="utf-8"><title>Parser prompt comparison</title>'
+            f'<style>{_STYLE}</style><h1>{title} · before / after</h1>'
+            '<p>Parser-only model outputs. No simulator, semantic grading or navigation result. '
+            'Each version is attempted once; phase count is not a success metric.</p>'
+            + ''.join(cards) + '</html>')
+
+
+def run_comparison(args) -> int:
+    """Run paired parses, persisting every result before starting the next one."""
+    if not args.before_prompts or not args.output_dir:
+        raise ValueError("Comparison requires --before-prompts and a new --output-dir")
+    mode = "structure_only" if getattr(args, "structure_only", False) else "full_parse"
+    result_key = "structure" if mode == "structure_only" else "plan"
+    rows = load_instruction_list(args.instructions_file)
+    output = Path(args.output_dir)
+    if output.exists():
+        raise ValueError("Comparison output must be new; never overwrite or resume silently")
+    config = load_model_config(args.env_path)
+    _validate_model_config(config)
+    current = REPO_ROOT / "src/agent/semantic/prompts"
+    versions = {name: {slot: (directory / filename).read_text(encoding="utf-8").strip()
+                       for slot, filename in PROMPT_FILES.items()}
+                for name, directory in (("before", args.before_prompts), ("after", current))}
+    if mode == "structure_only":
+        for slot in ("done_when_rules", "criteria_prompt"):
+            if versions["before"][slot] != versions["after"][slot]:
+                raise ValueError(f"Structure-only comparison requires unchanged {slot}")
+    output.mkdir(parents=True)
+    _write_json(output / "instructions.json", rows)
+    _write_json(output / "prompts.json", {
+        version: {slot: {"text": text, "sha256": _sha256_text(text)} for slot, text in prompts.items()}
+        for version, prompts in versions.items()})
+    results, aborted = [], False
+    for index, row in enumerate(rows, 1):
+        for version, prompts in versions.items():
+            print(f'[{index}/{len(rows)}] {version} {row["id"]}', flush=True)
+            parser = RecordingTaskParser(config, row["instruction"], prompts=prompts,
+                protocol_context=AERIAL_VLN_PARSER_PROTOCOL_CONTEXT if row["protocol"] == "aerial_vln" else "")
+            item = {**row, "mode": mode, "version": version, "artifact": f"{index:02d}_{version}.json"}
+            started = time.perf_counter()
+            try:
+                parsed = (parser.parse_structure(row["instruction"]) if mode == "structure_only"
+                          else parser.parse(row["instruction"]).plan)
+                item.update(status="ok", **{result_key: parsed.to_dict()})
+            except Exception as exc:
+                item.update(status="error", error=f"{type(exc).__name__}: {exc}")
+                aborted = True
+            item.update(duration_sec=round(time.perf_counter() - started, 3),
+                        exchanges=parser.exchanges, contracts=parser.contract_calls,
+                        parser_trace=parser.last_parse_trace)
+            item = _redacted(item, config.api_key)
+            _write_json(output / "cases" / item["artifact"], item)
+            results.append(item)
+            _write_json(output / "summary.json", {
+                "status": "aborted" if aborted else "running",
+                "mode": mode, "model": config.redacted_summary(), "temperature": 0,
+                "requested_pairs": len(rows), "results": results})
+            (output / "review.html").write_text(_comparison_html(rows, results, mode), encoding="utf-8")
+            print(f'  {item["status"]}: {len(item.get(result_key, {}).get("phases", []))} phases', flush=True)
+            if aborted:
+                return 1
+    summary = json.loads((output / "summary.json").read_text(encoding="utf-8"))
+    summary["status"] = "completed"
+    _write_json(output / "summary.json", summary)
+    return 0
 
 
 _STYLE = """

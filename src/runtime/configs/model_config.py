@@ -5,6 +5,10 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.llm.contracts import ProviderSettings
 
 
 @dataclass(frozen=True)
@@ -84,13 +88,22 @@ class ModelConfig:
             "action_planner_prompt_path": self.action_planner_prompt_path,
         }
 
+    def to_provider_settings(self) -> ProviderSettings:
+        """Pass only communication settings to the business-independent client."""
+        from src.llm.contracts import ProviderSettings
+
+        return ProviderSettings(
+            provider=self.provider, model_name=self.model_name, api_key=self.api_key,
+            base_url=self.base_url, timeout_sec=self.timeout_sec,
+            provider_timeout_retries=self.provider_timeout_retries,
+            provider_connection_retries=self.provider_connection_retries,
+        )
+
     def chat_completions_url(self) -> str:
-        base_url = self.base_url.rstrip("/")
-        if not base_url:
-            return "https://api.openai.com/v1/chat/completions"
-        if base_url.endswith("/chat/completions"):
-            return base_url
-        return f"{base_url}/chat/completions"
+        """Compatibility convenience; the provider adapter owns URL policy."""
+        from src.llm.providers.openai_compatible import chat_completions_url
+
+        return chat_completions_url(self.base_url)
 
 
 def load_model_config(env_path: str | Path = ".env") -> ModelConfig:

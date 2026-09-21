@@ -12,7 +12,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-from src.agent.provider_http import request_openai_compatible_json
+from src.llm import DefaultModelClient, MessageBuilder, ModelClient, ModelRequest
 from src.agent.semantic.task_parser import (
     DEFAULT_AGENT_RULES_PATH,
     DEFAULT_DONE_WHEN_RULES_PATH,
@@ -37,11 +37,16 @@ class SemanticPlanUpdater:
         model_config: ModelConfig,
         prompt_path: str | None = None,
         agent_rules_path: str | None = None,
+        *,
+        client: ModelClient | None = None,
     ) -> None:
         # Model configuration belongs to the application composition root.
         # Reading .env here would make background updates depend on cwd, which
         # differs for Git worktrees and remote runners.
         self.model_config = model_config
+        self.client = client if client is not None else DefaultModelClient(
+            self.model_config.to_provider_settings()
+        )
         self.agent_rules = self._load_agent_rules(agent_rules_path)
         self.user_preferences = self._load_required_text(
             DEFAULT_USER_PREFERENCES_PATH,
@@ -67,17 +72,17 @@ class SemanticPlanUpdater:
         )
 
     def _call_openai_compatible(self, context: dict[str, Any]) -> dict[str, Any]:
-        payload = {
-            "model": self.model_config.model_name,
-            "messages": self._build_messages(context),
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-        }
-        data = request_openai_compatible_json(
-            self.model_config,
-            payload,
-            error_prefix="Semantic plan updater request failed",
+        builder = MessageBuilder().extend(self._build_messages(context))
+        request = ModelRequest(
+            messages=builder.build(),
+            parameters={
+                "temperature": 0,
+                "response_format": {"type": "json_object"},
+            },
         )
+        data = self.client.request(
+            request, error_prefix="Semantic plan updater request failed",
+        ).data
         content = data["choices"][0]["message"]["content"]
         return _loads_json_object(content)
 

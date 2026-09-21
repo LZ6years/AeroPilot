@@ -21,6 +21,21 @@ def _write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
 
 
+def test_compact_report_uses_timeline_and_durable_audit(tmp_path):
+    page = tmp_path / "review.html"
+    page.write_text('<section class="phase-timeline"></section><a href="audit.json">Audit</a>', encoding="utf-8")
+    violations = []
+    MODULE._audit_portable_html(tmp_path, {}, violations, "case")
+    assert [v.code for v in violations] == ["review_transcript_section_missing"]
+    _write_json(tmp_path / "audit.json", {"agent_transcript": []})
+    violations = []
+    MODULE._audit_portable_html(tmp_path, {}, violations, "case")
+    assert violations == []
+    page.write_text('<a href="audit.json">Audit only</a>', encoding="utf-8")
+    MODULE._audit_portable_html(tmp_path, {}, violations, "case")
+    assert [v.code for v in violations] == ["review_transcript_section_missing"]
+
+
 def _valid_eval(tmp_path: Path) -> Path:
     root = tmp_path / "eval"
     case_dir = root / "cases" / "case-1"

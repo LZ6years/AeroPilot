@@ -174,7 +174,7 @@ def test_dispatcher_passes_private_settings_only_to_handler(monkeypatch):
         _capability_registry().skill_capability_catalog.capabilities[0].settings[
             "box_threshold"
         ]
-        == 0.25
+        == 0.4
     )
 
 

@@ -34,9 +34,10 @@ class ReviewSection:
     title: str
     kind: str
     payload: Any
+    primary: bool = False
 
     def __post_init__(self) -> None:
-        if self.kind not in {"text", "key_value", "table", "image_group"}:
+        if self.kind not in {"text", "key_value", "table", "image_group", "trajectory_ned"}:
             raise ValueError(f"Unsupported review section kind: {self.kind}")
 
 
@@ -75,6 +76,10 @@ class BenchmarkSummaryReview:
 class BenchmarkReviewRenderer:
     """Write shared review CSS plus evaluation and case HTML pages."""
 
+    def __init__(self, *, detailed_audit: bool = False) -> None:
+        # Full captured requests are opt-in: collapsed JSON still costs bytes.
+        self.detailed_audit = detailed_audit
+
     def write_case(
         self,
         eval_dir: str | Path,
@@ -86,7 +91,7 @@ class BenchmarkReviewRenderer:
         style_path = self._write_style(root)
         case_dir = root / "cases" / case.case_id
         case_dir.mkdir(parents=True, exist_ok=True)
-        case_html = case_dir / "review.html"
+        case_html = case_dir / ("audit_review.html" if self.detailed_audit else "review.html")
         atomic_write_text(
             case_html,
             self._case_html(case, case_dir, style_path),
@@ -188,6 +193,25 @@ class BenchmarkReviewRenderer:
             case.audit,
             case_dir,
         )
+        if not self.detailed_audit:
+            links = ' · '.join(f'<a href="{name}">{name}</a>' for name in
+                               ("audit.json", "trace.json", "metrics.json", "case_result.json")
+                               if (case_dir / name).is_file())
+            detail = case_dir / "audit_review.html"
+            if detail.is_file():
+                links += ' · <a href="audit_review.html">Detailed audit</a>'
+            return _document(
+                title=f"{case.benchmark_name}: {case.case_id}",
+                style_href=_relative_href(case_dir, style_path),
+                body=('<p><a href="../../review.html">← Evaluation index</a></p>'
+                      f'<h1>{_e(case.case_id)}</h1><p class="instruction">{_e(case.instruction)}</p>'
+                      + _compact_outcome(case)
+                      + _review_alerts(case, case_dir)
+                      + ''.join(_section_html(s, case_dir) for s in case.sections if s.primary or s.kind == "trajectory_ned")
+                      + _initial_plan_review(case.audit)
+                      + _phase_decision_review(case.audit, case.frame_assets, case_dir, planner_input_assets)
+                      + f'<footer>Raw audit files: {links}</footer>'),
+            )
         gallery = _frame_gallery(
             case.audit,
             case.frame_assets,
@@ -249,6 +273,34 @@ class BenchmarkReviewRenderer:
         )
 
 
+def _review_alerts(case: BenchmarkCaseReview, case_dir: Path) -> str:
+    """Keep failures visible without re-embedding full tracking/debug records."""
+    messages = [str(item) for item in case.audit.diagnostics]
+    tracking = _dict(case.metrics.get("backend_action_tracking"))
+    gate_path = case_dir / "manual_gate.json"
+    gate = {}
+    if gate_path.is_file():
+        try:
+            gate = json.loads(gate_path.read_text(encoding="utf-8"))
+            tracking = _dict(gate.get("tracking")) or tracking
+        except (ValueError, OSError) as exc:
+            messages.append(f"Gate artifact unreadable: {exc}")
+    if gate.get("passed") is False:
+        messages.append("Per-case audit gate FAILED; see manual_gate.json")
+    if case.outcome.get("cleanup_errors"):
+        messages.append(f"Cleanup errors: {case.outcome['cleanup_errors']}")
+    if tracking:
+        for key in ("trace_valid", "tracking_valid", "all_observed_within_tolerance"):
+            if tracking.get(key) is False:
+                messages.append(f"{key}=false; tracking requires review")
+    status = _key_value_table({k: tracking.get(k) for k in
+        ("trace_valid", "tracking_valid", "all_observed_within_tolerance",
+         "max_position_error_m", "max_abs_yaw_error_deg")}) if tracking else ""
+    return (('<section class="review-alerts"><h2>Audit / Tracking</h2>' + status
+             + ''.join(f'<p class="transcript-feedback">{_e(m)}</p>' for m in messages)
+             + '</section>') if messages or tracking else '')
+
+
 def _compact_outcome(case: BenchmarkCaseReview) -> str:
     """Keep result categories distinct without a screen of repeated key tables."""
     def line(values):
@@ -260,7 +312,7 @@ def _compact_outcome(case: BenchmarkCaseReview) -> str:
             + line({k: case.outcome.get(k) for k in outcome_keys}) + '</p>'
             + '<p>Benchmark metrics (independent of self-report): '
             + line({k: case.metrics.get(k) for k in metric_keys}) + '</p>'
-            + _json_details({"outcome": case.outcome, "metrics": case.metrics}, "All result fields") + '</section>')
+            + '</section>')
 
 
 def _initial_plan_review(audit: BenchmarkAuditLog) -> str:
@@ -284,7 +336,7 @@ def _initial_plan_review(audit: BenchmarkAuditLog) -> str:
     return ('<section><h2>Initial task plan</h2><ol>' + ''.join(cards) + '</ol>'
             + _json_details(snapshot.get("protocol_context"), "Recorded episode interpretation rules",
                             empty_message="No additional episode interpretation rules recorded.")
-            + _json_details(snapshot, "Immutable initial plan snapshot") + '</section>')
+            + '</section>')
 
 
 def _phase_decision_review(audit, frame_assets, case_dir, input_assets) -> str:
@@ -305,7 +357,7 @@ def _phase_decision_review(audit, frame_assets, case_dir, input_assets) -> str:
     parts = ['<section class="phase-timeline"><h2>Phase execution timeline</h2>']
     for phase_key, records in groups.items():
         phase = _dict(_dict(records[0].get("model_context")).get("current_phase"))
-        parts.append(f'<section><h3>Phase {_e(phase_key)}</h3><p>{_e(phase.get("goal"))}</p>')
+        parts.append(f'<section class="phase-group"><h3>Phase {_e(phase_key)}</h3><p>{_e(phase.get("goal"))}</p>')
         parts.append(_json_details(phase.get("done_when"), "Observed completion conditions at phase entry"))
         for record in records:
             parts.append(_compact_decision(record, audit, frame_assets, case_dir,
@@ -314,7 +366,9 @@ def _phase_decision_review(audit, frame_assets, case_dir, input_assets) -> str:
     if not groups:
         parts.append('<p class="empty">No ID-linked decisions available; see full audit.</p>')
     if ungrouped:
-        parts.append(_json_details(ungrouped, "Audit anomaly: ungrouped or duplicate-ID decisions"))
+        parts.append(_json_details([{"decision_id": r.get("decision_id"), "phase_key": r.get("phase_key"),
+                                    "path": r.get("path")} for r in ungrouped],
+                                   "Audit anomaly: ungrouped or duplicate-ID decisions; see audit.json"))
     linked_calls = {str(c.get("tool_call_id")) for r in audit.planner_debug
                     for model_round in r.get("model_rounds", [])
                     for c in _dict(model_round.get("canonical_turn")).get("tool_calls", [])}
@@ -341,8 +395,7 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
         parts.append(f'<p class="empty">Captured CURRENT image unavailable: {_e(obs)}. No substitute.</p>')
     rgb = [a for a in frame_assets if a.modality == "rgb" and a.observation_id == obs and a.display_path]
     if rgb:
-        parts.append('<details><summary>Original RGB · sensor audit, not a replacement request</summary>'
-                     + _image_group([{"path": rgb[0].display_path, "label": str(obs)}], case_dir) + '</details>')
+        parts.append(f'<p><a href="{_relative_href(case_dir, Path(rgb[0].display_path))}">Original RGB · sensor audit</a></p>')
     context = _dict(record.get("model_context"))
     prior = _dict(context.get("phase_strategy"))
     def stage_label(strategy):
@@ -357,11 +410,18 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
     if applied:
         strategy = _dict(_dict(record.get("coupled_plan")).get("phase_strategy"))
         parts.append('<p>Recorded active stage: ' + _e(stage_label(strategy)) + '</p>')
-        changed = applied[-1].get("update_kind") not in {"keep", "unchanged", "continue"}
-        parts.append(('<details open>' if changed else '<details>')
-                     + '<summary>Recorded strategy change (not completion evidence)</summary>'
-                     + _key_value_table({"change": applied[-1].get("update_kind"), "stages": strategy.get("stages")})
-                     + _json_details(applied, "Application events") + '</details>')
+        kind = applied[-1].get("update_kind")
+        stages = strategy.get("stages") or []
+        active = strategy.get("active_stage", 0)
+        active = active if isinstance(active, int) and 0 <= active <= len(stages) else 0
+        parts.append(f'<p>Strategy update: {_e(kind)} · version {_e(applied[-1].get("revision"))} (not a replan count)</p>')
+        if kind in {"initialize", "replan"}:
+            parts.append('<div class="strategy-change">' + _key_value_table({
+                "before": prior.get("stages"), "after": stages,
+                "reason": strategy.get("reason")}) + '</div>')
+        else:
+            parts.append('<p class="muted">Completed prefix: '
+                         + _e(' → '.join(str(s) for s in stages[:active] if isinstance(active, int))) + '</p>')
     for index, model_round in enumerate(rounds):
         canonical = _dict(model_round.get("canonical_turn"))
         outcome = _dict(model_round.get("runtime_outcome"))
@@ -369,8 +429,10 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
         # Non-final rounds (including corrections) stay inside this decision.
         if index < len(rounds) - 1:
             parts.append(f'<details><summary>Round {_e(model_round.get("round_index"))} · {_e(outcome.get("status"))}</summary>')
-        parts.append(f'<p>{_e(intent[:280])}{"…" if len(intent) > 280 else ""}</p>')
-        parts.append(_json_details({"source": canonical.get("public_intent_source"), "text": intent}, "Full public intent"))
+        parts.append(f'<p>{_e(intent[:180])}{"…" if len(intent) > 180 else ""}</p>')
+        parts.append('<details class="intent-detail"><summary>Full public intent · '
+                     + _e(canonical.get("public_intent_source")) + '</summary><p class="intent-text">'
+                     + _e(intent) + '</p></details>')
         if outcome.get("feedback"):
             parts.append(_json_details(outcome["feedback"], "Original protocol feedback"))
         for call in canonical.get("tool_calls", []):
@@ -383,8 +445,8 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
             if call.get("tool_name") == "runtime.commit_phase_turn":
                 parts.append(_record_table(_dict(args.get("completion_assessment")).get("done_when") or [],
                                            ("index", "status", "evidence")))
-                parts.append(_json_details(args, "Completion assessment and proposed local strategy"
-                                           + (" · 未应用" if result.get("status") != "ok" else "")))
+                if result.get("status") != "ok" and args.get("phase_strategy"):
+                    parts.append(_json_details(args["phase_strategy"], "Proposed strategy · 未应用"))
             else:
                 parts.append(_key_value_table(args))
             diagnosis = _dict(_dict(result.get("data")).get("rejection"))
@@ -405,9 +467,11 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
             if "candidates" in data:
                 parts.append(_record_table(data.get("candidates") or [],
                                            ("candidate_id", "label", "distance_m", "distance_status")))
-            parts.append(_json_details(result, "Terminal ToolResult / internal audit"))
+            if result.get("message") and result.get("status") == "ok":
+                parts.append(f'<p class="muted">{_e(str(result["message"])[:180])}</p>')
+        call_ids = {c.get("tool_call_id") for c in canonical.get("tool_calls", [])}
         evidence = [a for a in assets if a.get("timeline_role") == "TOOL_EVIDENCE"
-                    and a.get("round_index") == model_round.get("round_index")]
+                    and a.get("tool_call_id") in call_ids]
         if evidence:
             parts.append('<details><summary>Captured tool candidate images</summary>'
                          + _model_input_images(evidence, case_dir) + '</details>')
@@ -428,7 +492,18 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
 
 
 def _section_html(section: ReviewSection, case_dir: Path) -> str:
-    if section.kind == "text":
+    if section.kind == "trajectory_ned":
+        from evaluation.benchmarks.core.trajectory_plots import write_ned_comparison
+        plots = write_ned_comparison(case_dir, section.payload.get("actual", []), section.payload.get("reference", []))
+        if plots["status"] == "ok":
+            content = _image_group([{"path": plots["path_2d"], "label": "Actual / reference · 2D · metres"}], case_dir)
+            content += '<details><summary>3D trajectory · positive-up display</summary>' + _image_group(
+                [{"path": plots["path_3d"], "label": "Actual / reference · 3D · metres"}], case_dir) + '</details>'
+            if not plots["has_reference"]:
+                content += '<p class="empty">Reference trajectory unavailable.</p>'
+        else:
+            content = f'<p class="empty">Trajectory unavailable: {_e(plots["reason"])}</p>'
+    elif section.kind == "text":
         content = f"<p>{_e(section.payload)}</p>"
     elif section.kind == "key_value":
         content = _key_value_table(section.payload)
@@ -1396,6 +1471,7 @@ def _materialize_provider_round_assets(
                 "timeline_role": item.get("timeline_role"),
                 "observation_id": item.get("observation_id"),
                 "frame_id": item.get("frame_id"),
+                "tool_call_id": item.get("tool_call_id"),
                 "scene_size": item.get("scene_size"),
                 "display_size": item.get("display_size"),
                 "scene_bounds_in_display_pixels": item.get(
@@ -2730,6 +2806,15 @@ def _e(value: Any) -> str:
 
 
 _STYLE = """
+.phase-group { border-left: 5px solid #346a9a; padding: 16px; margin: 28px 0; background: #f2f6fa; }
+.phase-group > h3 { position: sticky; top: 0; background: #e5edf5; padding: 12px; z-index: 1; }
+.phase-group article { margin: 18px 0 18px 12px; background: white; padding: 16px; }
+.phase-group details { border-left: 3px solid #c5d3e0; padding: 8px 12px; background: #f7f9fc; }
+.phase-group details[open] { border-left-color: #567b9c; }
+summary { cursor: pointer; font-weight: 600; }
+.intent-text { white-space: pre-wrap; }
+.strategy-change { background: #fff6dd; padding: 10px; }
+footer { padding: 20px; border-top: 1px solid #ccd; }
 :root { color-scheme: light; font-family: Inter, Segoe UI, sans-serif; }
 body { margin: 0; background: #f5f7fb; color: #172033; }
 main { max-width: 1440px; margin: auto; padding: 28px; }

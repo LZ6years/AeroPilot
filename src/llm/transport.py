@@ -1,16 +1,12 @@
-"""Shared HTTP transport for OpenAI-compatible model requests.
+"""Byte-oriented HTTP transport with bounded retries and safe attempt metadata.
 
-The semantic parser, native ToolCall planner, semantic-plan updater, and model
-skill selector share this transport policy.  Capacity responses and narrowly
-classified transient connection failures are retried here, before any model
-response can enter the agent transcript or execute a tool.  Provider response
-contracts remain owned by the callers and are never repaired by this module.
+The caller supplies headers and an already serialized body. No message roles,
+model response decoding, conversation state or business contracts belong here.
 """
 
 from __future__ import annotations
 
 import http.client
-import json
 import ssl
 import time
 import urllib.error
@@ -19,7 +15,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from typing import Any
 
-from src.runtime.configs.model_config import ModelConfig
+from src.llm.contracts import ProviderRequestError
 
 
 TRANSIENT_HTTP_STATUSES = frozenset({429, 502, 503, 504})
@@ -27,32 +23,11 @@ RETRY_DELAYS_SEC = (2.0, 4.0, 8.0, 16.0)
 MAX_RETRY_AFTER_SEC = 60.0
 
 
-class ProviderRequestError(RuntimeError):
-    """A provider transport or HTTP failure with safe classification data."""
-
-    def __init__(
-        self,
-        message: str,
-        *,
-        category: str,
-        attempts: int,
-        retry_exhausted: bool,
-        status_code: int | None = None,
-    ) -> None:
-        super().__init__(message)
-        self.category = category
-        self.attempts = attempts
-        self.retry_exhausted = retry_exhausted
-        self.status_code = status_code
-
-
-def request_openai_compatible_json(
-    model_config: ModelConfig,
-    payload: dict[str, Any],
-    *,
-    error_prefix: str,
+def request_bytes(
+    url: str, *, headers: dict[str, str], body: bytes, timeout_sec: float,
+    timeout_retries: int, connection_retries: int, error_prefix: str,
     transport_trace: dict[str, Any] | None = None,
-) -> dict[str, Any]:
+) -> bytes:
     """POST JSON with bounded retries for transient provider failures.
 
     ``Retry-After`` takes precedence when supplied as seconds or an HTTP date.
@@ -67,8 +42,7 @@ def request_openai_compatible_json(
     bytes, or model reasoning.
     """
 
-    url = model_config.chat_completions_url()
-    encoded = json.dumps(payload).encode("utf-8")
+    encoded = body
     trace = transport_trace if transport_trace is not None else {}
     trace.clear()
     trace.update(
@@ -88,21 +62,14 @@ def request_openai_compatible_json(
         request = urllib.request.Request(
             url,
             data=encoded,
-            headers={
-                "Authorization": f"Bearer {model_config.api_key}",
-                "Content-Type": "application/json",
-            },
+            headers=headers,
             method="POST",
         )
         try:
             with urllib.request.urlopen(
-                request, timeout=model_config.timeout_sec
+                request, timeout=timeout_sec
             ) as response:
-                value = json.loads(response.read().decode("utf-8"))
-                if not isinstance(value, dict):
-                    raise TypeError(
-                        "model provider response must be a JSON object"
-                    )
+                value = response.read()
                 trace["final_status"] = "success"
                 return value
         except urllib.error.HTTPError as exc:
@@ -155,9 +122,9 @@ def request_openai_compatible_json(
         ) as exc:
             category, retryable = _classify_transport_error(exc)
             retry_limit = (
-                model_config.provider_timeout_retries
+                timeout_retries
                 if category == "timeout"
-                else model_config.provider_connection_retries
+                else connection_retries
             )
             category_key = category if category in retry_counts else "connection"
             if _can_retry(
@@ -192,14 +159,6 @@ def request_openai_compatible_json(
                 attempts=attempt,
                 retry_exhausted=retryable,
             ) from exc
-        except (json.JSONDecodeError, UnicodeDecodeError, TypeError):
-            trace.update(
-                {
-                    "final_status": "failed",
-                    "failure_category": "invalid_response",
-                }
-            )
-            raise
 
 
 def _can_retry(

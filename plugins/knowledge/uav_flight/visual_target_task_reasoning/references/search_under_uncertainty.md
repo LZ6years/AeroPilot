@@ -14,8 +14,10 @@ Useful search patterns should be selected by scene context:
   visually clear.
 - Landmark chaining: use visible landmarks to decide where to look next, but
   keep confidence low until the target itself is observed.
-- Candidate disambiguation: when several similar targets exist, gather another
-  view instead of committing early, but keep the promising candidates in view.
+- Candidate disambiguation: when competing identities change the next action,
+  use another view or independent category queries on the same view. Compare
+  position and appearance, not confidence rankings alone. Keep promising cues
+  in view and reuse results; absence of detection is not proof of absence.
 - Candidate confirmation: when one plausible candidate appears but is not yet
   reliable, switch from broad sweep to hover or a small 5-15 degree yaw before
   judging so the candidate stays in view. Do not describe a candidate and then
@@ -28,3 +30,9 @@ Reverse a broad sweep only when a candidate was plausibly swept past a frame
 edge, a scene or flight boundary blocks the current direction, or continuing
 would revisit rather than reveal view area. Use a small same-side correction,
 not a broad reversal, when the last observation contains a candidate.
+
+A next landmark not yet visible is different from losing the present route.
+Continue evidence-producing bounded progress while route and free-space cues
+remain coherent. After a recovery, reassess what changed rather than treating
+one attempt as a fixed stopping quota. Stop when no safe useful option remains,
+not simply because the expected landmark has not appeared after a few actions.

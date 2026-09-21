@@ -2,6 +2,19 @@
 
 `demos/` 只放用户可以体验或阅读的完整流程。底层诊断脚本放在 `tests/manual/`，离线评估工具放在 `tools/`。
 
+## llm_context_demo.py
+
+理解“保存上下文、组织每次请求、发送、把回答写回历史”的最小两轮 Demo。
+默认离线 MOCK，无费用，不启动模拟器；显式 `--real` 才调用真实模型。
+
+```powershell
+python demos/llm_context_demo.py
+```
+
+先读 [两轮教学说明](llm_context_demo.md)，再对照运行目录中的
+`round_01_request.json`、`round_02_request.json` 和
+`memory/agent_transcript.jsonl`。不新增配方，不改变框架或飞行策略。
+
 ## plugin_system_demo.py
 
 插件系统教学 demo。它不启动 UE，默认用一个固定 selector 展示插件如何从目录加载、如何选择 skill、如何把 skill 正文注入 `skills` context fragment，以及 research image context module 如何通过插件方式替换默认 image module。注意：默认模式不调用模型来选择 skill；如果 `.env` 有 API key 且 demo RGB 可读，research image 插件仍可能调用视觉模型生成 caption。

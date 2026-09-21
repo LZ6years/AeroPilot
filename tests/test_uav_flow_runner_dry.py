@@ -573,10 +573,10 @@ def test_runner_uses_independent_runtime_scene_session_per_case(tmp_path, monkey
         assert not list(case_dir.glob("*.md"))
         assert (case_dir / "audit.json").exists()
         html = (case_dir / "review.html").read_text(encoding="utf-8")
-        assert "Observation Gallery" in html
-        assert "Decision / Window Details" in html
-        assert "Action Timeline" in html
-        assert "Trajectory Plots" in html
+        assert "Observation Gallery" not in html
+        assert "Decision / Window Details" not in html
+        assert "Action Timeline" not in html
+        assert "Phase execution timeline" in html and "audit.json" in html
     assert result["summary_paths"]["html_review"].endswith("review.html")
     assert (tmp_path / "eval" / "reuse" / "review.html").exists()
     assert (

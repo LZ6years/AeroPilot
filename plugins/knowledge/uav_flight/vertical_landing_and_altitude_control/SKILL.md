@@ -8,25 +8,24 @@ summary: Select for altitude changes, vertical-path motion, landing, or stopping
 
 ## Application Boundary
 
-Use this guidance for altitude change, vertical or angled ascent/descent, and
-controlled landing near a surface. Do not treat visual target alignment alone
-as altitude or landing completion, and do not interpret "land" as an open-ended
-command to keep descending.
+Use for altitude change, vertical or angled ascent/descent, and landing.
+Alignment alone is not height or landing completion. "Land" is not an
+open-ended command to keep descending.
 
 ## Evidence Model
 
-Use requested height change, vertical progress, available clearance or surface
-cues, and region plausibility. No one evidence source is mandatory. For an angled
-path, interpret the angle as deviation from the vertical ascent/descent axis
-unless the user explicitly identifies yaw, heading, vehicle pitch, or camera
-angle. Request [angled motion details](references/angled_vertical_motion.md)
-when the component ratio or formula is needed.
+Use requested height change, progress, clearance and surface cues; no single
+source is mandatory. Angled paths deviate from the vertical axis unless the
+user specifies yaw, heading, pitch or camera angle. Request
+[angled motion details](references/angled_vertical_motion.md) for component ratios.
 
 ## Decision Procedure
 
 1. Establish the requested height, direction, path relation, or plausible
    landing region before substantial vertical movement.
-2. Use effective bounded progress while far from the target condition.
+2. Use effective bounded progress while far from the target condition. Clear
+   space and a substantial remaining height relation can support a larger step;
+   do not default to repeated tiny increments or the maximum permitted action.
 3. Re-observe after movement and shorten adjustments near the requested height,
    surface, or tolerance band.
 4. For a non-zero angled path, preserve both vertical and horizontal components
@@ -34,18 +33,21 @@ when the component ratio or formula is needed.
 
 ## Completion And Stop
 
-For numeric altitude change, finish inside a reasonable tolerance instead of
-making decimal-level corrections. Stop descending when the requested drop is
-reached, the landing surface is near enough, little clearance appears to remain,
-or another descent would mainly increase risk or vertical error. A coherent
-combination of available vertical progress, clearance, and visual region cues
-is sufficient without requiring an additional ideal view.
+For numeric altitude change, finish within reasonable tolerance, not decimal
+correction. Stop descending at the requested drop, near the landing surface,
+with little clearance, or when another descent mainly adds risk or error.
+Agreeing progress, clearance and region cues need no additional ideal view.
 
 ## Recovery
 
+Clearing an obstacle requires being above it along the intended passage, not
+merely accumulating a fixed ascent. Use a modest evidence-based clearance margin,
+not a guessed typical building height. Reassess after movement; do not assume
+intermediate views within an uninterrupted sequence of actions.
+
 If height or region cues conflict, hover or use a smaller adjustment. If they
 disappear after a maneuver, compare pre-maneuver and current views with measured
-vertical and horizontal change. Try one bounded retrace, then re-observe; never
+vertical and horizontal change. Try a bounded retrace, then re-observe; never
 continue a blind descent. Hover only to stabilize or compare. If no safe
 evidence-producing recovery remains, stop and cite the limitation. Correct
 overshoot gently and avoid large downward steps near a surface.

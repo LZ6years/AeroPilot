@@ -169,7 +169,7 @@ def build_uav_flow_review_sections(
         if key in {"trajectory_2d", "trajectory_3d"} and value
     ]
     sections.append(
-        ReviewSection("Trajectory Plots", "image_group", plot_assets)
+        ReviewSection("Trajectory Plots", "image_group", plot_assets, primary=True)
     )
     return tuple(sections)
 

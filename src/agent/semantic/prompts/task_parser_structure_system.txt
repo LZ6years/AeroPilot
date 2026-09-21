@@ -21,10 +21,12 @@ Return exactly one JSON object with no Markdown or extra text:
       "index": 1,
       "total": 1,
       "name": "short snake_case semantic phase name",
-      "goal": "one concise semantic objective"
+      "goal": "one sentence stating the local result and required route"
     }
   ]
 }
+
+The single phase shown above illustrates the JSON shape, not a suggested count.
 
 Structure contract:
 - Output only intent, task_goal, and phase index, total, name, and goal.
@@ -49,21 +51,43 @@ Structure contract:
   language context supplied before this prompt.
 
 Phase segmentation:
-- One phase is one local route leg ending at a useful, stable semantic
-  checkpoint. It is not one primitive action or mechanically one clause.
-- Keep setup and progress together when setup alone is not a useful endpoint.
-- Start another phase when the active reference, region, required relation, or
-  stable checkpoint changes and later progress remains independently unknown.
-- Do not let one phase silently consume several independently judgeable ordered
-  checkpoints.
-- A broad final-destination goal must not replace intermediate region visits or
-  reference changes. Later local maneuver planning cannot recover missing route
-  checkpoints. A genuinely single-checkpoint instruction still needs only one phase.
-- Do not split only because movement mode or punctuation changes.
-- Preserve all requested outcomes in order. Every explicit terminal result
-  must appear as an achieved objective in at least one phase goal.
-- Intermediate phases contain only their local checkpoint. The final phase
-  contains the requested final relation or terminal state.
+1. Identify the user-required results in order from the whole instruction:
+   positions, regions, heights, or directions and their referenced entities.
+2. Locate the handoff where each result gives way to the next part of the route.
+   "At X, turn toward Y" puts arrival at X at the end of the preceding phase;
+   the next phase starts from X. Likewise, a required position above something
+   followed by descent has an upper-position exit before the descent exit.
+3. Group the departure, turns and travel serving the same exit result into a
+   phase. Preserve takeoff and height requirements without automatically
+   creating a separate takeoff phase. Multiple requirements at one endpoint
+   can belong to one phase; do not split just because there are several verbs.
+
+Write each goal as one natural sentence describing the local result at its exit
+and the user's required route to it. Lead with that result, not a chronological
+list of every maneuver. Link setup to its destination or directional purpose
+when the instruction supplies one. Output only the JSON, not this analysis.
+
+Neither punctuation nor primitive action count sets the phase count. Standalone
+motion or relative-turn requests can have one phase without a visual target.
+A phase boundary does not request a pause, hover or stop. Do not add target
+centering, visibility, or confirmation stages. Heading toward a target alone
+does not require arrival, but an explicit later handoff at that target does:
+do not replace reaching the handoff with starting to move toward it.
+
+Contrast examples (illustrative semantics, not fixed templates or action plans):
+- "Follow the fence to its gate. At the gate, cross the yard to the fountain."
+  Ordered phase goals:
+  ["Reach the gate along the fence.",
+   "Reach the fountain by crossing the yard from the gate."]
+  The gate is an exit, not a new stopping obligation.
+- "Wait beside the antenna while facing the wind sock."
+  Ordered phase goals:
+  ["Wait beside the antenna with orientation toward the wind sock."]
+  Two endpoint relations, one phase.
+- "Turn left by 30 degrees."
+  Ordered phase goals:
+  ["Reach a heading 30 degrees left of the starting heading by turning left."]
+  Relative motion is itself the result; no landmark or search is needed.
 
 Boundaries:
 - Do not output completion conditions, continuation conditions, metrics,
@@ -74,6 +98,4 @@ Boundaries:
 - A scene's initialization or lack of a takeoff API is not evidence that a
   requested departure or altitude change has already happened. Preserve explicit
   altitude requirements independently of any episode-level terminal convention.
-- Do not use hidden external answers, evaluator-only data, or API-style tokens.
-- Before returning, verify complete instruction coverage, stable phase
-  boundaries, preserved relation ownership, and exact index/total numbering.
+- Keep phase index/total numbering consistent with the ordered phase list.

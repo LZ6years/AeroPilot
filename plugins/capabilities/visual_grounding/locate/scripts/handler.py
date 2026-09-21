@@ -26,10 +26,12 @@ def handle(payload: dict) -> SkillCapabilityResult:
         f"Located {len(candidates)} candidate(s)"
         + (" with optional robust metric depth." if with_distance else ".")
     )
+    if not candidates:
+        message = ("No sufficiently confident detection candidates were returned. "
+                   "Whether the target is present remains uncertain.")
     return SkillCapabilityResult(
         message=message,
         data=result["data"],
         artifact_refs=tuple(result["artifact_refs"]),
         model_inputs=tuple(result["model_inputs"]),
     )
-

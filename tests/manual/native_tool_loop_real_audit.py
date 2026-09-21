@@ -1471,11 +1471,18 @@ def _audit_portable_html(
         violations.append(Violation("review_html_missing", str(review), case_id))
     else:
         text = review.read_text(encoding="utf-8", errors="replace")
-        if "Agent Tool Transcript" not in text:
+        # The compact report keeps the causal timeline and links the durable
+        # transcript instead of embedding a second, full transcript view.
+        compact = (
+            '<section class="phase-timeline">' in text
+            and 'href="audit.json"' in text
+            and (case_dir / "audit.json").is_file()
+        )
+        if "Agent Tool Transcript" not in text and not compact:
             violations.append(
                 Violation(
                     "review_transcript_section_missing",
-                    "review.html does not contain Agent Tool Transcript",
+                    "review.html needs a transcript view or a phase timeline with a durable audit link",
                     case_id,
                 )
             )

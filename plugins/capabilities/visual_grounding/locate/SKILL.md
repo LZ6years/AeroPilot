@@ -20,6 +20,13 @@ Two independent queries may be submitted in the same read-only turn, within
 the per-observation quota. Runtime may execute them sequentially and return
 both results before the next decision. A query that depends on another result
 must wait for it. Reuse existing results instead of repeating identical calls.
+For competing identities that change the decision, compare concise visual
+category queries against the same observation. Reuse an existing query and use
+the remaining quota for its alternative. Avoid filler such as "visible in the
+scene". Compare locations and annotated appearance, not just confidence scores.
+An empty candidate list means no sufficiently confident detection was returned;
+it does not prove absence. Do not lower thresholds or repeat a query to obtain
+a preferred answer.
 
 Candidates are detector evidence, not guaranteed task identity. Inspect the
 annotated tool-evidence image and keep the relation unknown when multiple
