@@ -58,10 +58,28 @@ def yaw_deg(pose: dict[str, Any]) -> float:
     return 0.0
 
 
+def normalize_yaw_deg(value: float) -> float:
+    """Wrap an absolute heading into [-180, 180)."""
+
+    return (float(value) + 180.0) % 360.0 - 180.0
+
+
+def position_distance_m(before: dict[str, Any] | None, after: dict[str, Any] | None) -> float | None:
+    """Measure unrounded XYZ distance; unavailable/nonfinite poses stay unknown."""
+
+    if not before or not after:
+        return None
+    first = [pose_value(before, axis) for axis in ("x", "y", "z")]
+    second = [pose_value(after, axis) for axis in ("x", "y", "z")]
+    if any(value is None or not math.isfinite(value) for value in first + second):
+        return None
+    return math.dist(first, second)
+
+
 def normalize_yaw_delta_deg(delta: float) -> float:
     """Normalize a yaw delta to [-180, 180], preserving +180 for positive turns."""
 
-    normalized = (float(delta) + 180.0) % 360.0 - 180.0
+    normalized = normalize_yaw_deg(delta)
     return 180.0 if normalized == -180.0 and delta > 0 else normalized
 
 

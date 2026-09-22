@@ -7,7 +7,7 @@ import math
 
 import pytest
 
-from src.adapters.airsim_uav import AirSimUavAdapter
+from src.adapters.airsim.uav import AirSimUavAdapter
 from src.env_client.schemas import (
     ActionResult,
     MapPackage,

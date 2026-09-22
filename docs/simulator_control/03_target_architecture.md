@@ -25,6 +25,10 @@ flowchart TD
     BR -->|"airsim"| AB["AirSimBackend"]
     BR -->|"unrealcv"| UB["UnrealCvBackend"]
     BR -->|"future"| FB["Future Backend"]
+    AB --> AA["AirSimUavAdapter"]
+    UB --> UA["UnrealCvUavAdapter"]
+    AA --> AS["AirSim SDK"]
+    UA --> US["UnrealCV Client"]
 
     SS --> PC["Process Control"]
     PC --> LOCAL["Local"]

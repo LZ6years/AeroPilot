@@ -164,8 +164,8 @@ mask 像素数和清理状态。图像质量及第一视角判断只属于这个
 | 能力 | Owner |
 |---|---|
 | 启动地图、连接端口 | SimulationServer |
-| 主 UAV Actor pose、camera follow | UnrealCvBackend |
-| RGB/Depth/Segmentation/Pose | UnrealCvBackend |
+| 主 UAV Actor pose、camera follow | UnrealCvUavAdapter / UnrealCvPoseControl |
+| RGB/Depth/Segmentation/Pose | UnrealCvUavAdapter / UnrealCvCapture |
 | 人物/车辆创建、隐藏、外观和位置 | Benchmark Scenario |
 | episode 起点、reference path、SR/nDTW | Benchmark/Evaluation |
 
@@ -249,7 +249,7 @@ case `2025-03-30_11-49-14`以`status=ok`完成，产生 36 张 RGB 和 35 个正
 ## 最近一次真实结果
 
 验证时间：2026-07-30  
-调用链：`SimulatorEnvClient → SimulationServer → UnrealCvBackend`  
+调用链：`SimulatorEnvClient → SimulationServer → UnrealCvBackend → UnrealCvUavAdapter`
 Execution：`MANAGED`  
 Run：`runs/manual_local_unrealcv_probe/20260730_192119_692593`
 

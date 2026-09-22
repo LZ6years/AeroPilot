@@ -16,8 +16,8 @@ import pytest
 from src.env_client.schemas import MapPackage, SceneInstance
 from src.sim_server.backends.ground_clearance import enrich_pose_with_agl
 from src.sim_server.backends.unrealcv_backend import UnrealCvBackend
-from src.sim_server.backends.unrealcv_capture import UnrealCvCapture
-from src.sim_server.backends.unrealcv_control import (
+from src.adapters.unrealcv.capture import UnrealCvCapture
+from src.adapters.unrealcv.control import (
     ActorControlConfig,
     ActorPoseControl,
     CameraPoseControl,
@@ -772,7 +772,7 @@ def test_unrealcv_camera_pose_does_not_inherit_actor_agl_calibration() -> None:
     package.unrealcv["actor"] = {"landed_origin_z_m": 0.35}
     backend.package = package
 
-    assert "agl_m" not in backend._pose_to_model([0, 0, 3, 0, 0, 0])
+    assert "agl_m" not in backend._enrich_pose({"x": 0, "y": 0, "z": 3})
 
 
 @pytest.mark.parametrize(

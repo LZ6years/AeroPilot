@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from src.adapters.airsim_uav import (
-    AirSimUavAdapter,
-    resolve_airsim_control_strategy,
-)
-from src.adapters.airsim_client import close_airsim_client
+from src.adapters.airsim.uav import AirSimUavAdapter
+from src.adapters.airsim.control import resolve_airsim_control_strategy
+from src.adapters.airsim.client import probe_airsim_endpoint
 from src.adapters.uav_primitives import NullUavPrimitiveAdapter, UavPrimitiveAdapter
 from src.env_client.schemas import (
     ActionResult,
@@ -48,17 +46,7 @@ class AirSimBackend:
 
         if not self.use_real_uav:
             return BackendProbe(True, "in-memory AirSim test backend")
-        client = None
-        try:
-            import airsim
-
-            client = airsim.VehicleClient(ip=host, port=port, timeout_value=2)
-            ready = bool(client.ping())
-            return BackendProbe(ready, "AirSim RPC ping succeeded" if ready else "AirSim ping returned false")
-        except Exception as exc:
-            return BackendProbe(False, f"{type(exc).__name__}: {exc}")
-        finally:
-            close_airsim_client(client)
+        return BackendProbe(*probe_airsim_endpoint(host, port))
 
     def describe_capabilities(self, package: MapPackage) -> SceneCapabilities:
         mode = str(package.airsim.get("mode", "Multirotor"))

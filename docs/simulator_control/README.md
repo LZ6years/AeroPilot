@@ -29,7 +29,8 @@ flowchart TD
     BR --> UB["UnrealCvBackend"]
     BR --> FB["Future Backend"]
 
-    UB --> UC{"control_target"}
+    UB --> UA["UnrealCvUavAdapter"]
+    UA --> UC{"control_target"}
     UC --> UCC["CameraPoseControl"]
     UC --> UCA["ActorPoseControl"]
 
@@ -37,7 +38,8 @@ flowchart TD
     DM --> LP["Local Process Control"]
     DM --> RP["SSH Remote Control"]
 
-    AB --> AM{"AirSim SimMode"}
+    AB --> AA["AirSimUavAdapter"]
+    AA --> AM{"AirSim control strategy"}
     AM --> CV["ComputerVision"]
     AM --> MR["Multirotor"]
 ```

@@ -9,6 +9,7 @@ Actor's mask color.
 from __future__ import annotations
 
 from pathlib import Path
+from argparse import Namespace
 
 import numpy as np
 from PIL import Image
@@ -16,10 +17,22 @@ import pytest
 
 from src.perception.raw_observation import RawObservation
 from tests.manual.unrealcv_local_actor_probe import (
+    _assert_acceptance,
     _parse_object_color,
     _required_agl,
     _visual_quality,
 )
+
+
+@pytest.mark.parametrize("requested", [0.25, 0.5, 1.0])
+def test_motion_acceptance_uses_requested_distance(requested):
+    args = Namespace(yaw_deg=0, move_forward_m=requested, descend_m=0)
+    summary = {"checks": {"move": {"position_delta_m": requested + 0.01},
+                          "restore": {"position_error_m": 0, "yaw_error_deg": 0}}}
+    _assert_acceptance(summary, args)
+    summary["checks"]["move"]["position_delta_m"] = requested + 0.1
+    with pytest.raises(AssertionError, match="requested"):
+        _assert_acceptance(summary, args)
 
 
 def _observation(tmp_path: Path, segmentation: np.ndarray) -> RawObservation:

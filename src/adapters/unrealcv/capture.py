@@ -1,4 +1,4 @@
-"""Capture and decode generic UnrealCV observation modalities.
+"""Capture and decode observation modalities for the UnrealCV adapter package.
 
 Observation choice comes from the run-level ``ObservationProfile``.  This
 module only translates generic capture-source names into UnrealCV commands,

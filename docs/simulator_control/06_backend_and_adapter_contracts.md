@@ -6,6 +6,25 @@
 
 ## 三层多态
 
+目录责任：
+
+- `src/uav/` 保存纯数学：坐标、yaw、pose delta 和距离。
+- `src/adapters/` 保存协议 I/O；两个 UAV Adapter 都返回 `PrimitiveResult`。
+- `src/sim_server/backends/` 负责场景绑定、capabilities、primitive 分派和结果包装。
+- `src/sim_server/` 负责进程、settings、SSH 与所有权清理。
+
+AirSim 的 `airsim/control.py` 选择控制策略，`airsim/actions.py` 执行物理动作、
+读取 Future.get()、记录前后状态并在 finally 中 freeze。后者通过回调复用策略的
+pose 和 freeze 实现，不管理场景。图像采集保留在 `airsim/uav.py`。
+
+UnrealCV 的 `unrealcv/uav.py` 组合 `unrealcv/control.py` 与
+`unrealcv/capture.py`；这三个文件均位于 `src/adapters/`。Backend 保留
+MapPackage 对应的 AGL enrichment。释放连接只关闭 Adapter client，后续动作可
+按原有行为重新连接。目标人物/车辆布置仍由 Benchmark ScenarioController 负责。
+
+真实动作诊断可运行 `tests/manual/airsim_action_regression_probe.py --help`。
+它只输出 primitive 和 cleanup 证据，不能作为 benchmark 导航分数。
+
 ```text
 SimulationBackend
     AirSimBackend
@@ -13,6 +32,7 @@ SimulationBackend
 
 UavPrimitiveAdapter
     AirSimUavAdapter
+    UnrealCvUavAdapter
     NullUavPrimitiveAdapter
 
 AirSimControlStrategy
@@ -213,7 +233,7 @@ flowchart LR
 控制主 UAV Actor 与摆放 Benchmark 目标是两个责任：
 
 ```text
-UnrealCvBackend → 主 UAV/camera、pose、frames
+UnrealCvBackend → UnrealCvUavAdapter → 主 UAV/camera、pose、frames
 Benchmark Scenario → 人物/车辆创建、隐藏、外观、目标位置
 ```
 

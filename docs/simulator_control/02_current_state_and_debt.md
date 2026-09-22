@@ -95,7 +95,7 @@ src/sim_server/backends/local_ue_backend.py
 | 文件 | 零调用内容 | 文件仍需保留的原因 |
 |---|---|---|
 | `process_control.py` | `SceneProcessControl` | `LocalSceneControl`仍负责本地进程 |
-| `airsim_uav.py` | `_canonical_position()`、`_current_yaw_deg()` | AirSim Adapter 和策略是生产控制路径 |
+| `airsim/uav.py` | `_canonical_position()`、`_current_yaw_deg()` | AirSim Adapter 和策略是生产控制路径 |
 | `server.py` | `_wait_for_tcp_port()`、`_wait_for_airsim_rpc()`、`_launch_args()`、`list_maps()`、`get_scene_status()` | `SimulationServer`是统一生命周期入口 |
 | `registry.py` | `protocols()` | Registry 仍负责每场景 Backend 多态创建 |
 

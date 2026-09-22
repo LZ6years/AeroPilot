@@ -592,9 +592,10 @@ def _assert_acceptance(summary: dict[str, Any], args: argparse.Namespace) -> Non
             raise AssertionError(f"Turn yaw error exceeded 2 deg: {turn}")
     if args.move_forward_m:
         actual = summary["checks"]["move"]["position_delta_m"]
-        if not 0.20 <= actual <= 0.30:
+        if abs(actual - args.move_forward_m) > 0.05:
             raise AssertionError(
-                f"Forward displacement must be 0.20-0.30 m, received {actual}"
+                f"Forward displacement differs from requested {args.move_forward_m} m "
+                f"by more than 0.05 m: received {actual}"
             )
     if args.descend_m:
         descent = summary["checks"]["descent"]

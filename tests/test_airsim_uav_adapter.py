@@ -9,169 +9,10 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from src.adapters.airsim_uav import AirSimUavAdapter
+from src.adapters.airsim.uav import AirSimUavAdapter
 
 
-class FakeAirSim:
-    # Provide the AirSim API surface used by pose and frame tests.
-    class ImageType:
-        Scene = 0
-        DepthVis = 3
-        DepthPerspective = 2
-        Segmentation = 5
-
-    class ImageRequest:
-        def __init__(
-            self,
-            camera_name: str,
-            image_type: int,
-            pixels_as_float: bool,
-            compress: bool,
-        ) -> None:
-            self.camera_name = camera_name
-            self.image_type = image_type
-            self.pixels_as_float = pixels_as_float
-            self.compress = compress
-
-    class Vector3r:
-        def __init__(self, x_val: float, y_val: float, z_val: float) -> None:
-            # Store vector coordinates with AirSim-compatible attribute names.
-            self.x_val = x_val
-            self.y_val = y_val
-            self.z_val = z_val
-
-    class Pose:
-        def __init__(self, position: "FakeAirSim.Vector3r", orientation: tuple[float, float, float]) -> None:
-            # Store position and orientation exactly like a lightweight AirSim Pose.
-            self.position = position
-            self.orientation = orientation
-
-    class KinematicsState:
-        def __init__(self) -> None:
-            self.position = FakeAirSim.Vector3r(0.0, 0.0, 0.0)
-            self.orientation = (0.0, 0.0, 0.0)
-            self.linear_velocity = FakeAirSim.Vector3r(0.0, 0.0, 0.0)
-            self.angular_velocity = FakeAirSim.Vector3r(0.0, 0.0, 0.0)
-            self.linear_acceleration = FakeAirSim.Vector3r(0.0, 0.0, 0.0)
-            self.angular_acceleration = FakeAirSim.Vector3r(0.0, 0.0, 0.0)
-
-    @staticmethod
-    def to_quaternion(pitch: float, roll: float, yaw: float) -> tuple[float, float, float]:
-        # Return radians directly so the test can inspect degree-to-radian conversion.
-        return (pitch, roll, yaw)
-
-    @staticmethod
-    def to_eularian_angles(orientation):
-        return orientation
-
-
-class FakeAirSimClient:
-    def __init__(self) -> None:
-        # Capture simSetVehiclePose calls for assertions.
-        self.set_pose_calls = []
-        self.move_body_calls = []
-        self.image_requests = []
-        self.image_responses = []
-        self.pause_calls = []
-        self.continue_frame_calls = []
-        self.set_kinematics_calls = []
-        self.rotate_calls = []
-        self.kinematics = FakeAirSim.KinematicsState()
-        self.connection_calls = []
-        self.reset_calls = 0
-        self.join_error = None
-
-    def confirmConnection(self) -> None:
-        self.connection_calls.append("confirm")
-
-    def enableApiControl(self, enabled: bool, vehicle_name: str) -> None:
-        self.connection_calls.append(("api", enabled, vehicle_name))
-
-    def armDisarm(self, armed: bool, vehicle_name: str) -> None:
-        self.connection_calls.append(("arm", armed, vehicle_name))
-
-    def reset(self) -> None:
-        self.reset_calls += 1
-
-    def simSetVehiclePose(self, pose, ignore_collision: bool, vehicle_name: str) -> None:
-        # Record the pose placement request that would have gone to AirSim.
-        self.set_pose_calls.append(
-            {
-                "pose": pose,
-                "ignore_collision": ignore_collision,
-                "vehicle_name": vehicle_name,
-            }
-        )
-
-    def moveByVelocityBodyFrameAsync(self, vx: float, vy: float, vz: float, duration: float, vehicle_name: str):
-        # Record body-frame movement calls and return a joinable future.
-        self.move_body_calls.append(
-            {
-                "vx": vx,
-                "vy": vy,
-                "vz": vz,
-                "duration": duration,
-                "vehicle_name": vehicle_name,
-            }
-        )
-        self.kinematics.position.x_val += vx * duration
-        self.kinematics.position.y_val += vy * duration
-        self.kinematics.position.z_val += vz * duration
-        return self
-
-    def rotateToYawAsync(self, yaw: float, vehicle_name: str):
-        self.rotate_calls.append({"yaw": yaw, "vehicle_name": vehicle_name})
-        self.kinematics.orientation = (0.0, 0.0, np.deg2rad(yaw))
-        return self
-
-    def simPause(self, paused: bool) -> None:
-        self.pause_calls.append(paused)
-
-    def simContinueForFrames(self, frames: int) -> None:
-        self.continue_frame_calls.append(frames)
-
-    def simSetKinematics(
-        self,
-        state,
-        ignore_collision: bool,
-        vehicle_name: str,
-    ) -> None:
-        self.kinematics = state
-        self.set_kinematics_calls.append(
-            {
-                "state": state,
-                "ignore_collision": ignore_collision,
-                "vehicle_name": vehicle_name,
-            }
-        )
-
-    def getMultirotorState(self, vehicle_name: str):
-        return SimpleNamespace(kinematics_estimated=self.kinematics)
-
-    def join(self) -> None:
-        # Match the AirSim async future API used by the adapter.
-        if self.join_error is not None:
-            raise self.join_error
-        return None
-
-    def simGetImages(self, requests, vehicle_name: str):
-        self.image_requests = list(requests)
-        return list(self.image_responses)
-
-
-class FakeImageResponse:
-    def __init__(
-        self,
-        image_data_uint8: bytes = b"",
-        image_data_float: list[float] | None = None,
-        *,
-        width: int = 2,
-        height: int = 2,
-    ) -> None:
-        self.width = width
-        self.height = height
-        self.image_data_uint8 = image_data_uint8
-        self.image_data_float = image_data_float or []
+from tests.airsim_fakes import FakeAirSim, FakeAirSimClient, FakeImageResponse
 
 
 def test_pose_kinematic_set_pose_calls_airsim_sim_set_vehicle_pose(monkeypatch):
@@ -320,14 +161,153 @@ def test_paused_multirotor_action_failure_still_pauses(monkeypatch):
         control_strategy="paused_multirotor",
     )
     client = FakeAirSimClient()
-    client.join_error = RuntimeError("motion failed")
+    client.future_error = RuntimeError("motion failed")
     adapter._client = client
     monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
 
-    with pytest.raises(RuntimeError, match="motion failed"):
-        adapter.move_body(1.0, 0.0, 0.0, 1.0)
+    result = adapter.move_body(1.0, 0.0, 0.0, 1.0)
 
+    assert not result.ok
+    assert result.data["failure_kind"] == "rpc_error"
+    assert result.data["action_diagnostics"]["rpc"]["error"] == {
+        "error_type": "RuntimeError",
+        "error": "motion failed",
+    }
     assert client.pause_calls == [False, True]
+
+
+def test_paused_multirotor_false_rpc_result_is_not_reported_as_success(monkeypatch):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    client.future_result = False
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.turn_relative(30.0)
+
+    assert not result.ok
+    assert result.data["failure_kind"] == "controller_timeout_or_rejected"
+    assert result.data["action_diagnostics"]["rpc"]["result"] is False
+    assert client.pause_calls == [False, True]
+
+
+def test_paused_multirotor_turn_wraps_target_and_measures_crossing(monkeypatch):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    client.kinematics.orientation = (0.0, 0.0, np.deg2rad(170.0))
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.turn_relative(30.0)
+
+    tracking = result.data["action_diagnostics"]["tracking"]
+    assert result.ok
+    assert client.rotate_calls[0]["yaw"] == pytest.approx(-160.0)
+    assert tracking["observed_yaw_delta_deg"] == pytest.approx(30.0)
+    assert tracking["target_yaw_error_deg"] == pytest.approx(0.0)
+
+
+def test_paused_multirotor_turn_no_effect_is_failure(monkeypatch):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    client.action_effect_scale = 0.0
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.turn_relative(-79.0)
+
+    assert not result.ok
+    assert result.data["failure_kind"] == "control_no_effect"
+    tracking = result.data["action_diagnostics"]["tracking"]
+    assert tracking["observed_yaw_delta_deg"] == pytest.approx(0.0)
+
+
+def test_paused_multirotor_move_no_effect_reports_collision(monkeypatch):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    client.action_effect_scale = 0.0
+    client.collision.has_collided = True
+    client.collision.object_name = "Building_42"
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.move_body(2.0, 0.5, 0.0, 1.5)
+
+    assert not result.ok
+    assert result.data["failure_kind"] == "collision_blocked"
+    diagnostics = result.data["action_diagnostics"]
+    assert diagnostics["tracking"]["observed_translation_m"] == pytest.approx(0.0)
+    assert diagnostics["after"]["collision"]["object_name"] == "Building_42"
+
+
+def test_paused_multirotor_partial_motion_is_not_rejected(monkeypatch):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    client.action_effect_scale = 0.05
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.move_body(2.0, 0.0, 0.0, 1.0)
+
+    assert result.ok
+    assert result.data["action_diagnostics"]["tracking"][
+        "observed_translation_m"
+    ] == pytest.approx(0.1)
+
+
+def test_paused_multirotor_preserves_rpc_and_freeze_errors(monkeypatch):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    client.future_error = RuntimeError("rpc timed out")
+    client.freeze_error = RuntimeError("freeze failed")
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.move_body(1.0, 0.0, 0.0, 1.0)
+
+    assert not result.ok
+    assert result.data["failure_kind"] == "rpc_error"
+    diagnostics = result.data["action_diagnostics"]
+    assert diagnostics["rpc"]["error"]["error"] == "rpc timed out"
+    assert diagnostics["freeze"]["error"]["error"] == "freeze failed"
+    assert client.pause_calls == [False, True, True]
+
+
+def test_paused_multirotor_freeze_failure_has_distinct_failure_kind(monkeypatch):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    client.freeze_error = RuntimeError("freeze failed")
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.turn_relative(15.0)
+
+    assert not result.ok
+    assert result.data["failure_kind"] == "freeze_cleanup_error"
+    diagnostics = result.data["action_diagnostics"]
+    assert diagnostics["rpc"]["result"] is True
+    assert diagnostics["freeze"]["error"]["error"] == "freeze failed"
 
 
 def test_paused_multirotor_reset_restores_control_and_pause(monkeypatch):

@@ -27,7 +27,7 @@ from .remote.control import RemoteSceneControl
 from .remote.tunnel import SshTunnel
 from .scene_manager import SceneManager
 from .lifecycle import SceneLifecycle, SceneLifecycleError
-from src.adapters.airsim_client import close_airsim_client
+from src.adapters.airsim.client import close_airsim_client
 
 
 class SimulationServer:

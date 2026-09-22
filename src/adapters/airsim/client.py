@@ -1,4 +1,4 @@
-"""Release AirSim SDK wrappers without depending on a particular SDK version.
+"""Probe and release AirSim SDK clients across SDK versions.
 
 Ownership stays with the caller, which clears its reference after closing.
 VehicleClient normally exposes the msgpack RPC transport as ``client`` rather
@@ -6,6 +6,22 @@ than providing a public close method itself. Cleanup failures are not hidden.
 """
 
 from typing import Any
+
+
+def probe_airsim_endpoint(host: str, port: int) -> tuple[bool, str]:
+    """Ping an endpoint without taking ownership of its simulator process."""
+
+    client = None
+    try:
+        import airsim
+
+        client = airsim.VehicleClient(ip=host, port=port, timeout_value=2)
+        ready = bool(client.ping())
+        return ready, "AirSim RPC ping succeeded" if ready else "AirSim ping returned false"
+    except Exception as exc:
+        return False, f"{type(exc).__name__}: {exc}"
+    finally:
+        close_airsim_client(client)
 
 
 def close_airsim_client(client: Any, *, original_error: Exception | None = None) -> None:

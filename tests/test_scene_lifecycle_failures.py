@@ -7,8 +7,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from src.adapters.airsim_client import close_airsim_client
-from src.adapters.airsim_uav import AirSimUavAdapter
+from src.adapters.airsim.client import close_airsim_client
+from src.adapters.airsim.uav import AirSimUavAdapter
 from src.sim_server.backends.airsim_backend import AirSimBackend
 from src.sim_server.backends.registry import BackendRegistry
 from src.sim_server.lifecycle import SceneLifecycleError

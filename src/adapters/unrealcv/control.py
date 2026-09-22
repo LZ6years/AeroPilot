@@ -1,6 +1,6 @@
-"""Provide simulator-agnostic camera and actor pose control for UnrealCV.
+"""Provide camera and actor pose control for the UnrealCV adapter package.
 
-The Backend selects one strategy from the MapPackage. Camera control uses
+The adapter selects a strategy from resolved protocol configuration. Camera control uses
 standard UnrealCV camera commands. Actor control uses standard object
 location/rotation commands unless a packaged map explicitly declares the
 Blueprint yaw extension used by its controllable vehicle.
