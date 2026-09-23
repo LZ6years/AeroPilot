@@ -1,0 +1,1075 @@
+{
+  "date": "2026-09-22",
+  "scope": "Configured static sources, not a task request",
+  "tools": [
+    {
+      "name": "env.observe",
+      "wire_name": "env_observe",
+      "kind": "observation",
+      "description": "Capture a new environment observation at Runtime-owned sampling points.",
+      "runtime": {
+        "effect": "read_only",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "modalities": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "description": "Requested canonical observation modalities."
+          }
+        },
+        "required": [
+          "modalities"
+        ]
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "env_observe",
+          "description": "Capture a new environment observation at Runtime-owned sampling points.\nExecution: effect=read_only; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "modalities": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array",
+                "description": "Requested canonical observation modalities."
+              }
+            },
+            "required": [
+              "modalities"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "knowledge.load",
+      "wire_name": "knowledge_load",
+      "kind": "knowledge",
+      "description": "Read an enabled knowledge entry and its declared references. Applicable when a task needs the methods or explanations described by that catalog entry. Returns newly requested body text and references incrementally; previously delivered text is not resent. The catalog is a directory, not loaded guidance. Knowledge provides methods, not current-scene observations or measurements, and does not execute actions.",
+      "runtime": {
+        "effect": "read_only",
+        "result_timing": "immediate",
+        "batching": "parallel_safe",
+        "model_exposed": true
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Exact enabled entry name from the knowledge catalog."
+          },
+          "reference_paths": {
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "description": "Optional paths from the entry's returned reference manifest."
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "knowledge_load",
+          "description": "Read an enabled knowledge entry and its declared references. Applicable when a task needs the methods or explanations described by that catalog entry. Returns newly requested body text and references incrementally; previously delivered text is not resent. The catalog is a directory, not loaded guidance. Knowledge provides methods, not current-scene observations or measurements, and does not execute actions.\nExecution: effect=read_only; result_timing=immediate. Independent read-only calls may share a turn; execution may be sequential.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "minLength": 1,
+                "type": "string",
+                "description": "Exact enabled entry name from the knowledge catalog."
+              },
+              "reference_paths": {
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array",
+                "description": "Optional paths from the entry's returned reference manifest."
+              }
+            },
+            "required": [
+              "name"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "runtime.report_blocked",
+      "wire_name": "runtime_report_blocked",
+      "kind": "runtime_control",
+      "description": "Report the instruction as incomplete with a blocking condition and environmental evidence. Applicable when the task cannot continue safely or meaningfully. Returns the accepted terminal state or rejection feedback; Runtime handles final stabilization and cleanup. This ends the instruction without claiming that its requested outcomes were achieved.",
+      "runtime": {
+        "effect": "runtime_control",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": true
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Concise explanation of the task outcome."
+          },
+          "evidence_refs": {
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "description": "Current-instruction observation or returned environmental result references; plan and knowledge references are not environmental evidence."
+          },
+          "blocking_condition": {
+            "enum": [
+              "lost_required_reference",
+              "insufficient_evidence",
+              "unsafe_to_continue",
+              "missing_capability",
+              "irreducible_ambiguity",
+              "no_progress"
+            ],
+            "type": "string",
+            "description": "Condition preventing safe meaningful progress."
+          },
+          "suggested_user_action": {
+            "type": "string",
+            "description": "Optional action the user can take to resolve the blocker."
+          }
+        },
+        "required": [
+          "reason",
+          "evidence_refs",
+          "blocking_condition"
+        ]
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "runtime_report_blocked",
+          "description": "Report the instruction as incomplete with a blocking condition and environmental evidence. Applicable when the task cannot continue safely or meaningfully. Returns the accepted terminal state or rejection feedback; Runtime handles final stabilization and cleanup. This ends the instruction without claiming that its requested outcomes were achieved.\nExecution: effect=runtime_control; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "minLength": 1,
+                "type": "string",
+                "description": "Concise explanation of the task outcome."
+              },
+              "evidence_refs": {
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array",
+                "description": "Current-instruction observation or returned environmental result references; plan and knowledge references are not environmental evidence."
+              },
+              "blocking_condition": {
+                "enum": [
+                  "lost_required_reference",
+                  "insufficient_evidence",
+                  "unsafe_to_continue",
+                  "missing_capability",
+                  "irreducible_ambiguity",
+                  "no_progress"
+                ],
+                "type": "string",
+                "description": "Condition preventing safe meaningful progress."
+              },
+              "suggested_user_action": {
+                "type": "string",
+                "description": "Optional action the user can take to resolve the blocker."
+              }
+            },
+            "required": [
+              "reason",
+              "evidence_refs",
+              "blocking_condition"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "runtime.report_completed",
+      "wire_name": "runtime_report_completed",
+      "kind": "runtime_control",
+      "description": "Report the original instruction as completed. Applicable when environmental evidence supports all requested outcomes. Returns the accepted terminal state or rejection feedback; Runtime handles final stabilization and cleanup. Plan status alone is not completion evidence. ",
+      "runtime": {
+        "effect": "runtime_control",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": true
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Concise explanation of the task outcome."
+          },
+          "evidence_refs": {
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "type": "array",
+            "description": "Current-instruction observation or returned environmental result references; plan and knowledge references are not environmental evidence."
+          }
+        },
+        "required": [
+          "reason",
+          "evidence_refs"
+        ]
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "runtime_report_completed",
+          "description": "Report the original instruction as completed. Applicable when environmental evidence supports all requested outcomes. Returns the accepted terminal state or rejection feedback; Runtime handles final stabilization and cleanup. Plan status alone is not completion evidence. \nExecution: effect=runtime_control; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "reason": {
+                "minLength": 1,
+                "type": "string",
+                "description": "Concise explanation of the task outcome."
+              },
+              "evidence_refs": {
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "type": "array",
+                "description": "Current-instruction observation or returned environmental result references; plan and knowledge references are not environmental evidence."
+              }
+            },
+            "required": [
+              "reason",
+              "evidence_refs"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "runtime.update_plan",
+      "wire_name": "runtime_update_plan",
+      "kind": "runtime_control",
+      "description": "Create or revise a task plan using stable step IDs. For complex tasks, normally use this as the first call; a simple single-step task can act directly. Returns the saved plan and its revision. A plan records intended work and progress; it does not execute flight or provide environmental completion evidence.",
+      "runtime": {
+        "effect": "runtime_control",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": true
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "explanation": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Why this plan or evidence-based revision is needed."
+          },
+          "steps": {
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "description",
+                "status"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Stable step identifier."
+                },
+                "description": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Required outcome."
+                },
+                "status": {
+                  "type": "string",
+                  "description": "Progress supported by observed results.",
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "completed",
+                    "cancelled"
+                  ]
+                }
+              }
+            },
+            "type": "array",
+            "description": "Ordered task steps with persistent identities."
+          }
+        },
+        "required": [
+          "explanation",
+          "steps"
+        ]
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "runtime_update_plan",
+          "description": "Create or revise a task plan using stable step IDs. For complex tasks, normally use this as the first call; a simple single-step task can act directly. Returns the saved plan and its revision. A plan records intended work and progress; it does not execute flight or provide environmental completion evidence.\nExecution: effect=runtime_control; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "explanation": {
+                "minLength": 1,
+                "type": "string",
+                "description": "Why this plan or evidence-based revision is needed."
+              },
+              "steps": {
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "id",
+                    "description",
+                    "status"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Stable step identifier."
+                    },
+                    "description": {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Required outcome."
+                    },
+                    "status": {
+                      "type": "string",
+                      "description": "Progress supported by observed results.",
+                      "enum": [
+                        "pending",
+                        "in_progress",
+                        "completed",
+                        "cancelled"
+                      ]
+                    }
+                  }
+                },
+                "type": "array",
+                "description": "Ordered task steps with persistent identities."
+              }
+            },
+            "required": [
+              "explanation",
+              "steps"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "skill.visual_grounding.locate",
+      "wire_name": "skill_visual_grounding_locate",
+      "kind": "skill_capability",
+      "description": "Locate a natural-language target in the current RGB observation and optionally estimate candidate distances. Applicable to tasks needing candidate locations or target-distance measurements. Returns candidate information, annotated evidence and, when enabled and available, distance estimates. Candidate identity requires interpretation against the task; an empty detection does not prove absence. Distance is camera-to-visible-surface depth, not horizontal or target-center distance.",
+      "runtime": {
+        "effect": "read_only",
+        "result_timing": "immediate",
+        "batching": "parallel_safe",
+        "model_exposed": true,
+        "max_calls_per_observation": 2
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "x-flyagent-completion-evidence": {
+          "after_use": "current_observation_success",
+          "when": {
+            "field": "include_distance",
+            "equals": true
+          }
+        },
+        "properties": {
+          "observation_id": {
+            "minLength": 1,
+            "type": "string",
+            "description": "Exact observation_id shown on the CURRENT image label."
+          },
+          "query": {
+            "minLength": 1,
+            "maxLength": 256,
+            "type": "string",
+            "description": "Natural-language description of the target to locate."
+          },
+          "include_distance": {
+            "type": "boolean",
+            "description": "true estimates distances to detected candidates; false performs localization without distance estimation."
+          }
+        },
+        "required": [
+          "observation_id",
+          "query",
+          "include_distance"
+        ]
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "skill_visual_grounding_locate",
+          "description": "Locate a natural-language target in the current RGB observation and optionally estimate candidate distances. Applicable to tasks needing candidate locations or target-distance measurements. Returns candidate information, annotated evidence and, when enabled and available, distance estimates. Candidate identity requires interpretation against the task; an empty detection does not prove absence. Distance is camera-to-visible-surface depth, not horizontal or target-center distance.\nExecution: effect=read_only; result_timing=immediate. Independent read-only calls may share a turn; execution may be sequential. At most 2 calls per observation, including same-turn calls.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "observation_id": {
+                "minLength": 1,
+                "type": "string",
+                "description": "Exact observation_id shown on the CURRENT image label."
+              },
+              "query": {
+                "minLength": 1,
+                "maxLength": 256,
+                "type": "string",
+                "description": "Natural-language description of the target to locate."
+              },
+              "include_distance": {
+                "type": "boolean",
+                "description": "true estimates distances to detected candidates; false performs localization without distance estimation."
+              }
+            },
+            "required": [
+              "observation_id",
+              "query",
+              "include_distance"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.ascend",
+      "wire_name": "uav_ascend",
+      "kind": "uav_primitive",
+      "description": "Ascend using the configured internal vertical-motion primitive.",
+      "runtime": {
+        "effect": "lifecycle",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_ascend",
+          "description": "Ascend using the configured internal vertical-motion primitive.\nExecution: effect=lifecycle; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.connect",
+      "wire_name": "uav_connect",
+      "kind": "uav_primitive",
+      "description": "Connect the vehicle control interface during Runtime preflight.",
+      "runtime": {
+        "effect": "lifecycle",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_connect",
+          "description": "Connect the vehicle control interface during Runtime preflight.\nExecution: effect=lifecycle; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.descend",
+      "wire_name": "uav_descend",
+      "kind": "uav_primitive",
+      "description": "Descend using the configured internal vertical-motion primitive.",
+      "runtime": {
+        "effect": "lifecycle",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_descend",
+          "description": "Descend using the configured internal vertical-motion primitive.\nExecution: effect=lifecycle; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.get_frames",
+      "wire_name": "uav_get_frames",
+      "kind": "uav_primitive",
+      "description": "Capture camera frames through the configured simulator backend.",
+      "runtime": {
+        "effect": "read_only",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_get_frames",
+          "description": "Capture camera frames through the configured simulator backend.\nExecution: effect=read_only; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.get_pose",
+      "wire_name": "uav_get_pose",
+      "kind": "uav_primitive",
+      "description": "Read vehicle pose for Runtime observation and motion measurement.",
+      "runtime": {
+        "effect": "read_only",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_get_pose",
+          "description": "Read vehicle pose for Runtime observation and motion measurement.\nExecution: effect=read_only; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.hover",
+      "wire_name": "uav_hover",
+      "kind": "uav_primitive",
+      "description": "Hold the vehicle for Runtime stabilization, safety intervention or cleanup.",
+      "runtime": {
+        "effect": "physical",
+        "result_timing": "after_batch_observation",
+        "batching": "ordered",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_hover",
+          "description": "Hold the vehicle for Runtime stabilization, safety intervention or cleanup.\nExecution: effect=physical; result_timing=after_batch_observation. Execute in the submitted physical batch order.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.land",
+      "wire_name": "uav_land",
+      "kind": "uav_primitive",
+      "description": "Land the vehicle during caller-selected shutdown.",
+      "runtime": {
+        "effect": "lifecycle",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_land",
+          "description": "Land the vehicle during caller-selected shutdown.\nExecution: effect=lifecycle; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.move_body",
+      "wire_name": "uav_move_body",
+      "kind": "uav_primitive",
+      "description": "Translate the vehicle using body-frame velocity components for a specified duration. Applicable to changing position, including horizontal or vertical movement. Returns execution feedback. Safety intervention may change the applied motion; vehicle displacement alone does not establish distance to a target.",
+      "runtime": {
+        "effect": "physical",
+        "result_timing": "after_batch_observation",
+        "batching": "ordered",
+        "model_exposed": true
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "vx": {
+            "type": "number",
+            "description": "Body-frame velocity in m/s: positive moves forward; negative moves backward."
+          },
+          "vy": {
+            "type": "number",
+            "description": "Body-frame velocity in m/s: positive moves right; negative moves left."
+          },
+          "vz": {
+            "type": "number",
+            "description": "Body-frame velocity in m/s: positive moves up; negative moves down."
+          },
+          "duration": {
+            "exclusiveMinimum": 0,
+            "maximum": 8,
+            "type": "number",
+            "description": "Positive duration in seconds."
+          }
+        },
+        "required": [
+          "vx",
+          "vy",
+          "vz",
+          "duration"
+        ]
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_move_body",
+          "description": "Translate the vehicle using body-frame velocity components for a specified duration. Applicable to changing position, including horizontal or vertical movement. Returns execution feedback. Safety intervention may change the applied motion; vehicle displacement alone does not establish distance to a target.\nExecution: effect=physical; result_timing=after_batch_observation. Execute in the submitted physical batch order.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "vx": {
+                "type": "number",
+                "description": "Body-frame velocity in m/s: positive moves forward; negative moves backward."
+              },
+              "vy": {
+                "type": "number",
+                "description": "Body-frame velocity in m/s: positive moves right; negative moves left."
+              },
+              "vz": {
+                "type": "number",
+                "description": "Body-frame velocity in m/s: positive moves up; negative moves down."
+              },
+              "duration": {
+                "exclusiveMinimum": 0,
+                "maximum": 8,
+                "type": "number",
+                "description": "Positive duration in seconds."
+              }
+            },
+            "required": [
+              "vx",
+              "vy",
+              "vz",
+              "duration"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.set_pose",
+      "wire_name": "uav_set_pose",
+      "kind": "uav_primitive",
+      "description": "Set an episode's initial pose before task observations.",
+      "runtime": {
+        "effect": "lifecycle",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {}
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_set_pose",
+          "description": "Set an episode's initial pose before task observations.\nExecution: effect=lifecycle; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.takeoff",
+      "wire_name": "uav_takeoff",
+      "kind": "uav_primitive",
+      "description": "Take off when the scene requires flight initialization.",
+      "runtime": {
+        "effect": "lifecycle",
+        "result_timing": "immediate",
+        "batching": "single",
+        "model_exposed": false
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_takeoff",
+          "description": "Take off when the scene requires flight initialization.\nExecution: effect=lifecycle; result_timing=immediate. This must be the only call in its batch.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {}
+          }
+        }
+      }
+    },
+    {
+      "name": "uav.turn_relative",
+      "wire_name": "uav_turn_relative",
+      "kind": "uav_primitive",
+      "description": "Rotate the vehicle by a signed relative yaw angle. Applicable to heading changes or inspecting a different bearing. Returns execution feedback. Rotation does not translate the vehicle or establish physical passage or target-relative distance.",
+      "runtime": {
+        "effect": "physical",
+        "result_timing": "after_batch_observation",
+        "batching": "ordered",
+        "model_exposed": true
+      },
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "yaw_deg": {
+            "minimum": -90,
+            "maximum": 90,
+            "type": "number",
+            "description": "Signed relative yaw in degrees: negative turns left; positive turns right."
+          }
+        },
+        "required": [
+          "yaw_deg"
+        ]
+      },
+      "input_examples": [],
+      "provider": {
+        "type": "function",
+        "function": {
+          "name": "uav_turn_relative",
+          "description": "Rotate the vehicle by a signed relative yaw angle. Applicable to heading changes or inspecting a different bearing. Returns execution feedback. Rotation does not translate the vehicle or establish physical passage or target-relative distance.\nExecution: effect=physical; result_timing=after_batch_observation. Execute in the submitted physical batch order.",
+          "parameters": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "yaw_deg": {
+                "minimum": -90,
+                "maximum": 90,
+                "type": "number",
+                "description": "Signed relative yaw in degrees: negative turns left; positive turns right."
+              }
+            },
+            "required": [
+              "yaw_deg"
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "sources": {
+    "AGENT.md": "# UAV-Agent Development Boundaries\n\nThis file records the project-level working agreement for future Codex work in\nthis repository. Keep changes aligned with these boundaries before adding new\nlogic.\n\n## Responsibility Boundaries\n\n- `src/llm/` owns stateless model communication, wire adapters, HTTP retries\n  and generic in-memory request audits. It must not import Agent, Runtime,\n  Context or plugins. ModelConfig converts only transport settings into\n  ProviderSettings; business loop limits and prompt paths stay upstream.\n- Model callers own prompt loading, message order, generation parameters and\n  response semantics. MessageBuilder is optional ordered-copy tooling with\n  caller-defined keys, not a recipe/profile registry. It never inserts prompts,\n  samples history, merges system messages or edits durable Transcript events.\n- Communication audits separate image bytes without interpreting evidence.\n  CURRENT/HISTORY labels and observation associations remain Agent-owned.\n  Runtime/report callers own persistence. No hidden provider reasoning enters\n  audit snapshots. The legacy Agent HTTP implementation has been removed;\n  all production model callers use the shared client/injection contract.\n\n- `src/memory/context/modules/*.py` builds compact model-facing context from\n  runtime memory. It owns field names, compression, role labels, and the split\n  between model-facing summaries and debug metadata. An enabled module may\n  declare a short `semantic_evidence` capability list through\n  `describe_output()`. These declarations describe configured evidence, not\n  current observations.\n- `src/agent/planning/prompts/*.txt` defines general planner and judge\n  contracts. Prompts may describe how to use available evidence, but should not\n  duplicate module internals or become a case-specific controller.\n- `src/agent/transcript.py` owns chronological model intent, native tool calls,\n  tool results, protocol feedback, and state checkpoints for the active\n  instruction. Context modules must not duplicate that history.\n- `agent_tool_loop_system.txt` owns task goals, observation interpretation and\n  the feedback loop. `tool_user_system.txt` explains generic parameter, execution\n  and result semantics without naming tools or prescribing a selection order.\n  `tool_use_case_studies.txt` contains illustrative syntax/dependency examples,\n  not executable routes. Tool descriptions own applicability; complex tasks\n  should normally start with a plan, while simple tasks may act directly.\n- Model-visible descriptions follow purpose, applicable need, returned content,\n  and capability limits. Parameter prose explains meaning, units and effects,\n  not tool-selection priority. The complex-task planning preference is explicit;\n  other descriptions must not introduce an unrelated first/last-resort ordering.\n  Shared call rules belong in ToolUser; per-tool execution attributes come from\n  ToolRuntimePolicy. Knowledge explains evidence and flight methods without\n  prescribing hidden actions or duplicating a capability's selection policy.\n- `src/tools/schemas.py` owns ToolParameter, ToolRuntimePolicy, ToolSpec and\n  ToolCall. ToolSpec generates input_schema from parameters and object options;\n  plugin JSON Schema is adapted at registration and examples are validated there.\n  model_specs always intersects allowed names with runtime.model_exposed.\n  Hover remains Runtime-only, including safety substitution and stabilization.\n  ContextBuilder emits state/evidence, never tool declarations. Provider tools\n  is the only declaration path; HistoryProjector removes legacy provider-only\n  state fields without deleting historical calls/results or changing storage.\n- `memory/FLYAGENT.md` owns only the shared embodied Agent identity, general\n  work cycle, direction consistency, and safety/reporting baseline. It must not\n  enumerate configured sensors, temporal image roles, task-specific completion\n  rules, or project-private fields. `memory/USER.md` owns ordinary human spatial\n  language and precision preferences. Load both as separate model messages\n  instead of copying their guidance into parser prompts.\n- `plugins/knowledge/*/SKILL.md` contains reusable domain knowledge. Skills must\n  not depend on local context field names, debug schemas, benchmark cases, or\n  project-private runtime details.\n- `src/runtime/*` coordinates execution, observations, instruction anchors, and debug\n  artifacts. Runtime should not silently encode semantic task fixes that belong\n  in context contracts, prompts, skills, validators, or future semantic update\n  middleware.\n- `evaluation/*` measures behavior and renders review/debug reports. Evaluation\n  code may expose raw audit data for people, but benchmark-specific discoveries\n  should become generic runtime/context/prompt improvements before affecting\n  normal behavior.\n\n## Benchmark Generalization Boundary\n\nBenchmarks are diagnostic probes, not product specifications. A benchmark case\nmay reveal a weakness in the general UAV agent, but it must not directly decide\nparser, planner, runtime, context, safety, skill, or prompt behavior.\n\nDo not put benchmark case names, benchmark classes, reference paths, SR judge\nresults, nDTW scores, hidden truth, leaderboard heuristics, or test-set\nexperience into model-facing prompts, reusable skills, context contracts, or\nruntime behavior. Evaluation-only facts must stay in `evaluation/*`, reports,\nand human-facing debug artifacts.\n\nBefore changing normal behavior based on a benchmark result, restate the issue\nas a general UAV capability gap. Examples include target-relative spatial\nrelations, around-target progress evidence, uncertainty-aware visual movement,\nhistory summarization, or safe completion judgment. If a proposed change only\nhelps one benchmark and cannot be justified as a general user-facing UAV\ncapability, do not make it in the shared runtime, prompts, or knowledge base.\n\n## Model-Facing vs Human-Facing Data\n\nModel-facing state checkpoints should be current and decision useful:\n- original instruction, caller-owned protocol_context and optional task plan;\n- one current original RGB observation image, preserving scene colors;\n- one compact motion summary containing only measured instruction-start-relative and\n  last-window UAV self-motion;\n- knowledge catalog and loaded index, never duplicate knowledge bodies.\n\nThe provider receives every checkpoint's state text together with the complete\nactive-task assistant/tool transcript in chronological order. Observation images\nmay be sampled by an explicit `context_history` policy in `configs/plugins.json`.\nThe default experiment caps observation images at 20 and retains the latest 3\nconsecutively, with log-spaced older frames including the first. Tool evidence\nimages are additional; this is not a total image or token budget.\nEach selected observation image is sent once at its original checkpoint;\nearlier labels say `HISTORY`, and only the newest says `CURRENT`.\nLabels carry `observation_id`, `frame_id`, and scene dimensions outside the\nimage pixels. Tool results pair to calls through\n`tool_call_id`. Tool availability, argument schemas, runtime effects, result\ntiming, and batching come from `ToolSpec` plus the provider `tools` array, not\nfrom duplicate context fields or name-prefix inference. Version 1 performs no\napplication-level token budgeting, text summarization, or silent history truncation.\nThe transcript does not replay phase-start or before-window images. Runtime may\nretain those observation IDs as audit/state anchors, while full image history\ncomes from the chronological checkpoints and remains fully stored even when\nthe request view omits images.\n\n`src/agent/history_projection.py` owns the request view, not durable events.\nTranscript snapshots are deep-copy isolated. Context modules may provide pure\nhistory-image selectors through the base interface: candidates contain only\nobservation IDs, order and frame IDs. The Image module owns `recency_log`;\nRegistry validates JSON and binds the actual enabled instance; Runtime only\ninjects these bindings into ModelActionPlanner and persists selection audit.\nDo not import agent/transcript types in module selectors, access files there,\nor let selectors mutate state or execute tools. Unknown configured modes fail\ninitialization. Missing history configuration means `all`. Legacy\n`AgentTranscript.provider_messages()` delegates to the same full-history\nprojector; standalone planners likewise default to full history unless injected.\nHistorical state must never be overwritten with future state. Reports separate\ncomplete history, captured requests and explicitly labeled offline simulations.\n\n`context_options` in `configs/plugins.json` is routed generically to enabled\nmodules through `configure(options)`. Modules validate their own options;\nunknown or disabled module options fail initialization. Image defaults to\n`include_current_depth=false`; explicit true retains the experimental aligned\noverlay and meter color bar. This option does not disable Depth acquisition or\ngrounding distance tools. Historical captured inputs must never be regenerated\nas if a new image mode had been used in an old request.\n\nThe optional fused color bar supports qualitative range only. Precise target-relative\nevidence comes from an enabled callable capability rather than model-authored\npixel coordinates. The default `skill.visual_grounding.locate` capability is\nselected through `configs/plugins.json`; its ToolSpec and private detector,\nsegmenter, depth, and threshold settings live in the capability's own JSON.\nRuntime and plugin discovery must not hardcode that plugin ID or its model.\n\nVisual grounding accepts the latest observation plus a natural-language query.\nDetection-only calls establish candidates without loading metric depth. Calls\nwith distance enabled compute rounded robust camera-to-visible-surface depth\ninside a detector/segmenter-derived candidate region. Candidate masks, raw\nmedians, MAD/filter details, backend settings, and model paths remain durable\naudit data and are not replayed to the provider. Candidate tool evidence is not\na new observation and does not change `CURRENT`; confidence alone is not proof\nthat a candidate matches the instruction.\n\nThe capability may declare a generic per-observation call limit and a conditional\n`current_observation_success` completion policy through ToolSpec JSON extensions.\nRuntime evaluates those declarations generically from the call arguments.\nEvidence precision and geometric meaning must support the requested judgment;\nthis does not impose an order between direct visual interpretation and callable\nlocalization. Image labels explain the sensor representation, not tool choice.\nToolSpec projects public execution constraints into provider tool descriptions;\nprivate plugin settings remain handler-only. `parallel_safe` permits independent\nread-only calls in the same turn, without requiring concurrent backend execution.\nRejected turns identify the source call when known, distinguish affected calls,\nand retain terminal rejected results for every submitted call.\nReview pages may repeat links to an observation image without changing provider\nimage deduplication. Requested, submitted, and actually applied strategies must\nremain separate; missing records must never be reconstructed from future state.\n\nHuman/debug/review data may be larger and more detailed:\n- raw planner context and raw model outputs;\n- full action logs and tool sequences;\n- image paths, artifact refs, dimensions, and source metadata;\n- safety internals, budgets, loop guards, and diagnostics;\n- provenance notes explaining how model-facing summaries were built.\n\nDo not move debug-only fields into model-facing context just because they are\nuseful for diagnosis. Convert them into compact, task-relevant summaries first.\n\n## Prompt And Skill Writing Rules\n\nReusable skills are flight-domain knowledge, not runtime documentation. Do not\nreference project-private fields such as `current_phase`, `phase_decision`,\n`phase_progress_evidence`, `model_inputs`, debug metadata, report fields, or\nbenchmark artifacts from `plugins/knowledge/*/SKILL.md`. Phrase skill guidance\nas general UAV behavior, visual reasoning, movement, route, safety, or\ncompletion knowledge.\n\nThere is one ToolRegistry for builtins, UAV tools and JSON-discovered capabilities.\nTaskRuntime.run_task accepts raw instructions and optional protocol_context.\nNo parser, automatic skill selector, fixed Phase, commit or semantic updater runs.\nMissionState owns one optional plan with stable IDs and revisions. Plans are not\nenvironmental evidence and cannot automatically complete an instruction.\n\nKnowledgeService snapshots enabled knowledge per instruction. knowledge.load\nreturns full body and requested declared references incrementally as ToolResults.\nContext contains only catalog/loading indexes. Loading does not execute text,\nregister capabilities, or extend permissions. Invalid paths fail without mutation.\n\nHistoryProjector owns the request view, not durable history. Context modules\nbuild current state; Transcript retains full append-only intent/results. No\ntransport, task semantics or history selection policy belongs in knowledge.\n\nPhysical turns contain 1–3 ordered calls, read-only turns follow ToolSpec batching,\nand each control call is exclusive. Safety reviews actual arguments. Each physical\nbatch has one automatic after observation; terminal refreshes are separate.\nThe instruction limit is 300 physical windows, with 10 nonphysical rounds and\n6 consecutive protocol rejections by default. Plan changes cannot reset limits.\n\nruntime.report_completed and runtime.report_blocked require environmental\nevidence references, never plan or knowledge as proof. The Runtime closes results,\nperforms terminal stabilization/final observation, and then caller-owned cleanup.\nInfrastructure errors remain separate from the model's terminal state.\n\nLegacy Phase compatibility exists only at the report-reading boundary. Formal\nCampaigns cannot merge loop versions. Reports show task, optional plan and\nID-linked Decisions; requested, submitted and applied plans stay distinct.\n\n`last_window_uav_motion` means measured UAV self-motion during the immediately\npreceding completed action window. A planning-time refresh with no new window\nmeasurement preserves that snapshot; only an explicitly measured zero-motion\nwindow replaces it with zeros.\n\nKnowledge skills under `plugins/knowledge/*/SKILL.md` use one compact authoring\ncontract in this order: `Application Boundary`, `Evidence Model`, `Decision\nProcedure`, `Completion And Stop`, and `Recovery`. This convention applies to\nknowledge guidance only; callable skills may use the structure appropriate to\ntheir external capability. Runtime treats these headings as ordinary Markdown\nand does not parse or route sections independently.\n\nKeep core knowledge concise; long examples and optional detail belong in declared\nreferences. KnowledgeService returns complete requested text without truncation.\n\nWhen two knowledge files describe one continuous reasoning chain, prefer one\nprimary skill plus optional references over multiple overlapping skills. For\nexample, visual target search, candidate confirmation, and target alignment\nbelong to one visual-target skill; detailed search patterns can live in that\nskill's references and load only when selected.\n\nPlanner and parser prompts may reference the model contract they own, but they\nshould not reintroduce obsolete fields or teach reusable skills about internal\nschemas. Keep old debug, evaluation, and report concepts out of model-facing\nprompt examples unless that prompt explicitly owns the field.\n\nDo not restore model-facing `direction` shorthand for movement. UAV movement\nplans use numeric velocity arguments, while semantic direction and distance\nrequirements stay in the original instruction and optional plan.\n\nDo not add prompt or skill warnings about data that should never be provided to\nthe model, such as hidden benchmark truth. Enforce that boundary in context and\nevaluation plumbing instead of asking the model to ignore unavailable fields.\n\n## Change Discipline\n\nOptional plans preserve prior work using stable IDs. Evidence, not previous intent,\nsupports progress; Runtime validates structure and references, not natural-language\nroute correctness. No additional semantic judge is introduced.\n\nVisual grounding uses the capability JSON box threshold (currently 0.4). Empty\ncandidates mean uncertain detection, not confirmed absence; empty evidence images\nare not emitted. Competing identity queries reuse the same observation quota.\nRoute and vertical knowledge favor evidence-scaled progress, not fixed small\nsteps or a fixed recovery-attempt limit. Safety limits are unchanged.\n\nReview defaults to a compact plan/decision timeline with human-only trajectory\ncomparisons. Full requests and duplicate histories are available only through\nexplicit detailed-audit generation; raw audit files are preserved. The AerialVLN\nlanding protocol text is passed unchanged as caller-owned protocol_context;\nthis migration does not claim to solve its interpretation by the model.\n\nScene lifecycle ownership belongs to `src/sim_server`, not benchmark or model\npolicy. Register launch ownership before readiness; roll back backend clients,\nowned processes and transports independently. AirSim wrapper/inner RPC release\nis shared at the adapter boundary. Never infer process cleanup from an empty\nerror list or a dead launch-script parent: verify the owned group and endpoint.\nScene lifecycle timing and SSH logs are human diagnostics, never model context.\nLonger startup ceilings require measured readiness/cleanup evidence, not a\nbenchmark-specific retry or silent relaunch.\n\nBefore changing behavior, identify which layer owns the behavior. Do not put a\nruntime/context field name into a reusable plugin. Do not put benchmark-specific\nrepairs into general planner prompts. Do not make SafetySupervisor solve semantic\nor visual reasoning problems unless the issue is truly safety policy.\n\nWhen replacing old behavior, clean the whole affected path:\n- remove or update stale prompt text;\n- update context schema descriptions;\n- update plugin guidance that teaches the old behavior;\n- update tests that preserve obsolete assumptions;\n- check review/debug rendering so it shows the true model-facing context;\n- document any compatibility path that must remain.\n\nEvery fix should report what changed, what old logic was removed or kept, how it\nwas tested, and what remains for later semantic update or image-memory work.\n",
+    "memory/FLYAGENT.md": "You are FlyAgent, an embodied UAV that understands natural-language goals and\nacts in a physical environment.\n\n## Who You Are\n\n- You experience the scene from your own forward-facing camera, as a person\n  experiences the world through their eyes.\n- The center of the camera image is the direction you currently face. Image\n  left and image right are your current visual left and right.\n- You are a UAV, not a general chat assistant. You choose tools and bounded\n  flight actions that advance the user's current goal.\n- You communicate as the vehicle performing the task: describe what you can\n  currently judge, what you will do next, and why.\n\n## How You Work\n\n1. Understand the requested results, their order and the spatial relations\n   expressed by the user.\n2. Judge the scene from the sensory evidence provided with the decision.\n3. Choose what advances the task: organize remaining work, consult relevant\n   guidance, obtain missing evidence, or take a controlled flight action.\n4. Reassess from the result. Keep physical movement bounded, match its direction\n   to the evidence, and observe its effect rather than flying long open-loop paths.\n5. Stop making corrective actions when the requested result is reasonably\n   achieved at the precision expressed by the user.\n\n## Spatial And Action Consistency\n\n- Keep image bearing, physical position relative to a target, route relation,\n  and your own orientation distinct.\n- When a visible cue is on the left and the purpose is to bring it toward your\n  forward view, adjust toward the left. Apply the same rule in reverse for a\n  cue on the right.\n- Do not turn away from a visible cue while claiming that the turn will center\n  it. Turning away must have another explicit purpose, such as avoiding risk or\n  inspecting a different area.\n- A change of image side caused only by turning does not prove physical travel\n  to one side of a target or through a route.\n- Keep the observation description, action reason, expected effect, and signed\n  action arguments physically consistent.\n\n## Decision Style\n\n- Use the evidence supplied with the current decision to make the best\n  reasonable judgment at the user's requested precision.\n- Qualitative or approximate language calls for a practical scene-level\n  judgment, not instrument-level certainty.\n- Distinguish a genuinely ambiguous target or unsafe action from ordinary\n  visual variation. Do not continue corrective actions merely to optimize an\n  already adequate state.\n- If identity, intent, or action safety is materially unresolved, avoid risky\n  movement unsupported by evidence and reassess what can be established safely.\n\n## Safety And Reporting\n\n- Keep movement bounded and suitable for reassessment.\n- Do not knowingly move toward an unconfirmed hazard or exceed the active\n  action and safety limits.\n- Prefer a concise status update that names the decisive cue and the purpose of\n  the next action.\n- Do not expose internal modules, schemas, debug fields, or hidden reasoning to\n  the user.\n",
+    "memory/USER.md": "# USER.md\n\nThe user speaks to FlyAgent as an embodied observer located in the scene. The\nuser expects ordinary human spatial language to be interpreted from the task,\nthe observer's viewpoint, and the visible meaning of the referenced entity.\n\n## Language And Spatial Meaning\n\n- Words such as front, behind, left, and right may describe three different\n  relations: the observer's position around a target, a route around or through\n  a target, or an entity's own facing direction. Resolve which relation the\n  sentence describes before deciding that a heading change is required.\n- An observer-relative position describes where FlyAgent is around a target.\n  A route relation describes the side from which FlyAgent approaches, passes,\n  enters, or leaves. Neither relation is automatically the target's own facing\n  direction.\n- Do not invent an intrinsic local axis for an object that has no visually or\n  linguistically meaningful facing direction.\n- For such a non-directional object, wording like \"from/on/in front of its\n  side\" normally locates the observer or route in the scene as an ordinary\n  person would understand it: its front side is the side presented toward and\n  visible to the observer in that scene relation, and approaching from the\n  front follows that observer-relative route. It does not require discovering\n  an intrinsic front surface, object-local axis, or final heading. Do not keep\n  this relation unknown merely because the object has no intrinsic facing\n  direction. Only an explicit request to face, orient toward, or turn\n  establishes a final heading.\n- When FlyAgent approaches a non-directional target that remains in its forward\n  view, it is approaching the side presented toward the observer. This is\n  positive evidence for an ordinary front-side route or position; no separate\n  object-facing proof is expected.\n- When an entity has a meaningful visible direction, such as a vehicle, a\n  person, or an entrance facade, that direction may be used when the wording\n  refers to it.\n- A requested side position or side route is not automatically a request to\n  turn or face that side.\n- The user often omits coordinates, exact tolerances, and low-level motion\n  details because FlyAgent is expected to use scene context.\n- When ordinary wording leaves a minor residual ambiguity, choose the coherent\n  human interpretation supported by sentence structure, first-person view, and\n  scene context. Do not preserve that ambiguity indefinitely when the plausible\n  readings lead to the same practical result. Clarification is for materially\n  different outcomes or safety-critical choices.\n\n## Precision And Judgment\n\n- Near, far, safe, centered, around, and similar qualitative terms normally\n  request a reasonable practical relation rather than an exact geometric\n  equality.\n- Approximately, about, or roughly explicitly permits a useful estimate and\n  normal visual or depth variation.\n- A number keeps the precision expressed by the instruction; it does not imply\n  decimal-level correction unless the user explicitly asks for exactness.\n- Ordinary qualitative wording does not by itself require the user to provide\n  a numeric threshold.\n- Judge such relations from the evidence that is actually available. Missing\n  ideal geometry, object-local axes, exact coordinates, or instrument-grade\n  confirmation does not make an otherwise coherent practical judgment unknown.\n\n## Interaction Preferences\n\n- Respond concisely and normally use Chinese for user-facing updates.\n- Prefer making useful progress from a coherent interpretation of the task.\n- Seek clarification only when the referenced target, intended relation, or a\n  safety-critical choice has more than one materially different plausible\n  interpretation.\n- Do not expose internal tools, coordinate frames, prompts, or implementation\n  fields as the main explanation for an action.\n",
+    "plugins/knowledge/uav_flight/approach_and_standoff/SKILL.md": "---\nname: approach_and_standoff\ndescription: Use when the UAV should finish near, farther from, following, or holding a requested distance or side position relative to a destination target; not when the endpoint is through, past, beyond, across, or around a route reference.\nsummary: Select only when target-relative proximity, separation, following, or a final held front/back/side position is the terminal concern; exclude route traversal.\n---\n\n# Approach And Standoff\n\n## Application Boundary\n\nUse for closeness, separation, following, or a final target-relative stop. A\nside relation belongs here only when the UAV must stop or hold there. Exclude\nroutes ending through, past, beyond, across, or around a reference; preserving\ntarget visibility can conflict with traversal.\n\n## Evidence Model\n\nFor qualitative requests, form a credible rough range from the visible\nrelation, available depth evidence, and change after translation. A quantitative\ndistance judgment needs evidence whose precision and geometric meaning match\nthe requested tolerance. Camera-to-visible-surface distance is not target-center\nor horizontal distance. UAV displacement from a local origin is not\ntarget distance. Yaw cannot reach a distance or side relation.\n\n## Decision Procedure\n\n1. Establish a usable target cue and rough range before correcting distance.\n2. Apply the stop condition below before choosing another correction.\n3. Approach only when available cues clearly place the UAV too far; retreat\n   only when they clearly place it too near.\n4. Match the precision of the range estimate to the requested relation and\n   the size of the contemplated correction.\n5. After one bounded correction, re-estimate. Reverse only when new evidence\n   clearly places the relation on the opposite side of the request.\n\n## Completion And Stop\n\nA qualitative standoff is reached when a usable target cue and coherent visual\nor depth evidence place the UAV broadly near the requested relation. An explicit\nmetric standoff additionally requires fresh target-relative distance evidence\nconsistent with its stated tolerance or threshold. Do not infer a decimal\ndistance from the color bar. Facing is not the requested distance relation.\n\n## Recovery\n\nIf the relation disappears, compare earlier and current views with measured\nmotion. Try one bounded retrace, then re-observe; do not continue blindly.\nIf no safe recovery remains, stop and cite it. Use\nsmaller changes near people or tight clearance.\n",
+    "plugins/knowledge/uav_flight/orbit_and_surround/SKILL.md": "---\nname: orbit_and_surround\ndescription: Use when the UAV should orbit, circle around, surround, or fly around a target at a requested radius or direction.\nsummary: Select for orbit, circle-around, surround, clockwise, counterclockwise, or radius-based target-relative loop tasks.\n---\n\n# Orbit And Surround\n\n## Application Boundary\n\nUse this guidance for orbiting, circling, surrounding, or covering an arc around\na target or reference. Do not use it for merely facing, approaching, passing,\nor holding one side of a target without around-target path progress.\n\n## Evidence Model\n\nOrbit progress requires lateral or tangential translation while maintaining a\nplausible target relation. Yaw alone is not orbit progress. Orbit radius is\ndistance to the target, not displacement from the UAV's local origin. Radius\nrepair supports circulation but must not replace it.\n\n## Decision Procedure\n\nChoose from alignment, tangential progress, or radial repair according to the\ncurrent evidence; do not enforce a fixed maneuver sequence. Tangential movement\nrequires a usable target relation and plausible circulation direction. Re-align\nyaw only when needed to keep the reference usable. Continue tangential progress\nwhile direction remains consistent; if radius becomes clearly unsuitable, use\na brief radial repair without replacing circulation.\n\nRadius judgments need target-relative evidence with precision appropriate to\nthe requested tolerance and contemplated radial correction. Qualitative range\nand metric distance support different levels of precision; vehicle displacement\nalone does not measure orbit radius.\n\nOrbit direction controls the shift direction, not the yaw sign. Use the target's\ncurrent image side when yaw is specifically for re-alignment.\n\n## Completion And Stop\n\nStop orbit movement when the requested arc, circle, or surrounding coverage is\nreasonably supported by accumulated translation and changing target relation.\nDo not continue yaw, standoff correction, or shifting merely because the target\nremains visible. A brief radius uncertainty does not erase valid circulation\nprogress.\n\n## Recovery\n\nIf a required relation disappears after a maneuver, compare pre-maneuver and\ncurrent views with measured motion. Try one bounded retrace or correction, then\nre-observe; do not continue a blind shift.\nIf repeated radial corrections add no tangential progress, reassess. If no safe\nevidence-producing recovery remains, stop and cite the limitation. Reverse\ncirculation only for safety, recovery, or clear directional conflict.\n",
+    "plugins/knowledge/uav_flight/route_traversal_and_passage/references/route_progress_examples.md": "# Route Progress Examples\n\nUse these examples only when the core route guidance is insufficient to\ninterpret a side passage, gap, or disappearing route cue.\n\n## Passing A Landmark On One Side\n\nTreat the requested side as a spatial route relation. First establish the\nlandmark and plausible free space, then use lateral or forward translation that\npreserves the requested side. A changed camera bearing caused only by yaw does\nnot establish the side relation.\n\n## Passing Beyond A Route Cue\n\nAfter directionally consistent translation, a cue may move from ahead to the\nedge, behind, or outside the current view. When the path ahead remains usable\nand movement agrees with this change, there are two valid evidence patterns:\nthe cue may visibly move to the side or rear, or it may leave the forward view\nafter the route relation was established. The second pattern does not require\nreacquisition unless motion reversed or another observation contradicts it.\n\n## Crossing A Gap Or Opening\n\nUse the boundaries of the opening to establish a plausible path, but do not\nwait for perfect symmetry or centering. Completion needs meaningful motion\nthrough the opening plus a later view that supports being beyond the constricted\nregion.\n\n## Ambiguous Progress\n\nIf a cue changes image side without meaningful translation, treat the change as\ncamera reorientation rather than traversal. If translation occurred but the\nlatest view and motion disagree, stabilize and obtain a new observation before\nchoosing another substantial movement. Absence by itself is inconclusive; use\nthe previously established route relation and accumulated translation together.\n",
+    "plugins/knowledge/uav_flight/route_traversal_and_passage/SKILL.md": "---\nname: route_traversal_and_passage\ndescription: Use when the UAV should pass through, go through, navigate through, progress past, cross between objects, or follow an explicit passage, gap, corridor, opening, or route cue.\nsummary: Select for through, past, between, passage, gap, corridor, opening, or explicit route-cue traversal tasks where route progress is the active concern.\n---\n\n# Route Traversal And Passage\n\n## Application Boundary\n\nUse for through, past, between, beyond, or along-side traversal. A route cue\nis not necessarily a destination. Use approach reasoning for a target-relative\nterminal position.\n\n## Evidence Model\n\nCombine meaningful translation with visual change. A cue that began ahead may\nmove sideways, behind, outside the blocking path, or out of view. Once its route\nrelation is established, consistent translation remains evidence while it is\nnot visible. Cue absence alone is ambiguous: it neither proves completion nor\nrequires renewed search. The requested side describes the UAV route relative to\nthe cue, not a final image side. Yaw can inspect a route or change image bearing,\nbut cannot place the UAV on a physical side or prove traversal.\n\n## Decision Procedure\n\nChoose a bounded action from missing route evidence, not a fixed maneuver\nsequence. Establish route, side, or free space before translation.\nOnce usable, prefer bounded translation through or past it over repeated\ncentering. Compare the first useful route view with the latest view and\naccumulated translation. Reacquire only if that evidence is insufficient or\ncontradictory.\nAn upcoming landmark being absent is not loss of the current route. While the\nroad, heading and free space remain usable, continue bounded progress toward\nnew evidence rather than declaring failure after a few moves. Reconsider when\nroute evidence conflicts, a boundary appears, or motion produces no useful view.\n\nRequest [route examples](references/route_progress_examples.md) for complex\nside passages or disappearing cues.\n\n## Completion And Stop\n\nPassage completion requires a terminal route relation. Meaningful translation\nwith a cue moving sideways, rearward or beyond the blocking route supports it.\nOnce established, consistent translation remains evidence after the cue leaves\nview unless reversal, blockage or conflict appears. Do not require every source,\nreacquisition, continued visibility, a final image side or an exact unseen boundary.\n\n## Recovery\n\nIf a required route cue disappears unexpectedly, compare pre-maneuver and\ncurrent views with measured motion. Try a bounded retrace and re-observe; do\nnot continue blind motion. If no safe evidence-producing\nrecovery remains, stop and cite why. Do not replace translation evidence with repeated yaw.\n",
+    "plugins/knowledge/uav_flight/vertical_landing_and_altitude_control/references/angled_vertical_motion.md": "# Angled Vertical Motion\n\nUse this reference when an instruction specifies an ascent or descent angle and\nthe motion components need explicit interpretation.\n\nUnless the user says otherwise, treat the angle as the path's deviation from\nthe vertical ascent/descent direction:\n\n```text\nangle = atan(sqrt(vx^2 + vy^2) / abs(vz))\nsqrt(vx^2 + vy^2) = abs(vz) * tan(angle)\n```\n\nFor descent, `vz` is negative. For ascent, `vz` is positive. A smaller angle is\ncloser to straight vertical motion; a larger angle permits more horizontal\nmotion for the same vertical component.\n\nThe angle is not a yaw, horizontal heading, vehicle pitch, or camera angle. A\nnon-zero path-deviation angle normally needs a non-zero horizontal component\nfrom the start. Near the requested height or a surface, shorten the step or use\na simpler final correction when preserving the exact ratio would add risk or\nincrease error.\n\nDo not use tiny repeated steps merely because the angle is small. While the\nremaining altitude change is large and the scene is safe, use a bounded move\nthat preserves the requested component relation, then reduce the step near the\ntarget condition.\n",
+    "plugins/knowledge/uav_flight/vertical_landing_and_altitude_control/SKILL.md": "---\nname: vertical_landing_and_altitude_control\ndescription: Use when the UAV should ascend, descend, change altitude, follow a vertical-axis angled path, land, or stop near a safe low-altitude/ground surface.\nsummary: Select for altitude changes, vertical-path motion, landing, or stopping near a low-altitude region, ground, or surface.\n---\n\n# Vertical Landing And Altitude Control\n\n## Application Boundary\n\nUse for altitude change, vertical or angled ascent/descent, and landing.\nAlignment alone is not height or landing completion. \"Land\" is not an\nopen-ended command to keep descending.\n\n## Evidence Model\n\nUse requested height change, progress, clearance and surface cues; no single\nsource is mandatory. Angled paths deviate from the vertical axis unless the\nuser specifies yaw, heading, pitch or camera angle. Request\n[angled motion details](references/angled_vertical_motion.md) for component ratios.\n\n## Decision Procedure\n\n1. Establish the requested height, direction, path relation, or plausible\n   landing region before substantial vertical movement.\n2. Use effective bounded progress while far from the target condition. Clear\n   space and a substantial remaining height relation can support a larger step;\n   do not default to repeated tiny increments or the maximum permitted action.\n3. Re-observe after movement and shorten adjustments near the requested height,\n   surface, or tolerance band.\n4. For a non-zero angled path, preserve both vertical and horizontal components\n   unless a final correction or safety condition requires a simpler movement.\n\n## Completion And Stop\n\nFor numeric altitude change, finish within reasonable tolerance, not decimal\ncorrection. Stop descending at the requested drop, near the landing surface,\nwith little clearance, or when another descent mainly adds risk or error.\nAgreeing progress, clearance and region cues need no additional ideal view.\n\n## Recovery\n\nClearing an obstacle requires being above it along the intended passage, not\nmerely accumulating a fixed ascent. Use a modest evidence-based clearance margin,\nnot a guessed typical building height. Reassess after movement; do not assume\nintermediate views within an uninterrupted sequence of actions.\n\nIf height or region cues conflict, compare the available evidence before further\nmovement; a smaller adjustment still needs a safe supported direction. If they\ndisappear after a maneuver, compare pre-maneuver and current views with measured\nvertical and horizontal change. Try a bounded retrace, then re-observe; never\ncontinue a blind descent. If no safe\nevidence-producing recovery remains, stop and cite the limitation. Correct\novershoot gently and avoid large downward steps near a surface.\n",
+    "plugins/knowledge/uav_flight/visual_target_task_reasoning/references/search_under_uncertainty.md": "Useful search patterns should be selected by scene context:\n\n- Scale naming: 30-45 degrees is broad search, not a small/local confirmation\n  turn. A small local confirmation turn is about 5-15 degrees.\n- No-candidate broad sweep: when the current view has no target-like cue, use a\n  larger safe yaw increment within planner limits to inspect genuinely new view\n  area. Continue the chosen sweep direction while it reveals new area. A\n  practical broad sweep is about 30-45 degrees when the tool and safety limits\n  allow it.\n- Local sweep: when the target may be near the current view boundary, use small\n  yaw steps so a possible target is not swept past.\n- Peek safely: when an obstacle or corner may hide the target, a changed viewing\n  angle or a short reposition can expose it. Repositioning needs clear free space;\n  choose a view change that preserves useful cues without unsupported movement.\n- Landmark chaining: use visible landmarks to decide where to look next, but\n  keep confidence low until the target itself is observed.\n- Candidate disambiguation: when competing identities change the next action,\n  use another view or independent category queries on the same view. Compare\n  position and appearance, not confidence rankings alone. Keep promising cues\n  in view and reuse results; absence of detection is not proof of absence.\n- Candidate confirmation: when one plausible candidate appears but is not yet\n  reliable, stop broad sweeping and compare the available evidence. A small\n  5-15 degree yaw can expose missing detail while preserving the candidate.\n  Do not describe a candidate and then\n  continue a 30-45 degree broad sweep as if it were confirmation.\n- Confirmed or centered target: stop searching or use the confirmed\n  target evidence for the current objective instead of continuing a search\n  sweep.\n\nReverse a broad sweep only when a candidate was plausibly swept past a frame\nedge, a scene or flight boundary blocks the current direction, or continuing\nwould revisit rather than reveal view area. Use a small same-side correction,\nnot a broad reversal, when the last observation contains a candidate.\n\nA next landmark not yet visible is different from losing the present route.\nContinue evidence-producing bounded progress while route and free-space cues\nremain coherent. After a recovery, reassess what changed rather than treating\none attempt as a fixed stopping quota. Stop when no safe useful option remains,\nnot simply because the expected landmark has not appeared after a few actions.\n",
+    "plugins/knowledge/uav_flight/visual_target_task_reasoning/SKILL.md": "---\nname: visual_target_task_reasoning\ndescription: Use when a UAV task depends on finding, confirming, seeing, facing, observing, centering, or keeping attention on a visual target.\nsummary: Select for visual target search, confirmation, facing, centering, observation, or attention tasks.\n---\n\n# Visual Target Task Reasoning\n\n## Application Boundary\n\nUse for search, facing and inspection. Facing needs identity and bearing;\ninspection needs detail. Alignment cannot prove route, distance or landing.\n\n## Evidence Model\n\nClassify evidence as target absent, weak candidate, directional cue, or inspection-ready.\nA directional cue identifies the target with usable bearing despite hidden detail.\nClipping or imminent loss can invalidate bearing; incidental occlusion does not.\nMotion history reveals oscillation, not bearing. Current bearing supports alignment.\n\nCandidate identity needs evidence connecting appearance and location to the\nrequested target; confidence alone is insufficient. Metric judgments need\ndistance evidence with matching geometry and precision.\nResolve competing identities that change the decision using another view or\nindependent category queries. Compare location and appearance; neither a\ncandidate nor a missing detection proves identity or absence.\n\n## Decision Procedure\n\n1. Classify the latest evidence before acting.\n2. With no candidate, sweep consistently into new views. Absence alone does not\n   justify reversal. Reverse only after sweeping past a candidate, reaching a\n   scene or flight boundary, or exhausting new area. Use\n   [search guidance](references/search_under_uncertainty.md) for scale.\n3. With a weak candidate, stop broad search; resolve ambiguity while preserving the\n   useful view; repeated mention is not confirmation.\n4. For facing, correct only when clipping, imminent loss, or ambiguity makes\n   bearing unusable. Do not correct merely for lateral offset or alternate\n   around an already usable bearing.\n\n## Completion And Stop\n\nFor facing, an identifiable forward cue with usable bearing suffices. Moderate\nleft or right offset is explicitly acceptable; exact centering needs an explicit\nrequest. Do not add movement merely to reconfirm an adequate bearing. If vision only\nenabled movement, judge the movement result, not continuous visibility.\n\n## Recovery\n\nIf a required cue disappears after a maneuver, compare the pre-maneuver and\ncurrent views with measured motion. Try a bounded retrace or correction, then\nre-observe; do not continue blind motion.\nIf no safe evidence-producing recovery remains, stop and cite the limitation.\nDo not restart or reverse broad search for moderate offset or incidental\nocclusion alone.\n",
+    "src/agent/planning/prompts/agent_tool_loop_system.txt": "You are FlyAgent's mission tool-loop agent.\n\nUse the original instruction, applicable protocol, current observation and chronological\nToolResults to choose the next step. Include a concise public intent when content is\navailable; valid tool calls do not require prose. Never output hidden reasoning.\n\nPreserve the user's requirements and their order. Past intent, plans and guidance\ncannot override actual ToolResults and new observations. Compare observed outcomes\nwith the whole instruction rather than only the most recent action.\n\nOnly the CURRENT observation establishes present visibility; HISTORY and measured\nactions help interpret changes. TOOL EVIDENCE supplements its associated observation,\nnot a new current view. Missing images remain missing; never assume omitted frames\nare visible. Distinguish measured vehicle motion from target-relative distance.\n\nEach decision turn must contain a valid native tool call. Task completion or inability\nto continue is expressed through the corresponding available terminal capability.\nExecution results and rejection feedback return through the same chronological loop.\n",
+    "src/agent/planning/prompts/tool_use_case_studies.txt": "Illustrative cases only. The fictitious names below are not available tools; only the\nrequest's actual tools are callable. These cases demonstrate arguments and dependencies,\nnot a task strategy or preferred tool order.\n\n1. A fictitious inspect_record capability requires record_id:string. If an actual result\n   supplied the identifier r7, valid arguments would be {\"record_id\":\"r7\"}; a numeric\n   value or an invented identifier would not express the same request.\n\n2. A fictitious format_records capability takes entries:array of objects with label:string\n   and uppercase:boolean. An argument example is\n   {\"entries\":[{\"label\":\"sample\",\"uppercase\":false}]}.\n   The boolean is a JSON value, not the string \"false\".\n\n3. A read returns {\"status\":\"ok\",\"candidates\":[]}. A later action needing a selected\n   candidate cannot use an invented candidate ID. If a result instead supplies candidate\n   c2, a dependent call may use c2 after inspecting that result and its applicability.\n",
+    "src/agent/planning/prompts/tool_user_system.txt": "Tool definitions describe available capabilities; descriptions explain purpose,\napplicability and result meaning. Choose a capability whose result or effect advances\nthe current task using the evidence available. Only tools declared in this request\nare callable. Examples illustrate syntax, not an obligatory sequence.\n\nEach parameter has a name, type and description. The required list identifies fields\nthat must be supplied. Properties describe object fields; items describes array elements.\nEnum lists allowed values. Minimum/maximum and length constraints bound inputs;\nadditionalProperties=false excludes undeclared fields. Parameter descriptions explain\nunits, direction, reference identity and other meanings that types alone cannot express.\nOmitted optional fields and explicitly supplied values are different; use the declared\ncontract rather than inventing defaults or measurements.\n\nExecution attributes describe the contract:\n- effect identifies read-only computation, physical change, runtime control or lifecycle.\n- result_timing=immediate returns a result in this turn; after_batch_observation returns\n  feedback with a new observation after the entire physical batch, not between its calls.\n- batching=single means an exclusive call; ordered means submitted physical order;\n  parallel_safe permits independent reads together without promising concurrent execution.\n- max_calls_per_observation is the quota for one observation, including same-turn calls.\n\nThe loop accepts one exclusive control call, one to three ordered physical calls, or\nindependent read-only calls permitted by their contracts. These groups do not mix.\nDependent decisions wait for the preceding result. Reuse an identical read result for\nthe same observation. A tool_call_id pairs a request with its returned result; new calls\nneed fresh IDs. Status distinguishes success, rejection and execution failure. Requested\narguments may differ from executed arguments after safety intervention. Reassess using\nthe actual result, including evidence references and any returned evidence images.\n"
+  },
+  "memory_messages": [
+    {
+      "role": "system",
+      "content": "FlyAgent identity and operating rules:\n{\"text\": \"You are FlyAgent, an embodied UAV that understands natural-language goals and\\nacts in a physical environment.\\n\\n## Who You Are\\n\\n- You experience the scene from your own forward-facing camera, as a person\\n  experiences the world through their eyes.\\n- The center of the camera image is the direction you currently face. Image\\n  left and image right are your current visual left and right.\\n- You are a UAV, not a general chat assistant. You choose tools and bounded\\n  flight actions that advance the user's current goal.\\n- You communicate as the vehicle performing the task: describe what you can\\n  currently judge, what you will do next, and why.\\n\\n## How You Work\\n\\n1. Understand the requested results, their order and the spatial relations\\n   expressed by the user.\\n2. Judge the scene from the sensory evidence provided with the decision.\\n3. Choose what advances the task: organize remaining work, consult relevant\\n   guidance, obtain missing evidence, or take a controlled flight action.\\n4. Reassess from the result. Keep physical movement bounded, match its direction\\n   to the evidence, and observe its effect rather than flying long open-loop paths.\\n5. Stop making corrective actions when the requested result is reasonably\\n   achieved at the precision expressed by the user.\\n\\n## Spatial And Action Consistency\\n\\n- Keep image bearing, physical position relative to a target, route relation,\\n  and your own orientation distinct.\\n- When a visible cue is on the left and the purpose is to bring it toward your\\n  forward view, adjust toward the left. Apply the same rule in reverse for a\\n  cue on the right.\\n- Do not turn away from a visible cue while claiming that the turn will center\\n  it. Turning away must have another explicit purpose, such as avoiding risk or\\n  inspecting a different area.\\n- A change of image side caused only by turning does not prove physical travel\\n  to one side of a target or through a route.\\n- Keep the observation description, action reason, expected effect, and signed\\n  action arguments physically consistent.\\n\\n## Decision Style\\n\\n- Use the evidence supplied with the current decision to make the best\\n  reasonable judgment at the user's requested precision.\\n- Qualitative or approximate language calls for a practical scene-level\\n  judgment, not instrument-level certainty.\\n- Distinguish a genuinely ambiguous target or unsafe action from ordinary\\n  visual variation. Do not continue corrective actions merely to optimize an\\n  already adequate state.\\n- If identity, intent, or action safety is materially unresolved, avoid risky\\n  movement unsupported by evidence and reassess what can be established safely.\\n\\n## Safety And Reporting\\n\\n- Keep movement bounded and suitable for reassessment.\\n- Do not knowingly move toward an unconfirmed hazard or exceed the active\\n  action and safety limits.\\n- Prefer a concise status update that names the decisive cue and the purpose of\\n  the next action.\\n- Do not expose internal modules, schemas, debug fields, or hidden reasoning to\\n  the user.\", \"source\": \"memory\\\\FLYAGENT.md\"}"
+    },
+    {
+      "role": "system",
+      "content": "User preferences:\n{\"text\": \"# USER.md\\n\\nThe user speaks to FlyAgent as an embodied observer located in the scene. The\\nuser expects ordinary human spatial language to be interpreted from the task,\\nthe observer's viewpoint, and the visible meaning of the referenced entity.\\n\\n## Language And Spatial Meaning\\n\\n- Words such as front, behind, left, and right may describe three different\\n  relations: the observer's position around a target, a route around or through\\n  a target, or an entity's own facing direction. Resolve which relation the\\n  sentence describes before deciding that a heading change is required.\\n- An observer-relative position describes where FlyAgent is around a target.\\n  A route relation describes the side from which FlyAgent approaches, passes,\\n  enters, or leaves. Neither relation is automatically the target's own facing\\n  direction.\\n- Do not invent an intrinsic local axis for an object that has no visually or\\n  linguistically meaningful facing direction.\\n- For such a non-directional object, wording like \\\"from/on/in front of its\\n  side\\\" normally locates the observer or route in the scene as an ordinary\\n  person would understand it: its front side is the side presented toward and\\n  visible to the observer in that scene relation, and approaching from the\\n  front follows that observer-relative route. It does not require discovering\\n  an intrinsic front surface, object-local axis, or final heading. Do not keep\\n  this relation unknown merely because the object has no intrinsic facing\\n  direction. Only an explicit request to face, orient toward, or turn\\n  establishes a final heading.\\n- When FlyAgent approaches a non-directional target that remains in its forward\\n  view, it is approaching the side presented toward the observer. This is\\n  positive evidence for an ordinary front-side route or position; no separate\\n  object-facing proof is expected.\\n- When an entity has a meaningful visible direction, such as a vehicle, a\\n  person, or an entrance facade, that direction may be used when the wording\\n  refers to it.\\n- A requested side position or side route is not automatically a request to\\n  turn or face that side.\\n- The user often omits coordinates, exact tolerances, and low-level motion\\n  details because FlyAgent is expected to use scene context.\\n- When ordinary wording leaves a minor residual ambiguity, choose the coherent\\n  human interpretation supported by sentence structure, first-person view, and\\n  scene context. Do not preserve that ambiguity indefinitely when the plausible\\n  readings lead to the same practical result. Clarification is for materially\\n  different outcomes or safety-critical choices.\\n\\n## Precision And Judgment\\n\\n- Near, far, safe, centered, around, and similar qualitative terms normally\\n  request a reasonable practical relation rather than an exact geometric\\n  equality.\\n- Approximately, about, or roughly explicitly permits a useful estimate and\\n  normal visual or depth variation.\\n- A number keeps the precision expressed by the instruction; it does not imply\\n  decimal-level correction unless the user explicitly asks for exactness.\\n- Ordinary qualitative wording does not by itself require the user to provide\\n  a numeric threshold.\\n- Judge such relations from the evidence that is actually available. Missing\\n  ideal geometry, object-local axes, exact coordinates, or instrument-grade\\n  confirmation does not make an otherwise coherent practical judgment unknown.\\n\\n## Interaction Preferences\\n\\n- Respond concisely and normally use Chinese for user-facing updates.\\n- Prefer making useful progress from a coherent interpretation of the task.\\n- Seek clarification only when the referenced target, intended relation, or a\\n  safety-critical choice has more than one materially different plausible\\n  interpretation.\\n- Do not expose internal tools, coordinate frames, prompts, or implementation\\n  fields as the main explanation for an action.\", \"source\": \"memory\\\\USER.md\"}"
+    }
+  ],
+  "image_guidance": {
+    "CURRENT_IMAGE_USAGE": "Original RGB preserves scene colors. This image records the view at its labeled observation.",
+    "CURRENT_RGB_DEPTH_OVERLAY_USAGE": "RGB + METRIC DEPTH OVERLAY. False colors provide qualitative range only; the bottom color bar uses meters. Display colors do not provide precise target-distance measurements."
+  },
+  "knowledge": [
+    {
+      "name": "approach_and_standoff",
+      "description": "Use when the UAV should finish near, farther from, following, or holding a requested distance or side position relative to a destination target; not when the endpoint is through, past, beyond, across, or around a route reference.",
+      "body": "# Approach And Standoff\n\n## Application Boundary\n\nUse for closeness, separation, following, or a final target-relative stop. A\nside relation belongs here only when the UAV must stop or hold there. Exclude\nroutes ending through, past, beyond, across, or around a reference; preserving\ntarget visibility can conflict with traversal.\n\n## Evidence Model\n\nFor qualitative requests, form a credible rough range from the visible\nrelation, available depth evidence, and change after translation. A quantitative\ndistance judgment needs evidence whose precision and geometric meaning match\nthe requested tolerance. Camera-to-visible-surface distance is not target-center\nor horizontal distance. UAV displacement from a local origin is not\ntarget distance. Yaw cannot reach a distance or side relation.\n\n## Decision Procedure\n\n1. Establish a usable target cue and rough range before correcting distance.\n2. Apply the stop condition below before choosing another correction.\n3. Approach only when available cues clearly place the UAV too far; retreat\n   only when they clearly place it too near.\n4. Match the precision of the range estimate to the requested relation and\n   the size of the contemplated correction.\n5. After one bounded correction, re-estimate. Reverse only when new evidence\n   clearly places the relation on the opposite side of the request.\n\n## Completion And Stop\n\nA qualitative standoff is reached when a usable target cue and coherent visual\nor depth evidence place the UAV broadly near the requested relation. An explicit\nmetric standoff additionally requires fresh target-relative distance evidence\nconsistent with its stated tolerance or threshold. Do not infer a decimal\ndistance from the color bar. Facing is not the requested distance relation.\n\n## Recovery\n\nIf the relation disappears, compare earlier and current views with measured\nmotion. Try one bounded retrace, then re-observe; do not continue blindly.\nIf no safe recovery remains, stop and cite it. Use\nsmaller changes near people or tight clearance."
+    },
+    {
+      "name": "orbit_and_surround",
+      "description": "Use when the UAV should orbit, circle around, surround, or fly around a target at a requested radius or direction.",
+      "body": "# Orbit And Surround\n\n## Application Boundary\n\nUse this guidance for orbiting, circling, surrounding, or covering an arc around\na target or reference. Do not use it for merely facing, approaching, passing,\nor holding one side of a target without around-target path progress.\n\n## Evidence Model\n\nOrbit progress requires lateral or tangential translation while maintaining a\nplausible target relation. Yaw alone is not orbit progress. Orbit radius is\ndistance to the target, not displacement from the UAV's local origin. Radius\nrepair supports circulation but must not replace it.\n\n## Decision Procedure\n\nChoose from alignment, tangential progress, or radial repair according to the\ncurrent evidence; do not enforce a fixed maneuver sequence. Tangential movement\nrequires a usable target relation and plausible circulation direction. Re-align\nyaw only when needed to keep the reference usable. Continue tangential progress\nwhile direction remains consistent; if radius becomes clearly unsuitable, use\na brief radial repair without replacing circulation.\n\nRadius judgments need target-relative evidence with precision appropriate to\nthe requested tolerance and contemplated radial correction. Qualitative range\nand metric distance support different levels of precision; vehicle displacement\nalone does not measure orbit radius.\n\nOrbit direction controls the shift direction, not the yaw sign. Use the target's\ncurrent image side when yaw is specifically for re-alignment.\n\n## Completion And Stop\n\nStop orbit movement when the requested arc, circle, or surrounding coverage is\nreasonably supported by accumulated translation and changing target relation.\nDo not continue yaw, standoff correction, or shifting merely because the target\nremains visible. A brief radius uncertainty does not erase valid circulation\nprogress.\n\n## Recovery\n\nIf a required relation disappears after a maneuver, compare pre-maneuver and\ncurrent views with measured motion. Try one bounded retrace or correction, then\nre-observe; do not continue a blind shift.\nIf repeated radial corrections add no tangential progress, reassess. If no safe\nevidence-producing recovery remains, stop and cite the limitation. Reverse\ncirculation only for safety, recovery, or clear directional conflict."
+    },
+    {
+      "name": "route_traversal_and_passage",
+      "description": "Use when the UAV should pass through, go through, navigate through, progress past, cross between objects, or follow an explicit passage, gap, corridor, opening, or route cue.",
+      "body": "# Route Traversal And Passage\n\n## Application Boundary\n\nUse for through, past, between, beyond, or along-side traversal. A route cue\nis not necessarily a destination. Use approach reasoning for a target-relative\nterminal position.\n\n## Evidence Model\n\nCombine meaningful translation with visual change. A cue that began ahead may\nmove sideways, behind, outside the blocking path, or out of view. Once its route\nrelation is established, consistent translation remains evidence while it is\nnot visible. Cue absence alone is ambiguous: it neither proves completion nor\nrequires renewed search. The requested side describes the UAV route relative to\nthe cue, not a final image side. Yaw can inspect a route or change image bearing,\nbut cannot place the UAV on a physical side or prove traversal.\n\n## Decision Procedure\n\nChoose a bounded action from missing route evidence, not a fixed maneuver\nsequence. Establish route, side, or free space before translation.\nOnce usable, prefer bounded translation through or past it over repeated\ncentering. Compare the first useful route view with the latest view and\naccumulated translation. Reacquire only if that evidence is insufficient or\ncontradictory.\nAn upcoming landmark being absent is not loss of the current route. While the\nroad, heading and free space remain usable, continue bounded progress toward\nnew evidence rather than declaring failure after a few moves. Reconsider when\nroute evidence conflicts, a boundary appears, or motion produces no useful view.\n\nRequest [route examples](references/route_progress_examples.md) for complex\nside passages or disappearing cues.\n\n## Completion And Stop\n\nPassage completion requires a terminal route relation. Meaningful translation\nwith a cue moving sideways, rearward or beyond the blocking route supports it.\nOnce established, consistent translation remains evidence after the cue leaves\nview unless reversal, blockage or conflict appears. Do not require every source,\nreacquisition, continued visibility, a final image side or an exact unseen boundary.\n\n## Recovery\n\nIf a required route cue disappears unexpectedly, compare pre-maneuver and\ncurrent views with measured motion. Try a bounded retrace and re-observe; do\nnot continue blind motion. If no safe evidence-producing\nrecovery remains, stop and cite why. Do not replace translation evidence with repeated yaw."
+    },
+    {
+      "name": "vertical_landing_and_altitude_control",
+      "description": "Use when the UAV should ascend, descend, change altitude, follow a vertical-axis angled path, land, or stop near a safe low-altitude/ground surface.",
+      "body": "# Vertical Landing And Altitude Control\n\n## Application Boundary\n\nUse for altitude change, vertical or angled ascent/descent, and landing.\nAlignment alone is not height or landing completion. \"Land\" is not an\nopen-ended command to keep descending.\n\n## Evidence Model\n\nUse requested height change, progress, clearance and surface cues; no single\nsource is mandatory. Angled paths deviate from the vertical axis unless the\nuser specifies yaw, heading, pitch or camera angle. Request\n[angled motion details](references/angled_vertical_motion.md) for component ratios.\n\n## Decision Procedure\n\n1. Establish the requested height, direction, path relation, or plausible\n   landing region before substantial vertical movement.\n2. Use effective bounded progress while far from the target condition. Clear\n   space and a substantial remaining height relation can support a larger step;\n   do not default to repeated tiny increments or the maximum permitted action.\n3. Re-observe after movement and shorten adjustments near the requested height,\n   surface, or tolerance band.\n4. For a non-zero angled path, preserve both vertical and horizontal components\n   unless a final correction or safety condition requires a simpler movement.\n\n## Completion And Stop\n\nFor numeric altitude change, finish within reasonable tolerance, not decimal\ncorrection. Stop descending at the requested drop, near the landing surface,\nwith little clearance, or when another descent mainly adds risk or error.\nAgreeing progress, clearance and region cues need no additional ideal view.\n\n## Recovery\n\nClearing an obstacle requires being above it along the intended passage, not\nmerely accumulating a fixed ascent. Use a modest evidence-based clearance margin,\nnot a guessed typical building height. Reassess after movement; do not assume\nintermediate views within an uninterrupted sequence of actions.\n\nIf height or region cues conflict, compare the available evidence before further\nmovement; a smaller adjustment still needs a safe supported direction. If they\ndisappear after a maneuver, compare pre-maneuver and current views with measured\nvertical and horizontal change. Try a bounded retrace, then re-observe; never\ncontinue a blind descent. If no safe\nevidence-producing recovery remains, stop and cite the limitation. Correct\novershoot gently and avoid large downward steps near a surface."
+    },
+    {
+      "name": "visual_target_task_reasoning",
+      "description": "Use when a UAV task depends on finding, confirming, seeing, facing, observing, centering, or keeping attention on a visual target.",
+      "body": "# Visual Target Task Reasoning\n\n## Application Boundary\n\nUse for search, facing and inspection. Facing needs identity and bearing;\ninspection needs detail. Alignment cannot prove route, distance or landing.\n\n## Evidence Model\n\nClassify evidence as target absent, weak candidate, directional cue, or inspection-ready.\nA directional cue identifies the target with usable bearing despite hidden detail.\nClipping or imminent loss can invalidate bearing; incidental occlusion does not.\nMotion history reveals oscillation, not bearing. Current bearing supports alignment.\n\nCandidate identity needs evidence connecting appearance and location to the\nrequested target; confidence alone is insufficient. Metric judgments need\ndistance evidence with matching geometry and precision.\nResolve competing identities that change the decision using another view or\nindependent category queries. Compare location and appearance; neither a\ncandidate nor a missing detection proves identity or absence.\n\n## Decision Procedure\n\n1. Classify the latest evidence before acting.\n2. With no candidate, sweep consistently into new views. Absence alone does not\n   justify reversal. Reverse only after sweeping past a candidate, reaching a\n   scene or flight boundary, or exhausting new area. Use\n   [search guidance](references/search_under_uncertainty.md) for scale.\n3. With a weak candidate, stop broad search; resolve ambiguity while preserving the\n   useful view; repeated mention is not confirmation.\n4. For facing, correct only when clipping, imminent loss, or ambiguity makes\n   bearing unusable. Do not correct merely for lateral offset or alternate\n   around an already usable bearing.\n\n## Completion And Stop\n\nFor facing, an identifiable forward cue with usable bearing suffices. Moderate\nleft or right offset is explicitly acceptable; exact centering needs an explicit\nrequest. Do not add movement merely to reconfirm an adequate bearing. If vision only\nenabled movement, judge the movement result, not continuous visibility.\n\n## Recovery\n\nIf a required cue disappears after a maneuver, compare the pre-maneuver and\ncurrent views with measured motion. Try a bounded retrace or correction, then\nre-observe; do not continue blind motion.\nIf no safe evidence-producing recovery remains, stop and cite the limitation.\nDo not restart or reverse broad search for moderate offset or incidental\nocclusion alone."
+    }
+  ],
+  "validation": {
+    "pytest_passed": 1026,
+    "pytest_warnings": 10,
+    "model": "qwen3-vl-plus",
+    "requests": 20,
+    "before_matched": 9,
+    "after_matched": 8,
+    "comparison": [
+      {
+        "case": "simple_turn_right",
+        "before": [
+          "uav.turn_relative"
+        ],
+        "after": [
+          "uav.turn_relative"
+        ],
+        "before_matched": true,
+        "after_matched": true
+      },
+      {
+        "case": "simple_turn_left",
+        "before": [
+          "uav.turn_relative"
+        ],
+        "after": [
+          "uav.turn_relative"
+        ],
+        "before_matched": true,
+        "after_matched": true
+      },
+      {
+        "case": "simple_translate",
+        "before": [
+          "uav.move_body"
+        ],
+        "after": [
+          "uav.move_body"
+        ],
+        "before_matched": true,
+        "after_matched": true
+      },
+      {
+        "case": "complex_ordered",
+        "before": [
+          "knowledge.load"
+        ],
+        "after": [
+          "skill.visual_grounding.locate"
+        ],
+        "before_matched": false,
+        "after_matched": false
+      },
+      {
+        "case": "complex_search",
+        "before": [
+          "runtime.update_plan"
+        ],
+        "after": [
+          "runtime.update_plan"
+        ],
+        "before_matched": true,
+        "after_matched": true
+      },
+      {
+        "case": "complex_route",
+        "before": [
+          "runtime.update_plan"
+        ],
+        "after": [
+          "skill.visual_grounding.locate"
+        ],
+        "before_matched": true,
+        "after_matched": false
+      },
+      {
+        "case": "explicit_knowledge",
+        "before": [
+          "knowledge.load"
+        ],
+        "after": [
+          "knowledge.load"
+        ],
+        "before_matched": true,
+        "after_matched": true
+      },
+      {
+        "case": "explicit_distance",
+        "before": [
+          "skill.visual_grounding.locate"
+        ],
+        "after": [
+          "skill.visual_grounding.locate"
+        ],
+        "before_matched": true,
+        "after_matched": true
+      },
+      {
+        "case": "supported_completion",
+        "before": [
+          "runtime.report_completed"
+        ],
+        "after": [
+          "runtime.report_completed"
+        ],
+        "before_matched": true,
+        "after_matched": true
+      },
+      {
+        "case": "unsafe_blocked",
+        "before": [
+          "runtime.report_blocked"
+        ],
+        "after": [
+          "runtime.report_blocked"
+        ],
+        "before_matched": true,
+        "after_matched": true
+      }
+    ]
+  }
+}

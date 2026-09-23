@@ -34,6 +34,18 @@ CAPABILITY_JSON = (
 
 def main() -> None:
     args = _parser().parse_args()
+    if args.repeat < 1:
+        raise SystemExit('--repeat must be positive')
+    if args.trace_dir:
+        from tests.manual.process_diagnostics import install_grounding_trace
+        install_grounding_trace(args.trace_dir)
+    if args.sam_attention:
+        # One-variable diagnostic override; never changes capability settings.
+        from transformers import SamModel
+        original_load = SamModel.from_pretrained
+        def diagnostic_load(*values, **kwargs):
+            return original_load(*values, **kwargs, attn_implementation=args.sam_attention)
+        SamModel.from_pretrained = diagnostic_load
     rgb_path = Path(args.rgb).resolve()
     depth_path = Path(args.depth).resolve() if args.depth else None
     output_dir = Path(args.output_dir).resolve()
@@ -56,6 +68,18 @@ def main() -> None:
         )
     if args.device:
         settings["device"] = args.device
+    if args.sam_encoder_only:
+        from PIL import Image
+        from plugins.capabilities.visual_grounding.locate.scripts.backends.sam import SamBackend
+        backend = SamBackend(settings['segmentation_model'], settings['device'])
+        processor, model = backend._load()
+        with Image.open(rgb_path) as source:
+            inputs = processor(images=source.convert('RGB'), return_tensors='pt')
+        print('sam.encoder begin', flush=True)
+        with backend._torch().no_grad():
+            embeddings = model.get_image_embeddings(inputs['pixel_values'].to(backend.device))
+        print(json.dumps({'stage': 'sam.encoder end', 'shape': list(embeddings.shape)}), flush=True)
+        return
     frames = {
         "rgb": {"id": "probe_rgb", "path": str(rgb_path)},
     }
@@ -66,14 +90,16 @@ def main() -> None:
             "depth_unit": "meter",
         }
     service = service_from_settings(settings)
-    result = service.locate(
-        observation={"observation_id": args.observation_id, "frames": frames},
-        observation_id=args.observation_id,
-        query=args.query,
-        include_distance=args.include_distance,
-        run_dir=str(output_dir),
-        tool_call_id="offline_visual_grounding_probe",
-    )
+    for repeat in range(args.repeat):
+        result = service.locate(
+            observation={"observation_id": args.observation_id, "frames": frames},
+            observation_id=args.observation_id,
+            query=args.query,
+            include_distance=args.include_distance,
+            run_dir=str(output_dir),
+            tool_call_id="offline_visual_grounding_probe",
+        )
+        print(json.dumps({'repeat': repeat + 1, 'status': 'returned'}), flush=True)
     output = {
         "status": "ok",
         "call_name": capability.get("call_name"),
@@ -125,6 +151,10 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--device", choices=("auto", "cpu", "cuda"), default=None)
     parser.add_argument("--output-dir", required=True)
+    parser.add_argument("--trace-dir", help="Child-local stage trace; no production instrumentation")
+    parser.add_argument("--repeat", type=int, default=1, help="Calls in the same process for warm-path diagnosis")
+    parser.add_argument("--sam-attention", choices=("eager", "sdpa"), help="Diagnostic-only SAM attention override")
+    parser.add_argument("--sam-encoder-only", action="store_true", help="Isolate SAM image encoder without GroundingDINO or depth processing")
     return parser
 
 

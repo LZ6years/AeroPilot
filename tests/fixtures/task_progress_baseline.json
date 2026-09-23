@@ -1,0 +1,265 @@
+{
+  "system_prompt": "You are FlyAgent's mission tool-loop agent.\n\nUse the original instruction, applicable protocol, current observation and chronological\nToolResults to choose the next step. Include a concise public intent when content is\navailable; valid tool calls do not require prose. Never output hidden reasoning.\n\nPreserve the user's requirements and their order. Past intent, plans and guidance\ncannot override actual ToolResults and new observations. Compare observed outcomes\nwith the whole instruction rather than only the most recent action.\n\nOnly the CURRENT observation establishes present visibility; HISTORY and measured\nactions help interpret changes. TOOL EVIDENCE supplements its associated observation,\nnot a new current view. Missing images remain missing; never assume omitted frames\nare visible. Distinguish measured vehicle motion from target-relative distance.\n\nEach decision turn must contain a valid native tool call. Task completion or inability\nto continue is expressed through the corresponding available terminal capability.\nExecution results and rejection feedback return through the same chronological loop.",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "knowledge_load",
+        "description": "Read an enabled knowledge entry and its declared references. Applicable when a task needs the methods or explanations described by that catalog entry. Returns newly requested body text and references incrementally; previously delivered text is not resent. The catalog is a directory, not loaded guidance. Knowledge provides methods, not current-scene observations or measurements, and does not execute actions.\nExecution: effect=read_only; result_timing=immediate. Independent read-only calls may share a turn; execution may be sequential.",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "minLength": 1,
+              "type": "string",
+              "description": "Exact enabled entry name from the knowledge catalog."
+            },
+            "reference_paths": {
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": "array",
+              "description": "Optional paths from the entry's returned reference manifest."
+            }
+          },
+          "required": [
+            "name"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "runtime_report_blocked",
+        "description": "Report the instruction as incomplete with a blocking condition and environmental evidence. Applicable when the task cannot continue safely or meaningfully. Returns the accepted terminal state or rejection feedback; Runtime handles final stabilization and cleanup. This ends the instruction without claiming that its requested outcomes were achieved.\nExecution: effect=runtime_control; result_timing=immediate. This must be the only call in its batch.",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "minLength": 1,
+              "type": "string",
+              "description": "Concise explanation of the task outcome."
+            },
+            "evidence_refs": {
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": "array",
+              "description": "Current-instruction observation or returned environmental result references; plan and knowledge references are not environmental evidence."
+            },
+            "blocking_condition": {
+              "enum": [
+                "lost_required_reference",
+                "insufficient_evidence",
+                "unsafe_to_continue",
+                "missing_capability",
+                "irreducible_ambiguity",
+                "no_progress"
+              ],
+              "type": "string",
+              "description": "Condition preventing safe meaningful progress."
+            },
+            "suggested_user_action": {
+              "type": "string",
+              "description": "Optional action the user can take to resolve the blocker."
+            }
+          },
+          "required": [
+            "reason",
+            "evidence_refs",
+            "blocking_condition"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "runtime_report_completed",
+        "description": "Report the original instruction as completed. Applicable when environmental evidence supports all requested outcomes. Returns the accepted terminal state or rejection feedback; Runtime handles final stabilization and cleanup. Plan status alone is not completion evidence. \nExecution: effect=runtime_control; result_timing=immediate. This must be the only call in its batch.",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "reason": {
+              "minLength": 1,
+              "type": "string",
+              "description": "Concise explanation of the task outcome."
+            },
+            "evidence_refs": {
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1
+              },
+              "type": "array",
+              "description": "Current-instruction observation or returned environmental result references; plan and knowledge references are not environmental evidence."
+            }
+          },
+          "required": [
+            "reason",
+            "evidence_refs"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "runtime_update_plan",
+        "description": "Create or revise a task plan using stable step IDs. For complex tasks, normally use this as the first call; a simple single-step task can act directly. Returns the saved plan and its revision. A plan records intended work and progress; it does not execute flight or provide environmental completion evidence.\nExecution: effect=runtime_control; result_timing=immediate. This must be the only call in its batch.",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "explanation": {
+              "minLength": 1,
+              "type": "string",
+              "description": "Why this plan or evidence-based revision is needed."
+            },
+            "steps": {
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "id",
+                  "description",
+                  "status"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Stable step identifier."
+                  },
+                  "description": {
+                    "type": "string",
+                    "minLength": 1,
+                    "description": "Required outcome."
+                  },
+                  "status": {
+                    "type": "string",
+                    "description": "Progress supported by observed results.",
+                    "enum": [
+                      "pending",
+                      "in_progress",
+                      "completed",
+                      "cancelled"
+                    ]
+                  }
+                }
+              },
+              "type": "array",
+              "description": "Ordered task steps with persistent identities."
+            }
+          },
+          "required": [
+            "explanation",
+            "steps"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "skill_visual_grounding_locate",
+        "description": "Locate a natural-language target in the current RGB observation and optionally estimate candidate distances. Applicable to tasks needing candidate locations or target-distance measurements. Returns candidate information, annotated evidence and, when enabled and available, distance estimates. Candidate identity requires interpretation against the task; an empty detection does not prove absence. Distance is camera-to-visible-surface depth, not horizontal or target-center distance.\nExecution: effect=read_only; result_timing=immediate. Independent read-only calls may share a turn; execution may be sequential. At most 2 calls per observation, including same-turn calls.",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "observation_id": {
+              "minLength": 1,
+              "type": "string",
+              "description": "Exact observation_id shown on the CURRENT image label."
+            },
+            "query": {
+              "minLength": 1,
+              "maxLength": 256,
+              "type": "string",
+              "description": "Natural-language description of the target to locate."
+            },
+            "include_distance": {
+              "type": "boolean",
+              "description": "true estimates distances to detected candidates; false performs localization without distance estimation."
+            }
+          },
+          "required": [
+            "observation_id",
+            "query",
+            "include_distance"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "uav_move_body",
+        "description": "Translate the vehicle using body-frame velocity components for a specified duration. Applicable to changing position, including horizontal or vertical movement. Returns execution feedback. Safety intervention may change the applied motion; vehicle displacement alone does not establish distance to a target.\nExecution: effect=physical; result_timing=after_batch_observation. Execute in the submitted physical batch order.",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "vx": {
+              "type": "number",
+              "description": "Body-frame velocity in m/s: positive moves forward; negative moves backward."
+            },
+            "vy": {
+              "type": "number",
+              "description": "Body-frame velocity in m/s: positive moves right; negative moves left."
+            },
+            "vz": {
+              "type": "number",
+              "description": "Body-frame velocity in m/s: positive moves up; negative moves down."
+            },
+            "duration": {
+              "exclusiveMinimum": 0,
+              "maximum": 8.0,
+              "type": "number",
+              "description": "Positive duration in seconds."
+            }
+          },
+          "required": [
+            "vx",
+            "vy",
+            "vz",
+            "duration"
+          ]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "uav_turn_relative",
+        "description": "Rotate the vehicle by a signed relative yaw angle. Applicable to heading changes or inspecting a different bearing. Returns execution feedback. Rotation does not translate the vehicle or establish physical passage or target-relative distance.\nExecution: effect=physical; result_timing=after_batch_observation. Execute in the submitted physical batch order.",
+        "parameters": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "yaw_deg": {
+              "minimum": -30.0,
+              "maximum": 30.0,
+              "type": "number",
+              "description": "Signed relative yaw in degrees: negative turns left; positive turns right."
+            }
+          },
+          "required": [
+            "yaw_deg"
+          ]
+        }
+      }
+    }
+  ]
+}

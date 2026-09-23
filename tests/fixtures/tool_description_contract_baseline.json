@@ -1,0 +1,519 @@
+[
+  {
+    "name": "env.observe",
+    "wire_name": "env_observe",
+    "kind": "observation",
+    "description": "Capture a new environment observation at Runtime-owned sampling points.",
+    "runtime": {
+      "effect": "read_only",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "modalities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array",
+          "description": "Requested canonical observation modalities."
+        }
+      },
+      "required": [
+        "modalities"
+      ]
+    },
+    "input_examples": []
+  },
+  {
+    "name": "knowledge.load",
+    "wire_name": "knowledge_load",
+    "kind": "knowledge",
+    "description": "Read guidance for judging progress, choosing an action or recovering when a catalog entry addresses a missing method. The catalog is a directory, not loaded guidance. Reconsider relevant guidance when attempts make no useful progress. Returns newly requested body text and declared references; reuse delivered content. Knowledge supplies methods, not detection or distance measurements of the current scene; do not load every entry by default.",
+    "runtime": {
+      "effect": "read_only",
+      "result_timing": "immediate",
+      "batching": "parallel_safe",
+      "model_exposed": true
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "minLength": 1,
+          "type": "string",
+          "description": "Exact enabled entry name from the knowledge catalog."
+        },
+        "reference_paths": {
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": "array",
+          "description": "Optional paths from the entry's returned reference manifest."
+        }
+      },
+      "required": [
+        "name"
+      ]
+    },
+    "input_examples": []
+  },
+  {
+    "name": "runtime.report_blocked",
+    "wire_name": "runtime_report_blocked",
+    "kind": "runtime_control",
+    "description": "Stop the instruction as incomplete when evidence, capabilities or safety prevent meaningful progress. A target not yet visible is not itself a blocker if a safe useful next step exists. Do not require a fixed number of attempts or exhaust all tools before stopping. Returns the accepted terminal state or rejection feedback. Runtime handles final stabilization and cleanup.",
+    "runtime": {
+      "effect": "runtime_control",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": true
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "minLength": 1,
+          "type": "string",
+          "description": "Concise explanation of the task outcome."
+        },
+        "evidence_refs": {
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": "array",
+          "description": "Current-instruction observation or returned environmental result references; plan and knowledge references are not environmental evidence."
+        },
+        "blocking_condition": {
+          "enum": [
+            "lost_required_reference",
+            "insufficient_evidence",
+            "unsafe_to_continue",
+            "missing_capability",
+            "irreducible_ambiguity",
+            "no_progress"
+          ],
+          "type": "string",
+          "description": "Condition preventing safe meaningful progress."
+        },
+        "suggested_user_action": {
+          "type": "string",
+          "description": "Optional action the user can take to resolve the blocker."
+        }
+      },
+      "required": [
+        "reason",
+        "evidence_refs",
+        "blocking_condition"
+      ]
+    },
+    "input_examples": []
+  },
+  {
+    "name": "runtime.report_completed",
+    "wire_name": "runtime_report_completed",
+    "kind": "runtime_control",
+    "description": "Report the original instruction completed. Compare observed results with all original requirements, not just the last action, a detected candidate or plan status. Cite environmental evidence. Returns the accepted terminal state or rejection feedback. Runtime handles final stabilization and cleanup.",
+    "runtime": {
+      "effect": "runtime_control",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": true
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "reason": {
+          "minLength": 1,
+          "type": "string",
+          "description": "Concise explanation of the task outcome."
+        },
+        "evidence_refs": {
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": "array",
+          "description": "Current-instruction observation or returned environmental result references; plan and knowledge references are not environmental evidence."
+        }
+      },
+      "required": [
+        "reason",
+        "evidence_refs"
+      ]
+    },
+    "input_examples": []
+  },
+  {
+    "name": "runtime.update_plan",
+    "wire_name": "runtime_update_plan",
+    "kind": "runtime_control",
+    "description": "Create or revise a task list. For complex tasks, use this as the first call: ordered requirements, search followed by another goal, route and final-position obligations, or constraints retained across observations benefit from a plan. A simple single immediate goal can act directly. Keep near-term work concrete and unseen later work broad. Preserve stable IDs and completed work; cancel obsolete steps. Update when observed progress or new evidence changes the plan, not after every action. Returns the saved plan and revision; it never executes flight or supplies environmental completion evidence.",
+    "runtime": {
+      "effect": "runtime_control",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": true
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "explanation": {
+          "minLength": 1,
+          "type": "string",
+          "description": "Why this plan or evidence-based revision is needed."
+        },
+        "steps": {
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "description",
+              "status"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Stable step identifier."
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Required outcome."
+              },
+              "status": {
+                "type": "string",
+                "description": "Progress supported by observed results.",
+                "enum": [
+                  "pending",
+                  "in_progress",
+                  "completed",
+                  "cancelled"
+                ]
+              }
+            }
+          },
+          "type": "array",
+          "description": "Ordered task steps with persistent identities."
+        }
+      },
+      "required": [
+        "explanation",
+        "steps"
+      ]
+    },
+    "input_examples": [
+      {
+        "explanation": "Retain the user's ordered requirements.",
+        "steps": [
+          {
+            "id": "s1",
+            "description": "Find the requested landmark",
+            "status": "in_progress"
+          },
+          {
+            "id": "s2",
+            "description": "Reach the requested position relative to it",
+            "status": "pending"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "name": "skill.visual_grounding.locate",
+    "wire_name": "skill_visual_grounding_locate",
+    "kind": "skill_capability",
+    "description": "Supplement direct visual reasoning only when a decision-relevant target cannot be reliably localized or distinguished, or its measured distance is necessary. Do not delegate general scene understanding or already clear visibility/location to this detector. Use include_distance=false for unresolved localization and true for decision-critical measurement. Confirm candidate identity from the annotated evidence; distance is camera-to-visible-surface depth, not horizontal or target-center distance.",
+    "runtime": {
+      "effect": "read_only",
+      "result_timing": "immediate",
+      "batching": "parallel_safe",
+      "model_exposed": true,
+      "max_calls_per_observation": 2
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "x-flyagent-completion-evidence": {
+        "after_use": "current_observation_success",
+        "when": {
+          "field": "include_distance",
+          "equals": true
+        }
+      },
+      "properties": {
+        "observation_id": {
+          "minLength": 1,
+          "type": "string",
+          "description": "Exact observation_id shown on the CURRENT image label."
+        },
+        "query": {
+          "minLength": 1,
+          "maxLength": 256,
+          "type": "string",
+          "description": "Concise description of a decision-relevant target requiring localization or measurement, not a general scene inventory."
+        },
+        "include_distance": {
+          "type": "boolean",
+          "description": "Enable only for a measured-distance request, a nearby metric threshold affecting action, or a quantitative completion claim; a numeric mention alone does not require measurement."
+        }
+      },
+      "required": [
+        "observation_id",
+        "query",
+        "include_distance"
+      ]
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.ascend",
+    "wire_name": "uav_ascend",
+    "kind": "uav_primitive",
+    "description": "Ascend using the configured internal vertical-motion primitive.",
+    "runtime": {
+      "effect": "lifecycle",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.connect",
+    "wire_name": "uav_connect",
+    "kind": "uav_primitive",
+    "description": "Connect the vehicle control interface during Runtime preflight.",
+    "runtime": {
+      "effect": "lifecycle",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.descend",
+    "wire_name": "uav_descend",
+    "kind": "uav_primitive",
+    "description": "Descend using the configured internal vertical-motion primitive.",
+    "runtime": {
+      "effect": "lifecycle",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.get_frames",
+    "wire_name": "uav_get_frames",
+    "kind": "uav_primitive",
+    "description": "Capture camera frames through the configured simulator backend.",
+    "runtime": {
+      "effect": "read_only",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.get_pose",
+    "wire_name": "uav_get_pose",
+    "kind": "uav_primitive",
+    "description": "Read vehicle pose for Runtime observation and motion measurement.",
+    "runtime": {
+      "effect": "read_only",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.hover",
+    "wire_name": "uav_hover",
+    "kind": "uav_primitive",
+    "description": "Hold the vehicle for Runtime stabilization, safety intervention or cleanup.",
+    "runtime": {
+      "effect": "physical",
+      "result_timing": "after_batch_observation",
+      "batching": "ordered",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.land",
+    "wire_name": "uav_land",
+    "kind": "uav_primitive",
+    "description": "Land the vehicle during caller-selected shutdown.",
+    "runtime": {
+      "effect": "lifecycle",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.move_body",
+    "wire_name": "uav_move_body",
+    "kind": "uav_primitive",
+    "description": "Translate in the vehicle's current body frame when the task requires changing position. Choose motion from available route or target evidence. Translation is not a heading-only correction or a completion report. Runtime may limit velocity; inspect actual execution and the post-batch observation.",
+    "runtime": {
+      "effect": "physical",
+      "result_timing": "after_batch_observation",
+      "batching": "ordered",
+      "model_exposed": true
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "vx": {
+          "type": "number",
+          "description": "Positive moves forward; negative moves backward."
+        },
+        "vy": {
+          "type": "number",
+          "description": "Positive moves right; negative moves left."
+        },
+        "vz": {
+          "type": "number",
+          "description": "Positive moves up; negative moves down."
+        },
+        "duration": {
+          "exclusiveMinimum": 0,
+          "maximum": 8,
+          "type": "number",
+          "description": "Positive duration in seconds."
+        }
+      },
+      "required": [
+        "vx",
+        "vy",
+        "vz",
+        "duration"
+      ]
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.set_pose",
+    "wire_name": "uav_set_pose",
+    "kind": "uav_primitive",
+    "description": "Set an episode's initial pose before task observations.",
+    "runtime": {
+      "effect": "lifecycle",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {}
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.takeoff",
+    "wire_name": "uav_takeoff",
+    "kind": "uav_primitive",
+    "description": "Take off when the scene requires flight initialization.",
+    "runtime": {
+      "effect": "lifecycle",
+      "result_timing": "immediate",
+      "batching": "single",
+      "model_exposed": false
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {}
+    },
+    "input_examples": []
+  },
+  {
+    "name": "uav.turn_relative",
+    "wire_name": "uav_turn_relative",
+    "kind": "uav_primitive",
+    "description": "Change vehicle heading to inspect a view or face a cue. Turning changes bearing, not physical passage or distance to a target. Results report execution; a new observation follows the batch.",
+    "runtime": {
+      "effect": "physical",
+      "result_timing": "after_batch_observation",
+      "batching": "ordered",
+      "model_exposed": true
+    },
+    "schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "yaw_deg": {
+          "minimum": -90,
+          "maximum": 90,
+          "type": "number",
+          "description": "Signed relative yaw in degrees: negative turns left; positive turns right."
+        }
+      },
+      "required": [
+        "yaw_deg"
+      ]
+    },
+    "input_examples": []
+  }
+]
