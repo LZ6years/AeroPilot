@@ -64,7 +64,6 @@ class BackendRegistry:
             lambda context: AirSimBackend(
                 # Execution mode now controls process ownership only. A
                 # production Registry always builds a real protocol adapter.
-                use_real_uav=True,
                 action_config=context.action_config,
                 artifact_dir=context.artifact_dir,
                 save_artifacts=context.save_artifacts,
@@ -73,7 +72,6 @@ class BackendRegistry:
         registry.register(
             "unrealcv",
             lambda context: UnrealCvBackend(
-                use_real_client=True,
                 action_config=context.action_config,
                 artifact_dir=context.artifact_dir,
                 save_artifacts=context.save_artifacts,

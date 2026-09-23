@@ -15,22 +15,7 @@ from src.uav.frames import normalize_yaw_deg
 from ..uav_primitives import PrimitiveResult
 from .control import UnrealCvPoseControl, create_pose_control
 from .capture import UnrealCvCapture
-
-
-def probe_unrealcv_endpoint(host: str, port: int) -> tuple[bool, str]:
-    """Check connectivity using a temporary client, including failed connects."""
-    client = None
-    try:
-        from unrealcv import Client
-        client = Client((host, int(port)))
-        client.connect()
-        ready = bool(client.isconnected())
-        return ready, "UnrealCV connected" if ready else "UnrealCV connection was rejected"
-    except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"
-    finally:
-        if client is not None:
-            client.disconnect()
+from .client import close_unrealcv_client
 
 
 class UnrealCvUavAdapter:
@@ -53,8 +38,7 @@ class UnrealCvUavAdapter:
 
     def close(self) -> None:
         """Release only our SDK client; subsequent primitives reconnect lazily."""
-        if self.client is not None:
-            self.client.disconnect()
+        close_unrealcv_client(self.client)
         self.client = self.control = self.capture = None
 
     def takeoff(self) -> PrimitiveResult:
@@ -140,8 +124,8 @@ class UnrealCvUavAdapter:
                 save_artifacts=self.save_artifacts,
                 sync_camera=control.sync_camera,
             )
-        except Exception:
-            client.disconnect()
+        except Exception as exc:
+            close_unrealcv_client(client, original_error=exc)
             raise
         self.client = client
         self.control = control

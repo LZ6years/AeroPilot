@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import BinaryIO
 from typing import Any, Sequence
 
 import numpy as np
@@ -19,7 +20,7 @@ class SamBackend:
         self._model: Any | None = None
         self._device: str | None = None
 
-    def segment(self, rgb_path: Path, candidates: Sequence[GroundedCandidate]) -> list[CandidateMask]:
+    def segment(self, rgb_path: Path | BinaryIO, candidates: Sequence[GroundedCandidate]) -> list[CandidateMask]:
         if not candidates:
             return []
         torch = self._torch()
@@ -74,4 +75,3 @@ class SamBackend:
         except ModuleNotFoundError as exc:
             raise RuntimeError("SAM backend requires torch") from exc
         return torch
-

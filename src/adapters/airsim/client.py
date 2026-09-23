@@ -17,11 +17,14 @@ def probe_airsim_endpoint(host: str, port: int) -> tuple[bool, str]:
 
         client = airsim.VehicleClient(ip=host, port=port, timeout_value=2)
         ready = bool(client.ping())
-        return ready, "AirSim RPC ping succeeded" if ready else "AirSim ping returned false"
+        message = "AirSim RPC ping succeeded" if ready else "AirSim ping returned false"
     except Exception as exc:
-        return False, f"{type(exc).__name__}: {exc}"
-    finally:
+        ready, message = False, f"{type(exc).__name__}: {exc}"
+    try:
         close_airsim_client(client)
+    except Exception as exc:
+        message += f"; cleanup error: {type(exc).__name__}: {exc}"
+    return ready, message
 
 
 def close_airsim_client(client: Any, *, original_error: Exception | None = None) -> None:

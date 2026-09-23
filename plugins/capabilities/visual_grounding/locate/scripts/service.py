@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+from io import BytesIO
 from pathlib import Path
+from typing import BinaryIO
 from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw
+from src.perception.frame_payload import frame_bytes, load_rgb_frame
 
 from plugins.capabilities.visual_grounding.locate.scripts.backends.grounding_dino import (
     GroundingDinoBackend,
@@ -22,6 +25,7 @@ from plugins.capabilities.visual_grounding.locate.scripts.contracts import (
     VisualGroundingSettings,
 )
 from plugins.capabilities.visual_grounding.locate.scripts.depth import (
+    _clamped_box,
     estimate_candidate_depth,
     load_metric_depth,
 )
@@ -61,11 +65,11 @@ class VisualGroundingService:
         rgb_frame = frames.get("rgb")
         if not isinstance(rgb_frame, dict):
             raise ValueError("latest observation has no RGB frame")
-        rgb_path = _frame_path(rgb_frame)
-        if rgb_path is None:
-            raise ValueError("latest RGB artifact is unavailable")
-        with Image.open(rgb_path) as source:
-            width, height = source.size
+        image = load_rgb_frame(rgb_frame)
+        width, height = image.size
+        # PIL-backed detectors accept a seekable stream as well as a path.
+        # Keep memory-only observations in memory, including segmentation.
+        rgb_path = BytesIO(frame_bytes(rgb_frame))
 
         raw_candidates = self.grounding_backend.locate(rgb_path, query)
         # Replacement backends obey the same JSON-configured public threshold.
@@ -211,7 +215,7 @@ def service_from_settings(raw_settings: dict[str, Any]) -> VisualGroundingServic
 
 def _write_candidate_evidence(
     *,
-    rgb_path: Path,
+    rgb_path: Path | BinaryIO,
     run_dir: str | None,
     observation_id: str,
     tool_call_id: str | None,
@@ -267,23 +271,3 @@ def _write_candidate_evidence(
             },
         ),
     )
-
-
-def _frame_path(frame: dict[str, Any]) -> Path | None:
-    raw = frame.get("path") or frame.get("artifact_path") or frame.get("artifact_ref")
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    path = Path(raw)
-    if path.is_file():
-        return path
-    candidate = Path.cwd() / path
-    return candidate if candidate.is_file() else None
-
-
-def _clamped_box(box: tuple[float, float, float, float], width: int, height: int) -> tuple[int, int, int, int]:
-    x0, y0, x1, y1 = box
-    left = max(0, min(width - 1, int(np.floor(min(x0, x1)))))
-    top = max(0, min(height - 1, int(np.floor(min(y0, y1)))))
-    right = max(left + 1, min(width, int(np.ceil(max(x0, x1)))))
-    bottom = max(top + 1, min(height, int(np.ceil(max(y0, y1)))))
-    return left, top, right, bottom

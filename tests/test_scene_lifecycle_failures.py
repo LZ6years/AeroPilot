@@ -83,7 +83,7 @@ def test_probe_always_closes_nested_transport(monkeypatch, outcome):
     else:
         client.ping.return_value = outcome
     monkeypatch.setitem(sys.modules, "airsim", SimpleNamespace(VehicleClient=lambda **kwargs: client))
-    result = AirSimBackend(use_real_uav=True).probe(None, "unused", 1)
+    result = AirSimBackend().probe(None, "unused", 1)
     assert result.ready is (outcome is True)
     transport.close.assert_called_once()
 

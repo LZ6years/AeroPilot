@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -350,11 +351,11 @@ def test_frame_artifacts_do_not_overwrite_existing_files(tmp_path):
     existing_depth.write_bytes(b"old-depth")
 
     rgb_payload = bytes(range(12))
-    rgb_path = adapter._save_frame_artifact(
+    rgb_path = _saved_frame(adapter,
         "rgb", FakeImageResponse(image_data_uint8=rgb_payload)
     )
-    adapter._frame_index = 0
-    depth_path = adapter._save_frame_artifact("depth", FakeImageResponse(image_data_float=[1.0, 2.0, 3.0, 4.0]))
+    adapter.capture._frame_index = 0
+    depth_path = _saved_frame(adapter, "depth", FakeImageResponse(image_data_float=[1.0, 2.0, 3.0, 4.0]))
 
     assert rgb_path == tmp_path / "artifacts" / "rgb" / "frame_000002.png"
     assert depth_path == tmp_path / "artifacts" / "depth" / "frame_000002.npy"
@@ -433,7 +434,7 @@ def test_depth_vis_saves_normalized_array_and_preview(tmp_path):
         save_artifacts=True,
     )
 
-    path = adapter._save_frame_artifact(
+    path = _saved_frame(adapter,
         "depth",
         _depth_vis_response(),
         "depth_vis",
@@ -443,7 +444,7 @@ def test_depth_vis_saves_normalized_array_and_preview(tmp_path):
     assert values.shape == (2, 2)
     assert values.min() == 0.0
     assert values.max() == 1.0
-    assert adapter._depth_preview_path(path).is_file()
+    assert adapter.capture._depth_preview_path(path).is_file()
 
 
 def test_depth_vis_accepts_float_payload_from_compatible_servers(tmp_path):
@@ -452,14 +453,14 @@ def test_depth_vis_accepts_float_payload_from_compatible_servers(tmp_path):
         save_artifacts=True,
     )
 
-    path = adapter._save_frame_artifact(
+    path = _saved_frame(adapter,
         "depth",
         FakeImageResponse(image_data_float=[0.0, 0.25, 0.5, 1.0]),
         "depth_vis",
     )
 
     assert np.load(path).shape == (2, 2)
-    assert adapter._depth_preview_path(path).is_file()
+    assert adapter.capture._depth_preview_path(path).is_file()
 
 
 def test_unknown_capture_source_fails_before_rpc(monkeypatch):
@@ -484,3 +485,9 @@ def _depth_vis_response() -> FakeImageResponse:
     buffer = BytesIO()
     Image.fromarray(pixels, mode="RGB").save(buffer, format="PNG")
     return FakeImageResponse(image_data_uint8=buffer.getvalue())
+
+
+def _saved_frame(adapter, modality, response, source=None):
+    source = source or adapter.capture._capture_source(modality, None)
+    result = adapter.capture._frame_metadata(modality, source, adapter.capture._capture_spec(source), response)
+    return Path(result["artifact_path"])

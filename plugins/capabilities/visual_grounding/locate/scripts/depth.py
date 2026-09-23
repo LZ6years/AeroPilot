@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from src.perception.frame_payload import load_depth_frame
 
 import numpy as np
 
@@ -15,21 +15,7 @@ from plugins.capabilities.visual_grounding.locate.scripts.contracts import (
 
 
 def load_metric_depth(frame: dict) -> np.ndarray:
-    if frame.get("depth_unit") != "meter":
-        raise ValueError("latest depth frame is not declared in meters")
-    path = _frame_path(frame)
-    if path is None:
-        raise ValueError("metric-depth artifact is unavailable")
-    depth = np.asarray(np.load(path, allow_pickle=False), dtype=np.float32).squeeze()
-    if depth.ndim == 1:
-        width = int(frame.get("width") or 0)
-        height = int(frame.get("height") or 0)
-        if width <= 0 or height <= 0 or depth.size != width * height:
-            raise ValueError("flat metric-depth frame has invalid dimensions")
-        depth = depth.reshape((height, width))
-    if depth.ndim != 2 or depth.size == 0:
-        raise ValueError("metric-depth frame must be a non-empty 2D array")
-    return depth
+    return load_depth_frame(frame, require_metric=True)
 
 
 def estimate_candidate_depth(
@@ -119,15 +105,3 @@ def _clamped_box(box: tuple[float, float, float, float], width: int, height: int
     right = max(left + 1, min(width, int(np.ceil(max(x0, x1)))))
     bottom = max(top + 1, min(height, int(np.ceil(max(y0, y1)))))
     return left, top, right, bottom
-
-
-def _frame_path(frame: dict) -> Path | None:
-    raw = frame.get("path") or frame.get("artifact_path") or frame.get("artifact_ref")
-    if not isinstance(raw, str) or not raw.strip():
-        return None
-    path = Path(raw)
-    if path.is_file():
-        return path
-    candidate = Path.cwd() / path
-    return candidate if candidate.is_file() else None
-

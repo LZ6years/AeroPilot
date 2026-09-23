@@ -15,7 +15,7 @@ import pytest
 
 from src.env_client.schemas import MapPackage, SceneInstance
 from src.sim_server.backends.ground_clearance import enrich_pose_with_agl
-from src.sim_server.backends.unrealcv_backend import UnrealCvBackend
+from tests.simulator_fakes import FakeUnrealCvBackend as UnrealCvBackend
 from src.adapters.unrealcv.capture import UnrealCvCapture
 from src.adapters.unrealcv.control import (
     ActorControlConfig,

@@ -40,6 +40,32 @@ class FakeSegmenter:
         return list(self.masks)
 
 
+def test_memory_only_rgb_depth_are_consumed_without_backend_artifacts(tmp_path):
+    import base64
+    from io import BytesIO
+    rgb = BytesIO()
+    Image.new("RGB", (20, 20), (80, 100, 120)).save(rgb, format="PNG")
+    depth = BytesIO()
+    np.save(depth, np.full((20, 20), 7.0, dtype=np.float32))
+    observation = {"observation_id": "obs_memory", "frames": {
+        "rgb": {"base64": base64.b64encode(rgb.getvalue()).decode()},
+        "depth": {"base64": base64.b64encode(depth.getvalue()).decode(), "depth_unit": "meter"},
+    }}
+
+    class ReadingGrounder(FakeGrounder):
+        def locate(self, rgb_path, query):
+            with Image.open(rgb_path) as image:
+                assert image.size == (20, 20)
+            return super().locate(rgb_path, query)
+
+    service = VisualGroundingService(ReadingGrounder([_candidate()]), None, _settings())
+    result = service.locate(observation=observation, observation_id="obs_memory",
+        query="person", include_distance=True, run_dir=None, tool_call_id="fixture")
+    assert result["data"]["candidates"][0]["distance_m"] == 7.0
+    assert result["data"]["candidates"][0]["distance_status"] == "ok"
+    assert not list(tmp_path.iterdir())
+
+
 def _settings(**overrides) -> VisualGroundingSettings:
     values = {
         "grounding_backend": "fake",

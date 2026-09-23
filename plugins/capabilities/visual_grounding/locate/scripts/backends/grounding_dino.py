@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import inspect
 from pathlib import Path
+from typing import BinaryIO
 from typing import Any
 
 from PIL import Image
@@ -21,7 +22,7 @@ class GroundingDinoBackend:
         self._model: Any | None = None
         self._device: str | None = None
 
-    def locate(self, rgb_path: Path, query: str) -> list[GroundedCandidate]:
+    def locate(self, rgb_path: Path | BinaryIO, query: str) -> list[GroundedCandidate]:
         torch = self._torch()
         processor, model = self._load()
         with Image.open(rgb_path) as source:
@@ -74,4 +75,3 @@ class GroundingDinoBackend:
         except ModuleNotFoundError as exc:
             raise RuntimeError("GroundingDINO backend requires torch") from exc
         return torch
-

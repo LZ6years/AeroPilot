@@ -425,6 +425,6 @@ def test_launch_backend_uses_real_airsim_adapter(tmp_path):
     )
     backend.start(package, scene)
 
-    assert backend.use_real_uav
+    assert not backend._injected_uav
     assert isinstance(backend, AirSimBackend)
     assert isinstance(backend.uav, AirSimUavAdapter)

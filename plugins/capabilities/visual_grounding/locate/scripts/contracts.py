@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import BinaryIO
 from typing import Any, Protocol, Sequence
 
 import numpy as np
@@ -83,11 +84,10 @@ class DepthEstimate:
 
 
 class GroundingBackend(Protocol):
-    def locate(self, rgb_path: Path, query: str) -> list[GroundedCandidate]: ...
+    def locate(self, rgb_path: Path | BinaryIO, query: str) -> list[GroundedCandidate]: ...
 
 
 class SegmentationBackend(Protocol):
     def segment(
-        self, rgb_path: Path, candidates: Sequence[GroundedCandidate]
+        self, rgb_path: Path | BinaryIO, candidates: Sequence[GroundedCandidate]
     ) -> list[CandidateMask]: ...
-

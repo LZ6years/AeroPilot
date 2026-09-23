@@ -285,7 +285,7 @@ def test_ready_remote_scene_attaches_without_owning_external_ue(
 
 
 def test_ready_remote_scene_rejects_external_process_when_fresh_required(
-    tmp_path,
+    tmp_path, monkeypatch,
 ):
     template = _template(tmp_path)
     package = _package("remote_air", "remote", "airsim", template)
@@ -302,6 +302,9 @@ def test_ready_remote_scene_rejects_external_process_when_fresh_required(
         backend_registry=registry,
     )
 
+    # This fake tunnel never binds a socket; do not depend on a real engine's
+    # unrelated local tunnel occupying the fixed fixture port.
+    monkeypatch.setattr(service.port_manager, "_is_available", lambda port: True)
     with pytest.raises(ConnectionError, match="fresh managed process"):
         SimulatorEnvClient(service).start_scene("remote_air")
 

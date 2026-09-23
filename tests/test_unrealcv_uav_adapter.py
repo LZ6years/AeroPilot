@@ -7,8 +7,10 @@ import sys
 
 import pytest
 
-from src.adapters.unrealcv.uav import UnrealCvUavAdapter, probe_unrealcv_endpoint
-from src.adapters.uav_primitives import NullUavPrimitiveAdapter, PrimitiveResult
+from src.adapters.unrealcv.uav import UnrealCvUavAdapter
+from src.adapters.unrealcv.client import probe_unrealcv_endpoint
+from src.adapters.uav_primitives import PrimitiveResult
+from tests.fake_uav import FakeUavPrimitiveAdapter
 from src.sim_server.backends.unrealcv_backend import UnrealCvBackend
 from tests.test_unrealcv_control_and_capture import FakeUnrealCvClient, _package
 
@@ -82,7 +84,7 @@ def test_read_only_probe_always_disconnects(monkeypatch):
 
 
 def test_backend_preserves_primitive_failure():
-    class FailingAdapter(NullUavPrimitiveAdapter):
+    class FailingAdapter(FakeUavPrimitiveAdapter):
         def turn_relative(self, yaw_deg):
             return PrimitiveResult(False, "blocked", {"failure_kind": "control_no_effect"})
     backend = UnrealCvBackend(uav=FailingAdapter())

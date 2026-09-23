@@ -5,8 +5,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from src.adapters.uav_primitives import PrimitiveResult, NullUavPrimitiveAdapter, UavPrimitiveAdapter
-from src.adapters.unrealcv.uav import UnrealCvUavAdapter, probe_unrealcv_endpoint
+from src.adapters.uav_primitives import PrimitiveResult, UavPrimitiveAdapter
+from src.adapters.unrealcv.uav import UnrealCvUavAdapter
+from src.adapters.unrealcv.client import probe_unrealcv_endpoint
 from src.env_client.schemas import ActionResult, MapPackage, Observation, SceneCapabilities, SceneInstance
 from src.runtime.configs.action_config import UavActionConfig
 from src.uav import CANONICAL_VERTICAL_SIGN, move_body_velocity_from_args
@@ -17,24 +18,17 @@ from .ground_clearance import enrich_pose_with_agl
 class UnrealCvBackend:
     """Own per-scene adapter binding; protocol I/O belongs to src.adapters."""
 
-    def __init__(self, use_real_client: bool = False,
-                 action_config: UavActionConfig | None = None,
+    def __init__(self, action_config: UavActionConfig | None = None,
                  artifact_dir: str | Path | None = None, save_artifacts: bool = False,
                  uav: UavPrimitiveAdapter | None = None) -> None:
-        self.use_real_client = use_real_client
         self.action_config = action_config or UavActionConfig()
         self.artifact_dir = Path(artifact_dir) if artifact_dir is not None else None
         self.save_artifacts = save_artifacts
         self.package: MapPackage | None = None
-        self.uav = uav if uav is not None else NullUavPrimitiveAdapter()
-        if uav is None and not use_real_client:
-            # Preserve the historical dry UnrealCV origin and lazy connection.
-            self.uav.connect()
-            self.uav.set_pose(0.0, 0.0, 3.0)
+        self.uav = uav
+        self._injected_uav = uav is not None
 
     def probe(self, package: MapPackage, host: str, port: int) -> BackendProbe:
-        if not self.use_real_client:
-            return BackendProbe(True, "in-memory UnrealCV test backend")
         return BackendProbe(*probe_unrealcv_endpoint(host, port))
 
     def describe_capabilities(self, package: MapPackage) -> SceneCapabilities:
@@ -63,7 +57,7 @@ class UnrealCvBackend:
 
     def start(self, package: MapPackage, scene: SceneInstance) -> SceneInstance:
         self.package = package
-        if self.use_real_client:
+        if not self._injected_uav:
             self.uav = UnrealCvUavAdapter(
                 scene.control_host, scene.control_port, package.unrealcv,
                 artifact_dir=self.artifact_dir, save_artifacts=self.save_artifacts,
@@ -90,6 +84,8 @@ class UnrealCvBackend:
     def get_observation(self, scene: SceneInstance, agent_id: str,
                         modalities: list[str],
                         capture_sources: dict[str, str] | None = None) -> Observation:
+        if self.uav is None:
+            raise RuntimeError("UnrealCV Backend has no scene-bound adapter; start the scene first")
         data: dict[str, Any] = {}
         if "pose" in modalities:
             result = self.uav.get_pose()
@@ -106,6 +102,8 @@ class UnrealCvBackend:
 
     def execute_action(self, scene: SceneInstance, agent_id: str,
                        action: str, args: dict) -> ActionResult:
+        if self.uav is None:
+            raise RuntimeError("UnrealCV Backend has no scene-bound adapter; start the scene first")
         result = self._dispatch(action, args)
         data = dict(result.data or {})
         if action == "get_pose":

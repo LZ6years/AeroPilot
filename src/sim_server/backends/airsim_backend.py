@@ -7,7 +7,7 @@ from pathlib import Path
 from src.adapters.airsim.uav import AirSimUavAdapter
 from src.adapters.airsim.control import resolve_airsim_control_strategy
 from src.adapters.airsim.client import probe_airsim_endpoint
-from src.adapters.uav_primitives import NullUavPrimitiveAdapter, UavPrimitiveAdapter
+from src.adapters.uav_primitives import UavPrimitiveAdapter
 from src.env_client.schemas import (
     ActionResult,
     MapPackage,
@@ -28,15 +28,13 @@ class AirSimBackend:
     def __init__(
         self,
         uav: UavPrimitiveAdapter | None = None,
-        use_real_uav: bool = False,
         action_config: UavActionConfig | None = None,
         artifact_dir: str | Path | None = None,
         save_artifacts: bool = False,
     ) -> None:
-        # Tests may inject an in-memory primitive adapter; the production
-        # BackendRegistry always requests the real AirSim adapter.
-        self.uav = uav or NullUavPrimitiveAdapter()
-        self.use_real_uav = use_real_uav
+        # Explicit injection is the only replacement for the real SDK adapter.
+        self.uav = uav
+        self._injected_uav = uav is not None
         self.action_config = action_config or UavActionConfig()
         self.artifact_dir = Path(artifact_dir) if artifact_dir is not None else None
         self.save_artifacts = save_artifacts
@@ -44,8 +42,6 @@ class AirSimBackend:
     def probe(self, package: MapPackage, host: str, port: int) -> BackendProbe:
         """Verify AirSim RPC health instead of accepting a raw TCP listener."""
 
-        if not self.use_real_uav:
-            return BackendProbe(True, "in-memory AirSim test backend")
         return BackendProbe(*probe_airsim_endpoint(host, port))
 
     def describe_capabilities(self, package: MapPackage) -> SceneCapabilities:
@@ -78,7 +74,7 @@ class AirSimBackend:
 
     def start(self, package: MapPackage, scene: SceneInstance) -> SceneInstance:
         # Mark the scene running once SimulationServer has prepared it.
-        if self.use_real_uav:
+        if not self._injected_uav:
             self.uav = AirSimUavAdapter(
                 host=scene.control_host,
                 port=scene.control_port,
@@ -120,14 +116,22 @@ class AirSimBackend:
         capture_sources: dict[str, str] | None = None,
     ) -> Observation:
         # Build raw observation data from primitive UAV calls.
+        if self.uav is None:
+            raise RuntimeError("AirSim Backend has no scene-bound adapter; start the scene first")
         data = {}
         if "pose" in modalities:
-            data["pose"] = self.uav.get_pose().data
+            result = self.uav.get_pose()
+            if not result.ok:
+                raise RuntimeError(f"AirSim pose observation failed: {result.message}")
+            data["pose"] = result.data
         frame_modalities = [m for m in modalities if m != "pose"]
         if frame_modalities:
-            data["frames"] = self.uav.get_frames(
+            result = self.uav.get_frames(
                 frame_modalities, capture_sources
-            ).data
+            )
+            if not result.ok:
+                raise RuntimeError(f"AirSim frame observation failed: {result.message}")
+            data["frames"] = result.data
         return Observation(scene.scene_instance_id, agent_id, modalities, data)
 
     def execute_action(
@@ -139,6 +143,8 @@ class AirSimBackend:
 
     def _dispatch(self, action: str, args: dict):
         # Map server action names onto the UAV primitive adapter.
+        if self.uav is None:
+            raise RuntimeError("AirSim Backend has no scene-bound adapter; start the scene first")
         if action == "connect":
             return self.uav.connect()
         if action == "takeoff":
@@ -171,7 +177,7 @@ class AirSimBackend:
         if action == "get_pose":
             return self.uav.get_pose()
         if action == "get_frames":
-            return self.uav.get_frames(list(args.get("modalities", ["rgb"])))
+            return self.uav.get_frames(list(args.get("modalities", ["rgb"])), args.get("capture_sources"))
         raise ValueError(f"Unsupported UAV primitive action: {action}")
 
     def _move_body_args(self, args: dict) -> tuple[float, float, float, float]:

@@ -1,7 +1,7 @@
 {
   "call_name": "skill.visual_grounding.locate",
   "wire_name": "skill_visual_grounding_locate",
-  "description": "Supplement direct visual reasoning only when a decision-relevant target cannot be reliably localized or distinguished, or its measured distance is necessary. Do not delegate general scene understanding or already clear visibility/location to this detector. Use include_distance=false for unresolved localization and true for decision-critical measurement. Confirm candidate identity from the annotated evidence; distance is camera-to-visible-surface depth, not horizontal or target-center distance.",
+  "description": "Locate a natural-language target in the current RGB observation and optionally estimate candidate distances. Applicable to tasks needing candidate locations or target-distance measurements. Returns candidate information, annotated evidence and, when enabled and available, distance estimates. Candidate identity requires interpretation against the task; an empty detection does not prove absence. Distance is camera-to-visible-surface depth, not horizontal or target-center distance.",
   "input_schema": {
     "type": "object",
     "required": ["observation_id", "query", "include_distance"],
@@ -16,11 +16,11 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 256,
-        "description": "Concise description of a decision-relevant target requiring localization or measurement, not a general scene inventory."
+        "description": "Natural-language description of the target to locate."
       },
       "include_distance": {
         "type": "boolean",
-        "description": "Enable only for a measured-distance request, a nearby metric threshold affecting action, or a quantitative completion claim; a numeric mention alone does not require measurement."
+        "description": "true estimates distances to detected candidates; false performs localization without distance estimation."
       }
     },
     "x-flyagent-completion-evidence": {
