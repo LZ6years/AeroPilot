@@ -150,10 +150,10 @@ def test_runner_flushes_completed_case_before_keyboard_interrupt(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     config = UavFlowEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "output_dir": str(tmp_path / "outputs"),
             "run_root": str(tmp_path / "runs"),
-            "execution_mode": "dry",
+            "execution_mode": "managed",
             "generate_html_review": True,
             "enable_sr_judge": False,
             "enable_visual_diagnostics": False,

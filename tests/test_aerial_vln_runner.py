@@ -1,4 +1,4 @@
-"""In-memory AirSim episode test for the AerialVLN runner."""
+"""Explicitly injected AirSim integration tests for the AerialVLN runner."""
 
 from __future__ import annotations
 
@@ -7,6 +7,8 @@ import hashlib
 from pathlib import Path
 
 import pytest
+from tests.benchmark_fakes import AerialVlnBenchmarkRunner
+from src.agent.transcript import AgentToolCall, AssistantTurn
 from PIL import Image
 
 from evaluation.benchmarks.aerial_vln.config import AerialVlnEvalConfig
@@ -14,15 +16,10 @@ from evaluation.benchmarks.aerial_vln.protocol import (
     AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
 )
 from evaluation.benchmarks.aerial_vln.runner import (
-    AerialVlnBenchmarkRunner,
     _infrastructure_error,
 )
 from plugins.research.stmr_map.online import StmrOnlineMapResult
-from src.agent.phase import COMPLETE_TASK, PhaseTransition
-from src.agent.planning.schemas import CoupledActionPhasePlan
-from src.agent.semantic.schemas import TaskParseResult
-from src.agent.semantic.validator import semantic_plan_from_dict
-from src.memory.context.schemas import MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MapMemoryStore
 from src.runtime.logging.async_run_logger import AsyncRunLogger
@@ -83,7 +80,8 @@ class FailingOnlineStmrBuilder:
 def test_aerial_vln_stmr_config_and_context_modes(tmp_path):
     base = {
         "dataset_root": str(tmp_path / "dataset"),
-        "execution_mode": "dry",
+        "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
+        "dataset_version": "fixture-v1",
         "scene_map": {"1": "airvln_env_1"},
         "stmr_prior": "urban_aerial_v1",
         "stmr_max_queries": 9,
@@ -91,7 +89,7 @@ def test_aerial_vln_stmr_config_and_context_modes(tmp_path):
     }
     shadow_session = FakeStmrSession()
     shadow = AerialVlnBenchmarkRunner(
-        AerialVlnEvalConfig.from_dict({**base, "stmr_mode": "shadow"}),
+        AerialVlnEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, **base, "stmr_mode": "shadow"}),
         stmr_session=shadow_session,
     )
     shadow._prepare_stmr()
@@ -109,7 +107,7 @@ def test_aerial_vln_stmr_config_and_context_modes(tmp_path):
 
     planner_session = FakeStmrSession()
     planner = AerialVlnBenchmarkRunner(
-        AerialVlnEvalConfig.from_dict({**base, "stmr_mode": "planner"}),
+        AerialVlnEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, **base, "stmr_mode": "planner"}),
         stmr_session=planner_session,
     )
     context_builder, stmr_module = planner._planner_context_builder(
@@ -131,9 +129,10 @@ def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
 ):
     runner = AerialVlnBenchmarkRunner(
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": str(tmp_path / "dataset"),
-                "execution_mode": "dry",
+                "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
+                "dataset_version": "fixture-v1",
                 "scene_map": {"1": "airvln_env_1"},
                 "stmr_mode": "planner",
             }
@@ -177,7 +176,7 @@ def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
         FlightMemory("run", "map", "scene", "uav"),
         MapMemoryStore(),
     )
-    stage = StageContextInput(active_instruction="follow the road")
+    stage = TaskContextInput(active_instruction="follow the road")
 
     ready_fragment = stmr_module.build(sources, stage)
 
@@ -202,7 +201,7 @@ def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
 def test_aerial_vln_rejects_invalid_stmr_config(tmp_path, field, value):
     with pytest.raises(ValueError, match=field):
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": str(tmp_path / "dataset"),
                 field: value,
             }
@@ -219,12 +218,11 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     (dataset / "val_seen.json").write_text(
         json.dumps({"episodes": [episode()]}), encoding="utf-8"
     )
-    monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
     monkeypatch.setattr(
         runner_module, "ModelActionPlanner", FakePlanner
     )
     config = AerialVlnEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "dataset_root": str(dataset),
             "split": "val_seen",
             "dataset_family": "aerialvln-s",
@@ -232,8 +230,9 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
             "limit_per_difficulty": None,
             "output_dir": str(tmp_path / "eval"),
             "run_root": str(tmp_path / "runs"),
-            "execution_mode": "dry",
-            "parser_mode": "fake",
+            "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
+            "dataset_version": "fixture-v1",
+            "expected_split_sha256": hashlib.sha256((dataset / "val_seen.json").read_bytes()).hexdigest(),
             "scene_map": {"1": "airvln_env_1"},
             "initialization_min_settle_sec": 0.25,
             "stmr_mode": "shadow",
@@ -259,7 +258,6 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
         runtime = runner._make_runtime(
             runtime_dir,
             recorder=runtime_recorder,
-            task_parser=FakeTaskParser(),
             planner=FakePlanner(),
         )
         assert (
@@ -293,14 +291,12 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     assert case_result["reference_path_length_m"] == 0.0
     assert case_result["dataset_split"] == "val_seen"
     assert case_result["dataset_split_label"] == "Validation Seen"
-    assert case_result["semantic_plan_diagnostics"] == {
-        "phase_count": 1,
-        "phase_names": ["navigate"],
-        "final_phase_done_when": ["dry episode complete"],
-        "last_reached_phase_number": 1,
-        "last_reached_phase_name": "navigate",
+    assert case_result["task_plan_diagnostics"] == {
+        "loop_schema": "unified_tool_loop_v1",
+        "plan_created": False,
+        "task_plan": None,
         "stopped_reason": None,
-        "stop_source": None,
+        "stop_source": "runtime.report_completed",
     }
     review_html = (case_dir / "review.html").read_text(encoding="utf-8")
     assert "Trajectory" in review_html and "trajectory_2d.png" in review_html
@@ -313,10 +309,10 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     assert "aerialvln-s" in review_html
     assert "Validation Seen" in review_html
     assert "reference_path_length_m" in review_html
-    assert "Semantic Plan Diagnostics" in review_html
+    assert "Task Plan Diagnostics" in review_html
     assert "STMR Spatial Memory" in review_html
     assert "STMR Map" in review_html
-    assert "navigate" in review_html
+    assert "runtime.report_completed" in review_html
     assert "Landing language denotes reaching" in review_html
     assert Path(result["summary_paths"]["html_review"]).exists()
     assert Path(result["summary_paths"]["dataset_provenance"]).exists()
@@ -344,11 +340,11 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
         == "aerial_vln.uav_agent_native_actions.v2"
     )
     assert manifest["scene_map"] == {"1": "airvln_env_1"}
-    assert manifest["runtime_loop_guard_windows"] == 100
+    assert manifest["runtime_loop_guard_windows"] == 300
     assert manifest["initialization_min_settle_sec"] == 0.25
     assert manifest["stmr"]["mode"] == "shadow"
     assert stmr_session.warmup_calls == 1
-    assert FakeTaskParser.last_protocol_context == (
+    assert FakePlanner.last_protocol_context == (
         AERIAL_VLN_PARSER_PROTOCOL_CONTEXT
     )
     assert manifest["dataset"]["dataset_family"] == "aerialvln-s"
@@ -514,7 +510,7 @@ def test_aerial_real_review_requires_persistent_debug_artifacts(tmp_path):
         json.dumps({"episodes": [episode()]}), encoding="utf-8"
     )
     config = AerialVlnEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": False, "enable_action_planner_debug": True},
             "dataset_root": str(dataset),
             "execution_mode": "attach",
             "scene_map": {"1": "airvln_env_1"},
@@ -554,7 +550,7 @@ def test_validate_only_preparation_reports_all_scenes_without_model_or_server(
     monkeypatch.setattr(runner_module, "SimulationServer", forbidden)
     runner = AerialVlnBenchmarkRunner(
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": str(dataset),
                 "dataset_family": "aerialvln-s",
                 "map_config_path": "configs/maps/airvln_maps.json",
@@ -595,7 +591,7 @@ def test_aerial_vln_s_validate_only_allows_no_scene_mappings(tmp_path):
     )
     runner = AerialVlnBenchmarkRunner(
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": str(dataset),
                 "dataset_family": "aerialvln-s",
                 "scene_map": {},
@@ -640,7 +636,7 @@ def test_real_aerial_vln_s_fails_before_server_when_hash_or_scenes_not_ready(
         ),
     )
     config = AerialVlnEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "dataset_root": str(dataset),
             "dataset_family": "aerialvln-s",
             "split": "val_unseen",
@@ -670,7 +666,7 @@ def test_aerial_vln_s_sha_mismatch_fails_during_offline_preparation(
     )
     runner = AerialVlnBenchmarkRunner(
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": str(dataset),
                 "dataset_family": "aerialvln-s",
                 "split": "val_unseen",
@@ -704,7 +700,7 @@ def test_real_aerial_vln_s_requires_expected_hash_before_server(
     )
     runner = AerialVlnBenchmarkRunner(
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": str(dataset),
                 "dataset_family": "aerialvln-s",
                 "split": "val_unseen",
@@ -744,7 +740,7 @@ def test_seen_and_unseen_compute_independent_split_thresholds(tmp_path):
     def prepare(split: str):
         runner = AerialVlnBenchmarkRunner(
             AerialVlnEvalConfig.from_dict(
-                {
+                {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                     "dataset_root": str(dataset),
                     "dataset_family": "aerialvln-s",
                     "split": split,
@@ -795,7 +791,7 @@ def test_seen_sha_cannot_validate_unseen_split(tmp_path):
     )
     runner = AerialVlnBenchmarkRunner(
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": str(dataset),
                 "dataset_family": "aerialvln-s",
                 "split": "val_unseen",
@@ -864,17 +860,18 @@ def test_multi_scene_dry_runner_executes_selected_cases_without_scene_one_limit(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
     monkeypatch.setattr(runner_module, "ModelActionPlanner", FakePlanner)
     monkeypatch.setattr(
         runner_module, "load_model_config", lambda *_args, **_kwargs: object()
     )
     runner = AerialVlnBenchmarkRunner(
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": str(dataset),
                 "dataset_family": "aerialvln-s",
                 "split": "val_unseen",
+                "dataset_version": "fixture-v1",
+                "expected_split_sha256": hashlib.sha256((dataset / "val_unseen.json").read_bytes()).hexdigest(),
                 "difficulties": ["low"],
                 "limit_per_difficulty": 3,
                 "map_config_path": str(map_config),
@@ -884,8 +881,7 @@ def test_multi_scene_dry_runner_executes_selected_cases_without_scene_one_limit(
                 },
                 "output_dir": str(tmp_path / "eval"),
                 "run_root": str(tmp_path / "runs"),
-                "execution_mode": "dry",
-                "parser_mode": "fake",
+                "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
             }
         )
     )
@@ -953,7 +949,7 @@ def test_validate_only_cli_does_not_require_execution_ready(
                 "dataset_family": "aerialvln-s",
                 "map_config_path": "configs/maps/airvln_maps.json",
                 "scene_map": {"1": "airvln_env_1"},
-                "execution_mode": "dry",
+                "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
                 "output_dir": str(tmp_path / "validation"),
             }
         ),
@@ -1008,6 +1004,7 @@ def test_cli_overrides_difficulty_limit_and_dataset_identity(tmp_path):
         json.dumps(
             {
                 "dataset_root": "old",
+                "execution_mode": "managed",
                 "dataset_family": "aerialvln-s",
                 "difficulties": ["low", "medium", "high"],
                 "limit_per_difficulty": 3,
@@ -1058,14 +1055,16 @@ def _runner_with_three_cases(tmp_path: Path) -> AerialVlnBenchmarkRunner:
     )
     return AerialVlnBenchmarkRunner(
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": str(dataset),
                 "dataset_family": "aerialvln-s",
+                "dataset_version": "fixture-v1",
+                "expected_split_sha256": hashlib.sha256((dataset / "val_seen.json").read_bytes()).hexdigest(),
                 "split": "val_seen",
                 "scene_map": {"1": "airvln_env_1"},
                 "output_dir": str(tmp_path / "eval"),
                 "run_root": str(tmp_path / "runs"),
-                "execution_mode": "dry",
+                "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
                 "generate_html_review": False,
             }
         )
@@ -1084,53 +1083,21 @@ def _fake_case_result(case, infrastructure_error):
     }
 
 
-class FakeTaskParser:
-    last_protocol_context = None
-
-    def __init__(self, *args, **kwargs) -> None:
-        type(self).last_protocol_context = kwargs.get("protocol_context")
-
-    def parse(self, instruction: str) -> TaskParseResult:
-        plan = semantic_plan_from_dict(
-            {
-                "intent": "navigation",
-                "task_goal": {
-                    "target": "goal",
-                    "target_attributes": {},
-                    "final_state": "at_goal",
-                },
-                "phases": [
-                    {
-                        "name": "navigate",
-                        "goal": "complete dry episode",
-                        "done_when": ["dry episode complete"],
-                        "continue_when": ["not complete"],
-                    }
-                ],
-            }
-        )
-        return TaskParseResult(
-            instruction=instruction, parser_mode="fake", plan=plan
-        )
-
-
 class FakePlanner:
     planner_mode = "fake"
+    last_protocol_context = None
 
-    def __init__(self, *args, **kwargs) -> None:
-        return
+    def __init__(self, *args, **kwargs):
+        pass
 
-    def plan_next_with_phase_decision(
-        self, state, context
-    ) -> CoupledActionPhasePlan:
-        return CoupledActionPhasePlan(
-            phase=state.current_phase_name,
-            phase_decision=PhaseTransition(
-                COMPLETE_TASK, "dry episode complete"
-            ),
-            steps=[],
-            agent_messages=[],
-        )
+    def plan_turn(self, transcript, registry, **kwargs):
+        type(self).last_protocol_context = transcript.latest_context().get("protocol_context")
+        return AssistantTurn("fixture_turn", "Hold at the observed endpoint", [
+            AgentToolCall("fixture_done", "runtime.report_completed", {
+                "reason": "Fixture endpoint observed",
+                "evidence_refs": [transcript.latest_observation_id()],
+            })
+        ])
 
 
 def episode() -> dict:

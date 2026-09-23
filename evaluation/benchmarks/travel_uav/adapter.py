@@ -1,6 +1,7 @@
 """Adapt TravelUAV NED/XYZW cases to the shared Runtime contract."""
 
 from __future__ import annotations
+from evaluation.benchmarks.travel_uav.protocol import TRAVEL_UAV_PARSER_PROTOCOL_CONTEXT
 
 from dataclasses import dataclass
 
@@ -70,6 +71,7 @@ class TravelUavCaseAdapter:
             ),
         )
         return PreparedBenchmarkEpisode(
+            protocol_context=TRAVEL_UAV_PARSER_PROTOCOL_CONTEXT,
             benchmark_name="travel_uav",
             case_id=case.episode_id,
             protocol_variant=TRAVEL_UAV_PROTOCOL,

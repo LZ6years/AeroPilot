@@ -57,7 +57,6 @@ from plugins.research.stmr_map.context_modules.map import (
 from plugins.research.stmr_map.perception import StmrPerceptionSession
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
-from src.agent.semantic.task_parser import TaskParser
 from src.env_client import (
     ObservationProfile,
     SimulatorEnvClient,
@@ -67,7 +66,6 @@ from src.memory.context.modules import DefaultImageContextModule
 from src.memory.context.registry import ContextModuleRegistry
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
-from src.plugins.skills import ModelSkillSelector
 from src.runtime.configs import load_map_config
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.model_config import load_model_config
@@ -75,8 +73,6 @@ from src.runtime.configs.safety_config import load_uav_safety_config
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.runtime.runners.task_runtime import TaskRuntime
-from src.sim_server.backends.registry import BackendRegistry
-from src.sim_server.backends.unrealcv_backend import UnrealCvBackend
 from src.sim_server.execution import SimulationExecutionMode
 from src.sim_server.server import SimulationServer
 
@@ -88,9 +84,13 @@ class UavFlowBenchmarkRunner:
         self,
         config: UavFlowEvalConfig,
         *,
+        simulation_server_factory: Any = None,
+        scenario_controller_factory: Any = None,
         stmr_session: Any | None = None,
     ) -> None:
+        self._scenario_controller_factory = scenario_controller_factory or UavFlowScenarioController
         self.config = config
+        self._simulation_server_factory = simulation_server_factory or SimulationServer
         self.model_config = load_model_config(config.env_path)
         self.action_config = _benchmark_action_config(config)
         self.safety_config = _benchmark_safety_config(config)
@@ -333,18 +333,14 @@ class UavFlowBenchmarkRunner:
         execution = None
         setup_error: dict[str, str] | None = None
         stmr_module: StmrMapContextModule | None = None
-        scenario = UavFlowScenarioController(
-            enabled=self.config.execution_mode != "dry"
-        )
+        scenario = self._scenario_controller_factory()
 
         while True:
             run_dir = RunStore(self.config.run_root).create_run_dir(
                 f"uav_flow_{case.case_id}_attempt{attempt_number}"
             )
             recorder = AsyncRunLogger(run_dir)
-            scenario = UavFlowScenarioController(
-                enabled=self.config.execution_mode != "dry"
-            )
+            scenario = self._scenario_controller_factory()
             metric_suite = UavFlowMetricSuite(
                 case,
                 case_dir,
@@ -797,8 +793,7 @@ class UavFlowBenchmarkRunner:
         """Fail before scene launch when a real audit cannot be complete."""
 
         if (
-            self.config.execution_mode == "dry"
-            or not self.config.generate_html_review
+            not self.config.generate_html_review
         ):
             return
         missing = []
@@ -819,7 +814,6 @@ class UavFlowBenchmarkRunner:
         *,
         planner: Any,
         context_builder: ObservationContextBuilder | None,
-        task_parser: Any | None = None,
         env_client: SimulatorEnvClient | None = None,
     ) -> TaskRuntime:
         if env_client is None:
@@ -830,11 +824,6 @@ class UavFlowBenchmarkRunner:
         return TaskRuntime(
             env_client,
             recorder,
-            task_parser
-            or TaskParser(
-                mode=self.config.parser_mode,
-                model_config=self.model_config,
-            ),
             planner=planner,
             safety=SafetySupervisor(self.safety_config),
             shutdown_policy=self.config.shutdown_policy,
@@ -846,16 +835,10 @@ class UavFlowBenchmarkRunner:
         )
 
     def _make_simulation_server(self, run_dir: str | Path) -> SimulationServer:
-        """Build the one service owned by a real or dry batch session."""
+        """Build the one service owned by a real batch session."""
 
-        backend_registry = None
-        execution_mode = self.config.execution_mode
-        if execution_mode == "dry":
-            backend_registry = _dry_unrealcv_registry()
-            server_mode = SimulationExecutionMode.ATTACH
-        else:
-            server_mode = SimulationExecutionMode.parse(execution_mode)
-        return SimulationServer(
+        server_mode = SimulationExecutionMode.parse(self.config.execution_mode)
+        return self._simulation_server_factory(
             self.map_packages,
             port_policy=self.port_policy,
             run_dir=run_dir,
@@ -863,7 +846,6 @@ class UavFlowBenchmarkRunner:
             show_display=not self.config.headless,
             action_config=self.action_config,
             save_artifacts=self.config.save_artifacts,
-            backend_registry=backend_registry,
         )
 
     def _scene_session_for_case(
@@ -945,17 +927,9 @@ class UavFlowBenchmarkRunner:
         include_stmr = self.config.stmr_mode != "off"
         if not include_depth and not include_stmr:
             return None, None
-        model_selection_enabled = (
-            getattr(planner, "planner_mode", "") == "model"
-        )
-        skill_selector = (
-            ModelSkillSelector(self.model_config)
-            if model_selection_enabled
-            else ModelSkillSelector(enabled=False)
-        )
         default_registry = ContextModuleRegistry.default(
             plugin_registry=self.plugin_registry,
-            skill_selector=skill_selector,
+
         )
         modules = dict(default_registry.modules)
         if include_depth:
@@ -979,7 +953,6 @@ class UavFlowBenchmarkRunner:
         )
         return (
             ObservationContextBuilder(
-                action_config=self.action_config,
                 safety_config=self.safety_config,
                 registry=registry,
                 plugin_registry=self.plugin_registry,
@@ -1026,19 +999,6 @@ def _audit_summary(
         "agent_message_count": len(audit.agent_messages),
     }
 
-
-def _dry_unrealcv_registry() -> BackendRegistry:
-    registry = BackendRegistry()
-    registry.register(
-        "unrealcv",
-        lambda context: UnrealCvBackend(
-            use_real_client=False,
-            action_config=context.action_config,
-            artifact_dir=context.artifact_dir,
-            save_artifacts=context.save_artifacts,
-        ),
-    )
-    return registry
 
 
 def _write_evaluation_truth(case_dir: Path, case: UavFlowCase) -> None:

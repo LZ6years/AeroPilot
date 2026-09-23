@@ -1,84 +1,4 @@
-"""Run UAV-Flow benchmark cases from one small manual command.
-
-Why this script exists
-----------------------
-UAV-Flow evaluation uses the same MapPackage, SimulationServer, EnvClient, and
-TaskRuntime composition as other runs. This script packages the
-benchmark-specific dataset/report switches without reviving the legacy gym
-scene lifecycle.
-
-Default behavior
-----------------
-CLI options are overrides, not a second source of defaults. When an option is
-omitted, its value is preserved from the selected JSON config. The repository
-example config defaults to a small in-memory dry batch:
-
-- classes: Turn,Move,Approach
-- limit_per_class: 1
-- execution_mode: dry
-- enable_sr_judge: False
-- enable_visual_diagnostics: False
-- enable_action_planner_debug: False
-- runtime_loop_guard_windows: 40
-- parser_mode: model
-
-Common commands
----------------
-Run the default 1x dry debug smoke:
-
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --eval-id uav_flow_manual_real_1x
-
-Attach to an already-running DowntownWest UnrealCV scene:
-
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --execution-mode attach --classes Turn,Approach --limit-per-class 3 --eval-id uav_flow_manual_real_3x
-
-Run a dry benchmark smoke without launching UE:
-
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --execution-mode dry --classes Turn --limit-per-class 1 --eval-id uav_flow_manual_dry
-
-Run a fast dry script check without model/SR/visual diagnostic calls:
-
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --execution-mode dry --classes Turn --limit-per-class 1 --eval-id uav_flow_manual_dry_fast --parser-mode rule_based --no-sr-judge --no-visual-diagnostics --no-action-planner-debug
-
-Run one Move-only debug batch:
-
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --classes Move --limit-per-class 1 --eval-id uav_flow_manual_move_1x
-
-Run exact dataset cases in the requested order:
-
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --case-ids 2025-03-30_11-49-14,2025-03-30_11-49-27 --execution-mode managed --eval-id uav_flow_exact_cases
-
-Run every case from every class without selector truncation:
-
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --config evaluation/benchmarks/uav_flow/configs/uav_flow_full_273.local --all-cases --eval-id uav_flow_full
-
-Check real UnrealCV imports without launching UE:
-
-    python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py --preflight-only
-
-Before real UE runs
--------------------
-Check whether old UnrealCV/UE processes are still alive:
-
-    Get-Process | Where-Object {
-      $_.ProcessName -match "python|Collection|UE4|Unreal"
-    } | Select-Object Id, ProcessName, Path
-
-This script does not kill processes automatically. That is intentional: a
-manual benchmark launcher should not risk stopping unrelated Python or Unreal
-work.
-
-Outputs to inspect
-------------------
-After a run, this script prints the eval directory and the key report paths.
-Open:
-
-    evaluation/benchmarks/uav_flow/outputs/<eval_id>/review.html
-
-Then inspect per-case review pages, RGB frames, coupled planner debug cards,
-latest planner context, runtime phase transition events, nDTW, SR judge, and
-trajectory plots.
-"""
+"""Run real UAV-Flow evaluation using explicitly configured attach/managed scenes."""
 
 from __future__ import annotations
 
@@ -105,20 +25,16 @@ def main() -> int:
     config = _config_from_args(args)
     summary = _config_summary(config, args.eval_id)
     print(json.dumps({"uav_flow_manual_eval_config": summary}, indent=2, ensure_ascii=False))
-    if config.execution_mode != "dry":
-        preflight = _unrealcv_preflight(config)
-        print(json.dumps({"unrealcv_preflight": preflight}, indent=2, ensure_ascii=False))
-        if preflight["status"] != "ok":
-            return 2
-        if args.preflight_only:
-            return 0
-        print(
-            "Reminder: this run will launch real UnrealCV/UE. "
-            "Check for old python/Collection/UE4/Unreal processes before running long batches."
-        )
-    elif args.preflight_only:
-        print("preflight_only skipped because execution_mode=dry.")
+    preflight = _unrealcv_preflight(config)
+    print(json.dumps({"unrealcv_preflight": preflight}, indent=2, ensure_ascii=False))
+    if preflight["status"] != "ok":
+        return 2
+    if args.preflight_only:
         return 0
+    print(
+        "Reminder: this run will launch real UnrealCV/UE. "
+        "Check for old python/Collection/UE4/Unreal processes before running long batches."
+    )
     result = UavFlowBenchmarkRunner(config).run(eval_id=args.eval_id)
     print(json.dumps(_result_summary(result), indent=2, ensure_ascii=False))
     return 0
@@ -157,9 +73,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-cases", type=int, default=None, help="Optional total case cap after class filtering.")
     parser.add_argument(
         "--execution-mode",
-        choices=["dry", "attach", "managed"],
+        choices=["attach", "managed"],
         default=None,
-        help="Simulator ownership mode; dry uses the in-memory UnrealCV Backend.",
+        help="Real simulator ownership mode.",
     )
     parser.add_argument(
         "--sr-judge",
@@ -188,7 +104,6 @@ def _parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional per-semantic-phase runtime window limit.",
     )
-    parser.add_argument("--parser-mode", default=None, help="Optional task parser mode override.")
     parser.add_argument("--env-path", default=None, help="Optional .env path for model config.")
     parser.add_argument(
         "--planner-depth-input",
@@ -245,7 +160,6 @@ def _config_from_args(args: argparse.Namespace) -> UavFlowEvalConfig:
         "enable_visual_diagnostics": args.enable_visual_diagnostics,
         "enable_action_planner_debug": args.enable_action_planner_debug,
         "runtime_loop_guard_windows": args.runtime_loop_guard_windows,
-        "parser_mode": args.parser_mode,
     }
     for field_name, value in optional_overrides.items():
         if value is not None:
@@ -262,10 +176,7 @@ def _config_from_args(args: argparse.Namespace) -> UavFlowEvalConfig:
         data["stmr_max_queries"] = args.stmr_max_queries
     if args.stmr_device:
         data["stmr_device"] = args.stmr_device
-    if (
-        data["execution_mode"] != "dry"
-        and data.get("generate_html_review", True)
-    ):
+    if data.get("generate_html_review", True):
         data["save_artifacts"] = True
         data["enable_action_planner_debug"] = True
     return UavFlowEvalConfig.from_dict(data)
@@ -303,7 +214,6 @@ def _config_summary(config: UavFlowEvalConfig, eval_id: str | None) -> dict[str,
         "generate_html_review": config.generate_html_review,
         "save_artifacts": config.save_artifacts,
         "runtime_loop_guard_windows": config.runtime_loop_guard_windows,
-        "parser_mode": config.parser_mode,
         "env_path": config.env_path,
         "planner_depth_input": config.planner_depth_input,
         "stmr_mode": config.stmr_mode,

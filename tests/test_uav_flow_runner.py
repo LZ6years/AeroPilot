@@ -1,4 +1,4 @@
-"""Dry-run tests for the migrated UAV-Flow benchmark runner."""
+"""UAV-Flow integration with test-owned Adapter and Scenario injection."""
 
 from __future__ import annotations
 
@@ -7,17 +7,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from tests.benchmark_fakes import UavFlowBenchmarkRunner
+from src.agent.transcript import AgentToolCall, AssistantTurn
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.config import UavFlowEvalConfig
-from evaluation.benchmarks.uav_flow.runner import UavFlowBenchmarkRunner
 from evaluation.benchmarks.uav_flow.runner import (
     _is_recoverable_simulator_error,
 )
-from src.agent.phase import COMPLETE_TASK, PhaseTransition
-from src.agent.planning.schemas import CoupledActionPhasePlan
-from src.agent.semantic.schemas import TaskParseResult
-from src.agent.semantic.validator import semantic_plan_from_dict
 
 
 def make_case() -> UavFlowCase:
@@ -36,7 +33,7 @@ def make_case() -> UavFlowCase:
 
 def test_dry_runner_uses_simulation_server_profile_and_canonical_pose(tmp_path):
     runner = UavFlowBenchmarkRunner(
-        UavFlowEvalConfig.from_dict({"execution_mode": "dry"})
+        UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True})
     )
 
     assert runner.observation_profile.modalities == ("rgb", "depth", "pose")
@@ -44,58 +41,32 @@ def test_dry_runner_uses_simulation_server_profile_and_canonical_pose(tmp_path):
     assert runner.map_package.unrealcv["control_target"] == "actor"
 
 
-class FakeTaskParser:
-    def __init__(self, *args, **kwargs) -> None:
-        pass
-
-    def parse(self, instruction: str) -> TaskParseResult:
-        plan = semantic_plan_from_dict(
-            {
-                "intent": "benchmark",
-                "task_goal": {
-                    "target": "person",
-                    "target_attributes": {},
-                    "final_state": "facing_target",
-                },
-                "phases": [
-                    {
-                        "name": "benchmark_phase",
-                        "goal": "complete benchmark smoke",
-                        "done_when": ["benchmark smoke task is complete"],
-                        "continue_when": ["benchmark smoke task is incomplete"],
-                    }
-                ],
-            }
-        )
-        return TaskParseResult(instruction=instruction, parser_mode="fake", plan=plan)
-
-
 class FakePlanner:
     planner_mode = "fake"
+    last_protocol_context = None
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args, **kwargs):
         pass
 
-    def plan_next_with_phase_decision(self, state, context) -> CoupledActionPhasePlan:
-        return CoupledActionPhasePlan(
-            phase="benchmark_phase",
-            phase_decision=PhaseTransition(COMPLETE_TASK, "dry runner complete"),
-            steps=[],
-            agent_messages=[],
-        )
+    def plan_turn(self, transcript, registry, **kwargs):
+        type(self).last_protocol_context = transcript.latest_context().get("protocol_context")
+        return AssistantTurn("fixture_turn", "Hold at the observed endpoint", [
+            AgentToolCall("fixture_done", "runtime.report_completed", {
+                "reason": "Fixture endpoint observed",
+                "evidence_refs": [transcript.latest_observation_id()],
+            })
+        ])
 
 
 def test_runner_dry_writes_core_audit_truth_artifact_and_summary(tmp_path, monkeypatch):
     import evaluation.benchmarks.uav_flow.runner as runner_module
 
-    monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
     monkeypatch.setattr(runner_module, "ModelActionPlanner", FakePlanner)
     config = UavFlowEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "output_dir": str(tmp_path / "eval"),
             "run_root": str(tmp_path / "runs"),
-            "execution_mode": "dry",
-            "parser_mode": "fake",
+            "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
             "safety_overrides": {"max_yaw_step_deg": 10.0},
             "runtime_loop_guard_windows": 7,
         }
@@ -167,15 +138,13 @@ def test_runner_run_reuses_one_scene_for_multiple_cases(tmp_path, monkeypatch):
 
     import evaluation.benchmarks.uav_flow.runner as runner_module
 
-    monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
     monkeypatch.setattr(runner_module, "ModelActionPlanner", FakePlanner)
     runner = UavFlowBenchmarkRunner(
         UavFlowEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "output_dir": str(tmp_path / "eval"),
                 "run_root": str(tmp_path / "runs"),
-                "execution_mode": "dry",
-                "parser_mode": "fake",
+                "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
                 "generate_html_review": False,
             }
         )
@@ -199,7 +168,7 @@ def test_runner_run_reuses_one_scene_for_multiple_cases(tmp_path, monkeypatch):
     assert len(result["results"]) == 2
     assert run_manifest["schema_version"] == "uav_flow_run_manifest_v1"
     assert run_manifest["selected_case_ids"] == ["case_a", "case_b"]
-    assert run_manifest["resolved_config"]["parser_mode"] == "fake"
+    assert "parser_mode" not in run_manifest["resolved_config"]
     assert "api_key" not in json.dumps(run_manifest)
     assert manifest["status"] == "closed"
     assert manifest["start_count"] == 1
@@ -233,15 +202,13 @@ def test_runner_retries_one_case_after_in_place_simulator_recovery(
 ):
     import evaluation.benchmarks.uav_flow.runner as runner_module
 
-    monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
     monkeypatch.setattr(runner_module, "ModelActionPlanner", FakePlanner)
     runner = UavFlowBenchmarkRunner(
         UavFlowEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "output_dir": str(tmp_path / "eval"),
                 "run_root": str(tmp_path / "runs"),
-                "execution_mode": "dry",
-                "parser_mode": "fake",
+                "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
                 "generate_html_review": False,
             }
         )
@@ -282,7 +249,7 @@ def test_runner_retries_one_case_after_in_place_simulator_recovery(
 
 def test_config_roundtrip_includes_runtime_scene_fields():
     config = UavFlowEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "execution_mode": "attach",
             "map_config_path": "configs/maps/unrealcv_actor_control.example.json",
             "map_id": "downtownwest_local_unrealcv",
@@ -296,22 +263,23 @@ def test_config_roundtrip_includes_runtime_scene_fields():
     assert config.headless is False
     assert config.save_artifacts is True
     assert config.limit_per_class == 3
-    assert UavFlowEvalConfig.from_dict({}).execution_mode == "dry"
-    assert UavFlowEvalConfig.from_dict({}).runtime_loop_guard_windows == 40
-    assert UavFlowEvalConfig.from_dict({}).planner_depth_input == "off"
+    assert UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, }).execution_mode == "managed"
+    assert UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, }).runtime_loop_guard_windows == 300
+    assert UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, }).planner_depth_input == "off"
     assert config.to_dict()["save_artifacts"] is True
 
 
 def test_config_rejects_legacy_gym_scene_fields():
     with pytest.raises(ValueError, match="Legacy UAV-Flow gym scene fields"):
-        UavFlowEvalConfig.from_dict({"env_id": "old", "real_unrealcv": True})
+        UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "env_id": "old", "real_unrealcv": True})
 
 
 def test_config_exact_case_ids_disable_class_and_count_selectors():
     config = UavFlowEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "case_ids": ["move_a", "turn_a"],
             "classes": ["Turn"],
+                "execution_mode": "managed",
             "limit_per_class": 1,
             "max_cases": 1,
         }
@@ -334,7 +302,7 @@ def test_config_exact_case_ids_disable_class_and_count_selectors():
 )
 def test_config_rejects_invalid_exact_case_ids(case_ids):
     with pytest.raises(ValueError, match="case_ids"):
-        UavFlowEvalConfig.from_dict({"case_ids": case_ids})
+        UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "case_ids": case_ids})
 
 
 def test_manual_eval_cli_omitted_options_preserve_base_config():
@@ -349,11 +317,11 @@ def test_manual_eval_cli_omitted_options_preserve_base_config():
     # ``None`` means "no CLI override". The effective values below come from
     # uav_flow_eval.example.json rather than a second set of script defaults.
     assert args.runtime_loop_guard_windows is None
-    assert args.parser_mode is None
+    assert not hasattr(args, "parser_mode")
     assert args.enable_sr_judge is None
     assert args.enable_visual_diagnostics is None
-    assert config.runtime_loop_guard_windows == 40
-    assert config.parser_mode == "model"
+    assert config.runtime_loop_guard_windows == 300
+    assert not hasattr(config, "parser_mode")
     assert config.classes == ["Turn", "Move", "Approach"]
     assert config.limit_per_class == 1
     assert config.enable_sr_judge is False
@@ -373,6 +341,7 @@ def test_manual_eval_cli_all_cases_clears_every_selector_and_preserves_switches(
         json.dumps(
             {
                 "case_ids": ["representative_case"],
+                "execution_mode": "managed",
                 "classes": ["Turn"],
                 "limit_per_class": 1,
                 "max_cases": 1,
@@ -421,7 +390,7 @@ def test_manual_eval_cli_accepts_exact_case_ids():
 
 def test_config_roundtrip_includes_stmr_experiment_fields():
     config = UavFlowEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "stmr_mode": "planner",
             "stmr_prior": "urban_uav_prior_v1",
             "stmr_max_queries": 12,
@@ -433,7 +402,7 @@ def test_config_roundtrip_includes_stmr_experiment_fields():
     assert config.stmr_prior == "urban_uav_prior_v1"
     assert config.stmr_max_queries == 12
     assert config.stmr_device == "cpu"
-    assert UavFlowEvalConfig.from_dict({}).stmr_mode == "off"
+    assert UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, }).stmr_mode == "off"
 
 
 def test_runner_builds_case_local_stmr_context_without_global_config():
@@ -442,7 +411,7 @@ def test_runner_builds_case_local_stmr_context_without_global_config():
 
     session = object()
     runner = UavFlowBenchmarkRunner(
-        UavFlowEvalConfig.from_dict({"stmr_mode": "shadow", "stmr_device": "cpu"}),
+        UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "stmr_mode": "shadow", "stmr_device": "cpu"}),
         stmr_session=session,
     )
 
@@ -456,17 +425,17 @@ def test_runner_builds_case_local_stmr_context_without_global_config():
 
 
 def test_runner_profile_capture_is_independent_from_planner_depth_context():
-    baseline = UavFlowBenchmarkRunner(UavFlowEvalConfig.from_dict({"stmr_mode": "off"}))
+    baseline = UavFlowBenchmarkRunner(UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "stmr_mode": "off"}))
     depth = UavFlowBenchmarkRunner(
         UavFlowEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "stmr_mode": "off",
                 "planner_depth_input": "now",
             }
         )
     )
     stmr = UavFlowBenchmarkRunner(
-        UavFlowEvalConfig.from_dict({"stmr_mode": "shadow"}),
+        UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "stmr_mode": "shadow"}),
         stmr_session=object(),
     )
 
@@ -486,7 +455,7 @@ def test_runner_builds_depth_image_context_without_stmr():
 
     runner = UavFlowBenchmarkRunner(
         UavFlowEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "stmr_mode": "off",
                 "planner_depth_input": "now",
             }
@@ -516,7 +485,7 @@ def test_runner_warms_shared_stmr_session_once_before_cases():
 
     session = Session()
     runner = UavFlowBenchmarkRunner(
-        UavFlowEvalConfig.from_dict({"stmr_mode": "shadow"}),
+        UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "stmr_mode": "shadow"}),
         stmr_session=session,
     )
 
@@ -529,7 +498,6 @@ def test_runner_warms_shared_stmr_session_once_before_cases():
 def test_runner_uses_independent_runtime_scene_session_per_case(tmp_path, monkeypatch):
     import evaluation.benchmarks.uav_flow.runner as runner_module
 
-    monkeypatch.setattr(runner_module, "TaskParser", FakeTaskParser)
     monkeypatch.setattr(runner_module, "ModelActionPlanner", FakePlanner)
     cases = [
         UavFlowCase(
@@ -551,11 +519,10 @@ def test_runner_uses_independent_runtime_scene_session_per_case(tmp_path, monkey
     ]
     monkeypatch.setattr(UavFlowBenchmarkRunner, "load_cases", lambda self: cases)
     config = UavFlowEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "output_dir": str(tmp_path / "eval"),
             "run_root": str(tmp_path / "runs"),
-            "execution_mode": "dry",
-            "parser_mode": "fake",
+            "execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True,
             "enable_sr_judge": False,
             "enable_visual_diagnostics": False,
         }
@@ -576,7 +543,7 @@ def test_runner_uses_independent_runtime_scene_session_per_case(tmp_path, monkey
         assert "Observation Gallery" not in html
         assert "Decision / Window Details" not in html
         assert "Action Timeline" not in html
-        assert "Phase execution timeline" in html and "audit.json" in html
+        assert "Task execution timeline" in html and "audit.json" in html
     assert result["summary_paths"]["html_review"].endswith("review.html")
     assert (tmp_path / "eval" / "reuse" / "review.html").exists()
     assert (
@@ -592,7 +559,7 @@ def test_real_review_requires_artifacts_and_planner_debug():
     with pytest.raises(ValueError, match="save_artifacts=true"):
         UavFlowBenchmarkRunner(
             UavFlowEvalConfig.from_dict(
-                {
+                {**{"execution_mode": "managed", "save_artifacts": False, "enable_action_planner_debug": True},
                     "execution_mode": "attach",
                     "generate_html_review": True,
                 }

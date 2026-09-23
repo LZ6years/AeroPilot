@@ -279,15 +279,17 @@ def _config(
         encoding="utf-8",
     )
     return AerialVlnEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "dataset_root": str(dataset),
             "dataset_family": "aerialvln-s",
+            "dataset_version": "fixture-v1",
+            "expected_split_sha256": __import__("hashlib").sha256((dataset / "val_seen.json").read_bytes()).hexdigest(),
             "split": "val_seen",
             "map_config_path": str(maps),
             "scene_map": {
                 scene_id: f"remote_{scene_id}"
                 for scene_id in ("1", "13", "26")
             },
-            "execution_mode": "dry",
+            "execution_mode": "managed",
         }
     )

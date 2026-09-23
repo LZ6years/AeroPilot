@@ -48,7 +48,6 @@ from plugins.research.stmr_map.context_modules.map import (
 from plugins.research.stmr_map.perception import StmrPerceptionSession
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
-from src.agent.semantic.task_parser import TaskParser
 from src.env_client import (
     ObservationProfile,
     SimulatorEnvClient,
@@ -56,12 +55,11 @@ from src.env_client import (
 )
 from src.memory.context.registry import ContextModuleRegistry
 from src.memory.context.modules.image import DefaultImageContextModule
-from src.memory.context.schemas import StageContextInput
+from src.memory.context.schemas import TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryRecordReader
 from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
-from src.plugins.skills import ModelSkillSelector
 from src.runtime.configs import load_map_config
 from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.model_config import load_model_config
@@ -72,8 +70,6 @@ from src.runtime.configs.stabilization_config import (
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.runtime.runners.task_runtime import TaskRuntime
-from src.sim_server.backends.airsim_backend import AirSimBackend
-from src.sim_server.backends.registry import BackendRegistry
 from src.sim_server.execution import SimulationExecutionMode
 from src.sim_server.server import SimulationServer
 
@@ -106,9 +102,11 @@ class AerialVlnBenchmarkRunner:
         self,
         config: AerialVlnEvalConfig,
         *,
+        simulation_server_factory: Any = None,
         stmr_session: Any | None = None,
     ) -> None:
         self.config = config
+        self._simulation_server_factory = simulation_server_factory or SimulationServer
         # Dataset-only validation must not read model credentials or construct
         # model clients. Runtime creation resolves this lazily.
         self._loaded_model_config: Any | None = None
@@ -143,7 +141,6 @@ class AerialVlnBenchmarkRunner:
             )
         if (
             self.config.stmr_mode != "off"
-            and self.config.execution_mode != "dry"
             and not self.config.save_artifacts
         ):
             raise ValueError(
@@ -574,11 +571,11 @@ class AerialVlnBenchmarkRunner:
             "audit_path": audit_path,
             "stmr": stmr_summary,
         }
-        semantic_plan_diagnostics = _semantic_plan_diagnostics(
+        task_plan_diagnostics = _task_plan_diagnostics(
             run_dir, outcome
         )
-        case_result["semantic_plan_diagnostics"] = (
-            semantic_plan_diagnostics
+        case_result["task_plan_diagnostics"] = (
+            task_plan_diagnostics
         )
         _write_json(case_dir / "case_result.json", case_result)
         _write_json(case_dir / "trajectory.json", trajectory)
@@ -607,7 +604,7 @@ class AerialVlnBenchmarkRunner:
                     self.config.upstream_reference_commit
                 ),
                 "protocol_variant": AERIAL_VLN_PROTOCOL,
-                "semantic_plan_diagnostics": semantic_plan_diagnostics,
+                "task_plan_diagnostics": task_plan_diagnostics,
                 "scene_capabilities": capabilities,
                 "control_strategy": (
                     capabilities.get("control_mode")
@@ -719,9 +716,9 @@ class AerialVlnBenchmarkRunner:
                     },
                 ),
                 ReviewSection(
-                    "Semantic Plan Diagnostics",
+                    "Task Plan Diagnostics",
                     "key_value",
-                    semantic_plan_diagnostics,
+                    task_plan_diagnostics,
                 ),
                 ReviewSection(
                     "STMR Spatial Memory",
@@ -776,7 +773,6 @@ class AerialVlnBenchmarkRunner:
         run_dir: Path,
         recorder: AsyncRunLogger,
         *,
-        task_parser: Any | None = None,
         planner: Any | None = None,
     ) -> TaskRuntime:
         model_config = self._model_config()
@@ -786,15 +782,8 @@ class AerialVlnBenchmarkRunner:
         )
         if stmr_module is not None:
             self._stmr_modules[str(run_dir)] = stmr_module
-        backend_registry = None
-        if self.config.execution_mode == "dry":
-            backend_registry = _dry_airsim_registry()
-            server_mode = SimulationExecutionMode.ATTACH
-        else:
-            server_mode = SimulationExecutionMode.parse(
-                self.config.execution_mode
-            )
-        server = SimulationServer(
+        server_mode = SimulationExecutionMode.parse(self.config.execution_mode)
+        server = self._simulation_server_factory(
             self.map_packages,
             port_policy=self.port_policy,
             run_dir=run_dir,
@@ -802,19 +791,12 @@ class AerialVlnBenchmarkRunner:
             show_display=not self.config.headless,
             action_config=self.action_config,
             save_artifacts=self.config.save_artifacts,
-            backend_registry=backend_registry,
         )
         return TaskRuntime(
             SimulatorEnvClient(
                 server, observation_profile=self.observation_profile
             ),
             recorder,
-            task_parser
-            or TaskParser(
-                mode=self.config.parser_mode,
-                model_config=model_config,
-                protocol_context=AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
-            ),
             planner=active_planner,
             safety=SafetySupervisor(self.safety_config),
             shutdown_policy=self.config.shutdown_policy,
@@ -843,17 +825,9 @@ class AerialVlnBenchmarkRunner:
 
         if self.config.stmr_mode != "planner":
             return None, None
-        model_selection_enabled = (
-            getattr(planner, "planner_mode", "") == "model"
-        )
-        skill_selector = (
-            ModelSkillSelector(self._model_config())
-            if model_selection_enabled
-            else ModelSkillSelector(enabled=False)
-        )
         default_registry = ContextModuleRegistry.default(
             plugin_registry=self.plugin_registry,
-            skill_selector=skill_selector,
+
         )
         modules = dict(default_registry.modules)
         image_module = DefaultImageContextModule()
@@ -874,7 +848,6 @@ class AerialVlnBenchmarkRunner:
         )
         return (
             ObservationContextBuilder(
-                action_config=self.action_config,
                 safety_config=self.safety_config,
                 registry=registry,
                 plugin_registry=self.plugin_registry,
@@ -912,7 +885,7 @@ class AerialVlnBenchmarkRunner:
         try:
             module.online_builder.build(
                 memory,
-                StageContextInput(active_instruction=instruction),
+                TaskContextInput(active_instruction=instruction),
             )
         except Exception as exc:
             # debug_summary preserves the last successful state when possible;
@@ -1021,8 +994,7 @@ class AerialVlnBenchmarkRunner:
         """Require persistent evidence for real, portable HTML reviews."""
 
         if (
-            self.config.execution_mode == "dry"
-            or not self.config.generate_html_review
+            not self.config.generate_html_review
         ):
             return
         missing = []
@@ -1157,19 +1129,6 @@ def _materialize_stmr_assets(
     ]
 
 
-def _dry_airsim_registry() -> BackendRegistry:
-    registry = BackendRegistry()
-    registry.register(
-        "airsim",
-        lambda context: AirSimBackend(
-            use_real_uav=False,
-            action_config=context.action_config,
-            artifact_dir=context.artifact_dir,
-            save_artifacts=context.save_artifacts,
-        ),
-    )
-    return registry
-
 
 def _action_config(config: AerialVlnEvalConfig) -> Any:
     loaded = load_uav_action_config()
@@ -1289,41 +1248,16 @@ def _infrastructure_error(
     return None
 
 
-def _semantic_plan_diagnostics(
+def _task_plan_diagnostics(
     run_dir: Path, outcome: dict[str, Any]
 ) -> dict[str, Any]:
-    """Read evaluation-only phase diagnostics after Runtime logging closes."""
-
-    parse_result = _read_json_object(run_dir / "state" / "semantic_plan.json")
+    """Report optional task planning without inventing missing phases."""
     latest_state = _read_json_object(run_dir / "state" / "latest_state.json")
-    plan = parse_result.get("plan")
-    if not isinstance(plan, dict):
-        plan = latest_state.get("semantic_plan")
-    phases = plan.get("phases") if isinstance(plan, dict) else None
-    phase_rows = [item for item in phases or [] if isinstance(item, dict)]
-    phase_names = [str(item.get("name") or "") for item in phase_rows]
-    final_phase = phase_rows[-1] if phase_rows else {}
-
-    raw_current_index = latest_state.get("current_phase_index")
-    current_index = (
-        int(raw_current_index)
-        if isinstance(raw_current_index, int) and raw_current_index >= 0
-        else None
-    )
-    if phase_rows and current_index is not None:
-        reached_index = min(current_index, len(phase_rows) - 1)
-        reached_number = reached_index + 1
-        reached_name = phase_names[reached_index]
-    else:
-        reached_number = None
-        reached_name = None
-
+    plan = latest_state.get("task_plan")
     return {
-        "phase_count": len(phase_rows),
-        "phase_names": phase_names,
-        "final_phase_done_when": list(final_phase.get("done_when") or []),
-        "last_reached_phase_number": reached_number,
-        "last_reached_phase_name": reached_name,
+        "loop_schema": "unified_tool_loop_v1",
+        "plan_created": isinstance(plan, dict),
+        "task_plan": plan,
         "stopped_reason": outcome.get("stopped_reason"),
         "stop_source": outcome.get("stop_source"),
     }

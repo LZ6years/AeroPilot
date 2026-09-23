@@ -43,7 +43,6 @@ from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from tests.manual.benchmark_probe_support import (
     CompleteProbePlanner,
-    StaticProbeTaskParser,
 )
 
 
@@ -126,7 +125,6 @@ def main() -> int:
         runtime = runner._make_runtime(
             run_dir,
             recorder,
-            task_parser=StaticProbeTaskParser(),
             planner=CompleteProbePlanner(),
         )
         episode = AerialVlnCaseAdapter(

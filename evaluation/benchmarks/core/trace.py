@@ -15,6 +15,8 @@ from typing import Any
 
 
 PHYSICAL_TRACE_SCHEMA_VERSION = "physical_window_v2"
+# Legacy event names are accepted only at the read-only report boundary.
+PHYSICAL_WINDOW_EVENTS = frozenset({"physical_window_recorded", "phase_window_recorded"})
 _MEMORY_FILES = ("actions.jsonl", "poses.jsonl", "observations.jsonl")
 _MOTION_TOOLS = {"uav.move_body", "uav.turn_relative"}
 
@@ -242,7 +244,7 @@ class EpisodeTraceReader:
         physical_call_count = 0
         motion_call_count = 0
         for event in events:
-            if (event.get("event") or event.get("kind")) != "phase_window_recorded":
+            if (event.get("event") or event.get("kind")) not in PHYSICAL_WINDOW_EVENTS:
                 continue
             payload = event.get("payload")
             if not isinstance(payload, dict):

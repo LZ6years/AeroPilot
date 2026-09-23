@@ -141,24 +141,6 @@ def test_managed_scenario_cleanup_hides_objects_while_batch_scene_is_alive():
     assert connection.disconnect_count == 1
 
 
-def test_disabled_dry_scenario_does_not_open_connection():
-    called = False
-
-    def factory(host, port):
-        nonlocal called
-        called = True
-        return FakeConnection()
-
-    controller = UavFlowScenarioController(
-        enabled=False, connection_factory=factory
-    )
-
-    controller.prepare_episode(scene(), payload(use_obj=1))
-    controller.cleanup_episode(scene(), payload(use_obj=1))
-
-    assert called is False
-
-
 def payload(
     *, use_obj: int, obj_id: int | None = None
 ) -> UavFlowScenarioPayload:

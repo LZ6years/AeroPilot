@@ -21,6 +21,67 @@ def _write_json(path: Path, value) -> None:
     path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
 
 
+def test_batch_observation_audit_does_not_count_terminal_refresh():
+    records = [
+        {"kind": "state_checkpoint"}, {"kind": "assistant_turn"},
+        {"kind": "tool_result"}, {"kind": "state_checkpoint"},
+        {"kind": "state_checkpoint"}, {"kind": "task_terminal"},
+    ]
+    audit = {"observations": [
+        {"id": "obs2", "source": "automatic_physical_window"},
+        {"id": "obs3", "source": "task_terminal"},
+    ]}
+    violations = []
+    MODULE._audit_physical_observations(records, [(1, 2, "turn1")],
+                                        [(0, "obs1"), (3, "obs2"), (4, "obs3")],
+                                        audit, violations, "case")
+    assert violations == []
+    audit["observations"][1]["source"] = "automatic_physical_window"
+    MODULE._audit_physical_observations(records, [(1, 2, "turn1")],
+                                        [(0, "obs1"), (3, "obs2"), (4, "obs3")],
+                                        audit, violations, "case")
+    assert "post_batch_checkpoint_cardinality" in {v.code for v in violations}
+
+
+def test_advisory_audit_checks_applied_revision_and_rejected_updates():
+    from src.agent.planning.task_plan import TaskPlan
+    args = {"explanation": "Reach endpoint", "steps": [
+        {"id": "go", "description": "Move to endpoint", "status": "in_progress"}]}
+    plan = TaskPlan().updated(args).to_dict()
+    records = [
+        {"kind": "assistant_turn", "payload": {"tool_calls": [
+            {"tool_call_id": "p", "tool_name": "runtime.update_plan", "args": args}]}},
+        {"kind": "tool_result", "payload": {"tool_call_id": "p", "status": "ok",
+            "data": {"previous_revision": 0, "plan": plan}}},
+        {"kind": "state_checkpoint", "payload": {"context": {"task_plan": plan}}},
+    ]
+    violations = []
+    MODULE._audit_advisory_state(records, violations, "case")
+    assert not violations
+    records[1]["payload"]["status"] = "rejected"
+    MODULE._audit_advisory_state(records, violations, "case")
+    assert {v.code for v in violations} == {"rejected_plan_applied", "checkpoint_plan_mismatch"}
+
+
+def test_advisory_audit_checks_incremental_knowledge_and_version():
+    def load(identity, refs, data):
+        return [
+            {"kind": "assistant_turn", "payload": {"tool_calls": [{"tool_call_id": identity,
+                "tool_name": "knowledge.load", "args": {"name": "guide", "reference_paths": refs}}]}},
+            {"kind": "tool_result", "payload": {"tool_call_id": identity, "status": "ok", "data": data}},
+        ]
+    base = {"name": "guide", "version": "sha", "reference_manifest": [{"path": "ref.md"}]}
+    records = load("k1", [], {**base, "body_included": True, "body": "guidance", "references": []})
+    records += load("k2", ["ref.md"], {**base, "body_included": False,
+        "references": [{"path": "ref.md", "text": "detail"}]})
+    violations = []
+    MODULE._audit_advisory_state(records, violations, "case")
+    assert not violations
+    records[-1]["payload"]["data"]["version"] = "changed"
+    MODULE._audit_advisory_state(records, violations, "case")
+    assert {v.code for v in violations} == {"knowledge_delivery_mismatch"}
+
+
 def test_compact_report_uses_timeline_and_durable_audit(tmp_path):
     page = tmp_path / "review.html"
     page.write_text('<section class="phase-timeline"></section><a href="audit.json">Audit</a>', encoding="utf-8")
@@ -83,8 +144,8 @@ def _valid_eval(tmp_path: Path) -> Path:
                 "physical_windows": [
                     {
                         "decision_id": "decision_0001",
-                        "phase": "move",
-                        "phase_key": "1:move",
+                        "phase": None,
+                        "phase_key": None,
                         "window_index": 1,
                         "status": "ok",
                         "observation_before_id": "obs_1",
@@ -163,7 +224,7 @@ def _valid_eval(tmp_path: Path) -> Path:
             "kind": "state_checkpoint",
             "payload": {
                 "observation_id": "obs_1",
-                "context": {"current_phase": {"name": "move"}},
+                "context": {"task_plan": None},
             },
         },
         {
@@ -172,17 +233,6 @@ def _valid_eval(tmp_path: Path) -> Path:
             "payload": {
                 "public_intent": "Turn and move in one bounded window.",
                 "tool_calls": [
-                    {
-                        "tool_call_id": "commit_1",
-                        "tool_name": "runtime.commit_phase_turn",
-                        "args": {
-                            "completion_assessment": {
-                                "done_when": [
-                                    {"index": 0, "status": "unknown", "evidence": "not moved"}
-                                ]
-                            }
-                        },
-                    },
                     {
                         "tool_call_id": "turn_1",
                         "tool_name": "uav.turn_relative",
@@ -223,23 +273,11 @@ def _valid_eval(tmp_path: Path) -> Path:
             },
         },
         {
-            "id": "turn_6",
-            "kind": "tool_result",
-            "payload": {
-                "tool_call_id": "commit_1",
-                "tool_name": "runtime.commit_phase_turn",
-                "status": "ok",
-                "requested_args": {},
-                "executed_args": {},
-                "safety_interventions": [],
-            },
-        },
-        {
             "id": "turn_7",
             "kind": "state_checkpoint",
             "payload": {
                 "observation_id": "obs_2",
-                "context": {"current_phase": {"name": "move"}},
+                "context": {"task_plan": None},
             },
         },
         {
@@ -249,15 +287,9 @@ def _valid_eval(tmp_path: Path) -> Path:
                 "public_intent": "The requested motion is now complete.",
                 "tool_calls": [
                     {
-                        "tool_call_id": "commit_2",
-                        "tool_name": "runtime.commit_phase_turn",
-                        "args": {
-                            "completion_assessment": {
-                                "done_when": [
-                                    {"index": 0, "status": "supported", "evidence": "observed"}
-                                ]
-                            }
-                        },
+                        "tool_call_id": "done",
+                        "tool_name": "runtime.report_completed",
+                        "args": {"reason": "Observed endpoint", "evidence_refs": ["obs_2"]},
                     }
                 ],
             },
@@ -266,14 +298,16 @@ def _valid_eval(tmp_path: Path) -> Path:
             "id": "turn_9",
             "kind": "tool_result",
             "payload": {
-                "tool_call_id": "commit_2",
-                "tool_name": "runtime.commit_phase_turn",
+                "tool_call_id": "done",
+                "tool_name": "runtime.report_completed",
                 "status": "ok",
                 "requested_args": {},
                 "executed_args": {},
                 "safety_interventions": [],
             },
         },
+        {"id": "terminal", "kind": "task_terminal", "payload": {
+            "completed": True, "stopped": False, "stop_source": "runtime.report_completed"}},
     ]
     _write_json(
         case_dir / "audit.json",
@@ -281,19 +315,21 @@ def _valid_eval(tmp_path: Path) -> Path:
             "agent_transcript": transcript,
             "observations": [
                 {"id": "obs_1", "source": "preflight"},
-                {"id": "obs_2", "source": "automatic_phase_window"},
+                {"id": "obs_2", "source": "automatic_physical_window"},
             ],
             "actions": [
                 {
                     "tool": "uav.turn_relative",
+                    "result": {"ok": True},
                     "args": {"yaw_deg": 10.0},
-                    "phase": "move",
+                    "phase": None,
                     "step_index": 0,
                 },
                 {
                     "tool": "uav.move_body",
+                    "result": {"ok": True},
                     "args": {"vx": 1.0, "vy": 0.0, "vz": 0.0, "duration": 0.5},
-                    "phase": "move",
+                    "phase": None,
                     "step_index": 1,
                 },
             ],
@@ -419,28 +455,13 @@ def test_audit_accepts_generic_report_blocked_terminal(tmp_path):
     case_dir = root / "cases" / "case-1"
     audit_path = case_dir / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    audit["agent_transcript"][7:] = [
+    audit["agent_transcript"][6:] = [
         {
             "id": "turn_8",
             "kind": "assistant_turn",
             "payload": {
                 "public_intent": "No safe evidence-producing action remains.",
                 "tool_calls": [
-                    {
-                        "tool_call_id": "commit_blocked",
-                        "tool_name": "runtime.commit_phase_turn",
-                        "args": {
-                            "completion_assessment": {
-                                "done_when": [
-                                    {
-                                        "index": 0,
-                                        "status": "unknown",
-                                        "evidence": "obs_2 remains inconclusive",
-                                    }
-                                ]
-                            }
-                        },
-                    },
                     {
                         "tool_call_id": "report_blocked",
                         "tool_name": "runtime.report_blocked",
@@ -459,15 +480,6 @@ def test_audit_accepts_generic_report_blocked_terminal(tmp_path):
             "payload": {
                 "tool_call_id": "report_blocked",
                 "tool_name": "runtime.report_blocked",
-                "status": "ok",
-            },
-        },
-        {
-            "id": "turn_10",
-            "kind": "tool_result",
-            "payload": {
-                "tool_call_id": "commit_blocked",
-                "tool_name": "runtime.commit_phase_turn",
                 "status": "ok",
             },
         },
@@ -529,8 +541,8 @@ def test_audit_rejects_report_blocked_with_unknown_evidence_and_physical_call(tm
     report = MODULE.audit_evaluation(root)
     codes = {item["code"] for item in report["violations"]}
 
-    assert "report_blocked_turn_invalid" in codes
-    assert "report_blocked_evidence_unknown" in codes
+    assert "control_turn_mixed" in codes
+    assert "terminal_evidence_invalid" in codes
 
 
 def test_audit_rejects_duplicate_missing_and_orphan_results(tmp_path):
@@ -538,7 +550,7 @@ def test_audit_rejects_duplicate_missing_and_orphan_results(tmp_path):
     audit_path = root / "cases" / "case-1" / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     transcript = audit["agent_transcript"]
-    transcript[2]["payload"]["tool_calls"][2]["tool_call_id"] = "turn_1"
+    transcript[2]["payload"]["tool_calls"][1]["tool_call_id"] = "turn_1"
     transcript[:] = [
         item
         for item in transcript
@@ -707,7 +719,7 @@ def test_audit_accepts_fallback_intent_and_closed_provider_rejection(tmp_path):
     assert report["coverage"]["assistant_turns"] == 2
 
 
-def test_audit_excludes_closed_runtime_rejection_from_committed_windows(tmp_path):
+def test_audit_excludes_closed_runtime_rejection_from_accepted_windows(tmp_path):
     root = _valid_eval(tmp_path)
     audit_path = root / "cases" / "case-1" / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
@@ -716,12 +728,12 @@ def test_audit_excludes_closed_runtime_rejection_from_committed_windows(tmp_path
             "id": "assistant_rejected",
             "kind": "assistant_turn",
             "payload": {
-                "public_intent": "Commit without a required physical action.",
+                "public_intent": "Submit an invalid plan update.",
                 "public_intent_source": "provider_content",
                 "tool_calls": [
                     {
-                        "tool_call_id": "commit_rejected",
-                        "tool_name": "runtime.commit_phase_turn",
+                        "tool_call_id": "plan_rejected",
+                        "tool_name": "runtime.update_plan",
                         "args": {
                             "completion_assessment": {
                                 "done_when": [
@@ -741,17 +753,17 @@ def test_audit_excludes_closed_runtime_rejection_from_committed_windows(tmp_path
             "id": "result_rejected",
             "kind": "tool_result",
             "payload": {
-                "tool_call_id": "commit_rejected",
-                "tool_name": "runtime.commit_phase_turn",
+                "tool_call_id": "plan_rejected",
+                "tool_name": "runtime.update_plan",
                 "status": "rejected",
-                "message": "incomplete phase requires a physical call",
+                "message": "plan update requires valid steps",
                 "data": {"rejection": {"scope": "turn", "code": "invalid_turn_combination", "role": "turn_member", "executed": False}},
             },
         },
         {
             "id": "feedback_rejected",
             "kind": "protocol_feedback",
-            "payload": {"message": "Include one to three physical calls."},
+            "payload": {"message": "Submit a valid plan or act directly."},
         },
     ]
     _write_json(audit_path, audit)
@@ -760,7 +772,7 @@ def test_audit_excludes_closed_runtime_rejection_from_committed_windows(tmp_path
 
     assert report["status"] == "ok"
     assert report["coverage"]["rejected_assistant_turns"] == 1
-    assert report["coverage"]["committed_turns"] == 2
+    assert report["coverage"]["control_turns"] == 1
     assert report["coverage"]["physical_batches"] == 1
 
 

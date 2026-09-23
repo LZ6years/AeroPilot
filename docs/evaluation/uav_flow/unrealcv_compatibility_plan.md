@@ -14,7 +14,7 @@ composition 取代；当前实现以
 - nDTW、SR、plot、HTML 报告保留；
 - gym scene lifecycle、benchmark 私有飞行控制、camera capture 和私有轨迹缓存
   删除；
-- dry Backend、scenario、truth leak 和 trace 自动化测试；
+- 显式注入的 Fake Backend、scenario、truth leak 和 trace 自动化测试；
 - 真实引擎验收统一使用正式 `UavFlowBenchmarkRunner`；
 - 根据真实 Turn 结果修正 `blueprint_yaw` 的命令 offset 和物理 yaw readback。
 

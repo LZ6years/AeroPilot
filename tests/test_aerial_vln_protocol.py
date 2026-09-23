@@ -6,7 +6,6 @@ from evaluation.benchmarks.aerial_vln.protocol import (
     AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
     AERIAL_VLN_PROTOCOL,
 )
-from src.agent.semantic.task_parser import TaskParser
 from src.runtime.configs.model_config import ModelConfig
 
 
@@ -34,18 +33,10 @@ def test_aerial_vln_v2_protocol_defines_episode_stop_without_physical_land():
     assert "only when the instruction requests it separately" in context
 
 
-def test_aerial_vln_protocol_context_is_absent_from_default_parser_messages():
-    parser = TaskParser(
-        mode="model",
-        model_config=ModelConfig(
-            task_parser_mode="model",
-            model_name="test-model",
-            api_key="test-key",
-        ),
-    )
-
-    messages = parser._build_structure_messages("Land by the red building")
-
-    assert AERIAL_VLN_PARSER_PROTOCOL_CONTEXT not in [
-        message["content"] for message in messages
-    ]
+def test_aerial_vln_protocol_is_caller_owned_not_default_mission_state():
+    from src.agent.mission_state import MissionState
+    state = MissionState("test", "Land by the red building")
+    assert state.protocol_context == ""
+    configured = MissionState("test", state.user_instruction,
+                              protocol_context=AERIAL_VLN_PARSER_PROTOCOL_CONTEXT)
+    assert configured.protocol_context == AERIAL_VLN_PARSER_PROTOCOL_CONTEXT

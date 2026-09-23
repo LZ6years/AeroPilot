@@ -99,21 +99,21 @@ def test_dataset_provenance_is_bound_to_each_selected_split(tmp_path):
 
 def test_config_requires_explicit_dataset_root_and_valid_scene_map():
     with pytest.raises(ValueError, match="dataset_root"):
-        AerialVlnEvalConfig.from_dict({})
+        AerialVlnEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, })
     with pytest.raises(ValueError, match="scene_map"):
         AerialVlnEvalConfig.from_dict(
-            {"dataset_root": "data", "scene_map": {}}
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "dataset_root": "data", "scene_map": {}}
         )
     with pytest.raises(ValueError, match="finite and non-negative"):
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": "data",
                 "initialization_min_settle_sec": -1,
             }
         )
     with pytest.raises(ValueError, match="64 hex"):
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": "data",
                 "expected_split_sha256": "not-a-hash",
             }
@@ -132,7 +132,7 @@ def test_aerial_vln_s_rejects_preclassification_filters(
 ):
     with pytest.raises(ValueError, match=message):
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": "data",
                 "dataset_family": "aerialvln-s",
                 **override,
@@ -149,7 +149,7 @@ def test_aerial_vln_s_rejects_preclassification_filters(
 )
 def test_aerial_vln_s_accepts_official_validation_splits(split, label):
     config = AerialVlnEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "dataset_root": "data",
             "dataset_family": "aerialvln-s",
             "split": split,
@@ -165,7 +165,7 @@ def test_aerial_vln_s_accepts_official_validation_splits(split, label):
 def test_aerial_vln_s_rejects_non_validation_splits(split):
     with pytest.raises(ValueError, match="val_seen or val_unseen"):
         AerialVlnEvalConfig.from_dict(
-            {
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
                 "dataset_root": "data",
                 "dataset_family": "aerialvln-s",
                 "split": split,
@@ -175,7 +175,7 @@ def test_aerial_vln_s_rejects_non_validation_splits(split):
 
 def test_aerial_vln_s_default_split_remains_val_seen():
     config = AerialVlnEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "dataset_root": "data",
             "dataset_family": "aerialvln-s",
         }
@@ -219,7 +219,7 @@ def test_official_split_example_configs(filename, split, limit):
 
 def test_config_validates_difficulties_and_per_bucket_limit():
     config = AerialVlnEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "dataset_root": "data",
             "dataset_family": "aerialvln-s",
             "difficulties": ["medium", "high"],
@@ -231,11 +231,11 @@ def test_config_validates_difficulties_and_per_bucket_limit():
     assert config.limit_per_difficulty == 3
     with pytest.raises(ValueError, match="Unknown"):
         AerialVlnEvalConfig.from_dict(
-            {"dataset_root": "data", "difficulties": ["extreme"]}
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "dataset_root": "data", "difficulties": ["extreme"]}
         )
     with pytest.raises(ValueError, match="positive or null"):
         AerialVlnEvalConfig.from_dict(
-            {"dataset_root": "data", "limit_per_difficulty": 0}
+            {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "dataset_root": "data", "limit_per_difficulty": 0}
         )
 
 

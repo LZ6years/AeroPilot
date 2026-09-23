@@ -94,6 +94,55 @@ def test_prepared_episode_requires_profile_options_alignment():
         )
 
 
+def test_unified_capture_reader_obeys_frozen_event_boundary(tmp_path):
+    write_trace_fixture(tmp_path, window_event="physical_window_recorded")
+    folder = tmp_path / "debug" / "tool_loop"
+    folder.mkdir(parents=True)
+    for index in (1, 2):
+        decision = f"decision_{index:04d}"
+        payload = {"loop_schema": "unified_tool_loop_v1", "decision_id": decision,
+                   "decision_index": index, "checkpoint_observation_id": "obs_0001",
+                   "model_context": {"task_plan": None}, "model_rounds": []}
+        (folder / f"{decision}.json").write_text(json.dumps(payload), encoding="utf-8")
+    def capture(index):
+        decision = f"decision_{index:04d}"
+        append_jsonl(tmp_path / "events.jsonl", {
+            "timestamp": "2026-01-01T00:00:02+00:00", "event": "model_turn_recorded",
+            "payload": {"decision_id": decision, "debug_ref": f"debug/tool_loop/{decision}.json"}})
+    capture(1)
+    cursor = EpisodeAuditCursor.freeze(tmp_path)
+    capture(2)
+    audit = BenchmarkAuditReader().read(cursor)
+    assert [r["decision_id"] for r in audit.planner_debug] == ["decision_0001"]
+    assert not audit.diagnostics
+
+
+@pytest.mark.parametrize("ref", ["../outside.json", "missing.json"])
+def test_unified_capture_reports_unsafe_or_missing_artifact(tmp_path, ref):
+    from evaluation.benchmarks.core.audit import _tool_loop_debug_records
+    records, diagnostics = _tool_loop_debug_records(tmp_path, [{"event": "model_turn_recorded",
+        "payload": {"decision_id": "d1", "debug_ref": ref}}])
+    assert records == [] and len(diagnostics) == 1
+
+
+def test_unified_review_displays_checkpoint_plan_without_future_backfill(tmp_path):
+    from evaluation.benchmarks.core.review import _phase_decision_review, _initial_plan_review
+    first = {"loop_schema": "unified_tool_loop_v1", "decision_id": "d1", "decision_index": 1,
+             "checkpoint_observation_id": "obs1", "model_context": {"task_plan": None},
+             "model_rounds": []}
+    second = {**first, "decision_id": "d2", "decision_index": 2,
+              "model_context": {"task_plan": {"revision": 1, "steps": [
+                  {"id": "a", "description": "Reach <gate>", "status": "in_progress"}]}}}
+    audit = SimpleNamespace(planner_debug=[first, second], agent_transcript=[], events=[])
+    rendered = _phase_decision_review(audit, (), tmp_path, {})
+    first_card, second_card = rendered.split('id="decision-d2"')
+    assert "No plan created" in first_card and "Reach" not in first_card
+    assert "Reach &lt;gate&gt;" in second_card
+    assert "Task execution timeline" in rendered
+    assert "Strategy at checkpoint" not in rendered and "phase outcome" not in rendered
+    assert "Optional task plan" in _initial_plan_review(audit)
+
+
 def test_trace_reader_excludes_preflight_and_shutdown_and_keeps_stationary_action(
     tmp_path,
 ):
@@ -139,6 +188,22 @@ def test_trace_reader_falls_back_to_observation_pose(tmp_path):
     assert trace.action_count == 1
     assert trace.samples[-1].source == "window_observation_fallback"
     assert trace.samples[-1].pose["yaw_deg"] == 15.0
+
+
+@pytest.mark.parametrize("event_name", ["physical_window_recorded", "phase_window_recorded"])
+def test_physical_window_event_names_share_explicit_trace_and_action_refs(tmp_path, event_name):
+    """A phase-free window retains the same trajectory and frozen action join."""
+    write_trace_fixture(tmp_path, include_read_only=True, window_event=event_name)
+    trace = EpisodeTraceReader().read(TraceCursor.freeze(tmp_path))
+    audit = BenchmarkAuditReader().read(EpisodeAuditCursor.freeze(tmp_path))
+    assert trace.trace_integrity == "ok"
+    assert trace.physical_window_count == 1
+    assert trace.physical_call_count == trace.motion_call_count == 1
+    assert trace.physical_windows[0].observation_before_id == "obs_0001"
+    assert trace.physical_windows[0].observation_after_id == "obs_0002"
+    assert [item["tool"] for item in audit.actions] == ["uav.turn_relative"]
+    if event_name == "physical_window_recorded":
+        assert trace.physical_windows[0].phase_key is None
 
 
 def test_trace_reader_keeps_initial_pose_when_no_formal_actions(tmp_path):
@@ -1911,6 +1976,7 @@ def write_trace_fixture(
     include_action: bool = True,
     action_pose: bool = True,
     include_read_only: bool = False,
+    window_event: str = "phase_window_recorded",
 ) -> None:
     memory_dir = run_dir / "memory"
     state_dir = run_dir / "state"
@@ -2061,12 +2127,12 @@ def write_trace_fixture(
             run_dir / "events.jsonl",
             {
                 "timestamp": "2026-01-01T00:00:03+00:00",
-                "event": "phase_window_recorded",
+                "event": window_event,
                 "payload": {
                     "schema_version": "physical_window_v2",
                     "decision_id": "decision_0001",
                     "phase": "turn",
-                    "phase_key": "1:turn",
+                    "phase_key": "1:turn" if window_event == "phase_window_recorded" else None,
                     "window_index": 1,
                     "observation_before_id": "obs_0001",
                     "observation_after_id": "obs_0002",

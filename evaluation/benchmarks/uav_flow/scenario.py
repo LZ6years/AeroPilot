@@ -23,7 +23,6 @@ MASK_COLORS = {
 class UavFlowScenarioController:
     """Place benchmark targets without owning flight or camera capture."""
 
-    enabled: bool = True
     connection_factory: Callable[[str, int], Any] | None = None
 
     def __post_init__(self) -> None:
@@ -35,7 +34,7 @@ class UavFlowScenarioController:
         scene: SceneInstance,
         payload: UavFlowScenarioPayload | None,
     ) -> None:
-        if not self.enabled or payload is None:
+        if payload is None:
             return
         connection = self._connect(scene)
         try:
@@ -86,7 +85,7 @@ class UavFlowScenarioController:
         scene: SceneInstance,
         payload: UavFlowScenarioPayload | None,
     ) -> None:
-        if not self.enabled or payload is None:
+        if payload is None:
             return
         connection = self._connect(scene)
         try:

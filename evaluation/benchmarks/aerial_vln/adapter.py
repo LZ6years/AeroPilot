@@ -1,6 +1,7 @@
 """Convert AerialVLN NED/WXYZ cases into canonical Runtime episodes."""
 
 from __future__ import annotations
+from evaluation.benchmarks.aerial_vln.protocol import AERIAL_VLN_PARSER_PROTOCOL_CONTEXT
 
 from dataclasses import dataclass
 from typing import Any
@@ -69,6 +70,7 @@ class AerialVlnCaseAdapter:
             ),
         )
         return PreparedBenchmarkEpisode(
+            protocol_context=AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
             benchmark_name="aerial_vln",
             case_id=case.episode_id,
             protocol_variant=AERIAL_VLN_PROTOCOL,

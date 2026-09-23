@@ -10,8 +10,8 @@ Complete Approach example (normal 100-window emergency guard):
     F:\\conda_env\\flyagent\\python.exe tests/manual/uav_flow_eval/run_stmr_canary.py ^
       --canary-id stmr_approach_full_1x --classes Approach --modes planner
 
-Use ``--dry-run`` only to validate orchestration. Real perception and
-trajectory conclusions require UnrealCV. Local model directories are used by
+This entry point requires real UnrealCV. Offline orchestration tests use
+explicit test-only dependency injection. Local model directories are used by
 default when present; explicit CLI paths always take precedence.
 """
 
@@ -52,7 +52,7 @@ def main() -> int:
     canary_id = args.canary_id or f"stmr_canary_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
     common = replace(
         base,
-        execution_mode="dry" if args.dry_run else args.execution_mode,
+        execution_mode=args.execution_mode,
         enable_sr_judge=not args.no_sr_judge,
         enable_visual_diagnostics=not args.no_visual_diagnostics,
         enable_action_planner_debug=True,
@@ -103,7 +103,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--canary-id", default=None)
     parser.add_argument("--classes", default=",".join(DEFAULT_CLASSES))
     parser.add_argument("--modes", default="planner", help="Comma-separated: off,shadow,planner")
-    parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--execution-mode",
         choices=["attach", "managed"],

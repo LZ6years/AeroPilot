@@ -305,7 +305,7 @@ python tests/manual/aerial_vln_selected_case_probe.py `
 python -m pytest tests/test_aerial_vln_cases.py `
   tests/test_aerial_vln_adapter.py `
   tests/test_aerial_vln_metrics.py `
-  tests/test_aerial_vln_runner_dry.py -q
+  tests/test_aerial_vln_runner.py -q
 ```
 # Scene startup and cleanup diagnostics
 

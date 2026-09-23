@@ -58,7 +58,6 @@ def _config(tmp_path: Path, dataset: Path) -> tuple[Path, UavFlowEvalConfig]:
         "enable_action_planner_debug": True,
         "enable_sr_judge": False,
         "enable_visual_diagnostics": False,
-        "parser_mode": "model",
         "shutdown_policy": "hover",
         "planner_depth_input": "now",
         "runtime_loop_guard_windows": 80,
@@ -79,6 +78,7 @@ def _manifest(config: UavFlowEvalConfig, selected: list[str]) -> dict:
     cases = load_cases(config.uav_flow_repo_path, case_ids=selected)
     return {
         "schema_version": RUN_MANIFEST_SCHEMA,
+        "loop_schema": "unified_tool_loop_v1",
         "git_commit": "abc123",
         "git_dirty": False,
         "resolved_config": resolved,
@@ -169,7 +169,7 @@ def _native_stub(root: Path) -> dict:
                 "case_id": case_dir.name,
                 "coverage": {
                     "assistant_turns": 2,
-                    "committed_turns": 1,
+                    "control_turns": 1,
                     "physical_batches": 1,
                 },
             }
@@ -232,6 +232,20 @@ def test_campaign_combines_segments_in_dataset_order(tmp_path):
     assert report["finalized_case_count"] == 3
     assert [item["case_id"] for item in report["cases"]] == ["case_a", "case_b", "case_c"]
     assert report["transcript_coverage"]["assistant_turns"] == 6
+
+
+def test_campaign_rejects_legacy_loop_even_when_other_configuration_matches(tmp_path):
+    dataset = _dataset(tmp_path)
+    config_path, config = _config(tmp_path, dataset)
+    main = _segment(tmp_path, config, "legacy", ["case_a"], ["case_a"])
+    manifest_path = main / "run_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.pop("loop_schema")
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    report = audit_campaign(config_path, [main], expected_loop_guard_windows=50,
+                            segment_auditor=_native_stub)
+    assert "loop_schema_mismatch" in {item["code"] for item in report["violations"]}
+    assert report["status"] != "ok"
 
 
 def test_finalized_error_is_not_returned_as_missing(tmp_path):

@@ -35,7 +35,7 @@ class UavFlowEvalConfig:
     run_root: str = "runs"
     map_config_path: str = DEFAULT_MAP_CONFIG
     map_id: str = DEFAULT_MAP_ID
-    execution_mode: str = "dry"
+    execution_mode: str = field(kw_only=True)
     observation_profile_path: str | None = None
     headless: bool = True
     save_artifacts: bool = False
@@ -46,11 +46,10 @@ class UavFlowEvalConfig:
     limit_per_class: int | None = 1
     enable_sr_judge: bool = False
     env_path: str = ".env"
-    parser_mode: str = "model"
     shutdown_policy: str = "hover"
     action_config_overrides: dict[str, float] = field(default_factory=dict)
     safety_overrides: dict[str, float] = field(default_factory=dict)
-    runtime_loop_guard_windows: int = 40
+    runtime_loop_guard_windows: int = 300
     enable_visual_diagnostics: bool = False
     visual_diagnostics_max_frames: int = 12
     enable_action_planner_debug: bool = False
@@ -64,6 +63,11 @@ class UavFlowEvalConfig:
     classified_instr_path_override: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
+    def __post_init__(self) -> None:
+        allowed = {"attach", "managed"}
+        if self.execution_mode not in allowed:
+            raise ValueError("execution_mode must be explicitly set to " + "/".join(sorted(allowed)) + "; dry execution was removed; use offline case loading/report utilities for offline checks")
+
     @classmethod
     def from_file(cls, path: str | Path) -> "UavFlowEvalConfig":
         data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
@@ -71,6 +75,10 @@ class UavFlowEvalConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "UavFlowEvalConfig":
+        if data.get("execution_mode") == "dry":
+            raise ValueError("dry execution was removed; use offline case loading/report utilities for offline checks or explicitly configure a real execution_mode")
+        if "parser_mode" in data:
+            raise ValueError("parser_mode was removed: submit raw instructions to the unified tool loop")
         legacy = sorted(LEGACY_SCENE_FIELDS.intersection(data))
         if legacy:
             raise ValueError(
@@ -86,8 +94,8 @@ class UavFlowEvalConfig:
             # selectors cannot silently truncate or reorder requested cases.
             classes = None
         execution_mode = _choice(
-            data.get("execution_mode", "dry"),
-            {"dry", "attach", "managed"},
+            data.get("execution_mode", ""),
+            {"attach", "managed"},
             "execution_mode",
         )
         return cls(
@@ -119,7 +127,6 @@ class UavFlowEvalConfig:
             ),
             enable_sr_judge=bool(data.get("enable_sr_judge", False)),
             env_path=str(data.get("env_path", cls.env_path)),
-            parser_mode=str(data.get("parser_mode", cls.parser_mode)),
             shutdown_policy=str(data.get("shutdown_policy", cls.shutdown_policy)),
             action_config_overrides=_float_dict(data.get("action_config_overrides", {})),
             safety_overrides=_float_dict(data.get("safety_overrides", data.get("safety_config_overrides", {}))),

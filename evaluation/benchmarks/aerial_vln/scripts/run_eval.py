@@ -71,10 +71,7 @@ def _config_from_args(args: argparse.Namespace) -> AerialVlnEvalConfig:
         data["max_cases"] = args.max_cases
     if args.scene:
         data["scene_filter"] = list(args.scene)
-    if (
-        data["execution_mode"] != "dry"
-        and data.get("generate_html_review", True)
-    ):
+    if data.get("generate_html_review", True):
         data["save_artifacts"] = True
         data["enable_action_planner_debug"] = True
     return AerialVlnEvalConfig.from_dict(data)
@@ -129,7 +126,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--execution-mode",
-        choices=["dry", "attach", "managed"],
+        choices=["attach", "managed"],
         default=None,
     )
     parser.add_argument("--max-cases", type=int, default=None)

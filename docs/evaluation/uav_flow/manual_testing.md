@@ -255,20 +255,12 @@ python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
 重复转向、前后或上下振荡、零动作完成、模型网络错误和 UnrealCV 错误。基础设施错误
 不作为 Agent 能力结论；需要补测时使用新的 `eval-id`和原始精确 case ID。
 
-## 7. Dry 自动化测试
+## 7. 离线自动化测试
 
-Dry 模式使用 in-memory UnrealCV Backend，只验证代码契约，不属于真实 benchmark：
+生产 CLI 不再提供 dry 执行；测试通过显式注入 Fake Adapter/Scenario 验证报告和生命周期。
 
 ```powershell
-python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
-  --config evaluation/benchmarks/uav_flow/configs/uav_flow_eval.example.json `
-  --execution-mode dry `
-  --case-ids 2025-03-30_11-49-14 `
-  --eval-id uav_flow_dry `
-  --parser-mode rule_based `
-  --no-sr-judge `
-  --no-visual-diagnostics `
-  --no-action-planner-debug
+python -m pytest tests/test_uav_flow_runner.py tests/test_benchmark_core.py -q
 ```
 
 ## 8. STMR

@@ -103,6 +103,7 @@ class BenchmarkEpisodeExecutor:
                     stop_scene_on_finish=False,
                     scene_id=episode.scene_id,
                     execution_options=episode.execution_options,
+                    protocol_context=episode.protocol_context,
                 )
             except Exception as exc:
                 error = _error_payload(exc)

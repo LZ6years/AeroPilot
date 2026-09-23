@@ -21,7 +21,6 @@ from evaluation.benchmarks.core import (
     BenchmarkSummaryReview,
     EpisodeAuditCursor,
     FrameAssetResolver,
-    NoopScenarioController,
     ReviewSection,
     write_audit_json,
 )
@@ -44,7 +43,6 @@ from evaluation.benchmarks.travel_uav.selection import (
 )
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
-from src.agent.semantic.task_parser import TaskParser
 from src.env_client import ObservationProfile, SimulatorEnvClient, load_observation_profile
 from src.runtime.configs import load_map_config
 from src.runtime.configs.action_config import UavActionConfig, load_uav_action_config
@@ -54,8 +52,6 @@ from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.runtime.runners.task_runtime import TaskRuntime
-from src.sim_server.backends.airsim_backend import AirSimBackend
-from src.sim_server.backends.registry import BackendRegistry
 from src.sim_server.execution import SimulationExecutionMode
 from src.sim_server.server import SimulationServer
 
@@ -84,11 +80,12 @@ class TravelUavBenchmarkRunner:
         self,
         config: TravelUavEvalConfig,
         *,
-        task_parser_factory: Callable[[Any], Any] | None = None,
+        simulation_server_factory: Any = None,
         planner_factory: Callable[[Any], Any] | None = None,
         scenario_controller_factory: Callable[[], Any] | None = None,
     ) -> None:
         self.config = config
+        self._simulation_server_factory = simulation_server_factory or SimulationServer
         self.map_packages, self.port_policy = load_map_config(config.map_config_path)
         self.map_packages_by_id = {package.map_id: package for package in self.map_packages}
         self.observation_profile = (
@@ -107,7 +104,6 @@ class TravelUavBenchmarkRunner:
         self.action_config = _action_config(config)
         self.safety_config = _safety_config(config)
         self._model_config_value: Any | None = None
-        self._task_parser_factory = task_parser_factory
         self._planner_factory = planner_factory
         self._scenario_controller_factory = scenario_controller_factory
         self._case_reviews: dict[str, BenchmarkCaseReview] = {}
@@ -435,27 +431,13 @@ class TravelUavBenchmarkRunner:
 
     def _make_runtime(self, run_dir: Path, recorder: AsyncRunLogger) -> TaskRuntime:
         model_config = self._model_config()
-        parser = (
-            self._task_parser_factory(model_config)
-            if self._task_parser_factory
-            else TaskParser(
-                mode=self.config.parser_mode,
-                model_config=model_config,
-                protocol_context=TRAVEL_UAV_PARSER_PROTOCOL_CONTEXT,
-            )
-        )
         planner = (
             self._planner_factory(model_config)
             if self._planner_factory
             else ModelActionPlanner(model_config)
         )
-        backend_registry = None
-        if self.config.execution_mode == "dry":
-            backend_registry = _dry_airsim_registry()
-            server_mode = SimulationExecutionMode.ATTACH
-        else:
-            server_mode = SimulationExecutionMode.MANAGED
-        server = SimulationServer(
+        server_mode = SimulationExecutionMode.parse(self.config.execution_mode)
+        server = self._simulation_server_factory(
             self.map_packages,
             port_policy=self.port_policy,
             run_dir=run_dir,
@@ -463,12 +445,10 @@ class TravelUavBenchmarkRunner:
             show_display=not self.config.headless,
             action_config=self.action_config,
             save_artifacts=self.config.save_artifacts,
-            backend_registry=backend_registry,
         )
         return TaskRuntime(
             SimulatorEnvClient(server, observation_profile=self.observation_profile),
             recorder,
-            parser,
             planner=planner,
             safety=SafetySupervisor(self.safety_config),
             shutdown_policy=self.config.shutdown_policy,
@@ -484,8 +464,6 @@ class TravelUavBenchmarkRunner:
     def _scenario_controller(self) -> Any:
         if self._scenario_controller_factory:
             return self._scenario_controller_factory()
-        if self.config.execution_mode == "dry":
-            return NoopScenarioController()
         return TravelUavScenarioController(cleanup_strategy="process_exit")
 
     def _model_config(self) -> Any:
@@ -550,19 +528,6 @@ class TravelUavBenchmarkRunner:
                 "enable_action_planner_debug=true"
             )
 
-
-def _dry_airsim_registry() -> BackendRegistry:
-    registry = BackendRegistry()
-    registry.register(
-        "airsim",
-        lambda context: AirSimBackend(
-            use_real_uav=False,
-            action_config=context.action_config,
-            artifact_dir=context.artifact_dir,
-            save_artifacts=context.save_artifacts,
-        ),
-    )
-    return registry
 
 
 def _action_config(config: TravelUavEvalConfig) -> UavActionConfig:

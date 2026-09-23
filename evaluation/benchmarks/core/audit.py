@@ -17,6 +17,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .trace import PHYSICAL_WINDOW_EVENTS
+
 
 _AUDIT_FILES = (
     "memory/actions.jsonl",
@@ -257,7 +259,7 @@ class BenchmarkAuditReader:
         instruction_ids = {item.get("instruction_id") for item in transcript
                            if item.get("instruction_id")}
         early_plans = [item for item in records["events.jsonl"]
-                       if item.get("event") == "initial_semantic_plan"
+                       if item.get("event") in {"initial_semantic_plan", "instruction_started"}
                        and isinstance(item.get("payload"), dict)
                        and item["payload"].get("instruction_id") in instruction_ids
                        and item not in events]
@@ -269,6 +271,9 @@ class BenchmarkAuditReader:
             cursor.ended_at,
         )
         planner_debug, diagnostics = _planner_debug_records(run_dir)
+        tool_debug, tool_diagnostics = _tool_loop_debug_records(run_dir, events)
+        planner_debug.extend(tool_debug)
+        diagnostics.extend(tool_diagnostics)
         planner_debug = _associate_phase_completion(
             planner_debug,
             events,
@@ -471,6 +476,45 @@ def _payload_suffix(payload: bytes) -> str:
     return ".bin"
 
 
+def _tool_loop_debug_records(
+    run_dir: Path, events: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Read only explicitly captured unified decisions inside the frozen events.
+
+    Do not scan the tool-loop directory: later instructions or a partially
+    written future turn are not evidence for this episode. IDs must agree in
+    the event and artifact, and paths must remain inside the run directory.
+    """
+    records, diagnostics = [], []
+    root = run_dir.resolve()
+    for event in events:
+        if (event.get("event") or event.get("kind")) != "model_turn_recorded":
+            continue
+        link = event.get("payload")
+        if not isinstance(link, dict):
+            continue
+        try:
+            ref = link.get("debug_ref")
+            if not isinstance(ref, str) or not ref:
+                raise ValueError("missing debug_ref")
+            path = (root / ref).resolve()
+            if root not in path.parents:
+                raise ValueError("debug_ref_outside_run_dir")
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if (not isinstance(payload, dict)
+                    or payload.get("loop_schema") != "unified_tool_loop_v1"
+                    or not link.get("decision_id")
+                    or payload.get("decision_id") != link.get("decision_id")
+                    or (link.get("instruction_id") is not None
+                        and payload.get("instruction_id") != link["instruction_id"])):
+                raise ValueError("tool_loop_capture_identity_mismatch")
+            records.append({**payload, "path": str(path)})
+        except (OSError, ValueError) as exc:
+            diagnostics.append({"stage": "tool_loop_debug_read", "debug_ref": link.get("debug_ref"),
+                                "error_type": type(exc).__name__, "error": str(exc)})
+    return records, diagnostics
+
+
 def _planner_debug_records(
     run_dir: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -575,9 +619,7 @@ def _associate_phase_window_execution(
     executions_by_decision: dict[str, dict[str, Any]] = {}
     diagnostics: list[dict[str, Any]] = []
     for event in events:
-        if (event.get("event") or event.get("kind")) != (
-            "phase_window_recorded"
-        ):
+        if (event.get("event") or event.get("kind")) not in PHYSICAL_WINDOW_EVENTS:
             continue
         payload = event.get("payload")
         if not isinstance(payload, dict):
@@ -682,15 +724,22 @@ def _formal_planner_actions(
     """
 
     declared_v2 = any(
-        (event.get("event") or event.get("kind")) == "instruction_started"
-        and isinstance(event.get("payload"), dict)
-        and event["payload"].get("physical_trace_schema") == "physical_window_v2"
+        isinstance(event.get("payload"), dict)
+        and (
+            ((event.get("event") or event.get("kind")) == "instruction_started"
+             and event["payload"].get("physical_trace_schema") == "physical_window_v2")
+            # The instruction marker can precede the initial camera capture.
+            # An explicit versioned window is also authoritative; never fall
+            # back to timestamps/name allowlists and include read-only calls.
+            or ((event.get("event") or event.get("kind")) in PHYSICAL_WINDOW_EVENTS
+                and event["payload"].get("schema_version") == "physical_window_v2")
+        )
         for event in events
     )
     if declared_v2:
         ordered_refs = []
         for event in events:
-            if (event.get("event") or event.get("kind")) != "phase_window_recorded":
+            if (event.get("event") or event.get("kind")) not in PHYSICAL_WINDOW_EVENTS:
                 continue
             payload = event.get("payload")
             if not isinstance(payload, dict) or payload.get("schema_version") != "physical_window_v2":

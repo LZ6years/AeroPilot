@@ -29,21 +29,25 @@ class TravelUavEvalConfig:
     map_config_path: str = "configs/maps/travel_uav_remote.example.json"
     scene_map: dict[str, str] = field(default_factory=dict)
     observation_profile_path: str | None = None
-    execution_mode: str = "dry"
+    execution_mode: str = field(kw_only=True)
     abort_on_infrastructure_error: bool = True
     headless: bool = True
     save_artifacts: bool = False
     generate_html_review: bool = True
     enable_action_planner_debug: bool = False
     env_path: str = ".env"
-    parser_mode: str = "model"
     shutdown_policy: str = "hover"
-    runtime_loop_guard_windows: int = 100
+    runtime_loop_guard_windows: int = 300
     initialization_min_settle_sec: float = 0.0
     action_config_overrides: dict[str, float] = field(default_factory=dict)
     safety_overrides: dict[str, float] = field(default_factory=dict)
     dataset_version: str = "traveluav-official"
     upstream_reference_commit: str = "prince687028/TravelUAV"
+
+    def __post_init__(self) -> None:
+        allowed = {"managed"}
+        if self.execution_mode not in allowed:
+            raise ValueError("execution_mode must be explicitly set to " + "/".join(sorted(allowed)) + "; dry execution was removed; use --validate-only for offline checks")
 
     @classmethod
     def from_file(cls, path: str | Path) -> "TravelUavEvalConfig":
@@ -54,6 +58,10 @@ class TravelUavEvalConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TravelUavEvalConfig":
+        if data.get("execution_mode") == "dry":
+            raise ValueError("dry execution was removed; use --validate-only for offline checks or explicitly configure a real execution_mode")
+        if "parser_mode" in data:
+            raise ValueError("parser_mode was removed: submit raw instructions to the unified tool loop")
         index_path = str(data.get("index_path", "")).strip()
         if not index_path:
             raise ValueError("TravelUAV config requires index_path")
@@ -63,10 +71,10 @@ class TravelUavEvalConfig:
                 "TravelUAV split must be test_seen, test_unseen_map, or "
                 "test_unseen_object"
             )
-        execution_mode = str(data.get("execution_mode", "dry")).strip().lower()
-        if execution_mode not in {"dry", "managed"}:
+        execution_mode = str(data.get("execution_mode", "")).strip().lower()
+        if execution_mode not in {"managed"}:
             raise ValueError(
-                "TravelUAV v1 execution_mode must be dry or managed; attach "
+                "TravelUAV v1 execution_mode must be explicitly set to managed; attach "
                 "cannot guarantee dynamic-target cleanup"
             )
         raw_scene_map = data.get("scene_map", {})
@@ -120,10 +128,9 @@ class TravelUavEvalConfig:
             generate_html_review=bool(data.get("generate_html_review", True)),
             enable_action_planner_debug=bool(data.get("enable_action_planner_debug", False)),
             env_path=str(data.get("env_path", ".env")),
-            parser_mode=str(data.get("parser_mode", "model")),
             shutdown_policy=str(data.get("shutdown_policy", "hover")),
             runtime_loop_guard_windows=_positive_int(
-                data.get("runtime_loop_guard_windows", 100), "runtime_loop_guard_windows"
+                data.get("runtime_loop_guard_windows", 300), "runtime_loop_guard_windows"
             ),
             initialization_min_settle_sec=_non_negative_float(
                 data.get("initialization_min_settle_sec", 0.0),

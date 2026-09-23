@@ -251,11 +251,12 @@ def _config(tmp_path, *, create_key=True):
         encoding="utf-8",
     )
     return TravelUavEvalConfig.from_dict(
-        {
+        {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
             "index_path": str(index),
+            "expected_index_sha256": __import__("hashlib").sha256(index.read_bytes()).hexdigest(),
             "map_config_path": str(maps),
             "scene_map": {"MapSeen": "travel_MapSeen"},
-            "execution_mode": "dry",
+            "execution_mode": "managed",
             "limit_per_difficulty": None,
         }
     )

@@ -29,9 +29,8 @@
   "generate_html_review": true,
   "enable_action_planner_debug": true,
   "env_path": ".env",
-  "parser_mode": "model",
   "shutdown_policy": "hover",
-  "runtime_loop_guard_windows": 100,
+  "runtime_loop_guard_windows": 300,
   "initialization_min_settle_sec": 0.0,
   "dataset_version": "traveluav-official",
   "upstream_reference_commit": "prince687028/TravelUAV"

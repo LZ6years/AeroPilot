@@ -36,7 +36,7 @@ if str(REPO_ROOT) not in sys.path:
 from src.tools.registry import ToolRegistry, default_registry
 
 
-SCHEMA_VERSION = "native_tool_loop_real_audit_v2"
+SCHEMA_VERSION = "unified_tool_loop_real_audit_v1"
 TERMINAL_RESULT_STATUSES = {"ok", "error", "rejected", "skipped"}
 PUBLIC_INTENT_SOURCES = {"provider_content", "tool_arguments_fallback"}
 
@@ -107,7 +107,7 @@ def audit_evaluation(eval_dir: str | Path) -> dict[str, Any]:
     coverage = {
         "assistant_turns": sum(item["coverage"]["assistant_turns"] for item in case_reports),
         "read_only_turns": sum(item["coverage"]["read_only_turns"] for item in case_reports),
-        "committed_turns": sum(item["coverage"]["committed_turns"] for item in case_reports),
+        "control_turns": sum(item["coverage"]["control_turns"] for item in case_reports),
         "physical_batches": sum(item["coverage"]["physical_batches"] for item in case_reports),
         "multi_action_batches": sum(
             item["coverage"]["multi_action_batches"] for item in case_reports
@@ -249,7 +249,7 @@ def _audit_transcript(
     coverage = {
         "assistant_turns": 0,
         "read_only_turns": 0,
-        "committed_turns": 0,
+        "control_turns": 0,
         "physical_batches": 0,
         "multi_action_batches": 0,
         "protocol_feedback_items": 0,
@@ -497,11 +497,11 @@ def _audit_transcript(
                 )
         elif kind == "task_terminal":
             coverage["task_terminal_items"] += 1
-            if payload.get("completed") is not False or payload.get("stopped") is not True:
+            if payload.get("completed") is True and payload.get("stopped") is True:
                 violations.append(
                     Violation(
                         "task_terminal_state_invalid",
-                        "task_terminal must record completed=false and stopped=true",
+                        "task_terminal cannot be both completed and stopped",
                         case_id,
                         transcript_id,
                     )
@@ -510,6 +510,7 @@ def _audit_transcript(
     _audit_provider_rejection_feedback(records, violations, case_id)
 
     _audit_call_result_pairs(records, calls, results, violations, case_id)
+    _audit_advisory_state(records, violations, case_id)
 
     accepted_physical_calls: list[tuple[str, dict[str, Any], dict[str, Any]]] = []
     physical_batch_turns: list[tuple[int, int, str]] = []
@@ -555,23 +556,13 @@ def _audit_transcript(
 
         read_calls = [(call, spec) for call, spec in specs if spec.runtime.effect == "read_only"]
         physical_calls = [(call, spec) for call, spec in specs if spec.runtime.effect == "physical"]
-        report_blocked_calls = [
-            (call, spec)
-            for call, spec in specs
-            if call.get("tool_name") == "runtime.report_blocked"
-        ]
-        commits = [
-            (call, spec)
-            for call, spec in specs
-            if call.get("tool_name") == "runtime.commit_phase_turn"
-        ]
         if read_calls:
             coverage["read_only_turns"] += 1
             if len(read_calls) != len(specs):
                 violations.append(
                     Violation(
                         "read_only_turn_mixed",
-                        "read-only tools cannot be mixed with commit or side-effect tools",
+                        "read-only tools cannot be mixed with control or physical tools",
                         case_id,
                         transcript_id,
                     )
@@ -595,132 +586,45 @@ def _audit_transcript(
             )
             continue
 
-        coverage["committed_turns"] += 1
-        if len(commits) != 1 or not turn_calls or turn_calls[0].get("tool_name") != "runtime.commit_phase_turn":
-            violations.append(
-                Violation(
-                    "commit_contract_invalid",
-                    "non-read-only turn requires exactly one leading runtime.commit_phase_turn",
-                    case_id,
-                    transcript_id,
-                )
-            )
+        controls = [(call, spec) for call, spec in specs if spec.runtime.effect == "runtime_control"]
+        if controls:
+            coverage["control_turns"] += 1
+            if len(controls) != 1 or len(turn_calls) != 1:
+                violations.append(Violation("control_turn_mixed", "control tools require an exclusive turn", case_id, transcript_id))
+            for call, _ in controls:
+                name = call.get("tool_name")
+                if name not in {"runtime.report_completed", "runtime.report_blocked"}:
+                    continue
+                paired = results.get(_string(call.get("tool_call_id")), [])
+                if len(paired) != 1 or paired[0][1].get("status") != "ok":
+                    continue
+                if name == "runtime.report_blocked":
+                    coverage["reported_blocked_turns"] += 1
+                refs = _object(call.get("args")).get("evidence_refs")
+                known_refs = _prior_evidence_refs(records, assistant_index, registry)
+                if not isinstance(refs, list) or not refs or any(ref not in known_refs for ref in refs if isinstance(ref, str)) or any(not isinstance(ref, str) for ref in refs):
+                    violations.append(Violation("terminal_evidence_invalid", "terminal requires prior environmental evidence, not plan or knowledge", case_id, transcript_id))
+                if not any(record.get("kind") == "task_terminal" for record in records[assistant_index + 1:]):
+                    violations.append(Violation("task_terminal_missing", "accepted terminal must have durable task_terminal", case_id, transcript_id))
+                terminals = [_payload(record) for record in records[assistant_index + 1:]
+                             if record.get("kind") == "task_terminal"]
+                for terminal in terminals:
+                    completed = name == "runtime.report_completed"
+                    if (terminal.get("completed") is not completed
+                            or terminal.get("stopped") is not (not completed)
+                            or terminal.get("stop_source") != name):
+                        violations.append(Violation("terminal_result_state_mismatch",
+                            "durable terminal does not match the accepted terminal call", case_id, transcript_id))
+                if any(record.get("kind") == "assistant_turn" for record in records[assistant_index + 1:]):
+                    violations.append(Violation("assistant_after_terminal", "model execution must end after accepted terminal", case_id, transcript_id))
             continue
-        assessment = _nested(commits[0][0], "args", "completion_assessment", "done_when")
-        statuses = [item.get("status") for item in assessment if isinstance(item, dict)] if isinstance(assessment, list) else []
-        if not statuses:
-            violations.append(
-                Violation(
-                    "completion_assessment_missing",
-                    "commit must carry a non-empty completion assessment",
-                    case_id,
-                    transcript_id,
-                    _string(commits[0][0].get("tool_call_id")),
-                )
-            )
-        complete = bool(statuses) and all(status == "supported" for status in statuses)
-        side_effect_calls = [
-            (call, spec)
-            for call, spec in specs
-            if spec.runtime.effect in {"physical", "runtime_control"}
-            and call.get("tool_name") != "runtime.commit_phase_turn"
-        ]
-        if complete and side_effect_calls:
-            violations.append(
-                Violation(
-                    "completed_turn_has_side_effects",
-                    "a completed phase commit cannot include physical/runtime-control side effects",
-                    case_id,
-                    transcript_id,
-                )
-            )
-        if report_blocked_calls:
-            coverage["reported_blocked_turns"] += 1
-            other_side_effects = [
-                (call, spec)
-                for call, spec in side_effect_calls
-                if call.get("tool_name") != "runtime.report_blocked"
-            ]
-            if (
-                complete
-                or len(report_blocked_calls) != 1
-                or len(turn_calls) != 2
-                or turn_calls[1].get("tool_name") != "runtime.report_blocked"
-                or physical_calls
-                or other_side_effects
-            ):
-                violations.append(
-                    Violation(
-                        "report_blocked_turn_invalid",
-                        "runtime.report_blocked requires one incomplete leading commit and no other calls",
-                        case_id,
-                        transcript_id,
-                    )
-                )
-            if not any(status in {"unknown", "contradicted"} for status in statuses):
-                violations.append(
-                    Violation(
-                        "report_blocked_assessment_invalid",
-                        "blocked termination requires unknown or contradicted completion evidence",
-                        case_id,
-                        transcript_id,
-                    )
-                )
-            report_args = _object(report_blocked_calls[0][0].get("args"))
-            evidence_refs = report_args.get("evidence_refs")
-            known_refs = _prior_evidence_refs(records, assistant_index)
-            if not isinstance(evidence_refs, list) or not evidence_refs:
-                violations.append(
-                    Violation(
-                        "report_blocked_evidence_missing",
-                        "runtime.report_blocked requires at least one evidence reference",
-                        case_id,
-                        transcript_id,
-                    )
-                )
-            else:
-                unknown_refs = sorted(
-                    str(ref)
-                    for ref in evidence_refs
-                    if not isinstance(ref, str) or not ref or ref not in known_refs
-                )
-                if unknown_refs:
-                    violations.append(
-                        Violation(
-                            "report_blocked_evidence_unknown",
-                            "runtime.report_blocked cites unknown prior evidence: "
-                            + ", ".join(unknown_refs),
-                            case_id,
-                            transcript_id,
-                        )
-                    )
-            later_terminal = any(
-                record.get("kind") == "task_terminal"
-                for record in records[assistant_index + 1 :]
-            )
-            if not later_terminal:
-                violations.append(
-                    Violation(
-                        "report_blocked_terminal_missing",
-                        "accepted runtime.report_blocked must be followed by task_terminal",
-                        case_id,
-                        transcript_id,
-                    )
-                )
-        elif not complete and not 1 <= len(physical_calls) <= 3:
-            violations.append(
-                Violation(
-                    "physical_batch_size_invalid",
-                    f"incomplete phase requires 1-3 physical calls, received {len(physical_calls)}",
-                    case_id,
-                    transcript_id,
-                )
-            )
+        if len(physical_calls) != len(turn_calls) or not 1 <= len(physical_calls) <= 3:
+            violations.append(Violation("physical_batch_size_invalid", "physical turn requires 1-3 physical calls only", case_id, transcript_id))
         if any(spec.runtime.batching != "ordered" for _, spec in physical_calls):
             violations.append(
                 Violation(
                     "physical_batching_invalid",
-                    "every physical call in a committed window must use ordered batching",
+                    "every physical call in a physical window must use ordered batching",
                     case_id,
                     transcript_id,
                 )
@@ -946,10 +850,10 @@ def _audit_physical_trace(
                     "physical_window_after_observation_unknown",
                     f"after observation {after_id!r} is absent from audit",
                 )
-            elif after_observation.get("source") != "automatic_phase_window":
+            elif after_observation.get("source") != "automatic_physical_window":
                 trace_violation(
                     "physical_window_after_observation_source_invalid",
-                    f"after observation {after_id!r} is not automatic_phase_window",
+                    f"after observation {after_id!r} is not automatic_physical_window",
                 )
             if after_id in after_ids:
                 trace_violation(
@@ -1122,32 +1026,32 @@ def _audit_physical_trace(
             )
 
 
-def _prior_evidence_refs(
-    records: list[dict[str, Any]], assistant_index: int
-) -> set[str]:
-    """Collect instruction-local observation and ToolCall/result references."""
-
-    refs: set[str] = set()
+def _prior_evidence_refs(records, assistant_index, registry) -> set[str]:
+    """Only successful environmental results and preceding observations count."""
+    refs, pending = set(), {}
     for item in records[:assistant_index]:
         payload = _payload(item)
-        if item.get("kind") == "state_checkpoint":
-            observation_id = payload.get("observation_id")
-            if isinstance(observation_id, str) and observation_id:
-                refs.add(observation_id)
+        if item.get("kind") == "user_instruction":
+            refs.clear()
+            pending.clear()
+        elif item.get("kind") == "state_checkpoint" and payload.get("observation_id"):
+            refs.add(payload["observation_id"])
         elif item.get("kind") == "assistant_turn":
-            calls = payload.get("tool_calls")
-            if isinstance(calls, list):
-                for call in calls:
-                    call_id = _object(call).get("tool_call_id")
-                    if isinstance(call_id, str) and call_id:
-                        refs.add(call_id)
-        elif item.get("kind") == "tool_result":
-            call_id = payload.get("tool_call_id")
-            result_ref = payload.get("result_ref")
-            if isinstance(call_id, str) and call_id:
-                refs.add(call_id)
-            if isinstance(result_ref, str) and result_ref:
-                refs.add(result_ref)
+            pending.update((call.get("tool_call_id"), call.get("tool_name"))
+                           for call in _dict_items(payload.get("tool_calls")))
+        elif item.get("kind") == "tool_result" and payload.get("status") == "ok":
+            name = pending.get(payload.get("tool_call_id"))
+            if name != payload.get("tool_name"):
+                continue
+            try:
+                spec = registry.get(name)
+            except KeyError:
+                continue
+            if spec.runtime.effect not in {"physical", "read_only"} or spec.kind == "knowledge":
+                continue
+            refs.add(payload["tool_call_id"])
+            if payload.get("result_ref"):
+                refs.add(payload["result_ref"])
     return refs
 
 
@@ -1358,6 +1262,84 @@ def _audit_checkpoint_image_contract(
         )
 
 
+def _audit_advisory_state(records, violations, case_id):
+    """Replay only pure advisory contracts, never execute Runtime or plugins.
+
+    Results are authoritative application receipts; a proposal or rejection
+    cannot advance the audited revision. Knowledge text is checked for delivery
+    provenance, not interpreted as an instruction or environmental evidence.
+    """
+    from src.agent.planning.task_plan import TaskPlan
+
+    plan = None
+    calls = {}
+    knowledge = {}
+    for record in records:
+        payload = _payload(record)
+        kind = record.get("kind")
+        def fail(code, message):
+            violations.append(Violation(code, message, case_id, _record_id(record)))
+        if kind == "assistant_turn":
+            for call in _dict_items(payload.get("tool_calls")):
+                if isinstance(call.get("tool_call_id"), str):
+                    calls[call["tool_call_id"]] = call
+        elif kind == "state_checkpoint":
+            context = _object(payload.get("context"))
+            if "task_plan" in context and not _json_equal(context["task_plan"], plan.to_dict() if plan else None):
+                fail("checkpoint_plan_mismatch", "checkpoint plan differs from successfully applied updates")
+        elif kind == "tool_result":
+            call = calls.get(_string(payload.get("tool_call_id")))
+            if not call:
+                continue  # Pairing errors have their own diagnostics.
+            name = call.get("tool_name")
+            args, data = _object(call.get("args")), _object(payload.get("data"))
+            if payload.get("status") != "ok":
+                if name == "runtime.update_plan" and "plan" in data:
+                    fail("rejected_plan_applied", "failed plan result must not contain an applied plan")
+                continue
+            if name == "runtime.update_plan":
+                previous = plan or TaskPlan()
+                try:
+                    expected = previous.updated(args)
+                except ValueError as exc:
+                    fail("applied_plan_invalid", str(exc))
+                    continue
+                if (data.get("previous_revision") != previous.revision
+                        or not _json_equal(data.get("plan"), expected.to_dict())):
+                    fail("plan_application_mismatch", "plan receipt differs from requested update or revision")
+                plan = expected
+            elif name == "knowledge.load":
+                entry = args.get("name")
+                version = data.get("version")
+                if not isinstance(entry, str):
+                    fail("knowledge_provenance_invalid", "knowledge name must be a string")
+                    continue
+                prior = knowledge.get(entry)
+                refs = data.get("references")
+                manifest = data.get("reference_manifest")
+                if (data.get("name") != entry or not isinstance(version, str) or not version
+                        or not isinstance(refs, list) or not isinstance(manifest, list)):
+                    fail("knowledge_provenance_invalid", "load receipt lacks name/version/reference provenance")
+                    continue
+                delivered = set() if prior is None else prior[1]
+                requested = args.get("reference_paths", [])
+                declared = {item["path"] for item in _dict_items(manifest) if isinstance(item.get("path"), str)}
+                paths = [item.get("path") for item in _dict_items(refs)]
+                first = prior is None
+                if (not isinstance(requested, list) or any(not isinstance(p, str) for p in requested)
+                        or any(p not in declared for p in requested)):
+                    fail("knowledge_reference_invalid", "load requested undeclared references")
+                    continue
+                if (data.get("body_included") is not first
+                        or (first and not isinstance(data.get("body"), str))
+                        or (not first and "body" in data)
+                        or (prior and prior[0] != version)
+                        or paths != [p for p in requested if p not in delivered]
+                        or any(not isinstance(item.get("text"), str) for item in _dict_items(refs))):
+                    fail("knowledge_delivery_mismatch", "load does not preserve version or incremental body/reference delivery")
+                knowledge[entry] = (version, delivered | set(requested))
+
+
 def _audit_physical_observations(
     records: list[dict[str, Any]],
     batches: list[tuple[int, int, str]],
@@ -1369,8 +1351,12 @@ def _audit_physical_observations(
     automatic = [
         item
         for item in _dict_items(audit.get("observations"))
-        if item.get("source") == "automatic_phase_window"
+        if item.get("source") == "automatic_physical_window"
     ]
+    # Terminal refreshes and read-only checkpoints are not batch observations.
+    # Physical-window before/after and ordered-call references are independently
+    # checked by _audit_physical_trace; here verify their transcript placement.
+    automatic_ids = {str(item.get("id")) for item in automatic}
     if len(automatic) != len(batches):
         violations.append(
             Violation(
@@ -1394,13 +1380,13 @@ def _audit_physical_observations(
         after_checkpoints = [
             obs
             for index, obs in checkpoints
-            if assistant_index < index < next_assistant
+            if assistant_index < index < next_assistant and obs in automatic_ids
         ]
         if len(after_checkpoints) != 1:
             violations.append(
                 Violation(
                     "post_batch_checkpoint_cardinality",
-                    f"physical batch requires one checkpoint before the next assistant turn, received {len(after_checkpoints)}",
+                    f"physical batch requires one automatic after checkpoint before the next assistant turn, received {len(after_checkpoints)}",
                     case_id,
                     transcript_id,
                 )
@@ -1429,14 +1415,9 @@ def _audit_action_replay(
             spec = registry.get(str(action.get("tool")))
         except KeyError:
             continue
-        # A failed episode may have no ``tool_step_completed`` events.  The
-        # benchmark reader then retains bounded actions as a compatibility
-        # fallback, including shutdown hover.  Only phase-tagged actions are
-        # authoritative planner steps for a native transcript replay.
-        formal_step = action.get("phase") not in (None, "") or isinstance(
-            action.get("step_index"), int
-        )
-        if spec.runtime.effect == "physical" and formal_step:
+        # The audit reader joins v2 actions by physical-window references.
+        # No phase labels or timestamp fallback may decide membership here.
+        if spec.runtime.effect == "physical" and _object(action.get("result")).get("ok") is True:
             actual.append(action)
     if len(expected) != len(actual):
         violations.append(

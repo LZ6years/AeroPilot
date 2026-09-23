@@ -93,16 +93,17 @@ shutdown hover/land 误算为 Planner 行为。
 {
   "map_config_path": "configs/maps/unrealcv_actor_control.example.json",
   "map_id": "downtownwest_local_unrealcv",
-  "execution_mode": "dry",
+  "execution_mode": "managed",
   "observation_profile_path": null,
   "headless": true,
-  "save_artifacts": false
+  "save_artifacts": true,
+  "enable_action_planner_debug": true
 }
 ```
 
 `execution_mode`：
 
-- `dry`：in-memory UnrealCV Backend，不连接 UE；
+- 已移除生产 `dry`：旧配置明确报错，不会自动启动真实环境；
 - `attach`：连接已运行的 UE，不启动进程；
 - `managed`：由 SimulationServer 按 MapPackage 启动和停止进程。
 

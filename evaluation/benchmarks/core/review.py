@@ -20,6 +20,7 @@ from evaluation.benchmarks.core.audit import (
     BenchmarkAuditLog,
     ResolvedFrameAsset,
 )
+from evaluation.benchmarks.core.trace import PHYSICAL_WINDOW_EVENTS
 from evaluation.benchmarks.core.report_io import atomic_write_text
 from src.agent.planning.model_inputs import (
     build_model_user_content,
@@ -308,7 +309,10 @@ def _compact_outcome(case: BenchmarkCaseReview) -> str:
                           if v is not None and not isinstance(v, (list, dict)))
     outcome_keys = ("status", "completed", "stopped", "stopped_reason", "error")
     metric_keys = ("success", "oracle_success", "ndtw", "sdtw", "distance_to_goal")
-    return ('<section><h2>Outcome / Metrics</h2><p>Agent / Runtime self-report: '
+    notice = ('<p class="transcript-feedback">Scripted offline replay — no Provider request; '
+              'navigation success is not assessed. Images are recorded fixtures.</p>'
+              if case.metadata.get("scripted") is True else '')
+    return (notice + '<section><h2>Outcome / Metrics</h2><p>Agent / Runtime self-report: '
             + line({k: case.outcome.get(k) for k in outcome_keys}) + '</p>'
             + '<p>Benchmark metrics (independent of self-report): '
             + line({k: case.metrics.get(k) for k in metric_keys}) + '</p>'
@@ -317,6 +321,10 @@ def _compact_outcome(case: BenchmarkCaseReview) -> str:
 
 def _initial_plan_review(audit: BenchmarkAuditLog) -> str:
     """Only the pre-execution event is authoritative for the initial full plan."""
+    if any(r.get("loop_schema") == "unified_tool_loop_v1" for r in getattr(audit, "planner_debug", ())):
+        return ('<section><h2>Optional task plan</h2><p>No fixed Phase plan is required. '
+                'Each decision shows the plan available at that time; updates are tool results, '
+                'not proof of task completion.</p></section>')
     snapshots = [
         _dict(event.get("payload")) for event in audit.events
         if event.get("event") == "initial_semantic_plan"
@@ -349,16 +357,21 @@ def _phase_decision_review(audit, frame_assets, case_dir, input_assets) -> str:
     ungrouped = []
     ids = [r.get("decision_id") for r in audit.planner_debug]
     for record in audit.planner_debug:
-        if not record.get("phase_key") or not record.get("decision_id") or ids.count(record.get("decision_id")) != 1:
+        unified = record.get("loop_schema") == "unified_tool_loop_v1"
+        if (not unified and not record.get("phase_key")) or not record.get("decision_id") or ids.count(record.get("decision_id")) != 1:
             ungrouped.append(record)
             continue
-        groups.setdefault(str(record["phase_key"]), []).append(record)
+        groups.setdefault("__instruction__" if unified else str(record["phase_key"]), []).append(record)
     _, results = _transcript_indexes(list(audit.agent_transcript))
-    parts = ['<section class="phase-timeline"><h2>Phase execution timeline</h2>']
+    heading = "Task execution timeline" if "__instruction__" in groups else "Phase execution timeline"
+    parts = [f'<section class="phase-timeline"><h2>{heading}</h2>']
     for phase_key, records in groups.items():
         phase = _dict(_dict(records[0].get("model_context")).get("current_phase"))
-        parts.append(f'<section class="phase-group"><h3>Phase {_e(phase_key)}</h3><p>{_e(phase.get("goal"))}</p>')
-        parts.append(_json_details(phase.get("done_when"), "Observed completion conditions at phase entry"))
+        if phase_key == "__instruction__":
+            parts.append('<section class="phase-group"><h3>Instruction decisions</h3>')
+        else:
+            parts.append(f'<section class="phase-group"><h3>Phase {_e(phase_key)}</h3><p>{_e(phase.get("goal"))}</p>')
+            parts.append(_json_details(phase.get("done_when"), "Observed completion conditions at phase entry"))
         for record in records:
             parts.append(_compact_decision(record, audit, frame_assets, case_dir,
                                            input_assets.get(_planner_record_key(record), []), results))
@@ -395,6 +408,10 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
         parts.append(f'<p class="empty">Captured CURRENT image unavailable: {_e(obs)}. No substitute.</p>')
     rgb = [a for a in frame_assets if a.modality == "rgb" and a.observation_id == obs and a.display_path]
     if rgb:
+        if not current:
+            parts.append(_image_group([{"path": rgb[0].display_path,
+                "label": "Sensor RGB — not a captured Provider input",
+                "description": f"Recorded observation {obs}; actual request image unavailable."}], case_dir))
         parts.append(f'<p><a href="{_relative_href(case_dir, Path(rgb[0].display_path))}">Original RGB · sensor audit</a></p>')
     context = _dict(record.get("model_context"))
     prior = _dict(context.get("phase_strategy"))
@@ -404,7 +421,14 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
         if isinstance(index, int) and 0 <= index < len(stages):
             return f"{index}: {stages[index]}"
         return str(index) if strategy else "尚未初始化"
-    parts.append('<p>Strategy at checkpoint: ' + _e(stage_label(prior)) + '</p>')
+    unified = record.get("loop_schema") == "unified_tool_loop_v1"
+    if unified:
+        plan = _dict(context.get("task_plan"))
+        parts.append('<p>Plan revision at checkpoint: ' + _e(plan.get("revision", "No plan created")) + '</p>')
+        if plan:
+            parts.append(_record_table(plan.get("steps", []), ("id", "description", "status")))
+    else:
+        parts.append('<p>Strategy at checkpoint: ' + _e(stage_label(prior)) + '</p>')
     applied = [_dict(e.get("payload")) for e in audit.events if e.get("event") == "phase_strategy_updated"
                and _dict(e.get("payload")).get("decision_id") == decision_id]
     if applied:
@@ -464,6 +488,13 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
                     "requested": result.get("requested_args"), "executed": result.get("executed_args"),
                     "interventions": result.get("safety_interventions")}))
             data = _dict(result.get("data"))
+            if unified and call.get("tool_name") == "knowledge.load":
+                parts.append(_key_value_table({key: data.get(key) for key in
+                    ("name", "version", "body_included", "reference_paths")}))
+                parts.append(_json_details(data, "Knowledge receipt · complete audit"))
+            if unified and call.get("tool_name") == "runtime.update_plan":
+                label = "Applied plan update" if result.get("status") == "ok" else "Plan update not applied"
+                parts.append(_json_details(data.get("plan") if result.get("status") == "ok" else args, label))
             if "candidates" in data:
                 parts.append(_record_table(data.get("candidates") or [],
                                            ("candidate_id", "label", "distance_m", "distance_status")))
@@ -477,7 +508,8 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
                          + _model_input_images(evidence, case_dir) + '</details>')
         if index < len(rounds) - 1:
             parts.append('</details>')
-    windows = [_dict(e.get("payload")) for e in audit.events if e.get("event") == "phase_window_recorded"
+    windows = [_dict(e.get("payload")) for e in audit.events
+               if (e.get("event") or e.get("kind")) in PHYSICAL_WINDOW_EVENTS
                and _dict(e.get("payload")).get("decision_id") == decision_id]
     for window in windows:
         after = window.get("observation_after_id")
@@ -485,8 +517,9 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
         following = [r for r in audit.planner_debug if r.get("checkpoint_observation_id") == after and r.get("decision_id")]
         if following:
             parts.append(f'<a href="#decision-{_e(following[0]["decision_id"])}">Next observation / decision</a>')
-    parts.append(_key_value_table({"phase outcome": _decision(record).get("decision"),
-                                   "reason": _decision(record).get("reason")}))
+    if not unified:
+        parts.append(_key_value_table({"phase outcome": _decision(record).get("decision"),
+                                       "reason": _decision(record).get("reason")}))
     parts.append('</article>')
     return ''.join(parts)
 

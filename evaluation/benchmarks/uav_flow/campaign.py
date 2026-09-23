@@ -30,6 +30,7 @@ from evaluation.benchmarks.uav_flow.reports import failure_counts
 
 
 RUN_MANIFEST_SCHEMA = "uav_flow_run_manifest_v1"
+LOOP_SCHEMA = "unified_tool_loop_v1"
 CAMPAIGN_AUDIT_SCHEMA = "uav_flow_campaign_audit_v1"
 _CONFIG_SELECTOR_FIELDS = {"case_ids", "classes", "limit_per_class", "max_cases"}
 _CONFIG_LOCATION_FIELDS = {"output_dir", "run_root", "env_path"}
@@ -49,6 +50,7 @@ def write_run_manifest(
     git_commit, git_dirty = _git_state(Path(__file__).resolve().parents[3])
     payload = {
         "schema_version": RUN_MANIFEST_SCHEMA,
+        "loop_schema": LOOP_SCHEMA,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "eval_id": root.name,
         "git_commit": git_commit,
@@ -167,6 +169,12 @@ def audit_campaign(
         session = _read_object(root / "scene_session.json", violations, segment_name)
         finalized = _load_finalized_cases(root, violations)
         finalized_ids = set(finalized)
+
+        if manifest.get("loop_schema") != LOOP_SCHEMA:
+            segment_compatible = False
+            _violate(violations, "loop_schema_mismatch",
+                     "formal campaigns require unified_tool_loop_v1; legacy or mixed loops cannot be merged",
+                     segment=segment_name)
 
         if manifest.get("schema_version") != RUN_MANIFEST_SCHEMA:
             segment_compatible = False

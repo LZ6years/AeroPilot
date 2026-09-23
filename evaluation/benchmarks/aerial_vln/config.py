@@ -35,7 +35,7 @@ class AerialVlnEvalConfig:
         default_factory=lambda: {"1": "airvln_env_1"}
     )
     observation_profile_path: str | None = None
-    execution_mode: str = "dry"
+    execution_mode: str = field(kw_only=True)
     abort_on_infrastructure_error: bool = True
     headless: bool = True
     save_artifacts: bool = False
@@ -48,17 +48,21 @@ class AerialVlnEvalConfig:
     stmr_max_queries: int = 16
     stmr_device: str = "auto"
     env_path: str = ".env"
-    parser_mode: str = "model"
     shutdown_policy: str = "land"
     # Long multi-landmark routes need more observation/action windows than the
     # shared Runtime default. This remains benchmark-runner configuration and
     # does not change TaskRuntime or UAV-Flow defaults.
-    runtime_loop_guard_windows: int = 100
+    runtime_loop_guard_windows: int = 300
     initialization_min_settle_sec: float = 0.0
     action_config_overrides: dict[str, float] = field(default_factory=dict)
     safety_overrides: dict[str, float] = field(default_factory=dict)
     upstream_reference_commit: str = "local_airvln_reference"
     dataset_version: str = "unspecified"
+
+    def __post_init__(self) -> None:
+        allowed = {"attach", "managed"}
+        if self.execution_mode not in allowed:
+            raise ValueError("execution_mode must be explicitly set to " + "/".join(sorted(allowed)) + "; dry execution was removed; use --validate-only for offline checks")
 
     @classmethod
     def from_file(cls, path: str | Path) -> "AerialVlnEvalConfig":
@@ -69,6 +73,10 @@ class AerialVlnEvalConfig:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "AerialVlnEvalConfig":
+        if data.get("execution_mode") == "dry":
+            raise ValueError("dry execution was removed; use --validate-only for offline checks or explicitly configure a real execution_mode")
+        if "parser_mode" in data:
+            raise ValueError("parser_mode was removed: submit raw instructions to the unified tool loop")
         dataset_root = str(data.get("dataset_root", "")).strip()
         if not dataset_root:
             raise ValueError("AerialVLN config requires dataset_root")
@@ -82,10 +90,10 @@ class AerialVlnEvalConfig:
         split = str(data.get("split", "val_seen")).strip()
         if not split:
             raise ValueError("AerialVLN split cannot be empty")
-        execution_mode = str(data.get("execution_mode", "dry")).lower()
-        if execution_mode not in {"dry", "attach", "managed"}:
+        execution_mode = str(data.get("execution_mode", "")).lower()
+        if execution_mode not in {"attach", "managed"}:
             raise ValueError(
-                "AerialVLN execution_mode must be dry, attach, or managed"
+                "AerialVLN execution_mode must be explicitly set to attach or managed"
             )
         raw_scene_map = data.get("scene_map", {"1": "airvln_env_1"})
         if not isinstance(raw_scene_map, dict):
@@ -177,10 +185,9 @@ class AerialVlnEvalConfig:
                 field_name="stmr_device",
             ),
             env_path=str(data.get("env_path", ".env")),
-            parser_mode=str(data.get("parser_mode", "model")),
             shutdown_policy=str(data.get("shutdown_policy", "land")),
             runtime_loop_guard_windows=int(
-                data.get("runtime_loop_guard_windows", 100)
+                data.get("runtime_loop_guard_windows", 300)
             ),
             initialization_min_settle_sec=_non_negative_float(
                 data.get("initialization_min_settle_sec", 0.0),

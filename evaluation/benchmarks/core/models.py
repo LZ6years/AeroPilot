@@ -29,6 +29,7 @@ class PreparedBenchmarkEpisode(Generic[ScenarioPayloadT, EvaluationPayloadT]):
     planner_safe_metadata: dict[str, Any] = field(default_factory=dict)
     scenario_payload: ScenarioPayloadT | None = None
     evaluation_payload: EvaluationPayloadT | None = None
+    protocol_context: str | None = None
 
     def __post_init__(self) -> None:
         for name in (

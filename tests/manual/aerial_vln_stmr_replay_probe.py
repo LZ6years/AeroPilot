@@ -32,7 +32,7 @@ from plugins.research.stmr_map.perception.grounding_dino_backend import (
     DEFAULT_GROUNDING_DINO_MODEL,
 )
 from plugins.research.stmr_map.perception.sam_backend import DEFAULT_SAM_MODEL
-from src.memory.context.schemas import StageContextInput
+from src.memory.context.schemas import TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryRecordReader
 
@@ -84,7 +84,7 @@ def main() -> None:
     )
     result = builder.build(
         memory,
-        StageContextInput(active_instruction=instruction),
+        TaskContextInput(active_instruction=instruction),
     )
     if result.png_path is None or result.json_path is None:
         raise SystemExit(

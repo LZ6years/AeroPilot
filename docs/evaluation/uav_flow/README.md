@@ -45,10 +45,11 @@ evaluation/benchmarks/uav_flow/configs/uav_flow_eval.example.json
 {
   "map_config_path": "configs/maps/unrealcv_actor_control.example.json",
   "map_id": "downtownwest_local_unrealcv",
-  "execution_mode": "dry",
+  "execution_mode": "managed",
   "observation_profile_path": null,
   "headless": true,
-  "save_artifacts": false,
+  "save_artifacts": true,
+  "enable_action_planner_debug": true,
   "generate_html_review": true
 }
 ```
@@ -56,7 +57,7 @@ evaluation/benchmarks/uav_flow/configs/uav_flow_eval.example.json
 旧 `env_id`、gym reuse、time dilation、resolution 和 seed 配置会给出明确迁移
 错误。
 
-`dry` 模式允许不保存真实图片，用于验证报告结构。`attach/managed` 模式若
+生产链路只支持显式 `attach/managed`；离线报告测试通过 `tests/` 注入 Fake。若
 启用 `generate_html_review`，必须同时启用 `save_artifacts` 和
 `enable_action_planner_debug`；仓库提供的真实评测脚本会自动设置这两个开关。
 

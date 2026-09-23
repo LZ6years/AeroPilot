@@ -9,8 +9,8 @@ UavFlowBenchmarkRunner
 → Benchmark Core
 ```
 
-不再提供固定转向或移动动作的 UAV-Flow real-engine probe。`dry` 模式只用于
-自动化测试数据加载、生命周期、指标和报告结构，不能作为真实 benchmark 结果。
+不再提供固定动作 benchmark probe 或生产 dry 执行。
+自动测试通过显式依赖注入验证生命周期、指标和报告，不代表真实 benchmark 结果。
 
 ## 本地真实 Turn 三案例
 
@@ -23,7 +23,6 @@ python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
   --classes Turn `
   --limit-per-class 3 `
   --eval-id uav_flow_turn_local_real_3cases `
-  --parser-mode model `
   --planner-depth-input off `
   --stmr-mode off `
   --no-sr-judge `
@@ -42,18 +41,11 @@ evaluation/benchmarks/uav_flow/outputs/<eval_id>/cases/<case_id>/turn_diagnostic
 
 HTML gallery 默认只展示 RGB。Depth 仍保存在审计数据和资产目录中。
 
-## Dry 自动化 smoke
+## 离线自动化测试
 
 ```powershell
-python evaluation/benchmarks/uav_flow/scripts/run_manual_eval.py `
-  --config evaluation/benchmarks/uav_flow/configs/uav_flow_eval.example.json `
-  --execution-mode dry `
-  --parser-mode rule_based `
-  --case-ids 2025-03-30_11-49-14 `
-  --no-sr-judge `
-  --no-visual-diagnostics `
-  --no-action-planner-debug
+python -m pytest tests/test_uav_flow_runner.py tests/test_benchmark_core.py -q
 ```
 
-本目录只保留共享 STMR session 的 `run_stmr_canary.py`；普通 dry、attach 和
-managed 评测都使用上面的正式入口。
+本目录保留共享 STMR session 的 `run_stmr_canary.py`；真实 attach/managed
+评测使用正式入口，Fake 实现仅供测试注入。
