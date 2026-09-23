@@ -1,0 +1,16 @@
+Illustrative cases only. The fictitious names below are not available tools; only the
+request's actual tools are callable. These cases demonstrate arguments and dependencies,
+not a task strategy or preferred tool order.
+
+1. A fictitious inspect_record capability requires record_id:string. If an actual result
+   supplied the identifier r7, valid arguments would be {"record_id":"r7"}; a numeric
+   value or an invented identifier would not express the same request.
+
+2. A fictitious format_records capability takes entries:array of objects with label:string
+   and uppercase:boolean. An argument example is
+   {"entries":[{"label":"sample","uppercase":false}]}.
+   The boolean is a JSON value, not the string "false".
+
+3. A read returns {"status":"ok","candidates":[]}. A later action needing a selected
+   candidate cannot use an invented candidate ID. If a result instead supplies candidate
+   c2, a dependent call may use c2 after inspecting that result and its applicability.

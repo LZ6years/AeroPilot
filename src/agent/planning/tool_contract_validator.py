@@ -10,545 +10,109 @@ future layer direct access to model-call details.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, NoReturn
+import json
+from typing import Any, NoReturn, TYPE_CHECKING
 
-from src.agent.planning.schemas import ACTION_WINDOW_SCOPE_CURRENT_PHASE, PlannedStep, ShortHorizonPlan
+from src.agent.transcript import AssistantTurn
+from src.tools.validation import ToolArgumentError, validate_tool_args, validate_runtime_bound_tool_args
 
-
-DEFAULT_ALLOWED_TOOL_STEPS = {"uav.hover", "uav.turn_relative", "uav.move_body"}
-
-
-@dataclass(frozen=True)
-class ToolContractViolation:
-    """Structured description of one planner tool-contract failure."""
-
-    code: str
-    message: str
-    step_index: int | None = None
-    tool: str | None = None
-    field: str | None = None
-    expected: Any | None = None
-    actual: Any | None = None
-
-    def to_dict(self) -> dict[str, Any]:
-        """Return a JSON-friendly representation for logs and repair prompts."""
-
-        data = {
-            "code": self.code,
-            "message": self.message,
-        }
-        optional = {
-            "step_index": self.step_index,
-            "tool": self.tool,
-            "field": self.field,
-            "expected": self.expected,
-            "actual": self.actual,
-        }
-        data.update({key: value for key, value in optional.items() if value is not None})
-        return data
+if TYPE_CHECKING:
+    from src.tools.registry import ToolRegistry
 
 
-class ToolContractValidationError(ValueError):
-    """Raised when a model action plan violates PlannerContext's action contract."""
+class NativeTurnValidationError(ValueError):
+    """Pre-execution rejection with attribution, not a semantic judgment."""
 
-    def __init__(self, violation: ToolContractViolation) -> None:
-        self.violation = violation
-        super().__init__(violation.message)
+    def __init__(self, message: str, *, code: str, call_id: str | None = None,
+                 path: str | None = None) -> None:
+        super().__init__(message)
+        self.diagnostic = {"code": code, "scope": "call" if call_id else "turn"}
+        if call_id is not None:
+            self.diagnostic["source_tool_call_id"] = call_id
+        if path is not None:
+            self.diagnostic["parameter_path"] = path
 
-    def to_dict(self) -> dict[str, Any]:
-        return self.violation.to_dict()
+
+def read_call_signature(observation_id: str, tool_name: str, args: dict[str, Any]) -> tuple[str, str, str]:
+    return observation_id, tool_name, json.dumps(args, sort_keys=True, ensure_ascii=False, allow_nan=False)
 
 
-class ToolContractValidator:
-    """Validate ShortHorizonPlan tool steps against PlannerContext constraints."""
+def validate_native_turn(
+    turn: AssistantTurn,
+    registry: ToolRegistry,
+    *,
+    allowed_names: set[str],
+    latest_observation: dict[str, Any],
+    prior_call_ids: set[str] | frozenset[str] = frozenset(),
+    executed_read_signatures: set[tuple[str, str, str]] | frozenset[tuple[str, str, str]] = frozenset(),
+) -> str:
+    """Validate an entire turn before any mutation, returning its effect.
 
-    def __init__(self, fallback_allowed_tools: set[str] | None = None) -> None:
-        self.fallback_allowed_tools = set(fallback_allowed_tools or DEFAULT_ALLOWED_TOOL_STEPS)
-
-    def validate(self, plan: ShortHorizonPlan, expected_phase: str, context: dict[str, Any]) -> ShortHorizonPlan:
-        """Validate a parsed plan and return it unchanged when it satisfies the contract."""
-
-        if plan.phase != expected_phase:
-            self._fail(
-                "phase_mismatch",
-                f"Model action planner phase mismatch: {plan.phase} != {expected_phase}",
-                field="phase",
-                expected=expected_phase,
-                actual=plan.phase,
-            )
-        if not 1 <= len(plan.steps) <= 3:
-            self._fail(
-                "step_count_out_of_range",
-                "Model action planner must return 1 to 3 steps",
-                field="steps",
-                expected="1..3",
-                actual=len(plan.steps),
-            )
-        self._validate_action_window(plan)
-
-        constraints = self._action_constraints(context)
-        allowed_tools = self._allowed_tools(constraints)
-        forbidden_tools = set(constraints.get("forbidden_tools", []))
-        for index, step in enumerate(plan.steps):
-            self._validate_step(step, index, constraints, allowed_tools, forbidden_tools)
-        return plan
-
-    def _validate_action_window(self, plan: ShortHorizonPlan) -> None:
-        window = plan.action_window
-        if not window.intent.strip():
-            self._fail(
-                "action_window_intent_missing",
-                "action_window.intent must be a non-empty description",
-                field="action_window.intent",
-                expected="non-empty string",
-                actual=window.intent,
-            )
-        if window.scope != ACTION_WINDOW_SCOPE_CURRENT_PHASE:
-            self._fail(
-                "action_window_scope_invalid",
-                "action_window.scope must be current_phase_only",
-                field="action_window.scope",
-                expected=ACTION_WINDOW_SCOPE_CURRENT_PHASE,
-                actual=window.scope,
-            )
-        if window.requires_intermediate_observation and len(plan.steps) > 1:
-            self._fail(
-                "action_window_intermediate_observation_requires_single_step",
-                "action_window requires an intermediate observation, so the plan must contain exactly one step",
-                field="action_window.requires_intermediate_observation",
-                expected="true only with exactly one step",
-                actual={"requires_intermediate_observation": True, "step_count": len(plan.steps)},
-            )
-        if not window.expected_effect.strip():
-            self._fail(
-                "action_window_expected_effect_missing",
-                "action_window.expected_effect must be a non-empty description",
-                field="action_window.expected_effect",
-                expected="non-empty string",
-                actual=window.expected_effect,
-            )
-
-    def _validate_step(
-        self,
-        step: PlannedStep,
-        index: int,
-        constraints: dict[str, Any],
-        allowed_tools: set[str],
-        forbidden_tools: set[str],
-    ) -> None:
-        if step.kind == "observe":
-            self._fail(
-                "observe_managed_by_runtime",
-                "observe steps are managed by runtime perception policy",
-                step_index=index,
-                tool=step.tool,
-                field="kind",
-                expected="tool",
-                actual="observe",
-            )
-        if step.kind != "tool":
-            self._fail(
-                "unsupported_step_kind",
-                f"Unsupported model planned step kind: {step.kind}",
-                step_index=index,
-                tool=step.tool,
-                field="kind",
-                expected="tool",
-                actual=step.kind,
-            )
-        if step.tool in forbidden_tools:
-            self._fail(
-                "forbidden_tool",
-                f"Tool is forbidden in model action plan: {step.tool}",
-                step_index=index,
-                tool=step.tool,
-                field="tool",
-                expected="not in forbidden_tools",
-                actual=step.tool,
-            )
-        if step.tool not in allowed_tools:
-            self._fail(
-                "tool_not_allowed",
-                f"Tool is not allowed in model action plan: {step.tool}",
-                step_index=index,
-                tool=step.tool,
-                field="tool",
-                expected=sorted(allowed_tools),
-                actual=step.tool,
-            )
-        self._validate_tool_args(step, index, constraints)
-
-    def _validate_tool_args(self, step: PlannedStep, index: int, constraints: dict[str, Any]) -> None:
-        if step.tool == "uav.hover":
-            if step.args:
-                self._fail(
-                    "hover_args_not_empty",
-                    "uav.hover args must be {}",
-                    step_index=index,
-                    tool=step.tool,
-                    field="args",
-                    expected={},
-                    actual=step.args,
-                )
-            return
-        if step.tool == "uav.turn_relative":
-            self._validate_turn_relative_args(step.args, index, constraints)
-            return
-        if step.tool == "uav.move_body":
-            self._validate_move_body_args(step.args, index, constraints)
-            return
-        if str(step.tool).startswith("skill."):
-            self._validate_skill_tool_args(step.tool or "", step.args, index, constraints)
-            return
-        self._fail(
-            "tool_schema_not_supported",
-            f"Tool has no validator in model action plan: {step.tool}",
-            step_index=index,
-            tool=step.tool,
-            field="tool",
-            expected=sorted(DEFAULT_ALLOWED_TOOL_STEPS),
-            actual=step.tool,
-        )
-
-    def _validate_skill_tool_args(self, tool: str, args: dict[str, Any], index: int, constraints: dict[str, Any]) -> None:
-        schema = constraints.get("action_schemas", {}).get(tool, {})
-        input_schema = schema.get("input_schema") if isinstance(schema, dict) else None
-        if not isinstance(input_schema, dict):
-            self._fail(
-                "skill_tool_schema_missing",
-                f"Skill tool has no input_schema in planner context: {tool}",
-                step_index=index,
-                tool=tool,
-                field="input_schema",
-                expected="JSON schema object",
-                actual=schema,
-            )
-        _validate_json_schema_subset(self, tool, args, input_schema, index)
-
-    def _validate_turn_relative_args(self, args: dict[str, Any], index: int, constraints: dict[str, Any]) -> None:
-        if set(args) != {"yaw_deg"}:
-            self._fail(
-                "turn_args_schema_error",
-                "uav.turn_relative args must be exactly {'yaw_deg'}",
-                step_index=index,
-                tool="uav.turn_relative",
-                field="args",
-                expected={"yaw_deg": "number"},
-                actual=args,
-            )
-        yaw_deg = self._number_arg(args, "yaw_deg", "uav.turn_relative", index)
-        limits = (
-            constraints.get("action_schemas", {})
-            .get("uav.turn_relative", {})
-            .get("limits", {})
-        )
-        min_yaw = limits.get("yaw_deg_min")
-        max_yaw = limits.get("yaw_deg_max")
-        if min_yaw is not None and yaw_deg < float(min_yaw):
-            self._fail(
-                "turn_yaw_below_limit",
-                f"uav.turn_relative yaw_deg below limit: {yaw_deg} < {float(min_yaw)}",
-                step_index=index,
-                tool="uav.turn_relative",
-                field="yaw_deg",
-                expected=f">= {float(min_yaw)}",
-                actual=yaw_deg,
-            )
-        if max_yaw is not None and yaw_deg > float(max_yaw):
-            self._fail(
-                "turn_yaw_above_limit",
-                f"uav.turn_relative yaw_deg above limit: {yaw_deg} > {float(max_yaw)}",
-                step_index=index,
-                tool="uav.turn_relative",
-                field="yaw_deg",
-                expected=f"<= {float(max_yaw)}",
-                actual=yaw_deg,
-            )
-
-    def _validate_move_body_args(self, args: dict[str, Any], index: int, constraints: dict[str, Any]) -> None:
-        keys = set(args)
-        if "direction" in keys:
-            self._fail(
-                "move_body_direction_not_model_facing",
-                "uav.move_body direction shorthand is not allowed in model action plans; use vx/vy/vz/duration",
-                step_index=index,
-                tool="uav.move_body",
-                field="direction",
-                expected={"vx": "number", "vy": "number", "vz": "number", "duration": "number"},
-                actual=args,
-            )
-        if keys == {"vx", "vy", "vz", "duration"}:
-            limits = (
-                constraints.get("action_schemas", {})
-                .get("uav.move_body", {})
-                .get("limits", {})
-            )
-            vx = self._number_arg(args, "vx", "uav.move_body", index)
-            vy = self._number_arg(args, "vy", "uav.move_body", index)
-            vz = self._number_arg(args, "vz", "uav.move_body", index)
-            max_xy = limits.get("abs_vx_vy_max")
-            max_z = limits.get("abs_vz_max")
-            if max_xy is not None and (abs(vx) > float(max_xy) or abs(vy) > float(max_xy)):
-                self._fail(
-                    "move_body_planar_velocity_limit_exceeded",
-                    "uav.move_body planar velocity exceeds context limits",
-                    step_index=index,
-                    tool="uav.move_body",
-                    field="vx/vy",
-                    expected=f"abs(vx), abs(vy) <= {float(max_xy)}",
-                    actual={"vx": vx, "vy": vy},
-                )
-            if max_z is not None and abs(vz) > float(max_z):
-                self._fail(
-                    "move_body_vertical_velocity_limit_exceeded",
-                    "uav.move_body vertical velocity exceeds context limits",
-                    step_index=index,
-                    tool="uav.move_body",
-                    field="vz",
-                    expected=f"abs(vz) <= {float(max_z)}",
-                    actual=vz,
-                )
-            self._validate_duration(args, index, constraints)
-            return
-        self._fail(
-            "move_body_args_schema_error",
-            "uav.move_body args must be exactly {'vx', 'vy', 'vz', 'duration'}",
-            step_index=index,
-            tool="uav.move_body",
-            field="args",
-            expected=[
-                {"vx": "number", "vy": "number", "vz": "number", "duration": "number"},
-            ],
-            actual=args,
-        )
-
-    def _validate_duration(self, args: dict[str, Any], index: int, constraints: dict[str, Any]) -> None:
-        duration = self._number_arg(args, "duration", "uav.move_body", index)
-        if duration <= 0.0:
-            self._fail(
-                "move_body_duration_non_positive",
-                "uav.move_body duration must be greater than 0",
-                step_index=index,
-                tool="uav.move_body",
-                field="duration",
-                expected="> 0",
-                actual=duration,
-            )
-        limit = (
-            constraints.get("action_schemas", {})
-            .get("uav.move_body", {})
-            .get("limits", {})
-            .get("duration_max")
-        )
-        if limit is not None and duration > float(limit):
-            self._fail(
-                "move_body_duration_limit_exceeded",
-                f"uav.move_body duration exceeds context limit: {duration} > {float(limit)}",
-                step_index=index,
-                tool="uav.move_body",
-                field="duration",
-                expected=f"<= {float(limit)}",
-                actual=duration,
-            )
-
-    def _number_arg(self, args: dict[str, Any], key: str, tool: str, index: int) -> float:
-        if key not in args:
-            self._fail(
-                "numeric_arg_missing",
-                f"{tool} requires numeric arg: {key}",
-                step_index=index,
-                tool=tool,
-                field=key,
-                expected="number",
-            )
+    No commit, plan, or Phase prerequisite exists. Exposure and scene support
+    are supplied by Runtime, policies by ToolRegistry. The caller records read
+    attempts only when executed; rejected turns never consume an execution quota.
+    """
+    if not turn.tool_calls:
+        raise NativeTurnValidationError("submit at least one tool call", code="empty_turn")
+    seen = set(prior_call_ids)
+    specs = []
+    for call in turn.tool_calls:
+        if not call.tool_call_id or call.tool_call_id in seen:
+            raise NativeTurnValidationError("tool call IDs must be non-empty and unique within the instruction",
+                                            code="duplicate_call_id", call_id=call.tool_call_id)
+        seen.add(call.tool_call_id)
         try:
-            return float(args[key])
-        except (TypeError, ValueError):
-            self._fail(
-                "numeric_arg_invalid",
-                f"{tool} arg must be numeric: {key}",
-                step_index=index,
-                tool=tool,
-                field=key,
-                expected="number",
-                actual=args.get(key),
-            )
-
-    def _action_constraints(self, context: dict[str, Any]) -> dict[str, Any]:
-        constraints = context.get("allowed_action_constraints", {}) if isinstance(context, dict) else {}
-        return constraints if isinstance(constraints, dict) else {}
-
-    def _allowed_tools(self, constraints: dict[str, Any]) -> set[str]:
-        # Presence and truthiness have different meanings. An explicit empty
-        # list is a valid runtime contract saying the current Backend exposes
-        # no model-plannable actions; only an absent/malformed field uses the
-        # compatibility fallback.
-        if "planner_tools" in constraints:
-            tools = constraints.get("planner_tools")
-            if isinstance(tools, list):
-                return {str(item) for item in tools}
-        return set(self.fallback_allowed_tools)
-
-    def _fail(
-        self,
-        code: str,
-        message: str,
-        *,
-        step_index: int | None = None,
-        tool: str | None = None,
-        field: str | None = None,
-        expected: Any | None = None,
-        actual: Any | None = None,
-    ) -> NoReturn:
-        raise ToolContractValidationError(
-            ToolContractViolation(
-                code=code,
-                message=message,
-                step_index=step_index,
-                tool=tool,
-                field=field,
-                expected=expected,
-                actual=actual,
-            )
-        )
-
-
-def _validate_json_schema_subset(
-    validator: ToolContractValidator,
-    tool: str,
-    args: dict[str, Any],
-    schema: dict[str, Any],
-    index: int,
-) -> None:
-    if schema.get("type", "object") != "object":
-        validator._fail(
-            "skill_tool_schema_type_unsupported",
-            f"Skill tool schema must be an object schema: {tool}",
-            step_index=index,
-            tool=tool,
-            field="input_schema.type",
-            expected="object",
-            actual=schema.get("type"),
-        )
-    if not isinstance(args, dict):
-        validator._fail(
-            "skill_tool_args_invalid",
-            f"Skill tool args must be an object: {tool}",
-            step_index=index,
-            tool=tool,
-            field="args",
-            expected="object",
-            actual=args,
-        )
-    properties = schema.get("properties", {})
-    if not isinstance(properties, dict):
-        properties = {}
-    required = schema.get("required", [])
-    if not isinstance(required, list):
-        required = []
-    for name in required:
-        if name not in args:
-            validator._fail(
-                "skill_tool_required_arg_missing",
-                f"Skill tool requires arg: {name}",
-                step_index=index,
-                tool=tool,
-                field=str(name),
-                expected="present",
-            )
-    additional_allowed = bool(schema.get("additionalProperties", True))
-    if not additional_allowed:
-        extra = sorted(set(args) - set(properties))
-        if extra:
-            validator._fail(
-                "skill_tool_additional_arg_forbidden",
-                f"Skill tool received unsupported args: {extra}",
-                step_index=index,
-                tool=tool,
-                field="args",
-                expected=sorted(properties),
-                actual=extra,
-            )
-    for name, value in args.items():
-        prop_schema = properties.get(name)
-        if isinstance(prop_schema, dict):
-            _validate_json_value_subset(validator, tool, name, value, prop_schema, index)
-
-
-def _validate_json_value_subset(
-    validator: ToolContractValidator,
-    tool: str,
-    name: str,
-    value: Any,
-    schema: dict[str, Any],
-    index: int,
-) -> None:
-    expected_type = schema.get("type")
-    if expected_type == "string" and not isinstance(value, str):
-        _type_fail(validator, tool, name, value, "string", index)
-    if expected_type == "number" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
-        _type_fail(validator, tool, name, value, "number", index)
-    if expected_type == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
-        _type_fail(validator, tool, name, value, "integer", index)
-    if expected_type == "boolean" and not isinstance(value, bool):
-        _type_fail(validator, tool, name, value, "boolean", index)
-    if expected_type == "array":
-        if not isinstance(value, list):
-            _type_fail(validator, tool, name, value, "array", index)
-        item_schema = schema.get("items")
-        if isinstance(item_schema, dict):
-            for item_index, item in enumerate(value):
-                _validate_json_value_subset(validator, tool, f"{name}[{item_index}]", item, item_schema, index)
-    enum = schema.get("enum")
-    if isinstance(enum, list) and value not in enum:
-        validator._fail(
-            "skill_tool_enum_invalid",
-            f"Skill tool arg {name} must be one of {enum}",
-            step_index=index,
-            tool=tool,
-            field=name,
-            expected=enum,
-            actual=value,
-        )
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        minimum = schema.get("minimum")
-        maximum = schema.get("maximum")
-        if minimum is not None and float(value) < float(minimum):
-            validator._fail(
-                "skill_tool_number_below_minimum",
-                f"Skill tool arg {name} below minimum",
-                step_index=index,
-                tool=tool,
-                field=name,
-                expected=f">= {minimum}",
-                actual=value,
-            )
-        if maximum is not None and float(value) > float(maximum):
-            validator._fail(
-                "skill_tool_number_above_maximum",
-                f"Skill tool arg {name} above maximum",
-                step_index=index,
-                tool=tool,
-                field=name,
-                expected=f"<= {maximum}",
-                actual=value,
-            )
-
-
-def _type_fail(
-    validator: ToolContractValidator,
-    tool: str,
-    name: str,
-    value: Any,
-    expected: str,
-    index: int,
-) -> None:
-    validator._fail(
-        "skill_tool_arg_type_invalid",
-        f"Skill tool arg {name} must be {expected}",
-        step_index=index,
-        tool=tool,
-        field=name,
-        expected=expected,
-        actual=value,
-    )
+            spec = registry.get(call.tool_name)
+        except KeyError as exc:
+            raise NativeTurnValidationError("unknown tool", code="unknown_tool", call_id=call.tool_call_id) from exc
+        if (call.tool_name not in allowed_names or not spec.runtime.model_exposed
+                or spec.runtime.effect == "lifecycle"):
+            raise NativeTurnValidationError("tool is not exposed in this scene", code="tool_not_exposed",
+                                            call_id=call.tool_call_id)
+        try:
+            validate_tool_args(call.args, spec.input_schema)
+            validate_runtime_bound_tool_args(call.args, spec.input_schema, latest_observation)
+        except ToolArgumentError as exc:
+            raise NativeTurnValidationError(str(exc), code=exc.code,
+                                            call_id=call.tool_call_id, path=exc.path) from exc
+        specs.append(spec)
+    effects = {spec.runtime.effect for spec in specs}
+    if len(effects) != 1:
+        raise NativeTurnValidationError("read-only, physical and control calls require separate turns",
+                                        code="mixed_effects")
+    effect = specs[0].runtime.effect
+    if effect == "physical":
+        if len(specs) > 3 or any(spec.runtime.batching != "ordered" for spec in specs):
+            raise NativeTurnValidationError("physical turns require 1–3 ordered calls",
+                                            code="physical_batch_invalid")
+        if any(spec.runtime.result_timing != "after_batch_observation" for spec in specs):
+            raise NativeTurnValidationError("unsupported physical result timing", code="unsupported_timing")
+    elif effect == "runtime_control":
+        if len(specs) != 1 or specs[0].runtime.batching != "single":
+            raise NativeTurnValidationError("control tools require an exclusive turn", code="control_not_exclusive")
+        if specs[0].runtime.result_timing != "immediate":
+            raise NativeTurnValidationError("unsupported control result timing", code="unsupported_timing")
+    elif effect == "read_only":
+        if any(spec.runtime.result_timing != "immediate" for spec in specs):
+            raise NativeTurnValidationError("read-only results must be immediate", code="unsupported_timing")
+        if any(spec.runtime.batching not in {"single", "parallel_safe"} for spec in specs):
+            raise NativeTurnValidationError("unsupported read-only batching", code="read_batch_invalid")
+        if len(specs) > 1 and any(spec.runtime.batching != "parallel_safe" for spec in specs):
+            raise NativeTurnValidationError("independent read-only batching requires parallel_safe",
+                                            code="read_batch_invalid")
+        signatures = set(executed_read_signatures)
+        observation_id = str(latest_observation.get("observation_id") or "")
+        for call, spec in zip(turn.tool_calls, specs):
+            signature = read_call_signature(observation_id, call.tool_name, call.args)
+            if signature in signatures:
+                raise NativeTurnValidationError("reuse the existing result for this identical observation-scoped call",
+                                                code="duplicate_read_call", call_id=call.tool_call_id)
+            limit = spec.runtime.max_calls_per_observation
+            count = sum(item[:2] == signature[:2] for item in signatures)
+            if limit is not None and count >= limit:
+                raise NativeTurnValidationError("per-observation call limit reached", code="observation_call_limit",
+                                                call_id=call.tool_call_id)
+            signatures.add(signature)
+    else:
+        raise NativeTurnValidationError("non-executable tool effect", code="unsupported_effect")
+    return effect

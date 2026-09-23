@@ -53,33 +53,20 @@ class ContextFragment:
 
 
 @dataclass(frozen=True)
-class StageContextInput:
+class TaskContextInput:
+    """Current instruction snapshot; no phase, history or tool execution objects."""
+
     active_instruction: str
-    semantic_plan: dict[str, Any] = field(default_factory=dict)
-    current_phase: dict[str, Any] | None = None
-    phase_neighborhood: dict[str, Any] = field(default_factory=dict)
-    semantic_goal: dict[str, Any] = field(default_factory=dict)
+    protocol_context: str = ""
+    task_plan: dict[str, Any] | None = None
+    loaded_knowledge: list[dict[str, Any]] = field(default_factory=list)
+    motion_summary: dict[str, Any] = field(default_factory=dict)
     safety_constraints: dict[str, Any] = field(default_factory=dict)
-    allowed_action_constraints: dict[str, Any] = field(default_factory=dict)
     observation_policy: dict[str, Any] = field(default_factory=dict)
-    phase_execution_summary: dict[str, Any] = field(default_factory=dict)
-    phase_strategy: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
-            "active_instruction": self.active_instruction,
-            "semantic_plan": dict(self.semantic_plan),
-            "current_phase": dict(self.current_phase) if self.current_phase is not None else None,
-            "phase_neighborhood": dict(self.phase_neighborhood),
-            "semantic_goal": dict(self.semantic_goal),
-            "safety_constraints": dict(self.safety_constraints),
-            "allowed_action_constraints": dict(self.allowed_action_constraints),
-            "observation_policy": dict(self.observation_policy),
-            "phase_execution_summary": dict(self.phase_execution_summary),
-            "phase_strategy": dict(self.phase_strategy),
-            "metadata": dict(self.metadata),
-        }
+        return asdict(self)
 
 
 @dataclass(frozen=True)
@@ -87,46 +74,3 @@ class MemorySourceBundle:
     flight_memory: Any
     map_memory: Any = None
     run_memory: Any = None
-
-
-@dataclass(frozen=True)
-class PlannerContext:
-    active_instruction: str
-    current_phase: dict[str, Any] | None
-    phase_strategy: dict[str, Any]
-    phase_neighborhood: dict[str, Any]
-    semantic_goal: dict[str, Any]
-    fragments: list[ContextFragment]
-    disabled_fragments: list[str] = field(default_factory=list)
-    context_schema: dict[str, Any] = field(default_factory=dict)
-    rules: dict[str, Any] = field(default_factory=dict)
-    user_preferences: dict[str, Any] = field(default_factory=dict)
-    safety_constraints: dict[str, Any] = field(default_factory=dict)
-    allowed_action_constraints: dict[str, Any] = field(default_factory=dict)
-    observation_policy: dict[str, Any] = field(default_factory=dict)
-    phase_execution_summary: dict[str, Any] = field(default_factory=dict)
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        data = {
-            "active_instruction": self.active_instruction,
-            "current_phase": self.current_phase,
-            "phase_strategy": dict(self.phase_strategy),
-            "phase_neighborhood": self.phase_neighborhood,
-            "semantic_goal": self.semantic_goal,
-            "fragments": [fragment.to_dict() for fragment in self.fragments],
-            "disabled_fragments": list(self.disabled_fragments),
-            "context_schema": dict(self.context_schema),
-            "rules": dict(self.rules),
-            "user_preferences": dict(self.user_preferences),
-            "safety_constraints": dict(self.safety_constraints),
-            "allowed_action_constraints": dict(self.allowed_action_constraints),
-            "observation_policy": dict(self.observation_policy),
-            "phase_execution_summary": dict(self.phase_execution_summary),
-            "metadata": dict(self.metadata),
-        }
-        # Absence at phase entry is meaningful: it requests initialization
-        # instead of presenting an empty strategy as prior evidence.
-        if not data["phase_strategy"]:
-            data.pop("phase_strategy")
-        return data

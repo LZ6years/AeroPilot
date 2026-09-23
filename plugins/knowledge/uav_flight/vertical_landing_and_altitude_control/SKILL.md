@@ -45,9 +45,10 @@ merely accumulating a fixed ascent. Use a modest evidence-based clearance margin
 not a guessed typical building height. Reassess after movement; do not assume
 intermediate views within an uninterrupted sequence of actions.
 
-If height or region cues conflict, hover or use a smaller adjustment. If they
+If height or region cues conflict, compare the available evidence before further
+movement; a smaller adjustment still needs a safe supported direction. If they
 disappear after a maneuver, compare pre-maneuver and current views with measured
 vertical and horizontal change. Try a bounded retrace, then re-observe; never
-continue a blind descent. Hover only to stabilize or compare. If no safe
+continue a blind descent. If no safe
 evidence-producing recovery remains, stop and cite the limitation. Correct
 overshoot gently and avoid large downward steps near a surface.

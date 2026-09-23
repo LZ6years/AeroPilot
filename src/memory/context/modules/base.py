@@ -5,7 +5,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Any
 
-from src.memory.context.schemas import ContextFragment, HistoryImageCandidate, MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import ContextFragment, HistoryImageCandidate, MemorySourceBundle, TaskContextInput
 
 
 class ContextModule(ABC):
@@ -31,7 +31,7 @@ class ContextModule(ABC):
         return tuple(item.observation_id for item in candidates)
 
     @abstractmethod
-    def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
         """Return one auditable context fragment."""
 
     @abstractmethod

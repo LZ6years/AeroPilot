@@ -8,6 +8,7 @@ Tool names are identifiers only. Runtime behavior is declared explicitly by
 from __future__ import annotations
 
 import copy
+import json
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -89,6 +90,43 @@ class ToolRuntimePolicy:
 
 
 @dataclass(frozen=True)
+class ToolParameter:
+    """One named argument; constraints use JSON Schema, including nested items.
+
+    Nested object properties and array items remain standard JSON Schema so
+    plugin schemas and their unknown extension keywords survive conversion.
+    ``required`` belongs to the containing object, not the property schema.
+    """
+
+    name: str
+    type: str | list[str] | None = None
+    description: str | None = None
+    required: bool = False
+    constraints: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.name:
+            raise ValueError("tool parameter name must not be empty")
+        if {"type", "description"} & self.constraints.keys():
+            raise ValueError("parameter type and description must use their dedicated fields")
+        object.__setattr__(self, "constraints", copy.deepcopy(self.constraints))
+        object.__setattr__(self, "type", copy.deepcopy(self.type))
+
+    def to_schema(self) -> dict[str, Any]:
+        schema = copy.deepcopy(self.constraints)
+        if self.type is not None:
+            schema["type"] = copy.deepcopy(self.type)
+        if self.description is not None:
+            schema["description"] = self.description
+        return schema
+
+    @classmethod
+    def from_schema(cls, name: str, schema: dict[str, Any], *, required: bool = False) -> "ToolParameter":
+        data = copy.deepcopy(schema)
+        return cls(name, data.pop("type", None), data.pop("description", None), required, data)
+
+
+@dataclass(frozen=True)
 class ToolSpec:
     """One canonical tool plus its provider-facing function declaration."""
 
@@ -96,16 +134,62 @@ class ToolSpec:
     wire_name: str
     kind: str
     description: str
-    input_schema: dict[str, Any]
+    parameters: tuple[ToolParameter, ...]
     runtime: ToolRuntimePolicy
     metadata: dict[str, Any] = field(default_factory=dict)
+    schema_options: dict[str, Any] = field(default_factory=lambda: {"additionalProperties": False})
+    input_examples: tuple[dict[str, Any], ...] = ()
+
+    def __post_init__(self) -> None:
+        if any(not isinstance(item, ToolParameter) for item in self.parameters):
+            raise TypeError("parameters must contain ToolParameter instances")
+        names = [item.name for item in self.parameters]
+        if len(names) != len(set(names)):
+            raise ValueError("duplicate tool parameter name")
+        if {"properties", "required"} & self.schema_options.keys():
+            raise ValueError("properties and required are generated from parameters")
+        object.__setattr__(self, "parameters", tuple(copy.deepcopy(self.parameters)))
+        object.__setattr__(self, "schema_options", copy.deepcopy(self.schema_options))
+        object.__setattr__(self, "input_examples", tuple(copy.deepcopy(self.input_examples)))
+
+    @property
+    def input_schema(self) -> dict[str, Any]:
+        """Generate an isolated schema shared by Provider export and validation."""
+        schema = {"type": "object", **copy.deepcopy(self.schema_options)}
+        schema["properties"] = {item.name: item.to_schema() for item in self.parameters}
+        required = [item.name for item in self.parameters if item.required]
+        if required:
+            schema["required"] = required
+        return schema
+
+    @classmethod
+    def from_input_schema(cls, name: str, wire_name: str, kind: str, description: str,
+                          input_schema: dict[str, Any], runtime: ToolRuntimePolicy,
+                          **kwargs: Any) -> "ToolSpec":
+        """Adapt plugin JSON at registration; never retain a second parameter schema."""
+        options = copy.deepcopy(input_schema)
+        properties = options.pop("properties", {})
+        required = options.pop("required", [])
+        if options.get("type", "object") != "object":
+            raise ValueError("tool input schema must describe an object")
+        if not set(required) <= properties.keys():
+            raise ValueError("required tool parameters must have property definitions")
+        # Preserve required ordering for plugin/public listing stability.
+        names = [*required, *(name for name in properties if name not in required)]
+        parameters = tuple(ToolParameter.from_schema(name, properties[name], required=name in required)
+                           for name in names)
+        return cls(name, wire_name, kind, description, parameters, runtime,
+                   schema_options=options, **kwargs)
 
     def to_provider_tool(self) -> dict[str, Any]:
+        description = self.description + "\nExecution: " + self._execution_description()
+        if self.input_examples:
+            description += "\nExample arguments: " + json.dumps(self.input_examples, ensure_ascii=False)
         return {
             "type": "function",
             "function": {
                 "name": self.wire_name,
-                "description": self.description + "\nExecution: " + self._execution_description(),
+                "description": description,
                 "parameters": _provider_schema(self.input_schema),
             },
         }
@@ -115,18 +199,17 @@ class ToolSpec:
 
         parallel_safe permits independent calls in one turn; it does not promise
         concurrent backend execution. Configuration remains the single source.
+        Cross-tool call and dependency rules are explained once by ToolUser.
         """
         batching = {
-            "single": ("At most one instance of this control tool; follow its required commit combination."
-                       if self.runtime.effect == "runtime_control"
+            "single": ("At most one instance of this control tool; follow its description for associated calls."
+                       if self.runtime.effect == "runtime_control" and self.runtime.result_timing != "immediate"
                        else "This must be the only call in its batch."),
             "ordered": "Execute in the submitted physical batch order.",
-            "parallel_safe": "Independent read-only calls may share a turn; execution may be sequential. Wait for all results before dependent decisions.",
+            "parallel_safe": "Independent read-only calls may share a turn; execution may be sequential.",
             "sidecar": "Submit with the associated decision as required by the control protocol.",
         }
         text = f"effect={self.runtime.effect}; result_timing={self.runtime.result_timing}. {batching[self.runtime.batching]}"
-        if self.runtime.effect == "read_only":
-            text += " Do not mix with commit or physical calls. Reuse identical current-observation results."
         if self.runtime.max_calls_per_observation is not None:
             text += f" At most {self.runtime.max_calls_per_observation} calls per observation, including same-turn calls."
         return text

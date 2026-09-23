@@ -3,7 +3,7 @@
 from src.memory.context.composer import ContextComposer
 from src.memory.flight_memory import FlightMemory
 from src.memory.context.registry import ContextModuleRegistry
-from src.memory.context.schemas import ContextFragment, PlannerContext, StageContextInput
+from src.memory.context.schemas import ContextFragment, TaskContextInput
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 
 __all__ = [
@@ -13,6 +13,5 @@ __all__ = [
     "FlightMemory",
     "MemoryEventWriter",
     "MemoryRecordReader",
-    "PlannerContext",
-    "StageContextInput",
+    "TaskContextInput",
 ]

@@ -1,4 +1,4 @@
-"""Load model provider configuration for task parsing."""
+"""Load provider settings and caller-owned unified tool-loop configuration."""
 
 from __future__ import annotations
 
@@ -13,7 +13,6 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class ModelConfig:
-    task_parser_mode: str = "model"
     provider: str = "openai_compatible"
     model_name: str = ""
     api_key: str = ""
@@ -23,12 +22,13 @@ class ModelConfig:
     provider_connection_retries: int = 2
     max_tool_rounds: int = 10
     max_consecutive_protocol_rejections: int = 6
-    task_parser_prompt_path: str = ""
-    task_parser_structure_prompt_path: str = ""
-    task_parser_criteria_prompt_path: str = ""
     action_planner_prompt_path: str = ""
+    # Completed decisions between reminders; zero disables request-only reminders.
+    task_progress_reminder_interval: int = 5
 
     def __post_init__(self) -> None:
+        if type(self.task_progress_reminder_interval) is not int or self.task_progress_reminder_interval < 0:
+            raise ValueError("task_progress_reminder_interval must be a non-negative integer")
         if self.timeout_sec <= 0:
             raise ValueError("timeout_sec must be positive")
         if self.provider_timeout_retries < 0:
@@ -42,8 +42,11 @@ class ModelConfig:
 
     @classmethod
     def from_env(cls, env: dict[str, str]) -> "ModelConfig":
+        if any(key.startswith("FLYAGENT_TASK_PARSER_") for key in env):
+            raise ValueError("Parser configuration was removed; use the unified tool loop")
+        if any(key.startswith("FLYAGENT_RUNTIME_CONTROL_") for key in env):
+            raise ValueError("Legacy runtime control configuration was removed; use built-in tools")
         return cls(
-            task_parser_mode=env.get("FLYAGENT_TASK_PARSER_MODE", "model").strip() or "model",
             provider=env.get("FLYAGENT_MODEL_PROVIDER", "openai_compatible").strip()
             or "openai_compatible",
             model_name=env.get("FLYAGENT_MODEL_NAME", "").strip(),
@@ -57,22 +60,17 @@ class ModelConfig:
                 env.get("FLYAGENT_MODEL_CONNECTION_RETRIES", "2")
             ),
             max_tool_rounds=int(env.get("FLYAGENT_AGENT_MAX_TOOL_ROUNDS", "10")),
+            task_progress_reminder_interval=int(env.get("FLYAGENT_AGENT_TASK_PROGRESS_REMINDER_INTERVAL", "5")),
             max_consecutive_protocol_rejections=int(
                 env.get("FLYAGENT_AGENT_MAX_CONSECUTIVE_PROTOCOL_REJECTIONS", "6")
             ),
-            task_parser_prompt_path=env.get("FLYAGENT_TASK_PARSER_PROMPT_PATH", "").strip(),
-            task_parser_structure_prompt_path=env.get(
-                "FLYAGENT_TASK_PARSER_STRUCTURE_PROMPT_PATH", ""
-            ).strip(),
-            task_parser_criteria_prompt_path=env.get(
-                "FLYAGENT_TASK_PARSER_CRITERIA_PROMPT_PATH", ""
-            ).strip(),
+
+
             action_planner_prompt_path=env.get("FLYAGENT_ACTION_PLANNER_PROMPT_PATH", "").strip(),
         )
 
     def redacted_summary(self) -> dict[str, str | float | int | bool]:
         return {
-            "task_parser_mode": self.task_parser_mode,
             "provider": self.provider,
             "model_name": self.model_name,
             "base_url": self.base_url,
@@ -81,10 +79,8 @@ class ModelConfig:
             "provider_timeout_retries": self.provider_timeout_retries,
             "provider_connection_retries": self.provider_connection_retries,
             "max_tool_rounds": self.max_tool_rounds,
+            "task_progress_reminder_interval": self.task_progress_reminder_interval,
             "max_consecutive_protocol_rejections": self.max_consecutive_protocol_rejections,
-            "task_parser_prompt_path": self.task_parser_prompt_path,
-            "task_parser_structure_prompt_path": self.task_parser_structure_prompt_path,
-            "task_parser_criteria_prompt_path": self.task_parser_criteria_prompt_path,
             "action_planner_prompt_path": self.action_planner_prompt_path,
         }
 

@@ -33,11 +33,12 @@ def test_runtime_control_contract_keeps_model_context_compact():
             assert term not in text, f"{path} should not expose verbose runtime control field {term!r}"
 
 
-def test_runtime_control_does_not_enter_tool_dispatcher_or_skill_selection():
+def test_runtime_control_does_not_enter_tool_dispatcher_or_knowledge_reader():
     dispatcher_text = (Path("src") / "tools" / "dispatcher.py").read_text(encoding="utf-8")
-    skill_selection_text = (Path("src") / "plugins" / "skills" / "selection.py").read_text(encoding="utf-8")
+    knowledge_text = Path("src/plugins/skills/knowledge_service.py").read_text(encoding="utf-8")
 
     assert "control_actions" not in dispatcher_text
     assert "RuntimeControl" not in dispatcher_text
-    assert "control_actions" not in skill_selection_text
-    assert "RuntimeControl" not in skill_selection_text
+    assert "control_actions" not in knowledge_text
+    assert "RuntimeControl" not in knowledge_text
+    assert not Path("src/plugins/skills/selection.py").exists()

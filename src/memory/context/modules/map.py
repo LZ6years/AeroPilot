@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, TaskContextInput
 
 
 class DefaultMapContextModule(ContextModule):
@@ -13,7 +13,7 @@ class DefaultMapContextModule(ContextModule):
     priority = 60
     max_items = 5
 
-    def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
         memory = sources.flight_memory
         recalled = []
         if sources.map_memory is not None:

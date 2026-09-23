@@ -37,10 +37,7 @@ def main() -> None:
         transcript.start_instruction("确认画面中的人，然后小幅转向并前进", "inst_demo")
         transcript.append_state(
             {
-                "current_phase": {
-                    "name": "approach_person",
-                    "done_when": ["person is confirmed and approached"],
-                },
+                "task_plan": None,
                 "fragments": [],
                 "allowed_action_constraints": {"debug_only": True},
             },

@@ -3,7 +3,7 @@
 The probe uses the production ``ModelActionPlanner``, canonical ``ToolRegistry``,
 and ``AgentTranscript`` provider projection. It normally performs three paid
 model calls: detection-only grounding, distance-enabled grounding, then one
-phase commit plus a UAV turn after synthetic ToolResults. A genuinely
+a direct UAV turn after synthetic ToolResults. A genuinely
 invalid provider response may add a bounded repair round. No UAV command is
 executed.
 
@@ -52,7 +52,6 @@ PROBE_PROMPT = Path(__file__).with_name(
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "runs" / "manual_native_tool_loop_provider_probe"
 ALLOWED_TOOLS = {
     "skill.visual_grounding.locate",
-    "runtime.commit_phase_turn",
     "uav.turn_relative",
 }
 
@@ -197,9 +196,9 @@ def main() -> None:
         planner,
         transcript,
         registry,
-        stage="commit_and_physical",
+        stage="direct_physical",
     )
-    _assert_commit_turn(third_turn, registry)
+    _assert_physical_turn(third_turn, registry)
     transcript.append_assistant(third_turn)
     for call in third_turn.tool_calls:
         transcript.append_tool_result(
@@ -210,7 +209,7 @@ def main() -> None:
                 message=(
                     "provider protocol accepted; physical execution intentionally skipped"
                     if registry.get(call.tool_name).runtime.effect == "physical"
-                    else "provider protocol commit accepted"
+                    else "provider protocol tool accepted"
                 ),
                 data={"probe_only": True, "executed": False},
                 requested_args=dict(call.args),
@@ -260,7 +259,7 @@ def _parser() -> argparse.ArgumentParser:
         )
     )
     parser.add_argument("--env-path", default=".env")
-    parser.add_argument("--parallel-queries", action="store_true", help="Probe two independent same-turn queries and replay both results before commit (two paid model requests).")
+    parser.add_argument("--parallel-queries", action="store_true", help="Probe two independent same-turn queries and replay both results before motion (two paid model requests).")
     parser.add_argument(
         "--output-dir",
         default=None,
@@ -289,8 +288,8 @@ def _parallel_query_probe(planner, transcript, registry, output_dir, evidence_pa
             requested_args=dict(call.args), executed_args=dict(call.args),
             model_inputs=[{"type": "image", "role": "visual_grounding_candidates", "observation_id": "obs_probe_0001", "path": str(evidence_path), "artifact_ref": str(evidence_path), "mime_type": "image/png", "usage": "Synthetic probe evidence, not detector accuracy validation."}],
         ))
-    second, second_request, second_attempts = _plan_with_protocol_repair(planner, transcript, registry, stage="commit_after_parallel_queries")
-    _assert_commit_turn(second, registry)
+    second, second_request, second_attempts = _plan_with_protocol_repair(planner, transcript, registry, stage="physical_after_parallel_queries")
+    _assert_physical_turn(second, registry)
     replay = [message.get("tool_call_id") for message in second_request["messages"] if message.get("role") == "tool"]
     if replay != [call.tool_call_id for call in calls]:
         raise RuntimeError("Provider request did not replay both results exactly once in order.")
@@ -353,18 +352,7 @@ def _probe_context(image_path: Path, observation_id: str) -> dict[str, Any]:
             "Locate the visible person, measure it only when needed, then "
             "request one small right turn."
         ),
-        "current_phase": {
-            "name": "provider_protocol_probe",
-            "goal": "confirm the person and request a small right turn",
-            "done_when": [
-                "the UAV has turned right after the person's range was measured"
-            ],
-            "continue_when": ["the requested right turn has not executed"],
-        },
-        "phase_strategy": None,
-        "phase_progress_evidence": {
-            "summary": "No physical action has executed in this protocol probe."
-        },
+        "task_plan": None,
         "fragments": [
             {
                 "name": "image",
@@ -481,20 +469,12 @@ def _assert_grounding_turn(turn, *, include_distance: bool) -> None:
         )
 
 
-def _assert_commit_turn(turn, registry) -> None:
-    names = [call.tool_name for call in turn.tool_calls]
-    if not names or names[0] != "runtime.commit_phase_turn":
-        raise RuntimeError(
-            "Second provider turn must begin with runtime.commit_phase_turn; "
-            f"received={names}"
-        )
-    if len(names) < 2 or any(
-        registry.get(name).runtime.effect != "physical" for name in names[1:]
-    ):
-        raise RuntimeError(
-            "Second provider turn must include a physical call after commit; "
-            f"received={names}"
-        )
+def _assert_physical_turn(turn, registry) -> None:
+    from src.agent.planning.tool_contract_validator import validate_native_turn
+    effect = validate_native_turn(turn, registry, allowed_names=ALLOWED_TOOLS,
+                                  latest_observation={"observation_id": "obs_probe_0001"})
+    if effect != "physical" or len(turn.tool_calls) != 1:
+        raise RuntimeError("Final probe turn must request one physical call directly")
 
 
 def _assert_provider_requests(

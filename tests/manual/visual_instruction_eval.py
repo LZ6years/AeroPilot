@@ -38,10 +38,10 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.agent.planning.model_inputs import build_model_user_content
-from src.agent.semantic.task_parser import _loads_json_object
+from src.agent.model_support import loads_json_object as _loads_json_object
 from src.memory.context.composer import ContextComposer
 from src.memory.context.registry import ContextModuleRegistry
-from src.memory.context.schemas import MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MapMemoryStore, MemoryEventWriter, MemoryRecordReader
 from src.runtime.configs.model_config import ModelConfig, load_model_config
@@ -176,10 +176,8 @@ def build_case_context(
     )
     memory.append_observation_ref(now_write["observation_ref"])
     memory.append_frame_refs(now_write["frame_refs"])
-    stage_context = StageContextInput(
+    stage_context = TaskContextInput(
         active_instruction=str(case["instruction"]),
-        current_phase=dict(case.get("phase", {})),
-        semantic_goal={"source": "visual_instruction_eval", "case_id": case["id"]},
     )
     registry = ContextModuleRegistry.from_config(_repo_path(context_config))
     return ContextComposer(registry).compose(MemorySourceBundle(memory, MapMemoryStore()), stage_context)

@@ -20,10 +20,10 @@ class RecordingEnvClient:
 
 
 def test_provider_projection_exposes_execution_policy_not_private_metadata():
-    spec = ToolSpec("custom.inspect", "custom_inspect", "skill_capability", "Inspect.",
+    spec = ToolSpec.from_input_schema("custom.inspect", "custom_inspect", "skill_capability", "Inspect.",
                     {"type": "object"},
                     ToolRuntimePolicy("read_only", "immediate", "parallel_safe", True, 2),
-                    {"settings": {"model": "PRIVATE_MODEL"}})
+                    metadata={"settings": {"model": "PRIVATE_MODEL"}})
     projected = spec.to_provider_tool()
     description = projected["function"]["description"]
     assert "Independent read-only calls" in description
@@ -38,10 +38,9 @@ def test_grounding_config_permits_independent_calls_without_changing_quota():
     spec = default_registry().get("skill.visual_grounding.locate")
     assert spec.runtime.batching == "parallel_safe"
     assert spec.runtime.max_calls_per_observation == 2
-    assert "general scene understanding" in spec.description
+    assert "candidate locations or target-distance measurements" in spec.description
     blocked = default_registry().get("runtime.report_blocked").to_provider_tool()
-    assert "required commit combination" in blocked["function"]["description"]
-    assert "only call in its batch" not in blocked["function"]["description"]
+    assert "only call in its batch" in blocked["function"]["description"]
 
 
 @pytest.mark.parametrize("args,path", [({"nested": {"yaw": 91}}, "args.nested.yaw"), ({"nested": {"yaw": "bad"}}, "args.nested.yaw")])
@@ -58,7 +57,7 @@ def test_validation_error_carries_deepest_path_without_changing_message(args, pa
 def test_dispatch_uses_explicit_backend_binding_not_name_prefix():
     registry = ToolRegistry()
     registry.register(
-        ToolSpec(
+        ToolSpec.from_input_schema(
             name="camera.steady",
             wire_name="camera_steady",
             kind="uav_primitive",
@@ -86,10 +85,10 @@ def test_registry_rejects_duplicate_provider_wire_name():
     registry = ToolRegistry()
     policy = ToolRuntimePolicy("read_only", "immediate", "single", True)
     schema = {"type": "object", "properties": {}}
-    registry.register(ToolSpec("vision.one", "vision_call", "skill_capability", "one", schema, policy))
+    registry.register(ToolSpec.from_input_schema("vision.one", "vision_call", "skill_capability", "one", schema, policy))
 
     with pytest.raises(ValueError, match="Duplicate tool wire_name"):
-        registry.register(ToolSpec("vision.two", "vision_call", "skill_capability", "two", schema, policy))
+        registry.register(ToolSpec.from_input_schema("vision.two", "vision_call", "skill_capability", "two", schema, policy))
 
 
 @pytest.mark.parametrize(

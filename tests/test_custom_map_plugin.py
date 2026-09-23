@@ -22,7 +22,7 @@ from plugins.research.custom_map.context_modules.custom_map.schemas import PoseP
 from plugins.research.custom_map.context_modules.custom_map.trajectory import build_trajectory
 from src.memory.context.composer import ContextComposer
 from src.memory.context.registry import ContextModuleRegistry
-from src.memory.context.schemas import MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.plugins.core.discovery import PluginDiscovery
@@ -49,11 +49,9 @@ def _memory(tmp_path: Path) -> FlightMemory:
     )
 
 
-def _stage_context() -> StageContextInput:
-    return StageContextInput(
+def _stage_context() -> TaskContextInput:
+    return TaskContextInput(
         active_instruction="Fly past the building.",
-        current_phase={"name": "traverse_route", "goal": "move along the road"},
-        semantic_goal={"target": "building"},
     )
 
 

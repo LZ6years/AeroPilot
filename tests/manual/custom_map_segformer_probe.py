@@ -26,7 +26,7 @@ from plugins.research.custom_map.perception import (
     run_closed_set_segmentation,
 )
 from plugins.research.custom_map.perception.segmentation_writer import append_segmentation_result
-from src.memory.context.schemas import MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryRecordReader
 
@@ -135,7 +135,7 @@ def _render_custom_map(run_dir: Path) -> dict[str, Any]:
         active_instruction="manual SegFormer custom_map probe",
         memory_reader=MemoryRecordReader(run_dir),
     )
-    fragment = PluginContextModule().build(MemorySourceBundle(memory), StageContextInput(active_instruction=memory.active_instruction)).to_dict()
+    fragment = PluginContextModule().build(MemorySourceBundle(memory), TaskContextInput(active_instruction=memory.active_instruction)).to_dict()
     sanitized = dict(fragment)
     sanitized["model_inputs"] = [
         {key: value for key, value in item.items() if key != "data"}

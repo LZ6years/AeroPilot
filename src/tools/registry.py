@@ -1,20 +1,17 @@
-"""Register canonical tools and their explicit Runtime policies."""
+"""Register canonical tools, parameters and explicit Runtime policies."""
 
 from __future__ import annotations
 
 from src.plugins import PluginRegistry
 from src.runtime.configs.safety_config import UavSafetyConfig
-from src.tools.schemas import ToolRuntimePolicy, ToolSpec
+from src.tools.schemas import ToolParameter, ToolRuntimePolicy, ToolSpec
+from src.tools.validation import validate_tool_args
 from src.uav.commands import MOVE_BODY_ARGUMENT_SEMANTICS
 from src.uav.frames import SIGNED_YAW_SEMANTICS
 
 
-_EMPTY_OBJECT_SCHEMA = {"type": "object", "properties": {}, "additionalProperties": False}
-_ANY_OBJECT_SCHEMA = {"type": "object"}
-
-
 class ToolRegistry:
-    """Bidirectional registry for canonical and provider-safe tool names."""
+    """Bidirectional registry; exposure and example validation have one owner."""
 
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
@@ -23,9 +20,10 @@ class ToolRegistry:
     def register(self, spec: ToolSpec) -> None:
         existing = self._wire_names.get(spec.wire_name)
         if existing is not None and existing != spec.name:
-            raise ValueError(
-                f"Duplicate tool wire_name {spec.wire_name!r}: {existing!r} and {spec.name!r}"
-            )
+            raise ValueError(f"Duplicate tool wire_name {spec.wire_name!r}: {existing!r} and {spec.name!r}")
+        # Validate before mutating either lookup, including when replacing a tool.
+        for example in spec.input_examples:
+            validate_tool_args(example, spec.input_schema)
         old = self._tools.get(spec.name)
         if old is not None and old.wire_name != spec.wire_name:
             self._wire_names.pop(old.wire_name, None)
@@ -48,299 +46,78 @@ class ToolRegistry:
         return sorted(self._tools)
 
     def model_specs(self, allowed_names: set[str] | None = None) -> list[ToolSpec]:
-        specs = list(self._tools.values())
-        if allowed_names is None:
-            specs = [spec for spec in specs if spec.runtime.model_exposed]
-        else:
-            specs = [spec for spec in specs if spec.name in allowed_names]
-        return sorted(specs, key=lambda spec: spec.name)
+        return sorted((spec for spec in self._tools.values()
+                       if spec.runtime.model_exposed
+                       and (allowed_names is None or spec.name in allowed_names)),
+                      key=lambda spec: spec.name)
 
 
-def default_registry(
-    plugin_registry: PluginRegistry | None = None,
-    safety_config: UavSafetyConfig | None = None,
-) -> ToolRegistry:
-    """Build built-in, plugin, and core orchestration tool contracts."""
-
+def default_registry(plugin_registry: PluginRegistry | None = None,
+                     safety_config: UavSafetyConfig | None = None) -> ToolRegistry:
+    """Build tools without giving ContextBuilder tool-selection responsibility."""
     safety = safety_config or UavSafetyConfig()
     registry = ToolRegistry()
-
     lifecycle = ToolRuntimePolicy("lifecycle", "immediate", "single", False)
-    read_only_internal = ToolRuntimePolicy("read_only", "immediate", "single", False)
+    read_internal = ToolRuntimePolicy("read_only", "immediate", "single", False)
     physical = ToolRuntimePolicy("physical", "after_batch_observation", "ordered", True)
+    internal_hold = ToolRuntimePolicy("physical", "after_batch_observation", "ordered", False)
 
-    for name, backend_action in (
-        ("uav.connect", "connect"),
-        ("uav.takeoff", "takeoff"),
-        ("uav.land", "land"),
+    for action, description, policy in (
+        ("connect", "Connect the vehicle control interface during Runtime preflight.", lifecycle),
+        ("takeoff", "Take off when the scene requires flight initialization.", lifecycle),
+        ("land", "Land the vehicle during caller-selected shutdown.", lifecycle),
+        ("get_pose", "Read vehicle pose for Runtime observation and motion measurement.", read_internal),
+        ("get_frames", "Capture camera frames through the configured simulator backend.", read_internal),
+        ("hover", "Hold the vehicle for Runtime stabilization, safety intervention or cleanup.", internal_hold),
+        ("ascend", "Ascend using the configured internal vertical-motion primitive.", lifecycle),
+        ("descend", "Descend using the configured internal vertical-motion primitive.", lifecycle),
     ):
-        registry.register(
-            _spec(name, "uav_primitive", lifecycle, _EMPTY_OBJECT_SCHEMA, backend_action)
-        )
-    registry.register(
-        _spec("uav.set_pose", "uav_primitive", lifecycle, _ANY_OBJECT_SCHEMA, "set_pose")
-    )
-    for name, backend_action in (
-        ("uav.get_pose", "get_pose"),
-        ("uav.get_frames", "get_frames"),
-    ):
-        registry.register(
-            _spec(name, "uav_primitive", read_only_internal, _EMPTY_OBJECT_SCHEMA, backend_action)
-        )
-
-    registry.register(
-        _spec("uav.hover", "uav_primitive", physical, _EMPTY_OBJECT_SCHEMA, "hover")
-    )
-    registry.register(
-        _spec(
-            "uav.turn_relative",
-            "uav_primitive",
-            physical,
-            {
-                "type": "object",
-                "required": ["yaw_deg"],
-                "additionalProperties": False,
-                "properties": {
-                    "yaw_deg": {
-                        "type": "number",
-                        "minimum": -abs(safety.max_yaw_step_deg),
-                        "maximum": abs(safety.max_yaw_step_deg),
-                        "description": SIGNED_YAW_SEMANTICS,
-                    }
-                },
-            },
-            "turn_relative",
-        )
-    )
-    registry.register(
-        _spec(
-            "uav.move_body",
-            "uav_primitive",
-            physical,
-            {
-                "type": "object",
-                "required": ["vx", "vy", "vz", "duration"],
-                "additionalProperties": False,
-                "properties": {
-                    "vx": {"type": "number", "description": MOVE_BODY_ARGUMENT_SEMANTICS["vx"]},
-                    "vy": {"type": "number", "description": MOVE_BODY_ARGUMENT_SEMANTICS["vy"]},
-                    "vz": {"type": "number", "description": MOVE_BODY_ARGUMENT_SEMANTICS["vz"]},
-                    "duration": {
-                        "type": "number",
-                        "exclusiveMinimum": 0,
-                        "maximum": safety.max_move_duration_sec,
-                    },
-                },
-            },
-            "move_body",
-        )
-    )
-
-    # These convenience primitives remain Runtime-only until the canonical
-    # planner contract explicitly supports them.
-    for name, backend_action in (("uav.ascend", "ascend"), ("uav.descend", "descend")):
-        registry.register(
-            _spec(name, "uav_primitive", lifecycle, _EMPTY_OBJECT_SCHEMA, backend_action)
-        )
-    registry.register(
-        ToolSpec(
-            name="env.observe",
-            wire_name="env_observe",
-            kind="observation",
-            description="Get a new environment observation. Runtime owns normal observation timing.",
-            input_schema={
-                "type": "object",
-                "required": ["modalities"],
-                "properties": {
-                    "modalities": {"type": "array", "items": {"type": "string"}}
-                },
-                "additionalProperties": False,
-            },
-            runtime=read_only_internal,
-        )
-    )
-
-    registry.register(
-        ToolSpec(
-            name="runtime.commit_phase_turn",
-            wire_name="runtime_commit_phase_turn",
-            kind="runtime_control",
-            description=(
-                "Submit exactly one assessment for the current phase, first in a decision turn. "
-                "If all done_when are supported, emit this call only. Otherwise emit either "
-                "one to three ordered physical calls with strategy/window, or report_blocked "
-                "without physical calls. This control tool does not move the UAV."
-            ),
-            input_schema=_commit_phase_schema(),
-            runtime=ToolRuntimePolicy(
-                "runtime_control", "after_batch_observation", "sidecar", True
-            ),
-        )
-    )
-    registry.register(
-        ToolSpec(
-            name="runtime.ask_user",
-            wire_name="runtime_ask_user",
-            kind="runtime_control",
-            description="Request user clarification before safe progress can continue.",
-            input_schema={
-                "type": "object",
-                "required": ["question"],
-                "properties": {"question": {"type": "string"}, "context": {"type": "string"}},
-                "additionalProperties": False,
-            },
-            runtime=ToolRuntimePolicy("runtime_control", "user_reply", "single", False),
-            metadata={"runtime_action": "ask_user"},
-        )
-    )
-    registry.register(
-        ToolSpec(
-            name="runtime.report_blocked",
-            wire_name="runtime_report_blocked",
-            kind="runtime_control",
-            description=(
-                "Stop the current instruction as incomplete when available evidence cannot "
-                "support another safe, meaningful action. Cite only prior transcript evidence."
-            ),
-            input_schema={
-                "type": "object",
-                "required": ["blocking_condition", "reason", "evidence_refs"],
-                "properties": {
-                    "blocking_condition": {
-                        "type": "string",
-                        "enum": [
-                            "lost_required_reference",
-                            "insufficient_evidence",
-                            "unsafe_to_continue",
-                            "missing_capability",
-                            "irreducible_ambiguity",
-                            "no_progress",
-                        ],
-                    },
-                    "reason": {"type": "string", "minLength": 1},
-                    "evidence_refs": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {"type": "string"},
-                    },
-                    "suggested_user_action": {"type": "string"},
-                },
-                "additionalProperties": False,
-            },
-            runtime=ToolRuntimePolicy(
-                "runtime_control", "after_batch_observation", "single", True
-            ),
-            metadata={"runtime_action": "report_blocked", "core_runtime_control": True},
-        )
-    )
-    registry.register(
-        ToolSpec(
-            name="runtime.semantic_plan_update",
-            wire_name="runtime_semantic_plan_update",
-            kind="runtime_control",
-            description="Request an asynchronous review of the active semantic phase contract.",
-            input_schema={
-                "type": "object",
-                "required": ["reason"],
-                "properties": {
-                    "reason": {"type": "string"},
-                    "focus": {"type": "array", "items": {"type": "string"}},
-                },
-                "additionalProperties": False,
-            },
-            runtime=ToolRuntimePolicy("runtime_control", "async", "sidecar", False),
-            metadata={"runtime_action": "semantic_plan_update"},
-        )
-    )
+        registry.register(_primitive(action, description, policy))
+    registry.register(_primitive("set_pose", "Set an episode's initial pose before task observations.",
+                                 lifecycle, schema_options={"additionalProperties": True}))
+    registry.register(_primitive(
+        "turn_relative", "Rotate the vehicle by a signed relative yaw angle. Applicable to heading changes "
+        "or inspecting a different bearing. Returns execution feedback. Rotation does not translate the "
+        "vehicle or establish physical passage or target-relative distance.",
+        physical, (ToolParameter("yaw_deg", "number", SIGNED_YAW_SEMANTICS, True,
+                                 {"minimum": -abs(safety.max_yaw_step_deg), "maximum": abs(safety.max_yaw_step_deg)}),),
+    ))
+    registry.register(_primitive(
+        "move_body", "Translate the vehicle using body-frame velocity components for a specified duration. "
+        "Applicable to changing position, including horizontal or vertical movement. Returns execution "
+        "feedback. Safety intervention may change the applied motion; vehicle displacement alone does not "
+        "establish distance to a target.",
+        physical, tuple(ToolParameter(name, "number", MOVE_BODY_ARGUMENT_SEMANTICS[name], True)
+                        for name in ("vx", "vy", "vz")) + (
+            ToolParameter("duration", "number", MOVE_BODY_ARGUMENT_SEMANTICS["duration"], True,
+                          {"exclusiveMinimum": 0, "maximum": safety.max_move_duration_sec}),),
+    ))
+    registry.register(ToolSpec(
+        name="env.observe", wire_name="env_observe", kind="observation",
+        description="Capture a new environment observation at Runtime-owned sampling points.",
+        parameters=(ToolParameter("modalities", "array", "Requested canonical observation modalities.",
+                                  True, {"items": {"type": "string"}}),), runtime=read_internal,
+    ))
+    from src.tools.builtins import builtin_tools
+    for spec in builtin_tools():
+        registry.register(spec)
 
     plugins = plugin_registry or PluginRegistry.from_config()
     for capability in plugins.skill_capability_catalog.capabilities:
-        completion_evidence = capability.input_schema.get(
-            "x-flyagent-completion-evidence"
-        )
         metadata = {"mock": capability.mock}
+        completion_evidence = capability.input_schema.get("x-flyagent-completion-evidence")
         if isinstance(completion_evidence, dict):
             metadata["completion_evidence"] = dict(completion_evidence)
-        registry.register(
-            ToolSpec(
-                name=capability.call_name,
-                wire_name=capability.wire_name,
-                kind="skill_capability",
-                description=capability.description,
-                input_schema=dict(capability.input_schema),
-                runtime=capability.runtime,
-                metadata=metadata,
-            )
-        )
+        registry.register(ToolSpec.from_input_schema(
+            name=capability.call_name, wire_name=capability.wire_name, kind="skill_capability",
+            description=capability.description, input_schema=capability.input_schema,
+            runtime=capability.runtime, metadata=metadata,
+        ))
     return registry
 
 
-def _spec(
-    name: str,
-    kind: str,
-    runtime: ToolRuntimePolicy,
-    input_schema: dict,
-    backend_action: str,
-) -> ToolSpec:
-    return ToolSpec(
-        name=name,
-        wire_name=name.replace(".", "_"),
-        kind=kind,
-        description=f"FlyAgent tool {name}",
-        input_schema=dict(input_schema),
-        runtime=runtime,
-        metadata={"backend_action": backend_action},
-    )
-
-
-def _commit_phase_schema() -> dict:
-    assessment = {
-        "type": "object",
-        "required": ["done_when"],
-        "properties": {
-            "done_when": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "required": ["index", "status", "evidence"],
-                    "properties": {
-                        "index": {"type": "integer", "minimum": 0},
-                        "status": {"type": "string", "enum": ["supported", "unknown", "contradicted"]},
-                        "evidence": {"type": "string"},
-                    },
-                    "additionalProperties": False,
-                },
-            }
-        },
-        "additionalProperties": False,
-    }
-    return {
-        "type": "object",
-        "required": ["phase", "completion_assessment"],
-        "properties": {
-            "phase": {"type": "string", "description": "Exact current phase name, not a strategy stage."},
-            "completion_assessment": assessment,
-            "phase_strategy": {
-                "type": "object",
-                "description": "Required when continuing with physical actions. Revisable plan, not evidence of completed motion; active_stage is a zero-based index into stages.",
-                "required": ["stages", "active_stage", "reason"],
-                "properties": {
-                    "stages": {"type": "array", "minItems": 1, "maxItems": 4, "items": {"type": "string"}},
-                    "active_stage": {"type": "integer", "minimum": 0},
-                    "reason": {"type": "string"},
-                },
-                "additionalProperties": False,
-            },
-            "action_window": {
-                "type": "object",
-                "description": "Intent and expected effect of the physical calls in this turn; does not execute actions itself.",
-                "required": ["intent", "expected_effect"],
-                "properties": {
-                    "intent": {"type": "string"},
-                    "expected_effect": {"type": "string"},
-                },
-                "additionalProperties": False,
-            },
-        },
-        "additionalProperties": False,
-    }
+def _primitive(action: str, description: str, policy: ToolRuntimePolicy,
+               parameters: tuple[ToolParameter, ...] = (), **kwargs) -> ToolSpec:
+    return ToolSpec(name=f"uav.{action}", wire_name=f"uav_{action}", kind="uav_primitive",
+                    description=description, parameters=parameters, runtime=policy,
+                    metadata={"backend_action": action}, **kwargs)

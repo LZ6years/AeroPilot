@@ -6,7 +6,7 @@ import math
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, TaskContextInput
 from src.uav import clean_pose_for_model, pose_delta
 
 
@@ -15,7 +15,7 @@ class DefaultPoseContextModule(ContextModule):
     priority = 95
     max_items = 3
 
-    def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
         memory = sources.flight_memory
         reader = memory.memory_reader
         pose_records = reader.read_refs(memory.recent_pose_refs[-self.max_items :]) if reader else []

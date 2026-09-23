@@ -50,5 +50,5 @@ reacquisition, continued visibility, a final image side or an exact unseen bound
 
 If a required route cue disappears unexpectedly, compare pre-maneuver and
 current views with measured motion. Try a bounded retrace and re-observe; do
-not continue blind motion. Hover only to compare. If no safe evidence-producing
+not continue blind motion. If no safe evidence-producing
 recovery remains, stop and cite why. Do not replace translation evidence with repeated yaw.

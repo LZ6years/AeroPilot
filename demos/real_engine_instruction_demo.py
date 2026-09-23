@@ -37,7 +37,6 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
-from src.agent.semantic.task_parser import TaskParser
 from src.env_client import SimulatorEnvClient, load_observation_profile
 from src.runtime.configs import TaskExecutionOptions
 from src.runtime.configs.action_config import load_uav_action_config
@@ -82,7 +81,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scene-id", default=None)
     parser.add_argument("--agent-id", default="uav_1")
     parser.add_argument("--run-root", default="runs")
-    parser.add_argument("--parser-mode", choices=["model", "rule_based"], default="model")
     parser.add_argument("--shutdown-policy", choices=["hover", "land", "none"], default="hover")
     parser.add_argument(
         "--execution",
@@ -155,7 +153,7 @@ def main() -> None:
     )
 
     # This is the full production pipeline used by the demo:
-    # TaskParser(model) -> context builder -> ModelActionPlanner(model) ->
+    # Raw instruction -> context builder -> ModelActionPlanner(model) ->
     # coupled phase decision -> ToolContractValidator -> SafetySupervisor ->
     # ToolDispatcher/UAV -> automatic observation when the phase continues.
     runtime = make_runtime(
@@ -174,7 +172,6 @@ def main() -> None:
 
     print("Real engine basic instruction demo")
     print(f"map_id={args.map_id}")
-    print(f"parser_mode={args.parser_mode}, planner=ModelActionPlanner")
     print(f"shutdown_policy={args.shutdown_policy}")
     print(f"execution={args.execution}, headed={not args.headless}")
     print(
@@ -328,7 +325,6 @@ def make_runtime(args: argparse.Namespace, client, recorder, model_config, actio
     return TaskRuntime(
         client,
         recorder,
-        TaskParser(mode=args.parser_mode, model_config=model_config),
         planner=ModelActionPlanner(model_config),
         safety=SafetySupervisor(safety_config),
         shutdown_policy=args.shutdown_policy,
@@ -359,7 +355,6 @@ def write_common_config(
         "config/model_config.json",
         {
             "model_config": model_config.redacted_summary(),
-            "parser_mode": args.parser_mode,
             "planner": "ModelActionPlanner",
             "shutdown_policy": args.shutdown_policy,
             "continuous_scene": not args.separate_scenes,

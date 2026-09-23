@@ -17,7 +17,7 @@ from plugins.research.stmr_map.perception import StmrPerceptionSession
 from plugins.research.stmr_map.perception.grounding_dino_backend import DetectionResult
 from plugins.research.stmr_map.perception.sam_backend import SamMaskResult
 from src.agent.planning.model_inputs import build_model_user_content
-from src.memory.context.schemas import MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MapMemoryStore, MemoryRecordReader
 
@@ -474,10 +474,9 @@ def _memory(run_dir: Path) -> FlightMemory:
     )
 
 
-def _stage_context() -> StageContextInput:
-    return StageContextInput(
+def _stage_context() -> TaskContextInput:
+    return TaskContextInput(
         active_instruction="follow the building",
-        semantic_goal={"target": "building"},
     )
 
 

@@ -132,7 +132,7 @@ class InteractiveTaskSession:
             "completed": state_data.get("completed"),
             "connected": state_data.get("connected"),
             "airborne": state_data.get("airborne"),
-            "current_phase": state.current_phase_name if state is not None and not state.completed else None,
+            "task_plan": state.task_plan.to_dict() if state is not None and state.task_plan else None,
             "latest_pose": pose_from_observation(latest_observation),
             "last_summary": compact_turn_summary(self.last_summary) if self.last_summary else None,
         }
@@ -169,8 +169,8 @@ def build_turn_summary(
     agent_messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     latest_observation = state.get("latest_observation", {})
-    progress = state.get("current_phase_progress", {}) if isinstance(state.get("current_phase_progress", {}), dict) else {}
-    initial_pose = {}
+    progress = state.get("motion_summary", {}) if isinstance(state.get("motion_summary", {}), dict) else {}
+    initial_pose = state.get("instruction_origin_pose", {})
     final_pose = pose_from_observation(latest_observation)
     tool_facts = progress.get("tool_facts", {})
     events = load_events(run_dir / "events.jsonl")
@@ -186,7 +186,7 @@ def build_turn_summary(
         "initial_pose": initial_pose,
         "final_pose": final_pose,
         "pose_delta": pose_delta(initial_pose, final_pose),
-        "phase_execution_summary": progress,
+        "motion_summary": progress,
         "observation_summary": observation_summary([latest_observation] if latest_observation else []),
         "artifact_inventory": artifact_inventory_from_observations([latest_observation] if latest_observation else []),
         "agent_messages": agent_messages_for_summary(messages),
@@ -218,7 +218,7 @@ def build_error_summary(
         "initial_pose": {},
         "final_pose": {},
         "pose_delta": pose_delta({}, {}),
-        "phase_execution_summary": {},
+        "motion_summary": {},
         "observation_summary": {"has_pose": False, "has_rgb": False, "has_depth": False, "sources": []},
         "artifact_inventory": {"rgb": [], "depth": [], "other": [], "counts": {"rgb": 0, "depth": 0, "other": 0}},
         "agent_messages": agent_messages_for_summary(messages),
@@ -238,7 +238,7 @@ def compact_turn_summary(summary: dict[str, Any] | None) -> dict[str, Any]:
         "airborne": summary.get("airborne"),
         "tools": summary.get("tools", []),
         "pose_delta": summary.get("pose_delta", {}),
-        "phase_execution_summary": summary.get("phase_execution_summary", {}),
+        "motion_summary": summary.get("motion_summary", {}),
         "observation_summary": summary.get("observation_summary", {}),
         "artifact_counts": summary.get("artifact_inventory", {}).get("counts", {}),
         "agent_messages": summary.get("agent_messages", []),

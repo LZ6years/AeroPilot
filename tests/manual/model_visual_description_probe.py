@@ -40,7 +40,7 @@ from plugins.research.multimodal_image.context_modules import (
     caption_model_config,
     normalize_visual_description as normalize_module_visual_description,
 )
-from src.memory.context.schemas import MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.runtime.configs.model_config import ModelConfig
@@ -176,14 +176,8 @@ def build_description_context(
     )
     memory.append_observation_ref(observation_write["observation_ref"])
     memory.append_frame_refs(observation_write["frame_refs"])
-    stage_context = StageContextInput(
+    stage_context = TaskContextInput(
         active_instruction=instruction,
-        current_phase={
-            "name": phase_name,
-            "goal": phase_meaning,
-            "done_when": ["phase-relevant visual facts are described"],
-            "continue_when": ["phase-relevant visual facts are unclear"],
-        },
     )
     fragment = MultimodalImageContextModule(
         model_config=model_config,
@@ -195,13 +189,7 @@ def build_description_context(
     _assert_visual_caption_input(fragment)
     return {
         "active_instruction": instruction,
-        "current_phase": {
-            "name": phase_name,
-            "goal": phase_meaning,
-            "done_when": ["phase-relevant visual facts are described"],
-            "continue_when": ["phase-relevant visual facts are unclear"],
-        },
-        "semantic_goal": {"target": "phase_visual_summary_v1 probe"},
+        "task_plan": None,
         "fragments": [fragment],
         "metadata": {"source_image": str(image_path), "case_index": case_index},
     }
@@ -211,9 +199,9 @@ def build_description_payload(config: ModelConfig, context: dict[str, Any], imag
     return build_visual_caption_payload(
         config,
         image_path,
-        StageContextInput(
+        TaskContextInput(
             active_instruction=str(context.get("active_instruction", "")),
-            current_phase=context.get("current_phase") if isinstance(context.get("current_phase"), dict) else None,
+            task_plan=context.get("task_plan"),
         ),
     )
 

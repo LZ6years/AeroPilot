@@ -9,10 +9,9 @@ from typing import Any
 
 from src.memory.context.modules import DEFAULT_MODULES
 from src.memory.context.modules.base import ContextModule
-from src.memory.context.schemas import MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
 from src.plugins import PluginRegistry
 from src.plugins.context import load_plugin_context_module
-from src.plugins.skills.selection import ModelSkillSelector
 
 
 class ContextModuleConfigError(ValueError):
@@ -62,20 +61,20 @@ class ContextModuleRegistry:
         path: str | Path = "configs/plugins.json",
         *,
         plugin_registry: PluginRegistry | None = None,
-        skill_selector: ModelSkillSelector | None = None,
+
     ) -> "ContextModuleRegistry":
         plugin_registry = plugin_registry or PluginRegistry.from_config(path)
         config_path = Path(path)
         if not config_path.exists():
             return cls.default(
                 plugin_registry=plugin_registry,
-                skill_selector=skill_selector,
+
             )
         data = json.loads(config_path.read_text(encoding="utf-8-sig"))
         return cls.from_dict(
             data,
             plugin_registry=plugin_registry,
-            skill_selector=skill_selector,
+
         )
 
     @classmethod
@@ -83,11 +82,11 @@ class ContextModuleRegistry:
         cls,
         *,
         plugin_registry: PluginRegistry | None = None,
-        skill_selector: ModelSkillSelector | None = None,
+
     ) -> "ContextModuleRegistry":
         plugin_registry = plugin_registry or PluginRegistry.from_config()
         return cls(
-            _default_modules(plugin_registry, skill_selector),
+            _default_modules(plugin_registry),
             module_order=list(cls.DEFAULT_MODULE_ORDER),
         )
 
@@ -97,7 +96,7 @@ class ContextModuleRegistry:
         data: dict[str, Any],
         *,
         plugin_registry: PluginRegistry | None = None,
-        skill_selector: ModelSkillSelector | None = None,
+
     ) -> "ContextModuleRegistry":
         plugin_registry = plugin_registry or PluginRegistry.discover(data)
         module_config = dict(data.get("context_modules", {}))
@@ -115,7 +114,7 @@ class ContextModuleRegistry:
                 module_cls = DEFAULT_MODULES.get(key)
                 if module_cls is None:
                     raise ContextModuleConfigError(f"No default context module for slot: {key}")
-                modules[key] = _instantiate_default_module(key, plugin_registry, skill_selector)
+                modules[key] = _instantiate_default_module(key, plugin_registry)
                 continue
             if not isinstance(value, str):
                 raise ContextModuleConfigError(f"Invalid module config for {key}: {value!r}")
@@ -140,7 +139,7 @@ class ContextModuleRegistry:
             raise ContextModuleConfigError("context_history must be a JSON object")
         return cls(modules, disabled, module_order=module_order, history_policies=history)
 
-    def build_fragments(self, sources: MemorySourceBundle, stage_context: StageContextInput):
+    def build_fragments(self, sources: MemorySourceBundle, stage_context: TaskContextInput):
         fragments = []
         for key in self.module_order:
             module = self.modules.get(key)
@@ -205,10 +204,10 @@ class ContextModuleRegistry:
 
 def _default_modules(
     plugin_registry: PluginRegistry,
-    skill_selector: ModelSkillSelector | None,
+
 ) -> dict[str, ContextModule]:
     return {
-        key: _instantiate_default_module(key, plugin_registry, skill_selector)
+        key: _instantiate_default_module(key, plugin_registry)
         for key in ContextModuleRegistry.DEFAULT_MODULE_ORDER
     }
 
@@ -216,12 +215,12 @@ def _default_modules(
 def _instantiate_default_module(
     key: str,
     plugin_registry: PluginRegistry,
-    skill_selector: ModelSkillSelector | None,
+
 ) -> ContextModule:
     module_cls = DEFAULT_MODULES[key]
     if key == "skills":
         return module_cls(
             plugin_registry=plugin_registry,
-            skill_selector=skill_selector or ModelSkillSelector(enabled=False),
+
         )
     return module_cls()

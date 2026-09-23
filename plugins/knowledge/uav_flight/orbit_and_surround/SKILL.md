@@ -28,10 +28,10 @@ yaw only when needed to keep the reference usable. Continue tangential progress
 while direction remains consistent; if radius becomes clearly unsuitable, use
 a brief radial repair without replacing circulation.
 
-Use qualitative visual range while the radius is clearly unsuitable. Request
-grounded candidate distance only near a metric radius threshold, when radial
-repair magnitude depends on it, or before quantitative completion. Do not spend
-repeated perception turns refining a relation that is already actionably clear.
+Radius judgments need target-relative evidence with precision appropriate to
+the requested tolerance and contemplated radial correction. Qualitative range
+and metric distance support different levels of precision; vehicle displacement
+alone does not measure orbit radius.
 
 Orbit direction controls the shift direction, not the yaw sign. Use the target's
 current image side when yaw is specifically for re-alignment.
@@ -48,7 +48,7 @@ progress.
 
 If a required relation disappears after a maneuver, compare pre-maneuver and
 current views with measured motion. Try one bounded retrace or correction, then
-re-observe; do not continue a blind shift. Hover only to stabilize or compare.
+re-observe; do not continue a blind shift.
 If repeated radial corrections add no tangential progress, reassess. If no safe
 evidence-producing recovery remains, stop and cite the limitation. Reverse
 circulation only for safety, recovery, or clear directional conflict.

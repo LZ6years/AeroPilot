@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from src.memory.context.modules.image import DefaultImageContextModule
-from src.memory.context.schemas import ContextFragment, MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import ContextFragment, MemorySourceBundle, TaskContextInput
 from src.runtime.configs.model_config import ModelConfig
 
 from .client import (
@@ -34,7 +34,7 @@ class PluginContextModule(DefaultImageContextModule):
         self._caption_client = caption_client or call_visual_caption_model
         self._env_path = Path(env_path)
 
-    def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
         fragment = super().build(sources, stage_context)
         content = dict(fragment.content)
         metadata = dict(fragment.metadata)

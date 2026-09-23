@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from src.perception.frame_payload import rgb_data_url, load_rgb_frame, load_depth_frame
+
 import base64
 import math
 from io import BytesIO
@@ -11,18 +13,16 @@ from typing import Any
 from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 from src.memory.context.modules.base import ContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, HistoryImageCandidate, MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import BudgetSpec, ContextFragment, HistoryImageCandidate, MemorySourceBundle, TaskContextInput
 from src.depth_display import depth_legend_height
 
 
 CURRENT_IMAGE_USAGE = (
-    "Original RGB preserves scene colors. Interpret the image directly; request "
-    "grounded distance only when a measurement is needed for the next decision or claim."
+    "Original RGB preserves scene colors. This image records the view at its labeled observation."
 )
 CURRENT_RGB_DEPTH_OVERLAY_USAGE = (
     "RGB + METRIC DEPTH OVERLAY. False colors provide qualitative range only; "
-    "the bottom color bar uses meters. For an explicit metric distance or "
-    "threshold, use target grounding with distance enabled; do not draw a manual ROI."
+    "the bottom color bar uses meters. Display colors do not provide precise target-distance measurements."
 )
 
 _DEFAULT_DEPTH_DISPLAY_MAX_M = 10.0
@@ -106,7 +106,7 @@ class DefaultImageContextModule(ContextModule):
         self.include_current_depth = include_depth
         self.depth_display_max_m = float(maximum)
 
-    def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
         memory = sources.flight_memory
         reader = memory.memory_reader
         all_observations = reader.read_refs(memory.recent_observation_refs) if reader else []
@@ -492,22 +492,16 @@ def _artifact_ref(record: dict[str, Any], frame_ref: dict[str, Any] | None) -> s
 def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> list[dict[str, Any]]:
     """Encode one latest real RGB frame for model multimodal input.
 
-    The coupled planner uses this helper so unreadable or mock frames follow the
-    same conservative no-image behavior across action and phase decisions.
+    Mock frames attach no image. Real file or memory payloads are validated;
+    unreadable real observations fail explicitly rather than silently vanishing.
     """
 
     if not latest_rgb or latest_rgb.get("mock") is True:
         return []
-    path = _frame_path(latest_rgb)
-    if path is None:
-        return []
     role = str(latest_rgb.get("selection_role") or "latest")
     input_id = str(latest_rgb.get("input_id") or _image_input_id(1, role))
     usage = str(latest_rgb.get("usage") or latest_rgb.get("selection_reason") or "")
-    data_url = _image_data_url(path)
-    if data_url is None:
-        return []
-    scene_width, scene_height = _image_dimensions(path)
+    data_url, (scene_width, scene_height) = rgb_data_url(latest_rgb)
     return [
         {
             "type": "image",
@@ -542,10 +536,8 @@ def current_rgb_depth_overlay_model_input(
         or current_rgb.get("mock") is True
     ):
         return None
-    depth_path = _frame_path(current_depth)
-    rgb_path = _frame_path(current_rgb)
-    if depth_path is None or rgb_path is None:
-        return None
+    depth_path = current_depth
+    rgb_path = current_rgb
     data_url = _rgb_depth_overlay_data_url(
         rgb_path,
         depth_path,
@@ -554,7 +546,7 @@ def current_rgb_depth_overlay_model_input(
     )
     if data_url is None:
         return None
-    scene_width, scene_height = _image_dimensions(rgb_path)
+    scene_width, scene_height = load_rgb_frame(current_rgb).size
     resolved_scene_width = _positive_int(current_rgb.get("width")) or scene_width
     resolved_scene_height = _positive_int(current_rgb.get("height")) or scene_height
     legend_height = depth_legend_height(resolved_scene_height)
@@ -582,22 +574,10 @@ def current_rgb_depth_overlay_model_input(
     }
 
 
-def _frame_path(frame: dict[str, Any]) -> Path | None:
-    raw_path = frame.get("path") or frame.get("artifact_path") or frame.get("artifact_ref")
-    if not isinstance(raw_path, str) or not raw_path.strip():
-        return None
-    path = Path(raw_path)
-    if path.exists():
-        return path
-    cwd_path = Path.cwd() / path
-    if cwd_path.exists():
-        return cwd_path
-    return None
-
 
 def _rgb_depth_overlay_data_url(
-    rgb_path: Path,
-    depth_path: Path,
+    rgb_path: Path | dict[str, Any],
+    depth_path: Path | dict[str, Any],
     *,
     metadata: dict[str, Any],
     depth_display_max_m: float,
@@ -613,18 +593,12 @@ def _rgb_depth_overlay_data_url(
     try:
         import numpy as np
 
-        with Image.open(rgb_path) as source:
-            rgb = source.convert("RGB")
-        depth = np.asarray(np.load(depth_path, allow_pickle=False), dtype=np.float32)
-        depth = np.squeeze(depth)
-        if depth.ndim == 1:
-            width = _positive_int(metadata.get("width"))
-            height = _positive_int(metadata.get("height"))
-            if width is None or height is None or depth.size != width * height:
-                return None
-            depth = depth.reshape((height, width))
-        if depth.ndim != 2 or depth.size == 0:
-            return None
+        rgb_frame = rgb_path if isinstance(rgb_path, dict) else {"path": str(rgb_path)}
+        depth_frame = depth_path if isinstance(depth_path, dict) else {**metadata, "path": str(depth_path)}
+        rgb = load_rgb_frame(rgb_frame)
+        if depth_frame.get("capture_source") == "depth_vis" or depth_frame.get("depth_unit") == "normalized":
+            raise ValueError("DepthVis cannot be used as metric depth")
+        depth = load_depth_frame(depth_frame)
         if rgb.size != (int(depth.shape[1]), int(depth.shape[0])):
             return None
         valid = np.isfinite(depth) & (depth > 0.0)
@@ -748,26 +722,6 @@ def _positive_int(value: Any) -> int | None:
     return parsed if parsed > 0 else None
 
 
-def _image_data_url(path: Path) -> str | None:
-    """Return a PNG without altering the source scene pixel region."""
-
-    try:
-        with Image.open(path) as source:
-            scene = source.convert("RGB")
-            output = BytesIO()
-            scene.save(output, format="PNG")
-    except (OSError, UnidentifiedImageError, ValueError):
-        return None
-    encoded = base64.b64encode(output.getvalue()).decode("ascii")
-    return f"data:image/png;base64,{encoded}"
-
-
-def _image_dimensions(path: Path) -> tuple[int | None, int | None]:
-    try:
-        with Image.open(path) as source:
-            return source.size
-    except (OSError, UnidentifiedImageError, ValueError):
-        return None, None
 
 
 def _default_font(size: int) -> ImageFont.ImageFont:

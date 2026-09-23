@@ -20,6 +20,7 @@ from src.runtime.configs.map_config import load_map_config
 from src.sim_server import SimulationExecutionMode
 from src.sim_server.server import SimulationServer
 from src.uav.frames import position_distance_m
+from src.perception.frame_payload import load_rgb_frame, load_depth_frame
 
 
 def main() -> int:
@@ -30,6 +31,7 @@ def main() -> int:
     parser.add_argument("--turn", type=float, required=True)
     parser.add_argument("--velocity", nargs=3, type=float, required=True)
     parser.add_argument("--duration", type=float, required=True)
+    parser.add_argument("--save-artifacts", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--output-root", default="tests/manual_outputs/airsim_action_regression")
     args = parser.parse_args()
     output = Path(args.output_root) / datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -37,7 +39,7 @@ def main() -> int:
     maps, policy = load_map_config(args.config)
     service = SimulationServer(maps, policy, run_dir=output,
                                execution_mode=SimulationExecutionMode.MANAGED,
-                               save_artifacts=True)
+                               save_artifacts=args.save_artifacts)
     client = SimulatorEnvClient(service)
     scene = None
     report = {"diagnostic_only": True, "map_id": args.map_id, "actions": []}
@@ -59,6 +61,22 @@ def main() -> int:
         report["initial_position_error_m"] = position_distance_m(pose, measured)
         report["first_observation"] = client.get_observation(
             scene.scene_instance_id, "Drone_1", ["rgb", "depth", "pose"]).to_dict()
+        data = report["first_observation"]["data"]
+        frames = data["frames"].get("frames", data["frames"])
+        rgb = load_rgb_frame(frames["rgb"])
+        depth = load_depth_frame(frames["depth"], require_metric=True)
+        import numpy as np
+        report["capture_validation"] = {
+            "save_artifacts": args.save_artifacts,
+            "rgb_size": list(rgb.size), "depth_shape": list(depth.shape),
+            "rgb_nonconstant": bool(np.ptp(np.asarray(rgb)) > 0),
+            "depth_finite_count": int(np.isfinite(depth).sum()),
+            "depth_nonconstant": bool(np.ptp(depth[np.isfinite(depth)]) > 0),
+        }
+        if not report["capture_validation"]["rgb_nonconstant"] or not report["capture_validation"]["depth_nonconstant"]:
+            raise RuntimeError("Degenerate image payload")
+        if not args.save_artifacts and list((output / "artifacts").rglob("*")):
+            raise RuntimeError("Memory-only capture created backend artifacts")
         action("turn_relative", {"yaw_deg": args.turn})
         action("move_body", dict(zip(("vx", "vy", "vz"), args.velocity)) | {"duration": args.duration})
         report["final_observation"] = client.get_observation(

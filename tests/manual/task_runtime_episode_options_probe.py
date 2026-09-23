@@ -42,9 +42,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.agent.phase import COMPLETE_TASK, PhaseTransition
-from src.agent.planning.schemas import CoupledActionPhasePlan
-from src.agent.semantic.task_parser import TaskParser
 from src.env_client import SimulatorEnvClient, load_observation_profile
 from src.runtime.configs import InitialPose, TaskExecutionOptions
 from src.runtime.configs.map_config import load_map_config
@@ -58,22 +55,7 @@ from src.uav import pose_value, yaw_deg
 PROBE_INSTRUCTION = "前面右转会有一个黑色的路灯，右转面向路灯后停下"
 
 
-class CompleteWithoutFlightPlanner:
-    """Finish the current semantic phase without requesting a UAV primitive."""
-
-    planner_mode = "manual_probe"
-
-    def plan_next_with_phase_decision(self, state, context=None):
-        """Return a deterministic completion decision for initialization tests."""
-
-        return CoupledActionPhasePlan(
-            phase=state.current_phase_name,
-            phase_decision=PhaseTransition(
-                COMPLETE_TASK,
-                "manual probe validates Runtime initialization only",
-            ),
-            steps=[],
-        )
+from tests.manual.benchmark_probe_support import CompleteProbePlanner as CompleteWithoutFlightPlanner
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -220,7 +202,6 @@ def main() -> int:
     runtime = TaskRuntime(
         client,
         recorder,
-        TaskParser(mode="rule_based"),
         planner=CompleteWithoutFlightPlanner(),
         shutdown_policy="none",
     )

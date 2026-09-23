@@ -1,31 +1,22 @@
 """Short-horizon action planning."""
 
-from src.agent.planning.model_action_planner import (
-    ModelActionPlanner,
-    ModelActionPlannerConfigError,
-)
-from src.agent.planning.schemas import (
-    ActionWindow,
-    CoupledActionPhasePlan,
-    PhaseStrategy,
-    PlannedStep,
-    ShortHorizonPlan,
-)
-from src.agent.planning.tool_contract_validator import (
-    ToolContractValidationError,
-    ToolContractValidator,
-    ToolContractViolation,
-)
+from importlib import import_module
 
-__all__ = [
-    "ModelActionPlanner",
-    "ModelActionPlannerConfigError",
-    "ActionWindow",
-    "CoupledActionPhasePlan",
-    "PhaseStrategy",
-    "PlannedStep",
-    "ShortHorizonPlan",
-    "ToolContractValidationError",
-    "ToolContractValidator",
-    "ToolContractViolation",
-]
+_EXPORTS = {
+    "ModelActionPlanner": "model_action_planner",
+    "ModelActionPlannerConfigError": "model_action_planner",
+    "PlannedStep": "schemas",
+    "TaskPlan": "task_plan",
+    "TaskPlanStep": "task_plan",
+}
+
+__all__ = ["ModelActionPlanner", "ModelActionPlannerConfigError", "PlannedStep", "TaskPlan", "TaskPlanStep"]
+
+
+def __getattr__(name):
+    """Loading pure input/plan helpers must not eagerly load the Planner."""
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{__name__}.{_EXPORTS[name]}"), name)
+    globals()[name] = value
+    return value

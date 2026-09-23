@@ -8,6 +8,21 @@ from typing import Any
 from src.plugins.contracts.skill import Skill
 
 
+def read_declared_reference(skill: Skill, relative_path: str) -> str:
+    """Read a complete declared reference, rejecting aliases and escaped paths.
+
+    This non-truncating boundary is shared by on-demand knowledge snapshots.
+    The caller selects a manifest entry, never an arbitrary filesystem path.
+    """
+    allowed = {_relative_to_skill(skill, path): path for path in skill.reference_paths}
+    if relative_path not in allowed:
+        raise ValueError("reference is not declared by this knowledge entry")
+    resolved = allowed[relative_path].resolve()
+    if not resolved.is_relative_to(skill.skill_dir.resolve()):
+        raise ValueError("reference escapes the knowledge directory")
+    return resolved.read_text(encoding="utf-8-sig")
+
+
 DEFAULT_MAX_SKILL_CHARS = 2400
 DEFAULT_MAX_REFERENCE_CHARS = 1600
 

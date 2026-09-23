@@ -1,7 +1,7 @@
 Useful search patterns should be selected by scene context:
 
 - Scale naming: 30-45 degrees is broad search, not a small/local confirmation
-  turn. Small confirmation means hover or about 5-15 degrees.
+  turn. A small local confirmation turn is about 5-15 degrees.
 - No-candidate broad sweep: when the current view has no target-like cue, use a
   larger safe yaw increment within planner limits to inspect genuinely new view
   area. Continue the chosen sweep direction while it reveals new area. A
@@ -9,9 +9,9 @@ Useful search patterns should be selected by scene context:
   allow it.
 - Local sweep: when the target may be near the current view boundary, use small
   yaw steps so a possible target is not swept past.
-- Peek safely: when an obstacle or corner may hide the target, prefer yaw or
-  hover-based stabilization first; use a short reposition only when free space is
-  visually clear.
+- Peek safely: when an obstacle or corner may hide the target, a changed viewing
+  angle or a short reposition can expose it. Repositioning needs clear free space;
+  choose a view change that preserves useful cues without unsupported movement.
 - Landmark chaining: use visible landmarks to decide where to look next, but
   keep confidence low until the target itself is observed.
 - Candidate disambiguation: when competing identities change the next action,
@@ -19,10 +19,11 @@ Useful search patterns should be selected by scene context:
   position and appearance, not confidence rankings alone. Keep promising cues
   in view and reuse results; absence of detection is not proof of absence.
 - Candidate confirmation: when one plausible candidate appears but is not yet
-  reliable, switch from broad sweep to hover or a small 5-15 degree yaw before
-  judging so the candidate stays in view. Do not describe a candidate and then
+  reliable, stop broad sweeping and compare the available evidence. A small
+  5-15 degree yaw can expose missing detail while preserving the candidate.
+  Do not describe a candidate and then
   continue a 30-45 degree broad sweep as if it were confirmation.
-- Confirmed or centered target: hover, stop searching, or use the confirmed
+- Confirmed or centered target: stop searching or use the confirmed
   target evidence for the current objective instead of continuing a search
   sweep.
 

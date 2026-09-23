@@ -14,7 +14,6 @@ from pathlib import Path
 
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
-from src.agent.semantic.task_parser import TaskParser
 from src.cli.display import ANSI_BLUE, ANSI_DIM, CliNarrativePanel, clear_screen, color_text, print_json, print_summary
 from src.env_client import load_observation_profile
 from src.env_client.simulator_client import SimulatorEnvClient
@@ -72,12 +71,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--stop-on-error", action="store_true", help="Exit chat after an instruction fails")
     parser.add_argument("--instruction", default=None, help="User instruction for parse-task")
     parser.add_argument(
-        "--parser-mode",
-        choices=["model", "rule_based"],
-        default=None,
-        help="Override FLYAGENT_TASK_PARSER_MODE for parse-task",
-    )
-    parser.add_argument(
         "--shutdown-policy",
         choices=["hover", "land", "none"],
         default="hover",
@@ -91,7 +84,6 @@ def build_parser() -> argparse.ArgumentParser:
             "start",
             "smoke-test",
             "observation-smoke-test",
-            "parse-task",
             "run-task",
             "chat",
         ],
@@ -104,9 +96,6 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if args.command in {"chat", "start"}:
         return run_chat(args)
-    if args.command == "parse-task":
-        run_parse_task(args)
-        return 0
     if args.command == "run-task":
         run_task(args)
         return 0
@@ -172,39 +161,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def run_parse_task(args: argparse.Namespace) -> None:
-    # Parse a user instruction into a semantic plan without touching any environment.
-    if not args.instruction:
-        raise ValueError("parse-task requires --instruction")
-    run_dir = RunStore(args.run_root).create_run_dir("parse_task")
-    recorder = AsyncRunLogger(run_dir)
-    model_config = load_model_config(args.env_path)
-    parser_mode = args.parser_mode or model_config.task_parser_mode
-    try:
-        recorder.info("parse task started", parser_mode=parser_mode)
-        recorder.write_json(
-            "config/model_config.json",
-            {"model_config": model_config.redacted_summary(), "parser_mode": parser_mode},
-        )
-        parser = TaskParser(mode=parser_mode, model_config=model_config)
-        result = parser.parse(args.instruction)
-        payload = result.to_dict()
-        recorder.write_json("state/semantic_plan.json", payload)
-        if parser.last_parse_trace:
-            recorder.write_json("debug/task_parser_phase_skills.json", parser.last_parse_trace)
-            recorder.event("task_parser_phase_skill_trace", parser.last_parse_trace)
-        recorder.event("task_parsed", payload)
-        recorder.info("parse task completed", run_dir=str(run_dir))
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
-        print(f"Run record: {run_dir}")
-    except Exception as exc:
-        recorder.event("task_parse_failed", {"error_type": type(exc).__name__, "error": str(exc)})
-        recorder.error("parse task failed", error_type=type(exc).__name__, error=str(exc))
-        raise
-    finally:
-        recorder.close()
-
-
 def run_task(args: argparse.Namespace) -> None:
     # Run one M4 short-horizon task loop through EnvClient and ToolDispatcher.
     if not args.instruction:
@@ -218,7 +174,6 @@ def run_task(args: argparse.Namespace) -> None:
     run_dir = RunStore(args.run_root).create_run_dir("task")
     recorder = AsyncRunLogger(run_dir)
     model_config = load_model_config(args.env_path)
-    parser_mode = args.parser_mode or model_config.task_parser_mode
     action_config = load_uav_action_config(args.action_config)
     safety_config = load_uav_safety_config(args.safety_config)
     selected_map = next(pkg for pkg in maps if pkg.map_id == map_id)
@@ -226,7 +181,7 @@ def run_task(args: argparse.Namespace) -> None:
         recorder.info(
             "task run started",
             map_id=map_id,
-            parser_mode=parser_mode,
+
             planner="ModelActionPlanner",
             shutdown_policy=args.shutdown_policy,
         )
@@ -235,7 +190,6 @@ def run_task(args: argparse.Namespace) -> None:
             "config/model_config.json",
             {
                 "model_config": model_config.redacted_summary(),
-                "parser_mode": parser_mode,
                 "planner": "ModelActionPlanner",
                 "shutdown_policy": args.shutdown_policy,
             },
@@ -264,7 +218,6 @@ def run_task(args: argparse.Namespace) -> None:
                 observation_profile=observation_profile,
             ),
             recorder,
-            TaskParser(mode=parser_mode, model_config=model_config),
             planner=ModelActionPlanner(model_config),
             safety=SafetySupervisor(safety_config),
             shutdown_policy=args.shutdown_policy,
@@ -318,7 +271,6 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
     execution_options = TaskExecutionOptions.from_observation_profile(
         observation_profile
     )
-    parser_mode = args.parser_mode or "model"
     run_dir = RunStore(args.run_root).create_run_dir("interactive_cli")
     recorder = AsyncRunLogger(run_dir)
     live_printer = CliNarrativePanel()
@@ -345,7 +297,6 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
         "config/model_config.json",
         {
             "model_config": model_config.redacted_summary(),
-            "parser_mode": parser_mode,
             "planner": "ModelActionPlanner",
             "shutdown_policy": args.shutdown_policy,
             "save_artifacts": args.save_artifacts,
@@ -358,7 +309,6 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
             observation_profile=observation_profile,
         ),
         recorder,
-        TaskParser(mode=parser_mode, model_config=model_config),
         planner=ModelActionPlanner(model_config),
         safety=SafetySupervisor(safety_config),
         shutdown_policy=args.shutdown_policy,
@@ -514,10 +464,9 @@ def handle_slash_command(command: str, session: InteractiveTaskSession) -> bool:
 
 
 def print_chat_banner(args: argparse.Namespace, session: InteractiveTaskSession) -> None:
-    parser_mode = args.parser_mode or "model"
     map_id = args.map_id or session.map_id
     print("FlyAgent interactive CLI")
-    print(f"map_id={map_id}, parser_mode={parser_mode}, shutdown_policy={args.shutdown_policy}")
+    print(f"map_id={map_id}, shutdown_policy={args.shutdown_policy}")
     print(
         f"execution={args.execution}, "
         f"defer_scene_start={args.defer_scene_start}, "

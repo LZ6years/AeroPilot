@@ -81,9 +81,8 @@ python demos/memory_system_demo.py
 
 - 不调用真实模型。
 - 不启动真实 UE。
-- 使用 rule-based task parser。
-- 使用固定 hover planner。
-- 连续执行两条 instruction，用来观察 memory 和 context 是否持续更新。
+- 不创建 Parser、Planner、Runtime 或模拟 Backend。
+- 写入两条静态 instruction 和 pose fixture，观察 memory refs 与 context 的更新。
 
 适合看：
 
@@ -96,17 +95,14 @@ python demos/memory_system_demo.py
 
 ```text
 runs/memory_system_demo_<timestamp>/
-  state/latest_state.json
   state/flight_memory.json
   memory/instructions.jsonl
-  memory/actions.jsonl
   memory/observations.jsonl
   memory/poses.jsonl
   contexts/latest_context.json
-  debug/debug_events.jsonl
 ```
 
-它不适合看真实 action 规划、真实飞控执行、phase 是否完成。
+这些是静态教学记录，不表示真实动作、飞行轨迹或任务完成。
 
 ### model_action_planner_context_demo.py
 
@@ -132,7 +128,7 @@ python demos/model_action_planner_context_demo.py --env-path .env
 
 - 发给模型的完整 `latest_context.json`。
 - `context_schema` 如何解释字段。
-- `allowed_action_constraints` 是否进入模型输入。
+- 状态上下文不含重复工具定义，工具参数只经 Provider `tools` 进入模型输入。
 - 模型输出的 action plan 是否通过 contract validation。
 - `ModelRepairPlanner` 是否触发。
 - `SafetySupervisor` 最终如何审查 plan。

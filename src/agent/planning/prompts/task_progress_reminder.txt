@@ -1,0 +1,10 @@
+Task progress check: compare the original instruction with current evidence and
+remaining requirements, rather than only the last action. For a complex task without
+a plan, use runtime.update_plan before further physical action. If a plan exists,
+advance or revise it only where observations justify a change; do not rewrite an
+unchanged plan or cling to a route contradicted by new evidence.
+If the next action method is unclear, inspect the knowledge catalog and use
+knowledge.load for relevant guidance not already loaded. Missing scene facts require
+observations or perception, not invented facts from a plan or knowledge entry.
+This reminder asks for a progress check, not a mandatory plan rewrite or knowledge
+call. Continue with the capability appropriate to the actual task state.

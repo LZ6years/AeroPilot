@@ -16,12 +16,10 @@ target visibility can conflict with traversal.
 ## Evidence Model
 
 For qualitative requests, form a credible rough range from the visible
-relation, fused depth colors, and change after translation. A numeric request
-does not require precise perception while the relation is visibly far from its
-threshold. Near the threshold, when correction magnitude depends on it, or
-before quantitative completion, use available visual grounding with candidate
-distance enabled. Its result is camera-to-visible-surface distance, not target-
-center or horizontal distance. UAV displacement from a local origin is not
+relation, available depth evidence, and change after translation. A quantitative
+distance judgment needs evidence whose precision and geometric meaning match
+the requested tolerance. Camera-to-visible-surface distance is not target-center
+or horizontal distance. UAV displacement from a local origin is not
 target distance. Yaw cannot reach a distance or side relation.
 
 ## Decision Procedure
@@ -30,18 +28,16 @@ target distance. Yaw cannot reach a distance or side relation.
 2. Apply the stop condition below before choosing another correction.
 3. Approach only when available cues clearly place the UAV too far; retreat
    only when they clearly place it too near.
-4. For qualitative or clearly off-threshold requests, use a broad coherent range
-   rather than waiting for exact measurement. Request candidate distance only
-   when a precise decision is now necessary.
-5. After one bounded correction, re-estimate; repeat precise grounding only when
-   another quantitative decision is needed. Reverse only when new evidence
+4. Match the precision of the range estimate to the requested relation and
+   the size of the contemplated correction.
+5. After one bounded correction, re-estimate. Reverse only when new evidence
    clearly places the relation on the opposite side of the request.
 
 ## Completion And Stop
 
 A qualitative standoff is reached when a usable target cue and coherent visual
 or depth evidence place the UAV broadly near the requested relation. An explicit
-metric standoff additionally requires a fresh grounded-candidate distance
+metric standoff additionally requires fresh target-relative distance evidence
 consistent with its stated tolerance or threshold. Do not infer a decimal
 distance from the color bar. Facing is not the requested distance relation.
 
@@ -49,5 +45,5 @@ distance from the color bar. Facing is not the requested distance relation.
 
 If the relation disappears, compare earlier and current views with measured
 motion. Try one bounded retrace, then re-observe; do not continue blindly.
-Hover only to stabilize. If no safe recovery remains, stop and cite it. Use
+If no safe recovery remains, stop and cite it. Use
 smaller changes near people or tight clearance.

@@ -65,7 +65,7 @@ def make_transcript(tmp_path):
     transcript.start_instruction("move toward the target", "inst_0001")
     transcript.append_state(
         {
-            "current_phase": {"name": "approach", "done_when": ["target is near"]},
+            "user_instruction": "move toward the target", "task_plan": None,
             "fragments": [],
             "rules": {"text": "fly safely"},
         },
@@ -76,21 +76,68 @@ def make_transcript(tmp_path):
 
 def test_native_planner_sends_tools_and_parses_canonical_call(tmp_path):
     planner = StubPlanner(
-        response_with_calls(("call_1", "uav_hover", {}))
+        response_with_calls(("call_1", "uav_turn_relative", {"yaw_deg": 10}))
     )
     registry = default_registry()
 
     turn = planner.plan_turn(make_transcript(tmp_path), registry)
 
-    assert turn.tool_calls[0].tool_name == "uav.hover"
+    assert turn.tool_calls[0].tool_name == "uav.turn_relative"
     payload = planner.payloads[0]
     assert "tools" in payload
     assert "response_format" not in payload
     assert payload["messages"][-1]["role"] == "user"
     assert any(
-        tool["function"]["name"] == "runtime_commit_phase_turn"
+        tool["function"]["name"] == "runtime_report_completed"
         for tool in payload["tools"]
     )
+
+
+def test_planner_boundary_does_not_require_commit_tool(tmp_path):
+    from src.tools.registry import ToolRegistry
+    from src.tools.builtins import builtin_tools
+
+    registry = ToolRegistry()
+    for spec in builtin_tools():
+        registry.register(spec)
+    planner = StubPlanner(response_with_calls(("plan1", "runtime_update_plan", {
+        "explanation": "Simple task", "steps": []}), content=None))
+    turn = planner.plan_turn(make_transcript(tmp_path), registry)
+    assert turn.tool_calls[0].tool_name == "runtime.update_plan"
+    assert turn.public_intent_source == "tool_arguments_fallback"
+    assert all(t["function"]["name"] != "runtime_commit_phase_turn" for t in planner.payloads[0]["tools"])
+
+
+def test_tool_selection_prompt_and_descriptions_do_not_force_a_control_call(tmp_path):
+    """The real request builder exposes guidance; direct actions remain valid."""
+    planner = StubPlanner(response_with_calls(("direct", "uav_turn_relative", {"yaw_deg": 10}), content=None))
+    registry = default_registry()
+    transcript = make_transcript(tmp_path)
+    history_before = transcript.provider_messages(registry)
+    turn = planner.plan_turn(transcript, registry)
+    request = planner.payloads[0]
+    assert turn.tool_calls[0].tool_name == "uav.turn_relative"
+    assert request["tool_choice"] == "auto"
+    assert request["temperature"] == 0
+    assert "response_format" not in request
+    assert request["messages"][-len(history_before):] == history_before
+    assert transcript.provider_messages(registry) == history_before
+    assert request["tools"] == [spec.to_provider_tool() for spec in registry.model_specs()]
+    assert "before the first physical action" in registry.get("runtime.update_plan").description
+    system_text = "\n".join(message["content"] for message in request["messages"] if message["role"] == "system")
+    assert "call runtime.update_plan before the first" in system_text
+    assert "uav_hover" not in {tool["function"]["name"] for tool in request["tools"]}
+
+
+def test_request_allowlist_cannot_expose_hover_and_includes_generic_prompts(tmp_path):
+    planner = StubPlanner(response_with_calls(("turn", "uav_turn_relative", {"yaw_deg": 10})))
+    planner.plan_turn(make_transcript(tmp_path), default_registry(),
+                      allowed_tool_names={"uav.hover", "uav.turn_relative"})
+    payload = planner.payloads[0]
+    assert [tool["function"]["name"] for tool in payload["tools"]] == ["uav_turn_relative"]
+    systems = [message["content"] for message in payload["messages"] if message["role"] == "system"]
+    assert planner.tool_user_prompt in systems
+    assert planner.tool_case_studies in systems
 
 
 @pytest.mark.parametrize("stages", [
@@ -98,34 +145,29 @@ def test_native_planner_sends_tools_and_parses_canonical_call(tmp_path):
     ["Inspect the obscured entrance so its relation to the road becomes visible."],
     ["move_forward"],  # Prompt quality is not a new structural rejection gate.
 ])
-def test_strategy_strings_and_updated_prompt_reach_provider_unchanged(tmp_path, stages):
-    from src.agent.planning.schemas import PhaseStrategy
+def test_plan_descriptions_and_updated_prompt_reach_provider_unchanged(tmp_path, stages):
     from src.tools.validation import validate_tool_args
 
-    strategy = {"stages": stages, "active_stage": 0,
-                "reason": "The current evidence leaves the phase incomplete."}
-    assert PhaseStrategy.from_dict(strategy).to_dict() == strategy
-    args = {"phase": "approach", "phase_strategy": strategy,
-            "completion_assessment": {"done_when": [
-                {"index": 0, "status": "unknown", "evidence": "Not yet established."}
-            ]}}
+    steps = [{"id": str(i), "description": description, "status": "in_progress" if i == 0 else "pending"}
+             for i, description in enumerate(stages)]
+    args = {"explanation": "Current evidence", "steps": steps}
     planner = StubPlanner(response_with_calls(
-        ("strategy_call", "runtime_commit_phase_turn", args)))
+        ("strategy_call", "runtime_update_plan", args)))
     transcript = make_transcript(tmp_path)
     registry = default_registry()
-    validate_tool_args(args, registry.get("runtime.commit_phase_turn").input_schema)
+    validate_tool_args(args, registry.get("runtime.update_plan").input_schema)
     turn = planner.plan_turn(transcript, registry)
-    assert turn.tool_calls[0].args["phase_strategy"] == strategy
+    assert turn.tool_calls[0].args["steps"] == steps
     expected_prompt = Path("src/agent/planning/prompts/agent_tool_loop_system.txt").read_text(
         encoding="utf-8").strip()
     assert any(message["role"] == "system" and message["content"].strip() == expected_prompt
                for message in planner.payloads[0]["messages"])
     transcript.append_assistant(turn)
     transcript.append_tool_result(ToolResult(
-        "strategy_call", "runtime.commit_phase_turn", "ok", "Recorded by test fixture."))
+        "strategy_call", "runtime.update_plan", "ok", "Recorded by test fixture."))
     replay = transcript.provider_messages(registry)
     submitted = next(message for message in replay if message["role"] == "assistant")
-    assert json.loads(submitted["tool_calls"][0]["function"]["arguments"])["phase_strategy"] == strategy
+    assert json.loads(submitted["tool_calls"][0]["function"]["arguments"])["steps"] == steps
     assert replay[-1]["tool_call_id"] == "strategy_call"
 
 
@@ -146,8 +188,10 @@ def test_native_planner_transport_retry_is_one_model_round_and_not_transcript(
 
     outcomes = [http.client.RemoteDisconnected("closed"), Response()]
     sleeps = []
+    requests = []
 
     def fake_urlopen(request, timeout):
+        requests.append(request.data)
         outcome = outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
@@ -168,9 +212,11 @@ def test_native_planner_transport_retry_is_one_model_round_and_not_transcript(
     registry = default_registry()
     messages_before = transcript.provider_messages(registry)
 
-    turn = planner.plan_turn(transcript, registry)
+    turn = planner.plan_turn(transcript, registry, decision_index=6)
 
     assert turn.tool_calls[0].tool_name == "uav.hover"
+    assert requests[0] == requests[1]
+    assert json.loads(requests[0])["messages"][-1]["content"] == planner.task_progress_reminder
     assert transcript.provider_messages(registry) == messages_before
     assert sleeps == [2.0]
     assert planner.last_exchange["transport"] == {
@@ -232,7 +278,7 @@ def test_native_planner_captures_exact_public_exchange_and_hashed_media(tmp_path
     assert "data:image" not in request_text
     assert "provider_media sha256=" in request_text
     assert exchange["media"][0]["data"] == image_bytes
-    assert exchange["media"][0]["request_path"][:2] == ["messages", 2]
+    assert exchange["media"][0]["request_path"][:2] == ["messages", 4]
     assert exchange["media"][0]["timeline_role"] == "CURRENT"
     assert exchange["media"][0]["observation_id"] == "obs_media"
     assert exchange["media"][0]["frame_id"] == "frame_media"
@@ -261,15 +307,8 @@ def test_native_planner_replays_tool_result_in_full_transcript(tmp_path):
     planner.response = response_with_calls(
         (
             "call_2",
-            "runtime_commit_phase_turn",
-            {
-                "phase": "approach",
-                "completion_assessment": {
-                    "done_when": [
-                        {"index": 0, "status": "supported", "evidence": "stable"}
-                    ]
-                },
-            },
+            "runtime_report_completed",
+            {"reason": "stable", "evidence_refs": ["obs_0001"]},
         )
     )
 
@@ -324,47 +363,17 @@ def test_native_planner_accepts_null_content_with_read_only_fallback(tmp_path):
     assert turn.public_intent == "Request uav.get_pose for observation obs_0001."
 
 
-def test_native_planner_uses_action_window_intent_for_null_content(tmp_path):
-    planner = StubPlanner(
-        response_with_calls(
-            (
-                "call_commit",
-                "runtime_commit_phase_turn",
-                {
-                    "phase": "approach",
-                    "action_window": {
-                        "intent": "move closer to the visible target",
-                        "expected_effect": "the target appears larger",
-                    },
-                },
-            ),
-            ("call_move", "uav_move_body", {"vx": 1.0}),
-            content=None,
-        )
-    )
-
-    turn = planner.plan_turn(make_transcript(tmp_path), default_registry())
-
+@pytest.mark.parametrize("name,args", [
+    ("runtime_update_plan", {"explanation": "Route", "steps": []}),
+    ("runtime_report_completed", {"reason": "arrived", "evidence_refs": ["obs_0001"]}),
+    ("uav_move_body", {"vx": 1, "vy": 0, "vz": 0, "duration": 1}),
+])
+def test_native_planner_summarizes_canonical_call_for_null_content(tmp_path, name, args):
+    planner = StubPlanner(response_with_calls(("call1", name, args), content=None))
+    registry = default_registry()
+    turn = planner.plan_turn(make_transcript(tmp_path), registry)
     assert turn.public_intent_source == "tool_arguments_fallback"
-    assert turn.public_intent == "move closer to the visible target"
-
-
-def test_native_planner_uses_phase_commit_fallback_for_null_content(tmp_path):
-    planner = StubPlanner(
-        response_with_calls(
-            (
-                "call_commit",
-                "runtime_commit_phase_turn",
-                {"phase": "land"},
-            ),
-            content=None,
-        )
-    )
-
-    turn = planner.plan_turn(make_transcript(tmp_path), default_registry())
-
-    assert turn.public_intent_source == "tool_arguments_fallback"
-    assert turn.public_intent == "Commit phase decision for land."
+    assert turn.public_intent == f"Request tool call(s): {registry.from_wire_name(name).name}."
 
 
 def test_native_planner_rejection_snapshot_keeps_wire_attempt_only(tmp_path):

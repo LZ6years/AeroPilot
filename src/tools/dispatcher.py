@@ -6,6 +6,7 @@ from src.env_client.base import EnvClient
 from src.env_client.schemas import ActionResult, Observation
 from src.plugins import PluginRegistry
 from src.plugins.skills.dispatcher import SkillCapabilityDispatcher
+from src.plugins.skills.knowledge_service import KnowledgeService
 from src.tools.registry import ToolRegistry, default_registry
 from src.tools.validation import validate_tool_args
 
@@ -16,12 +17,16 @@ class ToolDispatcher:
         env_client: EnvClient,
         registry: ToolRegistry | None = None,
         plugin_registry: PluginRegistry | None = None,
+        knowledge_service: KnowledgeService | None = None,
     ) -> None:
         # Keep the environment client and available tool registry.
         self.env_client = env_client
         self.plugin_registry = plugin_registry or PluginRegistry.from_config()
         self.registry = registry or default_registry(self.plugin_registry)
         self.skill_capabilities = SkillCapabilityDispatcher(self.plugin_registry)
+        # The task owner creates a new service for each instruction. Never
+        # construct an implicit shared delivery cache in the dispatcher.
+        self.knowledge_service = knowledge_service
 
     def call(
         self,
@@ -33,6 +38,16 @@ class ToolDispatcher:
     ) -> ActionResult:
         # Validate and route a primitive tool action to EnvClient.
         spec = self.registry.get(tool_name)
+        if spec.kind == "knowledge":
+            self._validate_input_schema(spec.input_schema, args)
+            if self.knowledge_service is None:
+                raise ValueError("knowledge service is not bound to an instruction")
+            data = self.knowledge_service.load(**args)
+            return ActionResult(
+                ok=True, action=tool_name,
+                message="Knowledge guidance loaded; this is not environmental evidence.",
+                data=data,
+            )
         if spec.kind == "skill_capability":
             self._validate_input_schema(spec.input_schema, args)
             return self.skill_capabilities.call(scene_instance_id, agent_id, tool_name, args, runtime_context)

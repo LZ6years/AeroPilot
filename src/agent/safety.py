@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
+from src.agent.planning.schemas import PlannedStep
 from src.runtime.configs.safety_config import UavSafetyConfig
 
 if TYPE_CHECKING:
@@ -17,8 +17,10 @@ class SafetyViolation(ValueError):
 
 
 @dataclass(frozen=True)
-class SafetyDecision:
-    plan: ShortHorizonPlan
+class PhysicalSafetyDecision:
+    """Reviewed physical steps, independent of any semantic plan or Phase."""
+
+    steps: list[PlannedStep]
     interventions: list[dict] = field(default_factory=list)
 
 
@@ -48,18 +50,23 @@ class SafetySupervisor:
     def __init__(self, safety_config: UavSafetyConfig | None = None) -> None:
         self.safety_config = safety_config or UavSafetyConfig()
 
-    def review(
+    def review_steps(
         self,
-        plan: ShortHorizonPlan,
+        steps: list[PlannedStep],
         state: Any | None = None,
         *,
         registry: "ToolRegistry | None" = None,
-    ) -> SafetyDecision:
+    ) -> PhysicalSafetyDecision:
+        """Review one ordered batch using the existing physical limits.
+
+        Neither a mutable plan nor a phase is required. The legacy plan entry
+        delegates here during migration so there is only one safety algorithm.
+        """
         safe_steps: list[PlannedStep] = []
         interventions: list[dict] = []
         yaw_scan_offset = float(getattr(state, "yaw_scan_offset_deg", 0.0) or 0.0)
         yaw_scan_extent = float(getattr(state, "yaw_scan_extent_deg", 0.0) or 0.0)
-        for step in plan.steps:
+        for step_index, step in enumerate(steps):
             if step.kind == "tool" and step.tool == "uav.turn_relative":
                 safe_step, intervention = self._review_step(step, registry)
                 safe_yaw = float(safe_step.args.get("yaw_deg", 0.0))
@@ -74,6 +81,7 @@ class SafetySupervisor:
                     safe_steps.append(safe_step)
                     interventions.append(
                         {
+                            "step_index": step_index,
                             "tool": step.tool,
                             "replacement": "uav.hover",
                             "reason": "yaw_scan_budget_exceeded",
@@ -92,21 +100,13 @@ class SafetySupervisor:
                 yaw_scan_extent = projected_extent
                 safe_steps.append(safe_step)
                 if intervention:
-                    interventions.append(intervention)
+                    interventions.append({"step_index": step_index, **intervention})
                 continue
             safe_step, intervention = self._review_step(step, registry)
             safe_steps.append(safe_step)
             if intervention:
-                interventions.append(intervention)
-        return SafetyDecision(
-            ShortHorizonPlan(
-                plan.phase,
-                safe_steps,
-                action_window=plan.action_window,
-                agent_messages=plan.agent_messages,
-            ),
-            interventions,
-        )
+                interventions.append({"step_index": step_index, **intervention})
+        return PhysicalSafetyDecision(safe_steps, interventions)
 
     def _review_step(
         self,

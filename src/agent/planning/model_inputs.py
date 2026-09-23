@@ -230,7 +230,6 @@ def sanitize_context_for_model_text(
 
     sanitized = copy.deepcopy(context)
     _remove_debug_only_top_level_fields(sanitized)
-    _remove_legacy_semantic_metric_fields(sanitized)
     if not include_memory_documents:
         # ModelActionPlanner promotes these stable documents to separate system
         # messages. Keeping duplicate copies in JSON weakens their role and
@@ -364,13 +363,9 @@ def _order_model_text_context(context: dict[str, Any]) -> dict[str, Any]:
 
     preferred_order = (
         "active_instruction",
-        "current_phase",
-        "phase_strategy",
-        "phase_neighborhood",
-        "semantic_goal",
-        "runtime_control",
+        "protocol_context",
+        "task_plan",
         "fragments",
-        "allowed_action_constraints",
         "rules",
         "user_preferences",
     )
@@ -395,7 +390,7 @@ def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
 
     context.pop("safety_constraints", None)
     context.pop("observation_policy", None)
-    _remove_phase_judge_debug_fields(context)
+    _remove_execution_debug_fields(context)
     context.pop("context_schema", None)
     context.pop("metadata", None)
     context.pop("disabled_fragments", None)
@@ -406,34 +401,23 @@ def _remove_debug_only_top_level_fields(context: dict[str, Any]) -> None:
     context.pop("latest_observation_summary", None)
     # Backend capability details belong to Runtime lifecycle handling and its
     # state artifact. The model receives only the already-filtered canonical
-    # action contract. Keeping this defensive removal prevents a custom or
+    # Provider tools declaration. Keeping this defensive removal prevents a custom or
     # legacy context source from reintroducing the obsolete duplicate field.
     context.pop("simulator_contract", None)
 
 
-def _remove_legacy_semantic_metric_fields(context: dict[str, Any]) -> None:
-    """Prevent stale custom contexts from reviving the removed metric schema."""
-
-    current_phase = context.get("current_phase")
-    if isinstance(current_phase, dict):
-        current_phase.pop("metrics", None)
-
-
-def _remove_phase_judge_debug_fields(context: dict[str, Any]) -> None:
+def _remove_execution_debug_fields(context: dict[str, Any]) -> None:
     for key in (
         "planner_context_summary",
         "action_window",
         "action_plan",
         "safety_intervention_summary",
         "yaw_scan_remaining_deg",
-        "visual_phase_budget_exhausted",
         "recent_executed_tools",
         "recent_safety_reasons",
         "safety_interventions",
         "recent_history",
         "observation_before",
-        "phase_window_count",
-        "max_phase_window_count",
     ):
         context.pop(key, None)
     if isinstance(context.get("executed_steps"), list):
@@ -460,33 +444,11 @@ def _compact_executed_step(item: Any) -> dict[str, Any]:
 def _remove_model_facing_direction_shorthand(context: dict[str, Any]) -> None:
     """Strip legacy move direction shorthands from model-facing JSON only."""
 
-    constraints = context.get("allowed_action_constraints")
-    if isinstance(constraints, dict):
-        action_schemas = constraints.get("action_schemas")
-        if isinstance(action_schemas, dict):
-            move_schema = action_schemas.get("uav.move_body")
-            if isinstance(move_schema, dict):
-                _sanitize_move_body_schema(move_schema)
-
     fragments = context.get("fragments")
     if isinstance(fragments, list):
         for fragment in fragments:
             if isinstance(fragment, dict):
                 _sanitize_action_fragment(fragment)
-
-
-def _sanitize_move_body_schema(schema: dict[str, Any]) -> None:
-    args_one_of = schema.get("args_one_of")
-    if not isinstance(args_one_of, list):
-        return
-    numeric_options = [
-        item
-        for item in args_one_of
-        if isinstance(item, dict) and "direction" not in item
-    ]
-    schema["args_one_of"] = numeric_options or [
-        {"vx": "number", "vy": "number", "vz": "number", "duration": "number"}
-    ]
 
 
 def _remove_empty_and_debug_top_level_fields(context: dict[str, Any]) -> None:

@@ -102,23 +102,6 @@ class SkillCapabilityCatalog:
             if skill.capability is not None
         }
 
-    def action_schemas(self) -> dict[str, dict[str, Any]]:
-        return {
-            capability.call_name: {
-                "description": capability.description,
-                "input_schema": dict(capability.input_schema),
-                "wire_name": capability.wire_name,
-                "runtime": capability.runtime.to_dict(),
-                "source": "skill_capability",
-                "mock": capability.mock,
-            }
-            for capability in self.capabilities
-        }
-
-    def planner_tools(self) -> list[str]:
-        return sorted(capability.call_name for capability in self.capabilities)
-
-
 def _unique_suffix_match(name: str, by_name: dict[str, Skill]) -> Skill | None:
     if "." not in name:
         return None

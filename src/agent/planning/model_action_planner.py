@@ -76,6 +76,10 @@ class ModelActionPlanner:
         self.history_projector = history_projector or HistoryProjector()
         configured_prompt = prompt_path or self.model_config.action_planner_prompt_path or None
         self.system_prompt = self._load_system_prompt(configured_prompt)
+        prompt_dir = Path(__file__).resolve().parent / "prompts"
+        self.tool_user_prompt = (prompt_dir / "tool_user_system.txt").read_text(encoding="utf-8").strip()
+        self.tool_case_studies = (prompt_dir / "tool_use_case_studies.txt").read_text(encoding="utf-8").strip()
+        self.task_progress_reminder = (prompt_dir / "task_progress_reminder.txt").read_text(encoding="utf-8").strip()
         self.last_request: dict[str, Any] = {}
         self.last_response: dict[str, Any] = {}
         # In-memory only until Runtime writes a decision artifact. Image bytes
@@ -89,8 +93,16 @@ class ModelActionPlanner:
         registry: "ToolRegistry",
         *,
         allowed_tool_names: set[str] | None = None,
+        decision_index: int | None = None,
     ) -> AssistantTurn:
-        """Request exactly one native assistant/tool-call turn."""
+        """Request one turn; Runtime supplies a one-based, instruction-local index.
+
+        Standalone callers may omit the index to disable periodic reminders.
+        Transport retries reuse this request and never advance the decision clock.
+        """
+
+        if decision_index is not None and (type(decision_index) is not int or decision_index < 1):
+            raise ValueError("decision_index must be a positive integer or None")
 
         if not self.model_config.api_key:
             raise ModelActionPlannerConfigError(
@@ -101,16 +113,24 @@ class ModelActionPlanner:
                 f"Unsupported model provider: {self.model_config.provider}"
             )
         specs = registry.model_specs(allowed_tool_names)
-        if not any(spec.name == "runtime.commit_phase_turn" for spec in specs):
+        if not specs:
             raise ModelActionPlannerConfigError(
-                "runtime.commit_phase_turn must be exposed in every mission turn"
+                "at least one model tool must be exposed in a mission turn"
             )
         context = transcript.latest_context()
         projection = self.history_projector.project(transcript, registry)
         builder = MessageBuilder()
         builder.extend(_memory_system_messages(context), key="memory_documents")
         builder.add_system(self.system_prompt, key="planner_instruction")
+        builder.add_system(self.tool_user_prompt, key="tool_user_instruction")
+        builder.add_system(self.tool_case_studies, key="tool_case_studies")
         builder.extend(projection.messages, key="history")
+        interval = self.model_config.task_progress_reminder_interval
+        # A transient request instruction, never a durable Transcript event.
+        # Append after the complete history so tool call/result pairs stay intact.
+        if (interval and decision_index is not None and decision_index > 1
+                and (decision_index - 1) % interval == 0):
+            builder.add_system(self.task_progress_reminder, key="task_progress_reminder")
         request = ModelRequest(
             messages=builder.build(),
             tools=[spec.to_provider_tool() for spec in specs],
@@ -208,7 +228,19 @@ def _parse_assistant_turn(message: dict[str, Any], registry: "ToolRegistry") -> 
             raise AgentProtocolError(f"unknown provider tool: {wire_name}") from exc
         try:
             args = json.loads(function.get("arguments") or "{}")
-        except (json.JSONDecodeError, TypeError) as exc:
+        except json.JSONDecodeError as exc:
+            raw = function.get("arguments") or "{}"
+            nearby = raw[max(0, exc.pos - 32):exc.pos + 48]
+            raise AgentProtocolError(
+                f"tool {wire_name} arguments are not valid JSON: {exc.msg}; "
+                f"line {exc.lineno}, column {exc.colno}, offset {exc.pos}; "
+                f"near {json.dumps(nearby, ensure_ascii=True)}. "
+                "Resubmit a valid JSON object preserving the intended action. "
+                "JSON numbers cannot have leading zeros (for example 00.3 is invalid); "
+                "use valid decimal syntax such as 0.3 or -0.3 only if that is your intended value. "
+                "No call in this turn executed."
+            ) from exc
+        except TypeError as exc:
             raise AgentProtocolError(
                 f"tool {wire_name} arguments are not valid JSON"
             ) from exc
@@ -219,7 +251,7 @@ def _parse_assistant_turn(message: dict[str, Any], registry: "ToolRegistry") -> 
     public_intent = content.strip() if isinstance(content, str) else ""
     if not calls:
         raise AgentProtocolError(
-            "mission assistant turn must call a tool; use runtime.commit_phase_turn to finish a phase"
+            "assistant turn must call a tool; use runtime.report_completed or runtime.report_blocked to finish the task"
         )
     public_intent_source: PublicIntentSource = "provider_content"
     if not public_intent:
@@ -236,24 +268,6 @@ def _parse_assistant_turn(message: dict[str, Any], registry: "ToolRegistry") -> 
 
 def _fallback_public_intent(calls: list[AgentToolCall]) -> str:
     """Describe model-authored Tool arguments without inventing reasoning."""
-
-    commit = next(
-        (call for call in calls if call.tool_name == "runtime.commit_phase_turn"),
-        None,
-    )
-    if commit is not None:
-        action_window = commit.args.get("action_window")
-        if isinstance(action_window, dict):
-            intent = action_window.get("intent")
-            if isinstance(intent, str) and intent.strip():
-                return intent.strip()
-        phase = commit.args.get("phase")
-        phase_label = (
-            phase.strip()
-            if isinstance(phase, str) and phase.strip()
-            else "current"
-        )
-        return f"Commit phase decision for {phase_label}."
 
     if len(calls) == 1:
         observation_id = calls[0].args.get("observation_id")

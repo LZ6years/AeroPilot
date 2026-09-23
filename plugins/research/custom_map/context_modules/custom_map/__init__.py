@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, TaskContextInput
 
 from .grid_builder import DEFAULT_GRID_SIZE, DEFAULT_METERS_PER_CELL, build_grid_map
 from .html_report import render_custom_map_html
@@ -30,7 +30,7 @@ class PluginContextModule(ContextModule):
     priority = 82
     max_items = 1
 
-    def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
         memory = sources.flight_memory
         records = read_custom_map_records(memory)
         trajectory = build_trajectory(records)

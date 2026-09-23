@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.memory.context.schemas import StageContextInput
+from src.memory.context.schemas import TaskContextInput
 
 from .constants import (
     ALLOWED_POSITIONS,
@@ -20,11 +20,11 @@ from .constants import (
 def normalize_visual_description(
     raw: dict[str, Any],
     image_path: Path,
-    stage_context: StageContextInput | None = None,
+    stage_context: TaskContextInput | None = None,
 ) -> dict[str, Any]:
     data = raw.get("visual_description") if isinstance(raw.get("visual_description"), dict) else raw
     phase = data.get("phase") if isinstance(data.get("phase"), dict) else {}
-    stage_phase = stage_context.current_phase if stage_context and isinstance(stage_context.current_phase, dict) else {}
+    stage_phase = {}
     description = {
         "schema_version": str(data.get("schema_version") or SCHEMA_VERSION),
         "strategy": str(data.get("strategy") or STRATEGY),

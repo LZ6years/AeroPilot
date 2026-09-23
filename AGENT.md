@@ -32,27 +32,37 @@ logic.
 - `src/agent/transcript.py` owns chronological model intent, native tool calls,
   tool results, protocol feedback, and state checkpoints for the active
   instruction. Context modules must not duplicate that history.
-- `agent_tool_loop_system.txt` owns the native tool-loop protocol, phase commit,
-  and compact revisable maneuver strategy. It must not duplicate provider tool
-  schemas or contain benchmark-specific routes.
+- `agent_tool_loop_system.txt` owns task goals, observation interpretation and
+  the feedback loop. `tool_user_system.txt` explains generic parameter, execution
+  and result semantics without naming tools or prescribing a selection order.
+  `tool_use_case_studies.txt` contains illustrative syntax/dependency examples,
+  not executable routes. Tool descriptions own applicability; complex tasks
+  should normally start with a plan, while simple tasks may act directly.
+- Model-visible descriptions follow purpose, applicable need, returned content,
+  and capability limits. Parameter prose explains meaning, units and effects,
+  not tool-selection priority. The complex-task planning preference is explicit;
+  other descriptions must not introduce an unrelated first/last-resort ordering.
+  Shared call rules belong in ToolUser; per-tool execution attributes come from
+  ToolRuntimePolicy. Knowledge explains evidence and flight methods without
+  prescribing hidden actions or duplicating a capability's selection policy.
+- `src/tools/schemas.py` owns ToolParameter, ToolRuntimePolicy, ToolSpec and
+  ToolCall. ToolSpec generates input_schema from parameters and object options;
+  plugin JSON Schema is adapted at registration and examples are validated there.
+  model_specs always intersects allowed names with runtime.model_exposed.
+  Hover remains Runtime-only, including safety substitution and stabilization.
+  ContextBuilder emits state/evidence, never tool declarations. Provider tools
+  is the only declaration path; HistoryProjector removes legacy provider-only
+  state fields without deleting historical calls/results or changing storage.
 - `memory/FLYAGENT.md` owns only the shared embodied Agent identity, general
   work cycle, direction consistency, and safety/reporting baseline. It must not
   enumerate configured sensors, temporal image roles, task-specific completion
   rules, or project-private fields. `memory/USER.md` owns ordinary human spatial
   language and precision preferences. Load both as separate model messages
   instead of copying their guidance into parser prompts.
-- `src/agent/semantic/prompts/task_parser_structure_system.txt` owns only task
-  intent, task goal, and immutable phase structure. Phase count, order, name,
-  and goal come from the user instruction before any skill is selected.
-- `src/agent/semantic/prompts/done_when_generation_system.txt` owns the general
-  quality rules for a stable, minimal, judgeable completed state. It contains no
-  task-domain tutorial. `task_parser_phase_criteria_system.txt` only assembles
-  the per-phase `done_when` and `continue_when` JSON contract from
-  that shared rule, selected domain knowledge, and configured evidence.
 - `plugins/knowledge/*/SKILL.md` contains reusable domain knowledge. Skills must
   not depend on local context field names, debug schemas, benchmark cases, or
   project-private runtime details.
-- `src/runtime/*` coordinates execution, observations, phase anchors, and debug
+- `src/runtime/*` coordinates execution, observations, instruction anchors, and debug
   artifacts. Runtime should not silently encode semantic task fixes that belong
   in context contracts, prompts, skills, validators, or future semantic update
   middleware.
@@ -83,11 +93,11 @@ capability, do not make it in the shared runtime, prompts, or knowledge base.
 ## Model-Facing vs Human-Facing Data
 
 Model-facing state checkpoints should be current and decision useful:
-- current instruction and semantic phase;
+- original instruction, caller-owned protocol_context and optional task plan;
 - one current original RGB observation image, preserving scene colors;
-- one compact motion summary containing only measured phase-start-relative and
+- one compact motion summary containing only measured instruction-start-relative and
   last-window UAV self-motion;
-- compact phase completion evidence.
+- knowledge catalog and loaded index, never duplicate knowledge bodies.
 
 The provider receives every checkpoint's state text together with the complete
 active-task assistant/tool transcript in chronological order. Observation images
@@ -148,14 +158,10 @@ that a candidate matches the instruction.
 
 The capability may declare a generic per-observation call limit and a conditional
 `current_observation_success` completion policy through ToolSpec JSON extensions.
-Runtime evaluates those declarations generically from the call arguments. A
-numeric mention alone does not force immediate perception: use qualitative RGB
-and optional fused-depth evidence while clearly off threshold, and request precise
-candidate distance only when action choice, user-requested measurement, or
-quantitative completion genuinely depends on it.
-
-Direct visual reasoning precedes supplementary localization: request detection
-only for decision-relevant ambiguity, not as a general scene-description proxy.
+Runtime evaluates those declarations generically from the call arguments.
+Evidence precision and geometric meaning must support the requested judgment;
+this does not impose an order between direct visual interpretation and callable
+localization. Image labels explain the sensor representation, not tool choice.
 ToolSpec projects public execution constraints into provider tool descriptions;
 private plugin settings remain handler-only. `parallel_safe` permits independent
 read-only calls in the same turn, without requiring concurrent backend execution.
@@ -184,83 +190,35 @@ benchmark artifacts from `plugins/knowledge/*/SKILL.md`. Phrase skill guidance
 as general UAV behavior, visual reasoning, movement, route, safety, or
 completion knowledge.
 
-Semantic completion uses one shared contract across criteria generation,
-semantic updates, and phase decisions. The shared done_when prompt owns
-minimum sufficiency, stable completed-state wording, condition quality, and
-grouping. Criteria and updater prompts own only their output shape and numeric
-provenance in natural-language conditions; they must not duplicate generic done_when rules or contain visual,
-route, orbit, landing, or other task-domain tutorials. Knowledge skills own
-task evidence and behavior semantics, but must not teach `done_when`,
-`continue_when`, schema fields, or list organization. The semantic updater
-reuses the triggering planner window's selected core skill guidance; it does
-not run another selection pass or load skill references.
-Every explicit terminal result in an immutable phase goal must remain an
-already-achieved result in `done_when`; criteria and updater may not weaken it
-into proximity, feasibility, preparation, or readiness for a later action.
+There is one ToolRegistry for builtins, UAV tools and JSON-discovered capabilities.
+TaskRuntime.run_task accepts raw instructions and optional protocol_context.
+No parser, automatic skill selector, fixed Phase, commit or semantic updater runs.
+MissionState owns one optional plan with stable IDs and revisions. Plans are not
+environmental evidence and cannot automatically complete an instruction.
 
-Semantic evidence capabilities are rediscovered from enabled context modules
-before each model task parse. The structure parser must not receive them because they do
-not decide task or phase structure. Per-phase criteria generation and semantic
-updates may receive the same bounded capability list after selected skill
-guidance and before their output contract. They must treat it as potential
-evidence availability, not observed truth; must not turn RGB, depth, pose, map,
-or action-history source names into terminal obligations; and must not require
-hidden geometry or unavailable exact target-relative measurements. This
-capability metadata does not add fields to `SemanticPlan`, and validators must
-not parse modality names from natural-language conditions.
+KnowledgeService snapshots enabled knowledge per instruction. knowledge.load
+returns full body and requested declared references incrementally as ToolResults.
+Context contains only catalog/loading indexes. Loading does not execute text,
+register capabilities, or extend permissions. Invalid paths fail without mutation.
 
-Validators enforce structure, numeric provenance, and explicit contracts. They
-must not infer AND/OR semantics from natural-language connective words such as
-`or` or `alternatively`. Tests should lock responsibility boundaries and
-observable contracts rather than exact long prompt sentences that duplicate
-knowledge or preserve contradictory wording.
+HistoryProjector owns the request view, not durable history. Context modules
+build current state; Transcript retains full append-only intent/results. No
+transport, task semantics or history selection policy belongs in knowledge.
 
-Phase-start-relative cumulative motion describes the whole phase; exact action
-history is read from the transcript rather than reconstructed by a context
-module. The model classifies every
-`done_when` item as `supported`, `unknown`, or `contradicted`; those judgments
-alone derive the semantic phase transition. Numeric requirements stay in the
-natural-language condition and are judged from the evidence available at the
-requested precision. Free-text evidence is explanatory and must not be parsed
-as control logic. The phase-decision prompt must not duplicate separate visual,
-route, orbit, or landing tutorials.
+Physical turns contain 1–3 ordered calls, read-only turns follow ToolSpec batching,
+and each control call is exclusive. Safety reviews actual arguments. Each physical
+batch has one automatic after observation; terminal refreshes are separate.
+The instruction limit is 300 physical windows, with 10 nonphysical rounds and
+6 consecutive protocol rejections by default. Plan changes cannot reset limits.
 
-Within native tool-loop planning, `runtime.commit_phase_turn` carries the
-completion assessment, current short maneuver strategy, and physical-window
-intent. Stable primitive argument semantics belong to canonical `ToolSpec`
-schemas and enter the provider request through `tools`; prompts, state
-checkpoints, and knowledge skills must not maintain duplicate sign conventions.
+runtime.report_completed and runtime.report_blocked require environmental
+evidence references, never plan or knowledge as proof. The Runtime closes results,
+performs terminal stabilization/final observation, and then caller-owned cleanup.
+Infrastructure errors remain separate from the model's terminal state.
 
-The runtime uses two loops. The inner loop may execute immediate read-only tools
-and feed their results back without consuming a flight window. A valid commit
-ends the inner loop. The outer phase loop sends an ordered batch of one to three
-physical calls through Safety and ToolDispatcher, waits for stabilization,
-observes once after the batch, and then creates the next state checkpoint.
-
-Phase strategy is mutable Runtime state, not part of `SemanticPlan` and not a
-phase-completion authority. Runtime owns its revision and update classification;
-the model sees only the latest compact snapshot as a top-level `PlannerContext`
-field immediately after `current_phase`. The prior output `reason` is exposed
-there as `previous_reason`, so it cannot masquerade as current-window evidence.
-An intermediate strategy stage may advance while phase completion remains
-unknown. Strategy updates must assess the active stage's own observable cue
-before selecting the next action; they must not use the final `done_when` result
-as the stage-advance gate.
-
-Strategy stages remain strings: the native planner prompt asks for one concise,
-situated natural sentence per stage, with its problem and observable progress
-understandable together. Evidence, not merely an executed maneuver, supports
-keeping or changing the strategy. This is prompt-level guidance, not a new
-schema validation, fixed sentence template, visual task sequence, or termination
-condition; `reason` briefly explains the current evidence without repeating the plan.
-
-Initial task plans are recorded before execution in the append-only
-`initial_semantic_plan` event, including the parser's actual protocol context.
-Reports use this frozen snapshot, never a future strategy, as the full initial
-plan. Default review contains that plan and ID-linked Phase/Decision cards;
-complete requests and detailed histories remain in folded Advanced audit.
-Missing/ambiguous associations remain visible. Semantic route coverage and
-entity ownership belong to parser contracts, not keyword fixes in Runtime.
+Legacy Phase compatibility exists only at the report-reading boundary. Formal
+Campaigns cannot merge loop versions. Reports show task, optional plan and
+ID-linked Decisions; requested, submitted and applied plans stay distinct.
 
 `last_window_uav_motion` means measured UAV self-motion during the immediately
 preceding completed action window. A planning-time refresh with no new window
@@ -274,13 +232,8 @@ knowledge guidance only; callable skills may use the structure appropriate to
 their external capability. Runtime treats these headings as ordinary Markdown
 and does not parse or route sections independently.
 
-Keep each core knowledge body within the current 2400-character guidance
-budget. The core must retain the evidence and completion knowledge needed by
-semantic criteria generation. Move formulas, long examples, search scales, and
-optional action detail to one-level `references/*.md` files, and state clearly
-when a planner should request each reference. Do not move essential completion
-conditions into references because parser-time criteria selection does not load
-them.
+Keep core knowledge concise; long examples and optional detail belong in declared
+references. KnowledgeService returns complete requested text without truncation.
 
 When two knowledge files describe one continuous reasoning chain, prefer one
 primary skill plus optional references over multiple overlapping skills. For
@@ -293,23 +246,9 @@ should not reintroduce obsolete fields or teach reusable skills about internal
 schemas. Keep old debug, evaluation, and report concepts out of model-facing
 prompt examples unless that prompt explicitly owns the field.
 
-Model task parsing uses two distinct stages. The structure stage sees no skill
-body. After structure is validated, each phase independently selects all and
-only the knowledge skills relevant to its completion, continuation, or evidence
-criteria. There is no runtime hard limit on the number selected, but
-the selector should choose the smallest genuinely relevant set. Parser-time
-selection loads bounded `SKILL.md` knowledge only: no references, source paths,
-or callable capabilities.
-
-Parser-time and planner-time skill selection are independent. Parser selection
-helps define a phase's semantic criteria; planner selection helps choose the
-next action from current runtime evidence. Do not carry one stage's selected
-skill list into the other as an implicit decision or let a skill determine
-phase count, order, name, or goal.
-
 Do not restore model-facing `direction` shorthand for movement. UAV movement
 plans use numeric velocity arguments, while semantic direction and distance
-requirements stay in phase goals and natural-language completion conditions.
+requirements stay in the original instruction and optional plan.
 
 Do not add prompt or skill warnings about data that should never be provided to
 the model, such as hidden benchmark truth. Enforce that boundary in context and
@@ -317,17 +256,9 @@ evaluation plumbing instead of asking the model to ignore unavailable fields.
 
 ## Change Discipline
 
-Route phases preserve independently judgeable handoffs, including explicit
-departure/altitude requirements. Preserve those requirements without making each
-setup maneuver a separate phase: group by meaningful exit state and route handoff.
-Completion conditions express exit results rather than verb-by-verb action
-receipts; necessary relative-motion and route constraints still use history.
-Neither current-image-only proof nor a grammatical tense is a semantic rule.
-Completion conditions separate independently required results without imposing
-counts or intermediate stops. Local strategies
-normally retain their completed prefix and advance the active stage; revisions
-need new evidence, and prior narratives never override actual tool arguments.
-These are prompt contracts, not new Runtime validators.
+Optional plans preserve prior work using stable IDs. Evidence, not previous intent,
+supports progress; Runtime validates structure and references, not natural-language
+route correctness. No additional semantic judge is introduced.
 
 Visual grounding uses the capability JSON box threshold (currently 0.4). Empty
 candidates mean uncertain detection, not confirmed absence; empty evidence images
@@ -338,8 +269,8 @@ steps or a fixed recovery-attempt limit. Safety limits are unchanged.
 Review defaults to a compact plan/decision timeline with human-only trajectory
 comparisons. Full requests and duplicate histories are available only through
 explicit detailed-audit generation; raw audit files are preserved. The AerialVLN
-landing protocol remains parser-only in this change: Planner reinterpretation
-of landing is a known deferred issue, not a solved behavior claim.
+landing protocol text is passed unchanged as caller-owned protocol_context;
+this migration does not claim to solve its interpretation by the model.
 
 Scene lifecycle ownership belongs to `src/sim_server`, not benchmark or model
 policy. Register launch ownership before readiness; roll back backend clients,

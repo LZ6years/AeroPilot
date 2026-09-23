@@ -28,9 +28,5 @@
       "max_observation_images": 20,
       "keep_recent_observations": 3
     }
-  },
-  "skills": {
-    "selection": "model",
-    "include_body": "summary"
   }
 }

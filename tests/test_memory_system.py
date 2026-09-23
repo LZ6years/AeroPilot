@@ -9,13 +9,13 @@ import pytest
 from PIL import Image
 
 from src.agent.messages import AgentMessage
-from src.agent.semantic.task_parser import TaskParser
+from types import SimpleNamespace
 from src.memory.context.composer import ContextComposer
 from plugins.research.multimodal_image.context_modules import MultimodalImageContextModule
 from src.memory.flight_memory import FlightMemory
 from src.memory.context.modules.base import ContextModule
 from src.memory.context.registry import ContextModuleConfigError, ContextModuleRegistry
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, TaskContextInput
 from src.memory.stores import MapMemoryStore, MemoryEventWriter, MemoryRecordReader
 from src.plugins import PluginRegistry
 from src.runtime.configs.model_config import ModelConfig
@@ -25,32 +25,22 @@ def write_test_png(path, color=(12, 34, 56), size=(320, 240)) -> None:
     Image.new("RGB", size, color).save(path, format="PNG")
 
 
-def make_parse_result():
-    return TaskParser(mode="rule_based").parse("右转寻找黑色路灯并停下")
+def make_instruction():
+    return SimpleNamespace(instruction="右转寻找黑色路灯并停下")
 
 
-def make_stage_context(
-    result=None,
-    current_phase: dict | None = None,
-    phase_neighborhood: dict | None = None,
-    phase_execution_summary: dict | None = None,
-) -> StageContextInput:
-    result = result or make_parse_result()
-    return StageContextInput(
+def make_task_context(result=None, motion_summary=None) -> TaskContextInput:
+    result = result or make_instruction()
+    return TaskContextInput(
         active_instruction=result.instruction,
-        semantic_plan=result.plan.to_dict(),
-        current_phase=current_phase if current_phase is not None else result.plan.phases[0].to_dict(),
-        phase_neighborhood=phase_neighborhood or {},
-        semantic_goal=result.plan.task_goal.to_dict(),
         safety_constraints={"hover_required": False},
-        allowed_action_constraints={"planner_tools": ["uav.hover", "env.observe"]},
-        phase_execution_summary=phase_execution_summary or {},
+        motion_summary=motion_summary or {},
         metadata={"test": True},
     )
 
 
 def make_memory(tmp_path) -> FlightMemory:
-    result = make_parse_result()
+    result = make_instruction()
     writer = MemoryEventWriter(tmp_path)
     reader = MemoryRecordReader(tmp_path)
     memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
@@ -64,7 +54,7 @@ def make_memory(tmp_path) -> FlightMemory:
             "agent_id": "uav_1",
             "modalities": ["rgb", "depth", "pose"],
             "pose": {"x": 1.0, "y": 0.0, "z": -2.0},
-            "frames": {"rgb": {"path": "rgb.png"}, "depth": {"path": "depth.npy"}},
+            "frames": {"rgb": {"path": "rgb.png", "mock": True}, "depth": {"path": "depth.npy"}},
             "source": "phase_step",
         }
     )
@@ -144,33 +134,26 @@ def test_memory_event_writer_records_agent_messages_as_refs(tmp_path):
 
 
 def test_stage_context_input_to_dict_has_expected_fields():
-    result = make_parse_result()
-    stage_context = make_stage_context(result)
+    result = make_instruction()
+    stage_context = make_task_context(result)
 
     data = stage_context.to_dict()
 
     assert data["active_instruction"] == result.instruction
-    assert data["semantic_plan"] == result.plan.to_dict()
-    assert data["current_phase"] == result.plan.phases[0].to_dict()
-    assert data["phase_neighborhood"] == {}
-    assert data["semantic_goal"] == result.plan.task_goal.to_dict()
     assert data["safety_constraints"] == {"hover_required": False}
-    assert data["allowed_action_constraints"]["planner_tools"] == ["uav.hover", "env.observe"]
+    assert "allowed_action_constraints" not in data
     assert data["metadata"] == {"test": True}
 
 
 def test_context_composer_outputs_uniform_fragments(tmp_path):
-    result = make_parse_result()
+    result = make_instruction()
     memory = make_memory(tmp_path)
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
-        make_stage_context(result),
+        make_task_context(result),
     )
 
     assert context["active_instruction"] == memory.active_instruction
-    assert context["current_phase"]["name"]
-    assert context["phase_neighborhood"] == {}
-    assert context["semantic_goal"] == result.plan.task_goal.to_dict()
     assert [fragment["name"] for fragment in context["fragments"]] == [
         "instruction",
         "skills",
@@ -197,7 +180,7 @@ def test_context_composer_outputs_uniform_fragments(tmp_path):
         "action",
         "map",
     }
-    assert "selected_skills" in context["context_schema"]["module_content_fields"]["skills"]
+    assert "knowledge_catalog" in context["context_schema"]["module_content_fields"]["skills"]
     assert "agl_m" in context["context_schema"]["module_content_fields"]["pose"]
     assert "latest_pose" not in context["context_schema"]["module_content_fields"]["pose"]
     assert "selected_frames" in context["context_schema"]["module_content_fields"]["image"]
@@ -211,7 +194,7 @@ def test_context_composer_loads_rules_and_user_preferences_from_markdown(tmp_pat
 
     context = ContextComposer(rules_path=rules_path, user_preferences_path=user_path).compose(
         MemorySourceBundle(make_memory(tmp_path), MapMemoryStore()),
-        make_stage_context(),
+        make_task_context(),
     )
 
     assert context["rules"] == {"text": "Always prefer safe hover.", "source": str(rules_path)}
@@ -230,7 +213,7 @@ def test_context_composer_loads_default_memory_rules_and_preferences(tmp_path, m
     flight_memory = make_memory(tmp_path)
     context = ContextComposer().compose(
         MemorySourceBundle(flight_memory, MapMemoryStore()),
-        make_stage_context(),
+        make_task_context(),
     )
     flight_memory_json = flight_memory.to_dict()
 
@@ -250,7 +233,7 @@ def test_context_composer_allows_explicit_rules_to_override_file_values(tmp_path
         user_preferences={"text": "runtime preferences"},
         rules_path=rules_path,
         user_preferences_path=tmp_path / "missing_USER.md",
-    ).compose(MemorySourceBundle(make_memory(tmp_path), MapMemoryStore()), make_stage_context())
+    ).compose(MemorySourceBundle(make_memory(tmp_path), MapMemoryStore()), make_task_context())
 
     assert context["rules"]["text"] == "runtime rules"
     assert context["rules"]["mode"] == "test"
@@ -283,7 +266,7 @@ def test_context_composer_preserves_fragment_content_when_over_budget(tmp_path):
 
     context = ContextComposer(registry, max_tokens_estimate=500).compose(
         MemorySourceBundle(make_memory(tmp_path), MapMemoryStore()),
-        make_stage_context(),
+        make_task_context(),
     )
     map_fragment = _fragment(context, "map")
 
@@ -327,7 +310,7 @@ def test_context_composer_preserves_all_selected_skills_when_over_budget(tmp_pat
 
     context = ContextComposer(registry, max_tokens_estimate=500).compose(
         MemorySourceBundle(make_memory(tmp_path), MapMemoryStore()),
-        make_stage_context(),
+        make_task_context(),
     )
     skills_fragment = _fragment(context, "skills")
 
@@ -363,9 +346,8 @@ def test_action_module_reads_jsonl_refs_and_outputs_unified_motion_history(tmp_p
 
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
-        make_stage_context(
-            current_phase={"name": "stop"},
-            phase_execution_summary={
+        make_task_context(
+            motion_summary={
                 "phase": "stop",
                 "window_count": 7,
                 "measurements": {"yaw_delta_deg": 60.0},
@@ -378,13 +360,13 @@ def test_action_module_reads_jsonl_refs_and_outputs_unified_motion_history(tmp_p
     )
     action = _fragment(context, "action")
 
-    summary = action["content"]["motion_history_summary"]
+    summary = action["content"]
     assert "window_count" not in summary
-    assert summary["phase_start_relative_uav_motion"] == {
-        "forward_m": 0.0,
-        "right_m": 0.0,
-        "up_m": 0.0,
-        "planar_m": 0.0,
+    assert summary["instruction_start_relative_uav_motion"] == {
+        "forward_m": None,
+        "right_m": None,
+        "up_m": None,
+        "planar_m": None,
         "yaw_delta_deg": 60.0,
     }
     assert action["metadata"]["visual_search_progress"] == {
@@ -398,7 +380,6 @@ def test_action_module_reads_jsonl_refs_and_outputs_unified_motion_history(tmp_p
     }
     assert "recent_execution_order" not in summary
     assert "recent_execution" not in summary
-    assert "motion_history_summary_sources" in action["metadata"]
     assert "recent_actions" not in action["content"]
     assert "action_trend" not in action["content"]
     assert "action_effect_summaries" not in action["content"]
@@ -411,7 +392,7 @@ def test_pose_and_image_modules_read_jsonl_refs(tmp_path):
 
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
-        make_stage_context(current_phase={"name": "align_to_landmark"}),
+        make_task_context(),
     )
     pose = _fragment(context, "pose")
     image = _fragment(context, "image")
@@ -446,7 +427,7 @@ def test_default_image_module_attaches_latest_real_rgb_as_model_input(tmp_path):
 
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
-        make_stage_context(current_phase={"name": "search_visual_target"}),
+        make_task_context(),
     )
     image = _fragment(context, "image")
     model_input = image["model_inputs"][0]
@@ -481,7 +462,7 @@ def test_image_module_keeps_three_recent_rgb_frames_only(tmp_path):
                 "modalities": ["rgb", "depth", "pose"],
                 "pose": {"x": float(index), "y": 0.0, "z": -2.0},
                 "frames": {
-                    "rgb": {"path": f"rgb_{index}.png"},
+                    "rgb": {"path": f"rgb_{index}.png", "mock": True},
                     "depth": {"path": f"depth_{index}.npy"},
                 },
             }
@@ -492,7 +473,7 @@ def test_image_module_keeps_three_recent_rgb_frames_only(tmp_path):
 
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
-        make_stage_context(current_phase={"name": "search_landmark"}),
+        make_task_context(),
     )
     image = _fragment(context, "image")
 
@@ -532,7 +513,7 @@ def test_image_module_ignores_temporal_anchors_for_checkpoint_media(tmp_path):
     memory.set_observation_anchor("before_last_action_window", observation_refs[1])
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
-        make_stage_context(current_phase={"name": "navigate"}),
+        make_task_context(),
     )
     image = _fragment(context, "image")
     selected = image["content"]["selected_frames"]
@@ -547,7 +528,7 @@ def test_image_module_ignores_temporal_anchors_for_checkpoint_media(tmp_path):
     merged = _fragment(
         ContextComposer().compose(
             MemorySourceBundle(memory, MapMemoryStore()),
-            make_stage_context(current_phase={"name": "navigate"}),
+            make_task_context(),
         ),
         "image",
     )
@@ -558,15 +539,15 @@ def test_image_module_ignores_temporal_anchors_for_checkpoint_media(tmp_path):
 
 def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
     rgb_path = tmp_path / "frame.png"
-    rgb_path.write_bytes(b"fake-png")
+    write_test_png(rgb_path)
     seen_payloads = []
 
     def caption_client(config, payload):
         seen_payloads.append(payload)
         user_content = payload["messages"][1]["content"]
         prompt_context = json.loads(user_content[0]["text"])
-        assert prompt_context["current_phase"]["name"] == "search_landmark"
-        assert user_content[1]["image_url"]["url"] == "data:image/png;base64," + base64.b64encode(b"fake-png").decode("ascii")
+        assert "current_phase" not in prompt_context
+        assert user_content[1]["image_url"]["url"] == "data:image/png;base64," + base64.b64encode(rgb_path.read_bytes()).decode("ascii")
         return {
             "parsed": {
                 "visual_description": {
@@ -620,13 +601,8 @@ def test_multimodal_image_module_captions_latest_real_rgb(tmp_path):
         caption_client=caption_client,
     ).build(
         MemorySourceBundle(memory),
-        make_stage_context(
-            current_phase={
-                "name": "search_landmark",
-                "goal": "identify the entrance candidate",
-                "done_when": ["entrance candidate is visible"],
-                "continue_when": ["entrance identity is unclear"],
-            }
+        make_task_context(
+
         ),
     ).to_dict()
 
@@ -662,7 +638,7 @@ def test_multimodal_image_module_falls_back_for_mock_or_missing_rgb(tmp_path):
 
     fragment = MultimodalImageContextModule().build(
         MemorySourceBundle(memory),
-        make_stage_context(current_phase={"name": "search_landmark"}),
+        make_task_context(),
     ).to_dict()
 
     assert fragment["model_inputs"] == []
@@ -673,7 +649,7 @@ def test_multimodal_image_module_falls_back_for_mock_or_missing_rgb(tmp_path):
 
 def test_multimodal_image_module_falls_back_when_caption_unavailable(tmp_path):
     rgb_path = tmp_path / "frame.png"
-    rgb_path.write_bytes(b"fake-png")
+    write_test_png(rgb_path)
     writer = MemoryEventWriter(tmp_path)
     reader = MemoryRecordReader(tmp_path)
     memory = FlightMemory("run_1", "m1", "scene_1", "uav_1", memory_reader=reader)
@@ -692,7 +668,7 @@ def test_multimodal_image_module_falls_back_when_caption_unavailable(tmp_path):
         caption_client=lambda *_: pytest.fail("caption client should not be called without an API key"),
     ).build(
         MemorySourceBundle(memory),
-        make_stage_context(current_phase={"name": "search_landmark"}),
+        make_task_context(),
     ).to_dict()
 
     assert fragment["model_inputs"] == []
@@ -716,7 +692,7 @@ def test_pose_module_keeps_three_recent_pose_refs(tmp_path):
 
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
-        make_stage_context(current_phase={"name": "stop"}),
+        make_task_context(),
     )
     pose = _fragment(context, "pose")
 
@@ -747,7 +723,7 @@ def test_pose_module_exposes_only_optional_agl_to_model_content(tmp_path):
 
     context = ContextComposer().compose(
         MemorySourceBundle(memory, MapMemoryStore()),
-        make_stage_context(current_phase={"name": "land"}),
+        make_task_context(),
     )
     pose = _fragment(context, "pose")
 
@@ -827,10 +803,10 @@ def test_registry_can_disable_modules(tmp_path):
             }
         }
     )
-    result = make_parse_result()
+    result = make_instruction()
     context = ContextComposer(registry).compose(
         MemorySourceBundle(make_memory(tmp_path), MapMemoryStore()),
-        make_stage_context(result),
+        make_task_context(result),
     )
 
     assert [fragment["name"] for fragment in context["fragments"]] == ["instruction", "pose", "action"]
@@ -846,17 +822,16 @@ def test_default_modules_describe_their_outputs():
     descriptions = registry.describe_modules()
 
     assert set(descriptions) == {"instruction", "skills", "image", "pose", "action", "map"}
-    assert "current_instruction" in descriptions["instruction"]["content_fields"]
-    assert "selected_skills" in descriptions["skills"]["content_fields"]
+    assert "instruction" in descriptions["instruction"]["content_fields"]
+    assert "knowledge_catalog" in descriptions["skills"]["content_fields"]
     assert "selected_frames" in descriptions["image"]["content_fields"]
     assert "agl_m" in descriptions["pose"]["content_fields"]
     assert "latest_pose" in descriptions["pose"]["metadata_fields"]
     assert "latest_pose" not in descriptions["pose"]["content_fields"]
-    assert "motion_history_summary" in descriptions["action"]["content_fields"]
+    assert "instruction_start_relative_uav_motion" in descriptions["action"]["content_fields"]
     assert "field_semantics" in descriptions["action"]["content_fields"]
     assert "recent_actions" not in descriptions["action"]["content_fields"]
     assert "action_trend" not in descriptions["action"]["content_fields"]
-    assert "motion_history_summary_sources" in descriptions["action"]["metadata_fields"]
     assert "visual_search_progress" in descriptions["action"]["metadata_fields"]
     assert "recalled_map_memories" in descriptions["map"]["content_fields"]
 
@@ -916,7 +891,7 @@ def test_map_context_module_outputs_recall_as_inference_and_risk():
 
     context = ContextComposer().compose(
         MemorySourceBundle(memory, store),
-        make_stage_context(current_phase={"name": "search_landmark"}),
+        make_task_context(),
     )
     map_fragment = _fragment(context, "map")
 

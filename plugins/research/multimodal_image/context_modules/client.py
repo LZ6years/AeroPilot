@@ -18,7 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from src.memory.context.schemas import StageContextInput
+from src.memory.context.schemas import TaskContextInput
 from src.runtime.configs.model_config import ModelConfig, load_model_config
 
 from .constants import (
@@ -48,15 +48,14 @@ def caption_model_config(base_config: ModelConfig | None = None, env_path: str |
 def build_visual_caption_payload(
     config: ModelConfig,
     image_path: Path,
-    stage_context: StageContextInput,
+    stage_context: TaskContextInput,
     frame: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build an OpenAI-compatible multimodal request for phase-aware captioning."""
 
-    current_phase = dict(stage_context.current_phase) if stage_context.current_phase else None
     user_context = {
         "active_instruction": stage_context.active_instruction,
-        "current_phase": current_phase,
+        "task_plan": stage_context.task_plan,
         "expected_visual_description": {
             "schema_version": SCHEMA_VERSION,
             "strategy": STRATEGY,

@@ -1,121 +1,53 @@
 """Validate runtime control requests without dispatching UAV tools.
-
-Phase 1 only accepts or rejects requests and records the outcome. Real behavior
-for ask_user and semantic_plan_update is intentionally left to later phases.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from typing import Any
-
-from src.agent.planning.schemas import RuntimeControlAction
-from src.runtime.configs.runtime_control_config import RuntimeControlConfig
-from src.runtime.control.actions.semantic_plan_update import (
-    SemanticPlanUpdateJob,
-    SemanticPlanUpdateManager,
-    SemanticPlanUpdateResult,
+from src.agent.transcript import AgentToolCall, ToolResult, TranscriptEvent
+from src.tools.registry import ToolRegistry
+from src.tools.validation import validate_tool_args
+from src.runtime.control.actions.task_plan import PlanState, apply_plan_update
+from src.runtime.control.actions.terminal import (
+    TerminalState, apply_terminal, environmental_evidence_refs, validate_completion_freshness,
 )
-from src.runtime.control.recommendations import runtime_control_recommendations
-from src.runtime.control.registry import RuntimeControlRegistry
 
 
-@dataclass(frozen=True)
-class RuntimeControlResult:
-    """Validation result for a runtime control request."""
+def execute_builtin_control(
+    call: AgentToolCall,
+    state: PlanState | TerminalState,
+    registry: ToolRegistry,
+    history: tuple[TranscriptEvent, ...],
+) -> ToolResult:
+    """Execute a validated exclusive control turn using the unique ToolRegistry.
 
-    name: str
-    status: str
-    reason: str
-    payload: dict[str, Any] = field(default_factory=dict)
-
-    def to_dict(self) -> dict[str, Any]:
-        return {
-            "name": self.name,
-            "status": self.status,
-            "reason": self.reason,
-            "payload": dict(self.payload),
-        }
-
-
-class RuntimeControlExecutor:
-    """Runtime-side validator for control actions requested by the planner."""
-
-    def __init__(
-        self,
-        config: RuntimeControlConfig | None = None,
-        registry: RuntimeControlRegistry | None = None,
-        semantic_plan_update_manager: SemanticPlanUpdateManager | None = None,
-        semantic_plan_updater: Any | None = None,
-    ) -> None:
-        self.config = config or RuntimeControlConfig()
-        self.registry = registry or RuntimeControlRegistry.default()
-        self.semantic_plan_update_manager = semantic_plan_update_manager or SemanticPlanUpdateManager(
-            semantic_plan_updater
+    This function owns no tool definitions, model calls, observations or cleanup.
+    Runtime persists its result and performs terminal hover/observation itself.
+    Handler validation precedes state mutation; expected invalid requests close
+    with a rejected ToolResult, not an unpaired exception.
+    """
+    try:
+        spec = registry.get(call.tool_name)
+        if (spec.runtime.effect != "runtime_control" or not spec.runtime.model_exposed
+                or spec.runtime.batching != "single" or spec.runtime.result_timing != "immediate"):
+            raise ValueError("tool is not an exposed immediate control")
+        validate_tool_args(call.args, spec.input_schema)
+        if call.tool_name == "runtime.update_plan":
+            data = apply_plan_update(state, call.args)
+        elif call.tool_name in {"runtime.report_completed", "runtime.report_blocked"}:
+            if call.tool_name == "runtime.report_completed":
+                validate_completion_freshness(history, registry)
+            data = apply_terminal(
+                state, call.args, completed=call.tool_name == "runtime.report_completed",
+                available_evidence=environmental_evidence_refs(history, registry),
+            )
+        else:
+            raise ValueError("no built-in control handler for this tool")
+    except (KeyError, ValueError) as exc:
+        return ToolResult(
+            call.tool_call_id, call.tool_name, "rejected", str(exc),
+            data={"rejection": {"code": "control_rejected", "scope": "call",
+                                "source_tool_call_id": call.tool_call_id}},
+            requested_args=dict(call.args),
         )
-        self._status: dict[str, str] = {}
-
-    def model_context(self, recommendation_context: dict[str, Any] | None = None) -> dict[str, Any]:
-        available = self.config.exposed_actions(self.registry.names())
-        self._status.update(self.semantic_plan_update_manager.model_status())
-        if not available and not self._status:
-            return {}
-        context: dict[str, Any] = {"available": available}
-        contracts = {
-            name: contract.model_contract
-            for name in available
-            for contract in [self.registry.get(name)]
-            if contract is not None and contract.model_contract
-        }
-        if contracts:
-            context["contracts"] = contracts
-        visible_status = {name: status for name, status in sorted(self._status.items()) if name in available}
-        if visible_status:
-            context["status"] = visible_status
-        recommendation_context = recommendation_context or {}
-        recommendations = runtime_control_recommendations(
-            available=available,
-            status=visible_status,
-            phase_execution_summary=recommendation_context.get("phase_execution_summary"),
-            completed=bool(recommendation_context.get("completed", False)),
-            stopped=bool(recommendation_context.get("stopped", False)),
-        )
-        if recommendations:
-            context["recommendations"] = recommendations
-        return context
-
-    def validate(self, action: RuntimeControlAction) -> RuntimeControlResult:
-        contract = self.registry.get(action.name)
-        if contract is None:
-            return RuntimeControlResult(action.name, "rejected", "unknown_runtime_control_action", action.payload)
-        if not self.config.is_enabled(action.name):
-            return RuntimeControlResult(action.name, "rejected", "runtime_control_action_disabled", action.payload)
-        if not self.config.is_exposed(action.name):
-            return RuntimeControlResult(action.name, "rejected", "runtime_control_action_not_exposed", action.payload)
-        try:
-            contract.validate_payload(action.payload)
-        except ValueError as exc:
-            return RuntimeControlResult(action.name, "rejected", f"invalid_payload: {exc}", action.payload)
-        if action.name == "semantic_plan_update":
-            return RuntimeControlResult(action.name, "accepted", "validated_for_submission", action.payload)
-        return RuntimeControlResult(action.name, "not_implemented", "phase_1_validation_only", action.payload)
-
-    def validate_all(self, actions: list[RuntimeControlAction]) -> list[RuntimeControlResult]:
-        return [self.validate(action) for action in actions]
-
-    def submit_semantic_plan_update(self, job: SemanticPlanUpdateJob) -> RuntimeControlResult:
-        if not self.config.is_enabled("semantic_plan_update"):
-            return RuntimeControlResult("semantic_plan_update", "rejected", "runtime_control_action_disabled", job.request_payload)
-        if not self.config.is_exposed("semantic_plan_update"):
-            return RuntimeControlResult("semantic_plan_update", "rejected", "runtime_control_action_not_exposed", job.request_payload)
-        ok, reason = self.semantic_plan_update_manager.submit(job)
-        if not ok:
-            return RuntimeControlResult("semantic_plan_update", "rejected", reason, job.request_payload)
-        self._status["semantic_plan_update"] = "pending"
-        return RuntimeControlResult("semantic_plan_update", "pending", reason, job.request_payload)
-
-    def take_completed_semantic_plan_update(self) -> SemanticPlanUpdateResult | None:
-        result = self.semantic_plan_update_manager.take_completed()
-        if result is not None:
-            self._status.pop("semantic_plan_update", None)
-        return result
+    return ToolResult(call.tool_call_id, call.tool_name, "ok", "Control applied.", data=data,
+                      requested_args=dict(call.args), executed_args=dict(call.args))

@@ -6,12 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
-from src.agent.planning.tool_contract_validator import (
-    ToolContractValidationError,
-    ToolContractValidator,
-)
-from src.perception.context_builder import ObservationContextBuilder
+from src.agent.transcript import AgentToolCall, AssistantTurn
+from src.agent.planning.tool_contract_validator import NativeTurnValidationError, validate_native_turn
 from src.plugins import PluginRegistry
 from src.plugins.contracts.skill import SkillCapabilityResult
 from src.plugins.skills import dispatcher as dispatcher_module
@@ -31,14 +27,6 @@ def _capability_registry() -> PluginRegistry:
     )
 
 
-def _context_for_skill_tool() -> dict:
-    constraints = ObservationContextBuilder(
-        plugin_registry=_capability_registry()
-    )._allowed_action_constraints()
-    return {
-        "current_phase": {"name": "confirm_visual_reference"},
-        "allowed_action_constraints": constraints,
-    }
 
 
 def test_callable_skill_is_discovered_from_json_and_exposes_schema():
@@ -80,65 +68,32 @@ def test_provider_tool_schema_does_not_expose_settings_or_policy_extensions():
     assert "IDEA-Research" not in str(tool)
 
 
-def test_context_constraints_merge_builtin_tools_and_skill_calls():
-    constraints = _context_for_skill_tool()["allowed_action_constraints"]
-
-    assert constraints["planner_tools"][:3] == [
-        "uav.hover",
-        "uav.turn_relative",
-        "uav.move_body",
-    ]
-    assert "skill.visual_grounding.locate" in constraints["planner_tools"]
-    assert (
-        constraints["action_schemas"]["skill.visual_grounding.locate"]["source"]
-        == "skill_capability"
-    )
+def test_registry_exposes_builtin_and_plugin_tools_without_context():
+    registry = default_registry(_capability_registry())
+    tools = {spec.name: spec for spec in registry.model_specs()}
+    assert {"uav.turn_relative", "uav.move_body", "skill.visual_grounding.locate"} <= tools.keys()
+    assert "uav.hover" not in tools
+    capability = _capability_registry().skill_capability_catalog.capabilities[0]
+    assert tools[capability.call_name].input_schema == capability.input_schema
 
 
-def test_skill_tool_validator_accepts_schema_valid_args():
-    plan = ShortHorizonPlan(
-        "confirm_visual_reference",
-        [
-            PlannedStep.tool_step(
-                "skill.visual_grounding.locate",
-                {
-                    "observation_id": "obs_0001",
-                    "query": "the person to orbit around",
-                    "include_distance": False,
-                },
-                "confirm target visibility",
-            )
-        ],
-    )
-
-    validated = ToolContractValidator().validate(
-        plan, "confirm_visual_reference", _context_for_skill_tool()
-    )
-
-    assert validated.steps[0].tool == "skill.visual_grounding.locate"
-
-
-def test_skill_tool_validator_rejects_schema_invalid_args():
-    plan = ShortHorizonPlan(
-        "confirm_visual_reference",
-        [
-            PlannedStep.tool_step(
-                "skill.visual_grounding.locate",
-                {
-                    "observation_id": "obs_0001",
-                    "query": "person",
-                    "include_distance": False,
-                    "extra": True,
-                },
-                "bad args",
-            )
-        ],
-    )
-
-    with pytest.raises(ToolContractValidationError):
-        ToolContractValidator().validate(
-            plan, "confirm_visual_reference", _context_for_skill_tool()
-        )
+@pytest.mark.parametrize("extra", [False, True])
+def test_skill_tool_validator_checks_schema_before_execution(extra):
+    registry = default_registry(_capability_registry())
+    args = {"observation_id": "obs_0001", "query": "person", "include_distance": False}
+    if extra:
+        args["extra"] = True
+    turn = AssistantTurn("turn", "Confirm identity", [
+        AgentToolCall("detect", "skill.visual_grounding.locate", args)])
+    def validate():
+        return validate_native_turn(turn, registry,
+            allowed_names={"skill.visual_grounding.locate"},
+            latest_observation={"observation_id": "obs_0001"})
+    if extra:
+        with pytest.raises(NativeTurnValidationError):
+            validate()
+    else:
+        assert validate() == "read_only"
 
 
 def test_dispatcher_passes_private_settings_only_to_handler(monkeypatch):

@@ -195,43 +195,6 @@ class AgentTranscript:
                     references.add(result.result_ref)
         return references
 
-    def phase_tool_results(
-        self,
-        phase_name: str,
-        tool_name: str,
-    ) -> list[ToolResult]:
-        """Return tool results from the current contiguous phase transcript."""
-
-        start_index = 0
-        found_phase = False
-        for index in range(len(self.items) - 1, -1, -1):
-            item = self.items[index]
-            if item.kind != "state_checkpoint":
-                continue
-            context = item.payload.get("context")
-            current_phase = (
-                context.get("current_phase") if isinstance(context, dict) else None
-            )
-            checkpoint_phase = (
-                str(current_phase.get("name") or "")
-                if isinstance(current_phase, dict)
-                else ""
-            )
-            if checkpoint_phase == phase_name:
-                found_phase = True
-                start_index = index
-                continue
-            if found_phase:
-                break
-        if not found_phase:
-            return []
-        return [
-            item.payload
-            for item in self.items[start_index:]
-            if item.kind == "tool_result"
-            and isinstance(item.payload, ToolResult)
-            and item.payload.tool_name == tool_name
-        ]
 
     def snapshot(self) -> tuple[TranscriptEvent, ...]:
         """Return isolated events so request projections cannot mutate history."""

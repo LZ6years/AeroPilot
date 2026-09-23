@@ -257,7 +257,7 @@ def test_cli_defaults_to_chat_model_artifacts():
 
     assert args.command == "chat"
     assert args.env_path == ".env"
-    assert args.parser_mode is None
+    assert not hasattr(args, "parser_mode")
     assert args.save_artifacts is True
     assert args.execution == "managed"
     assert args.defer_scene_start is False

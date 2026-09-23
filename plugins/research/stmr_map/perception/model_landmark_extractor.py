@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from typing import Any
 
-from src.agent.semantic.task_parser import _loads_json_object
+from src.agent.model_support import loads_json_object as _loads_json_object
 from src.runtime.configs.model_config import ModelConfig, load_model_config
 
 from .landmark_extractor import Landmark
@@ -160,4 +160,3 @@ def _sanitize_label(value: str) -> str:
     if len(words) > 5:
         words = words[:5]
     return " ".join(words)
-

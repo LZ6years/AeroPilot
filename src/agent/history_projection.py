@@ -234,6 +234,9 @@ def _provider_state_context(
     """
 
     projected = copy.deepcopy(context)
+    projected.pop("simulator_contract", None)
+    # Historical recordings may contain duplicate tool declarations. Current
+    # context no longer creates them; request projection preserves old events.
     projected.pop("allowed_action_constraints", None)
     runtime_control = projected.get("runtime_control")
     if isinstance(runtime_control, dict):

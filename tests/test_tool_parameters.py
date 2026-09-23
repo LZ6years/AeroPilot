@@ -1,0 +1,78 @@
+"""Canonical parameter conversion, registration and visibility contracts."""
+
+import copy
+from dataclasses import replace
+
+import pytest
+
+from src.tools.registry import ToolRegistry, default_registry
+from src.tools.schemas import ToolParameter, ToolRuntimePolicy, ToolSpec
+from src.tools.validation import ToolArgumentError, validate_tool_args
+
+
+def test_plugin_conversion_preserves_nested_constraints_and_extensions():
+    schema = {
+        "type": "object", "additionalProperties": False,
+        "x-flyagent-completion": {"policy": "current_observation_success"},
+        "required": ["regions"],
+        "properties": {"regions": {
+            "type": "array", "description": "Regions to inspect.", "minItems": 1,
+            "items": {"type": "object", "required": ["x"], "additionalProperties": False,
+                      "properties": {"x": {"type": "number", "minimum": 0, "maximum": 1,
+                                             "x-flyagent-coordinate": "normalized"}}},
+        }},
+    }
+    original = copy.deepcopy(schema)
+    spec = ToolSpec.from_input_schema("inspect", "inspect", "test", "Inspect regions.", schema,
+                                     ToolRuntimePolicy("read_only", "immediate", "single", True))
+    assert spec.input_schema == original
+    assert spec.parameters[0].required
+    schema["properties"].clear()
+    exported = spec.input_schema
+    exported["properties"].clear()
+    assert spec.input_schema == original
+    provider = spec.to_provider_tool()["function"]["parameters"]
+    assert "x-flyagent-completion" not in provider
+    assert "x-flyagent-coordinate" not in provider["properties"]["regions"]["items"]["properties"]["x"]
+    validate_tool_args({"regions": [{"x": 0.5}]}, spec.input_schema)
+    with pytest.raises(ToolArgumentError):
+        validate_tool_args({"regions": [{"x": 2}]}, spec.input_schema)
+
+
+@pytest.mark.parametrize("options", [{}, {"additionalProperties": True}, {"additionalProperties": False}])
+def test_empty_object_options_keep_their_meaning(options):
+    spec = ToolSpec.from_input_schema("empty", "empty", "test", "Empty.",
+                                     {"type": "object", **options},
+                                     ToolRuntimePolicy("read_only", "immediate", "single"))
+    assert spec.input_schema == {"type": "object", "properties": {}, **options}
+
+
+def test_parameter_examples_are_checked_before_registry_mutation():
+    registry = ToolRegistry()
+    spec = ToolSpec("test", "test", "test", "Test.",
+                    (ToolParameter("count", "integer", "Positive count.", True, {"minimum": 1}),),
+                    ToolRuntimePolicy("read_only", "immediate", "single", True),
+                    input_examples=({"count": 1},))
+    registry.register(spec)
+    assert "Example arguments:" in spec.to_provider_tool()["function"]["description"]
+    with pytest.raises(ToolArgumentError):
+        registry.register(replace(spec, wire_name="replacement", input_examples=({"count": 0},)))
+    assert registry.get("test") is spec
+    with pytest.raises(KeyError):
+        registry.from_wire_name("replacement")
+
+
+def test_allowlist_cannot_reopen_hidden_runtime_tools():
+    registry = default_registry()
+    assert registry.get("uav.hover").runtime.effect == "physical"
+    assert not registry.get("uav.hover").runtime.model_exposed
+    assert registry.model_specs({"uav.hover"}) == []
+    assert {s.name for s in registry.model_specs({"uav.hover", "uav.turn_relative"})} == {"uav.turn_relative"}
+    assert "uav.hover" not in {s.name for s in registry.model_specs()}
+
+
+def test_parameter_names_cannot_be_duplicated():
+    with pytest.raises(ValueError, match="duplicate"):
+        ToolSpec("test", "test", "test", "Test.",
+                 (ToolParameter("x"), ToolParameter("x")),
+                 ToolRuntimePolicy("read_only", "immediate", "single"))

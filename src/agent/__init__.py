@@ -1,28 +1,26 @@
 ﻿"""Agent semantic planning package."""
 
-from src.agent.mission_state import MissionState
-from src.agent.messages import AgentMessage
-from src.agent.planning.model_action_planner import ModelActionPlanner
-from src.agent.planning.schemas import PlannedStep, ShortHorizonPlan
-from src.agent.safety import SafetySupervisor
-from src.agent.semantic.schemas import (
-    SemanticPhase,
-    SemanticPlan,
-    TaskGoal,
-    TaskParseResult,
-)
-from src.agent.semantic.task_parser import TaskParser
+from importlib import import_module
 
-__all__ = [
-    "MissionState",
-    "AgentMessage",
-    "ModelActionPlanner",
-    "PlannedStep",
-    "SafetySupervisor",
-    "SemanticPhase",
-    "SemanticPlan",
-    "TaskGoal",
-    "ShortHorizonPlan",
-    "TaskParseResult",
-    "TaskParser",
-]
+# Importing a generic helper must not initialize Context and PluginDiscovery.
+# Exports resolve lazily so pure helpers do not create cross-layer cycles.
+_EXPORTS = {
+    "MissionState": "mission_state",
+    "AgentMessage": "messages",
+    "ModelActionPlanner": "planning.model_action_planner",
+    "TaskPlan": "planning.task_plan",
+    "TaskPlanStep": "planning.task_plan",
+    "PlannedStep": "planning.schemas",
+    "SafetySupervisor": "safety",
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name):
+    """Resolve one public export without eager cross-layer imports."""
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    value = getattr(import_module(f"{__name__}.{_EXPORTS[name]}"), name)
+    globals()[name] = value
+    return value

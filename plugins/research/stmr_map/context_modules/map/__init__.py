@@ -14,7 +14,7 @@ from typing import Any
 
 from src.memory.context.modules.base import ContextModule
 from src.memory.context.modules.map import DefaultMapContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, StageContextInput
+from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, TaskContextInput
 
 from ...online import StmrOnlineMapBuilder, StmrOnlineMapResult
 from ...perception import DEFAULT_UAV_PRIOR_NAME, MAX_LANDMARK_QUERIES, StmrPerceptionSession
@@ -58,7 +58,7 @@ class PluginContextModule(ContextModule):
             device=device,
         )
 
-    def build(self, sources: MemorySourceBundle, stage_context: StageContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
         baseline = self.default_map.build(sources, stage_context)
         try:
             result = self.online_builder.build(sources.flight_memory, stage_context)

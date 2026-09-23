@@ -9,23 +9,20 @@ in one turn, both for the CURRENT observation. Query "the visible person" with
 include_distance=false and "the visible building" with include_distance=true.
 These are explicitly requested synthetic protocol checks, not ordinary scene
 understanding. After both results, reference both queries in your public intent
-if content is emitted, then emit commit plus turn using the final-stage rules
+if content is emitted, then emit a direct turn using the final-stage rules
 below. Do not request further grounding in this branch.
 
 Before any ToolResult exists, call only skill_visual_grounding_locate with the
 exact observation_id shown by the CURRENT image, query "the visible person",
-and include_distance=false. Do not commit or call a UAV tool in that turn.
+and include_distance=false. Do not call a UAV tool in that turn.
 
 After a successful detection-only ToolResult exists but no distance result
 exists, call only skill_visual_grounding_locate again for the same current
 observation and query, this time with include_distance=true.
 
 After a successful distance-enabled ToolResult exists, do not call grounding
-again. Call runtime_commit_phase_turn first and uav_turn_relative second in the
-same assistant turn. The phase is provider_protocol_probe. Mark done_when index
-0 unknown because this probe does not execute the turn. Include a one-stage
-phase_strategy and an action_window describing a small right turn. Request a
-positive yaw no greater than 10 degrees.
+again. Call only uav_turn_relative directly; no plan or commit is needed for
+this simple protocol probe. Request a positive yaw no greater than 10 degrees.
 
 Never claim that the physical turn already happened. This probe validates only
 the provider's native function-call and tool-result message protocol.

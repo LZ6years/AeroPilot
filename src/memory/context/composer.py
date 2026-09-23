@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from pathlib import Path
+import copy
 from typing import Any
 
 from src.memory.context.registry import ContextModuleRegistry
-from src.memory.context.schemas import ContextFragment, MemorySourceBundle, PlannerContext, StageContextInput
+from src.memory.context.schemas import ContextFragment, MemorySourceBundle, TaskContextInput
 
 
 DEFAULT_MAX_TOKENS_ESTIMATE = 2000
@@ -32,43 +33,39 @@ class ContextComposer:
     def compose(
         self,
         sources: MemorySourceBundle,
-        stage_context: StageContextInput,
+        stage_context: TaskContextInput,
     ) -> dict[str, Any]:
         fragments = self.registry.build_fragments(sources, stage_context)
         fragments.sort(key=lambda item: item.budget.priority, reverse=True)
-        original_tokens = _tokens_estimate(fragments)
-        budget_metadata = _budget_metadata(fragments)
         memory = sources.flight_memory
-        context = PlannerContext(
-            active_instruction=stage_context.active_instruction,
-            current_phase=stage_context.current_phase,
-            phase_strategy=_model_facing_phase_strategy(stage_context.phase_strategy),
-            phase_neighborhood=dict(stage_context.phase_neighborhood),
-            semantic_goal=dict(stage_context.semantic_goal),
-            fragments=fragments,
-            disabled_fragments=list(self.registry.disabled),
-            context_schema=_build_context_schema(self.registry.describe_modules()),
-            rules=self.rules,
-            user_preferences=self.user_preferences,
-            safety_constraints=dict(stage_context.safety_constraints),
-            allowed_action_constraints=dict(stage_context.allowed_action_constraints),
-            observation_policy=dict(stage_context.observation_policy),
-            phase_execution_summary=dict(stage_context.phase_execution_summary),
-            metadata={
-                "run_id": memory.run_id,
-                "map_id": memory.map_id,
-                "scene_instance_id": memory.scene_instance_id,
-                "agent_id": memory.agent_id,
-                "reset_epoch": memory.reset_epoch,
+        return {
+            "active_instruction": stage_context.active_instruction,
+            "protocol_context": stage_context.protocol_context,
+            "task_plan": copy.deepcopy(stage_context.task_plan),
+            "fragments": [fragment.to_dict() for fragment in fragments],
+            "disabled_fragments": list(self.registry.disabled),
+            "context_schema": {
+                "planner_context_fields": list(TaskContextInput.__dataclass_fields__),
+                "fragment_fields": list(ContextFragment.__dataclass_fields__),
+                "module_content_fields": {
+                    name: copy.deepcopy(description.get("content_fields", {}))
+                    for name, description in self.registry.describe_modules().items()
+                },
+            },
+            "rules": copy.deepcopy(self.rules),
+            "user_preferences": copy.deepcopy(self.user_preferences),
+            "safety_constraints": copy.deepcopy(stage_context.safety_constraints),
+            "observation_policy": copy.deepcopy(stage_context.observation_policy),
+            "metadata": {
+                "run_id": memory.run_id, **copy.deepcopy(stage_context.metadata),
                 "budget": {
                     "max_tokens_estimate": self.max_tokens_estimate,
-                    "original_tokens_estimate": original_tokens,
-                    **budget_metadata,
+                    "original_tokens_estimate": sum(item.budget.tokens_estimate for item in fragments),
+                    "final_tokens_estimate": sum(item.budget.tokens_estimate for item in fragments),
+                    "budget_applied": False, "trimmed_fragments": [],
                 },
-                **dict(stage_context.metadata),
             },
-        )
-        return context.to_dict()
+        }
 
 
 def _read_markdown_config(path: str | Path) -> dict[str, Any]:
@@ -86,113 +83,3 @@ def _merge_text_config(file_config: dict[str, Any], override: dict[str, Any] | N
     if override:
         data.update(dict(override))
     return data
-
-
-def _build_context_schema(module_descriptions: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "planner_context_fields": {
-            "active_instruction": "Current user instruction.",
-            "current_phase": "Current semantic phase with goal, done_when, and continue_when.",
-            "phase_strategy": (
-                "Previous compact current-phase maneuver strategy. previous_reason "
-                "records the prior window's rationale and is not current evidence."
-            ),
-            "phase_neighborhood": (
-                "Compact previous completed and next upcoming semantic phase summaries; "
-                "the current phase remains authoritative."
-            ),
-            "semantic_goal": "Parsed lightweight task_goal.",
-            "fragments": "Enabled context fragments.",
-            "rules": "Global FlyAgent behavior guidance.",
-            "user_preferences": "User response preferences.",
-            "safety_constraints": "Current safety state.",
-            "allowed_action_constraints": "Allowed tools, forbidden tools, schemas, and limits.",
-            "observation_policy": "Runtime collects observations automatically; do not output observe steps.",
-            "phase_execution_summary": "Runtime/debug progress source; model-facing motion is consolidated into the action fragment.",
-        },
-        "fragment_fields": {
-            "name": "Fragment type.",
-            "content": "Planner-facing compact content.",
-            "model_inputs": "Attached image/text model inputs.",
-            "risks": "Warnings or missing evidence.",
-            "metadata": "Debug/audit metadata; do not treat as task evidence.",
-        },
-        "module_content_fields": _module_content_fields(module_descriptions),
-    }
-
-
-def _module_content_fields(module_descriptions: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    legacy_fields = _compact_module_content_fields()
-    fields: dict[str, dict[str, Any]] = {}
-    for name, description in module_descriptions.items():
-        content_fields = description.get("content_fields") if isinstance(description, dict) else None
-        if isinstance(content_fields, dict) and content_fields:
-            fields[name] = dict(content_fields)
-            continue
-        if name in legacy_fields:
-            fields[name] = dict(legacy_fields[name])
-    return fields
-
-
-def _compact_module_content_fields() -> dict[str, dict[str, str]]:
-    return {
-        "instruction": {
-            "current_instruction": "Current instruction summary.",
-            "instruction_history": "Previous compact instruction summaries; excludes the current instruction.",
-        },
-        "skills": {
-            "selected_skills": "Selected skill summaries, bounded SKILL.md guidance text, and any explicitly requested reference text.",
-            "callable_capabilities": "Enabled callable skill tools, present only when non-empty.",
-        },
-        "image": {
-            "selected_frames": "The checkpoint's single current observation image reference.",
-            "visual_evidence": "RGB availability, mock status, attached image count, and interpretation status.",
-        },
-        "pose": {
-            "agl_m": "Optional UAV clearance above the configured local landing reference.",
-            "field_semantics": "Meaning and evidence boundary for optional AGL.",
-        },
-        "action": {
-            "motion_history_summary": "Current-phase and last-window UAV self-motion plus up to five successful actions ordered oldest to newest.",
-            "field_semantics": "Meanings and evidence boundaries for self-motion fields.",
-        },
-        "map": {
-            "recalled_map_memories": "Map memory clues; confirm with current observations.",
-            "recall_filter": "Map recall filter.",
-        },
-    }
-
-
-def _model_facing_phase_strategy(strategy: dict[str, Any] | None) -> dict[str, Any]:
-    """Convert Runtime strategy state into a prior-window planner snapshot.
-
-    MissionState and audit artifacts retain the output contract's ``reason``.
-    Renaming only this model-facing copy to ``previous_reason`` prevents a
-    historical explanation from masquerading as current-window evidence.
-    """
-
-    if not isinstance(strategy, dict) or not strategy:
-        return {}
-    result: dict[str, Any] = {}
-    stages = strategy.get("stages")
-    if isinstance(stages, list):
-        result["stages"] = list(stages)
-    if "active_stage" in strategy:
-        result["active_stage"] = strategy.get("active_stage")
-    reason = strategy.get("reason")
-    if isinstance(reason, str) and reason.strip():
-        result["previous_reason"] = reason.strip()
-    return result
-
-
-def _budget_metadata(fragments: list[ContextFragment]) -> dict[str, Any]:
-    tokens = _tokens_estimate(fragments)
-    return {
-        "final_tokens_estimate": tokens,
-        "trimmed_fragments": [],
-        "budget_applied": False,
-    }
-
-
-def _tokens_estimate(fragments: list[ContextFragment]) -> int:
-    return sum(max(0, int(fragment.budget.tokens_estimate)) for fragment in fragments)

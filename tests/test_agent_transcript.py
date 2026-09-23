@@ -17,6 +17,7 @@ def test_transcript_projects_state_calls_and_results_in_chronological_order(tmp_
         {
             "current_phase": {"name": "find_person", "done_when": ["person found"]},
             "allowed_action_constraints": {"planner_tools": ["uav.hover"]},
+            "simulator_contract": {"private": "legacy provider field"},
             "runtime_control": {
                 "available": ["semantic_plan_update"],
                 "contracts": {"semantic_plan_update": "duplicate schema"},
@@ -47,6 +48,9 @@ def test_transcript_projects_state_calls_and_results_in_chronological_order(tmp_
     ]
     state_json = json.loads(messages[1]["content"][-1]["text"])
     assert "allowed_action_constraints" not in state_json
+    assert "simulator_contract" not in state_json
+    assert "allowed_action_constraints" in transcript.latest_context()
+    assert "simulator_contract" in transcript.latest_context()
     assert state_json["runtime_control"] == {
         "status": {"semantic_plan_update": "pending"}
     }
@@ -55,23 +59,6 @@ def test_transcript_projects_state_calls_and_results_in_chronological_order(tmp_
     assert transcript.latest_observation_id() == "obs_0001"
 
 
-def test_transcript_scopes_tool_results_to_current_contiguous_phase(tmp_path):
-    transcript = AgentTranscript(MemoryEventWriter(tmp_path))
-    transcript.start_instruction("measure then continue", "inst_0001")
-    transcript.append_state({"current_phase": {"name": "phase_a"}}, "obs_0001")
-    transcript.append_tool_result(
-        ToolResult("call_a", "skill.metric_depth.sample_region", "ok")
-    )
-    transcript.append_state({"current_phase": {"name": "phase_b"}}, "obs_0002")
-    transcript.append_tool_result(
-        ToolResult("call_b", "skill.metric_depth.sample_region", "error")
-    )
-
-    results = transcript.phase_tool_results(
-        "phase_b", "skill.metric_depth.sample_region"
-    )
-
-    assert [result.tool_call_id for result in results] == ["call_b"]
 
 
 def test_transcript_keeps_images_in_memory_but_strips_binary_from_jsonl(tmp_path):

@@ -1,6 +1,6 @@
 # FlyAgent
 
-FlyAgent 是一个面向 UAV/UE 仿真环境的轻量级 Agent 项目。目标是让用户用自然语言描述任务，系统通过“整体语义规划 + 短期滚动执行 + 环境反馈更新”的方式控制无人机完成目标。
+FlyAgent 是一个面向 UAV/UE 仿真环境的轻量级 Agent 项目。用户提交自然语言任务，同一个模型根据观察与工具结果持续决策：按需维护计划、加载知识、调用感知、执行动作或报告终态，不强制预先划分 Phase。
 
 典型指令：
 
@@ -10,12 +10,15 @@ FlyAgent 是一个面向 UAV/UE 仿真环境的轻量级 Agent 项目。目标�
 
 这类指令不能一次性翻译成一长串确定动作。更合理的方式是：
 
-1. 先生成整体语义目标：右转后寻找黑色路灯，并最终让 UAV 朝向它后悬停。
+1. 从原始指令和当前观察开始；简单任务可直接行动，复杂任务可按需建立可修改计划。
 2. 每次只预测未来几步短期动作。
 3. 执行后读取观测，再更新计划。
 4. 用户语言不确定、目标未确认或环境状态变化时，保守悬停或重新观察。
 
 ## 文档
+
+- [当前单一工具循环、迁移与离线验收](docs/agent_loop/unified_tool_loop_migration.md)
+- [当前内置控制工具边界](docs/runtime_control/README.md)
 
 - [需求文档](C:/Users/HP/Desktop/UAV-Agent/docs/requirements.md)
 - [架构说明](C:/Users/HP/Desktop/UAV-Agent/docs/architecture.md)
