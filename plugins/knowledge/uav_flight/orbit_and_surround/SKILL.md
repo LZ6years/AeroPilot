@@ -1,6 +1,6 @@
 ---
 name: orbit_and_surround
-description: Use when the UAV should orbit, circle around, surround, or fly around a target at a requested radius or direction.
+description: Applicable needs: circling a target or covering a requested arc; Decision questions: separate heading change, radial repair and actual circulation progress; Contents: tangential movement, target relation, direction and coverage; Limits: yaw alone does not establish an orbit.
 summary: Select for orbit, circle-around, surround, clockwise, counterclockwise, or radius-based target-relative loop tasks.
 ---
 
@@ -8,9 +8,7 @@ summary: Select for orbit, circle-around, surround, clockwise, counterclockwise,
 
 ## Application Boundary
 
-Use this guidance for orbiting, circling, surrounding, or covering an arc around
-a target or reference. Do not use it for merely facing, approaching, passing,
-or holding one side of a target without around-target path progress.
+Use for orbiting or covering an arc around a target. Facing or holding one side alone is not circulation.
 
 ## Evidence Model
 
@@ -35,6 +33,9 @@ alone does not measure orbit radius.
 
 Orbit direction controls the shift direction, not the yaw sign. Use the target's
 current image side when yaw is specifically for re-alignment.
+Use prior actual translation and changing target aspect to scale the next arc
+segment. Shorten the observation interval when clearance or the target relation
+may change; a previous successful segment does not prove the whole orbit is clear.
 
 ## Completion And Stop
 

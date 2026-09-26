@@ -1,6 +1,6 @@
 ---
 name: visual_target_task_reasoning
-description: Use when a UAV task depends on finding, confirming, seeing, facing, observing, centering, or keeping attention on a visual target.
+description: Applicable needs: finding, identifying or facing a visual target; Decision questions: choose search direction, disambiguate candidates and decide when visibility is adequate; Contents: directional cues, viewpoint changes, candidate confirmation and alignment; Limits: does not establish passage, metric range or arrival.
 summary: Select for visual target search, confirmation, facing, centering, observation, or attention tasks.
 ---
 
@@ -14,13 +14,10 @@ inspection needs detail. Alignment cannot prove route, distance or landing.
 ## Evidence Model
 
 Classify evidence as target absent, weak candidate, directional cue, or inspection-ready.
-A directional cue identifies the target with usable bearing despite hidden detail.
-Clipping or imminent loss can invalidate bearing; incidental occlusion does not.
-Motion history reveals oscillation, not bearing. Current bearing supports alignment.
+Current bearing supports alignment; clipping may invalidate usable bearing.
 
-Candidate identity needs evidence connecting appearance and location to the
-requested target; confidence alone is insufficient. Metric judgments need
-distance evidence with matching geometry and precision.
+Identity needs matching appearance and location.
+Metric judgments need valid matching geometry.
 Resolve competing identities that change the decision using another view or
 independent category queries. Compare location and appearance; neither a
 candidate nor a missing detection proves identity or absence.
@@ -28,6 +25,9 @@ candidate nor a missing detection proves identity or absence.
 ## Decision Procedure
 
 1. Classify the latest evidence before acting.
+   A known search direction does not guarantee target visibility or range. When
+   looking in that direction reveals no candidate, consider safe translation to
+   obtain a useful viewpoint, not just repeated detection or stationary rotation.
 2. With no candidate, sweep consistently into new views. Absence alone does not
    justify reversal. Reverse only after sweeping past a candidate, reaching a
    scene or flight boundary, or exhausting new area. Use
@@ -37,6 +37,8 @@ candidate nor a missing detection proves identity or absence.
 4. For facing, correct only when clipping, imminent loss, or ambiguity makes
    bearing unusable. Do not correct merely for lateral offset or alternate
    around an already usable bearing.
+   Interpret a turn toward a landmark by its visual purpose. Preserve explicitly
+   requested angles; otherwise observe before sweeping past a plausible cue.
 
 ## Completion And Stop
 
@@ -47,9 +49,7 @@ enabled movement, judge the movement result, not continuous visibility.
 
 ## Recovery
 
-If a required cue disappears after a maneuver, compare the pre-maneuver and
-current views with measured motion. Try a bounded retrace or correction, then
-re-observe; do not continue blind motion.
-If no safe evidence-producing recovery remains, stop and cite the limitation.
+Compare earlier views and actual motion when a cue disappears. Recover a useful
+view if safe; otherwise stop and cite the limitation.
 Do not restart or reverse broad search for moderate offset or incidental
 occlusion alone.

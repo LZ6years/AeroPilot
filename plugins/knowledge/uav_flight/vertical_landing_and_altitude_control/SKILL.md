@@ -1,6 +1,6 @@
 ---
 name: vertical_landing_and_altitude_control
-description: Use when the UAV should ascend, descend, change altitude, follow a vertical-axis angled path, land, or stop near a safe low-altitude/ground surface.
+description: Applicable needs: ascending, descending, clearing obstacles or landing; Decision questions: judge height progress, clearance, adjustment magnitude and stopping; Contents: actual vertical motion, surface evidence, angled paths and landing relations; Limits: self-height change alone does not prove obstacle clearance or touchdown.
 summary: Select for altitude changes, vertical-path motion, landing, or stopping near a low-altitude region, ground, or surface.
 ---
 
@@ -27,7 +27,10 @@ user specifies yaw, heading, pitch or camera angle. Request
    space and a substantial remaining height relation can support a larger step;
    do not default to repeated tiny increments or the maximum permitted action.
 3. Re-observe after movement and shorten adjustments near the requested height,
-   surface, or tolerance band.
+   surface, or tolerance band; a smaller adjustment still needs a safe supported direction.
+   Compare actual height change and surface appearance with the previous request;
+   interrupted or constrained motion is not the requested displacement. Re-estimate
+   the next magnitude when the surface or direction of travel changes.
 4. For a non-zero angled path, preserve both vertical and horizontal components
    unless a final correction or safety condition requires a simpler movement.
 
@@ -45,10 +48,6 @@ merely accumulating a fixed ascent. Use a modest evidence-based clearance margin
 not a guessed typical building height. Reassess after movement; do not assume
 intermediate views within an uninterrupted sequence of actions.
 
-If height or region cues conflict, compare the available evidence before further
-movement; a smaller adjustment still needs a safe supported direction. If they
-disappear after a maneuver, compare pre-maneuver and current views with measured
-vertical and horizontal change. Try a bounded retrace, then re-observe; never
-continue a blind descent. If no safe
-evidence-producing recovery remains, stop and cite the limitation. Correct
-overshoot gently and avoid large downward steps near a surface.
+If cues conflict or disappear, compare earlier views with actual movement.
+Recover a useful view if safe, otherwise stop and cite the limitation. Never
+continue a blind descent; correct overshoot gently near a surface.

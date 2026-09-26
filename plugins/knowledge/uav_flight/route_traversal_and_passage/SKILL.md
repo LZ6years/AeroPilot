@@ -1,6 +1,6 @@
 ---
 name: route_traversal_and_passage
-description: Use when the UAV should pass through, go through, navigate through, progress past, cross between objects, or follow an explicit passage, gap, corridor, opening, or route cue.
+description: Applicable needs: following routes, passing landmarks, crossing openings or conditional turns; Decision questions: judge route continuity, junction arrival, road ends and passage progress; Contents: successive views, measured translation, route nodes, turn conditions and recovery; Limits: does not independently prove object identity or precise target distance.
 summary: Select for through, past, between, passage, gap, corridor, opening, or explicit route-cue traversal tasks where route progress is the active concern.
 ---
 
@@ -8,7 +8,7 @@ summary: Select for through, past, between, passage, gap, corridor, opening, or 
 
 ## Application Boundary
 
-Use for through, past, between, beyond, or along-side traversal. A route cue
+Use to pass through a gap, past, between or beyond route cues. A route cue
 is not necessarily a destination. Use approach reasoning for a target-relative
 terminal position.
 
@@ -30,15 +30,18 @@ Once usable, prefer bounded translation through or past it over repeated
 centering. Compare the first useful route view with the latest view and
 accumulated translation. Reacquire only if that evidence is insufficient or
 contradictory.
-An upcoming landmark being absent is not loss of the current route. While the
-road, heading and free space remain usable, continue bounded progress toward
-new evidence rather than declaring failure after a few moves. Reconsider when
-route evidence conflicts, a boundary appears, or motion produces no useful view.
+An absent upcoming landmark is not a lost route. Continue along coherent road
+and free-space cues; reconsider at conflict or a boundary.
 
 Request [route examples](references/route_progress_examples.md) for complex
 side passages or disappearing cues.
 
 ## Completion And Stop
+
+Seeing a route node is not reaching it or entering its continuation. A building
+or hidden road alone does not prove an end. Compare road edges, lateral exits and
+successive views. At the instructed node, turn toward the supported continuation;
+unspecified turns have no fixed angle. Contradictory views require reassessment.
 
 Passage completion requires a terminal route relation. Meaningful translation
 with a cue moving sideways, rearward or beyond the blocking route supports it.
@@ -48,7 +51,6 @@ reacquisition, continued visibility, a final image side or an exact unseen bound
 
 ## Recovery
 
-If a required route cue disappears unexpectedly, compare pre-maneuver and
-current views with measured motion. Try a bounded retrace and re-observe; do
-not continue blind motion. If no safe evidence-producing
-recovery remains, stop and cite why. Do not replace translation evidence with repeated yaw.
+Compare earlier views with actual motion when cues conflict. Recover a useful
+view if safe; otherwise stop and cite why. Do not replace translation evidence
+with repeated yaw.

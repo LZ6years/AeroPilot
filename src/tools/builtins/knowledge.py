@@ -7,8 +7,8 @@ def knowledge_tool() -> ToolSpec:
     return ToolSpec(
         name="knowledge.load", wire_name="knowledge_load", kind="knowledge",
         description=("Read an enabled knowledge entry and its declared references. Applicable when a task "
-                     "needs the methods or explanations described by that catalog entry. When the next action "
-                     "method is unclear and a relevant entry exists, load it before proceeding; reuse guidance "
+                     "benefits from the methods or explanations described by that catalog entry. Select guidance "
+                     "by its value for the current decision, including checking a familiar method; reuse guidance "
                      "already loaded. Missing scene facts require observation or perception. Returns newly "
                      "requested body text and references incrementally; previously delivered text is not resent. "
                      "The catalog is a directory, not loaded guidance. Knowledge provides methods, not "

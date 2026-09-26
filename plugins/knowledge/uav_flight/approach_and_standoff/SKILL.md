@@ -1,6 +1,6 @@
 ---
 name: approach_and_standoff
-description: Use when the UAV should finish near, farther from, following, or holding a requested distance or side position relative to a destination target; not when the endpoint is through, past, beyond, across, or around a route reference.
+description: Applicable needs: approaching, retreating or holding a target-relative position; Decision questions: choose correction magnitude and decide when to stop; Contents: visual change, qualitative range, metric evidence and relative position; Limits: does not prove traversal or orbit coverage.
 summary: Select only when target-relative proximity, separation, following, or a final held front/back/side position is the terminal concern; exclude route traversal.
 ---
 
@@ -32,6 +32,10 @@ target distance. Yaw cannot reach a distance or side relation.
    the size of the contemplated correction.
 5. After one bounded correction, re-estimate. Reverse only when new evidence
    clearly places the relation on the opposite side of the request.
+   Compare actual translation with target growth and relative change across
+   successive views. Similar geometry can support a larger next correction when
+   still clearly far away; rapid visual change or proximity calls for a shorter
+   observation interval. Do not extrapolate across a changed target or viewpoint.
 
 ## Completion And Stop
 

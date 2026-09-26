@@ -28,6 +28,17 @@ region.
 
 ## Ambiguous Progress
 
+At a suspected road end, a facade ahead may be distant or may hide a bend. Use
+successive road-edge views and any lateral continuation to distinguish a true
+terminal node from occlusion or an ordinary intersection. Seeing the node is not
+arrival. After entering the instructed continuation, conflicting route evidence
+calls for reassessment rather than treating an executed turn as proof of success.
+
+Along a confirmed straight segment, compare actual prior translation and visual
+change to choose meaningful progress before the next observation. Approaching a
+junction or an uncertain continuation shortens that horizon. Multiple actions are
+appropriate only when their selection needs no intervening view.
+
 If a cue changes image side without meaningful translation, treat the change as
 camera reorientation rather than traversal. If translation occurred but the
 latest view and motion disagree, stabilize and obtain a new observation before
