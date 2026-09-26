@@ -24,7 +24,8 @@ def handle(payload: dict) -> SkillCapabilityResult:
     with_distance = bool(args.get("include_distance"))
     message = (
         f"Located {len(candidates)} candidate(s)"
-        + (" with optional robust metric depth." if with_distance else ".")
+        + (f"; {sum(c.get('distance_status') == 'ok' and c.get('distance_m') is not None for c in candidates)} valid distance estimate(s). Check distance_status; execution success is not measurement validity."
+           if with_distance else "; distance not requested (not_requested).")
     )
     if not candidates:
         message = ("No sufficiently confident detection candidates were returned. "

@@ -218,7 +218,7 @@ def test_segmentation_failure_falls_back_to_inset_detector_box(tmp_path):
     assert "SAM unavailable" in result["data"]["audit_details"]["segmentation_error"]
 
 
-def test_multiple_depth_surfaces_return_unavailable_instead_of_a_number(tmp_path):
+def test_multiple_depth_surfaces_return_unavailable_instead_of_a_number(tmp_path, monkeypatch):
     depth = np.full((20, 20), 9.0, dtype=np.float32)
     depth[6:14, 6:10] = 2.0
     depth[6:14, 10:14] = 6.0
@@ -242,6 +242,12 @@ def test_multiple_depth_surfaces_return_unavailable_instead_of_a_number(tmp_path
     candidate = result["data"]["candidates"][0]
     assert candidate["distance_m"] is None
     assert candidate["distance_status"] == "inconsistent_depth_surfaces"
+    from plugins.capabilities.visual_grounding.locate.scripts import handler
+    monkeypatch.setattr(handler, "service_from_settings", lambda settings: service)
+    public = handler.handle({"args": {"observation_id": "obs_0001", "query": "person", "include_distance": True},
+                             "runtime_context": {"latest_observation": _observation(tmp_path, depth)}})
+    assert "0 valid distance estimate(s)" in public.message
+    assert "execution success is not measurement validity" in public.message
 
 
 def test_empty_candidates_and_stale_observation_are_explicit(tmp_path):

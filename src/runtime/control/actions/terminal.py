@@ -105,38 +105,3 @@ def apply_terminal(
         **({"suggested_user_action": payload["suggested_user_action"]}
            if "suggested_user_action" in payload else {}),
     }
-
-
-def validate_completion_freshness(
-    events: tuple[TranscriptEvent, ...], registry: ToolRegistry,
-) -> None:
-    """Apply existing ToolSpec freshness declarations at instruction scope.
-
-    This is a generic protocol predicate over arguments and result provenance,
-    not a test of target identity, measurement quality or natural-language goals.
-    Blocking remains possible when fresh successful evidence is unavailable.
-    """
-    observation_id = None
-    results: list[ToolResult] = []
-    for event in events:
-        if event.kind == "user_instruction":
-            observation_id, results = None, []
-        elif event.kind == "state_checkpoint":
-            observation_id = event.payload.get("observation_id")
-        elif event.kind == "tool_result":
-            results.append(event.payload)
-    for name in registry.names():
-        policy = registry.get(name).metadata.get("completion_evidence")
-        if not isinstance(policy, dict) or policy.get("after_use") != "current_observation_success":
-            continue
-        used = [result for result in results if result.tool_name == name
-                and result.status in {"ok", "error"}]
-        condition = policy.get("when")
-        if isinstance(condition, dict):
-            field = condition.get("field")
-            used = [result for result in used
-                    if isinstance(field, str) and field and "equals" in condition
-                    and result.requested_args.get(field) == condition["equals"]]
-        if used and not any(result.status == "ok" and observation_id
-                            and result.data.get("observation_id") == observation_id for result in used):
-            raise ValueError(f"{name} requires a successful result for the current observation before completion")

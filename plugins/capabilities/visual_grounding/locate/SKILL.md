@@ -32,3 +32,14 @@ Candidates are detector evidence, not guaranteed task identity. Inspect the
 annotated tool-evidence image and keep the relation unknown when multiple
 candidates cannot be distinguished. `distance_m` is robust camera-to-visible-
 surface depth for that candidate, not target-center or horizontal distance.
+
+Describe the visible object category and observed appearance, not an unseen target
+or a hoped-for spatial relation. Avoid alternative identities and invented attributes.
+For example, use "brown-walled building" or "beige flat roof" only when supported
+by the image; interpret "below the UAV" separately.
+
+`not_requested` means detection-only, not failure. `inconsistent_depth_surfaces`
+means the candidate region has excessive depth dispersion, which can also arise
+from sloped or extended surfaces. It invalidates the scalar range, not the detection.
+An execution error supplies no negative scene evidence. Empty candidates weaken an
+unconfirmed visual hypothesis without proving absence.

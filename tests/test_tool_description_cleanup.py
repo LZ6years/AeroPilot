@@ -19,10 +19,15 @@ from src.tools.registry import default_registry
 from tests.manual import tool_contract_behavior_probe as probe
 
 
-def test_description_cleanup_preserves_all_structural_contracts_and_hidden_definitions():
+def test_description_cleanup_preserves_contracts_except_retired_completion_gate():
     baseline = json.loads(Path("tests/fixtures/tool_description_contract_baseline.json").read_text(encoding="utf-8"))
     registry = default_registry(safety_config=load_uav_safety_config())
     current = probe.tool_snapshot(registry)
+    # Keep the historical fixture intact. The later grounding migration removes
+    # only this task-global policy; schemas, limits and hidden tools stay fixed.
+    for tool in baseline:
+        if tool["name"] == "skill.visual_grounding.locate":
+            tool["schema"].pop("x-flyagent-completion-evidence", None)
     assert probe.structural_contracts(current) == probe.structural_contracts(baseline)
     assert sum(tool["runtime"]["model_exposed"] for tool in current) == 7
     for before, after in zip(baseline, current):

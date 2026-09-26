@@ -307,9 +307,9 @@ RGB/depth 会被 runtime 真实采集并保存为 artifacts。默认 image conte
   与候选内部的鲁棒深度，模型不再自己提交 ROI。
 - ToolResult 的候选标注图是普通 user-role Tool Evidence，不创建新 observation；模型仍须
   根据指令确认候选语义，不能把 detector confidence 当作目标真值。
-- capability 通过通用 ToolSpec metadata 声明条件式 `current_observation_success`：仅符合
-  JSON `when` 条件的调用要求 supported 终态在当前 observation 上有成功结果。Runtime
-  不解析任务语言、目标类别或 `include_distance` 这一具体字段名。
+- 历史测距不会触发任务级的结束前重测门槛。完成检查保留当前任务隔离、真实证据引用和
+  工具结果配对；模型根据所需结论判断证据是否仍然有效。定量结论要求有效且几何含义
+  匹配的距离，不能把工具执行成功当作测量有效。
 - 视觉层不输出 `recommended_next_observation`、转向、扫描或移动建议。
 - 模型只有在实际收到图片，或 context 中存在明确视觉证据时，才能声称看到了目标。
 

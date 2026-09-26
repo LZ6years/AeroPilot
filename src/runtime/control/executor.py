@@ -8,7 +8,7 @@ from src.tools.registry import ToolRegistry
 from src.tools.validation import validate_tool_args
 from src.runtime.control.actions.task_plan import PlanState, apply_plan_update
 from src.runtime.control.actions.terminal import (
-    TerminalState, apply_terminal, environmental_evidence_refs, validate_completion_freshness,
+    TerminalState, apply_terminal, environmental_evidence_refs,
 )
 
 
@@ -34,8 +34,6 @@ def execute_builtin_control(
         if call.tool_name == "runtime.update_plan":
             data = apply_plan_update(state, call.args)
         elif call.tool_name in {"runtime.report_completed", "runtime.report_blocked"}:
-            if call.tool_name == "runtime.report_completed":
-                validate_completion_freshness(history, registry)
             data = apply_terminal(
                 state, call.args, completed=call.tool_name == "runtime.report_completed",
                 available_evidence=environmental_evidence_refs(history, registry),

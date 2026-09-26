@@ -254,34 +254,23 @@ def test_control_executor_terminal_and_circular_evidence(loop_registry):
     assert mission.completed and mission.stop_source == "runtime.report_completed"
 
 
-def test_terminal_freshness_uses_generic_policy_without_phase(loop_registry):
-    sensor = loop_registry.get("sensor")
-    loop_registry.register(replace(sensor, metadata={"completion_evidence": {
-        "after_use": "current_observation_success", "when": {"field": "precise", "equals": True},
-    }}))
-    mission = state()
+def test_prior_distance_call_does_not_require_current_requery():
+    from src.tools.registry import default_registry
+    registry = default_registry()
+    call = AgentToolCall("range", "skill.visual_grounding.locate", {
+        "observation_id": "old", "query": "taxi", "include_distance": True})
     history = (
-        TranscriptEvent("user_instruction", {"instruction": "go"}),
-        TranscriptEvent("state_checkpoint", {"observation_id": "obs1"}),
-        TranscriptEvent("tool_result", ToolResult("sense", "sensor", "ok",
-                        data={"observation_id": "obs1"}, requested_args={"precise": True})),
-        TranscriptEvent("state_checkpoint", {"observation_id": "obs2"}),
+        TranscriptEvent("user_instruction", {"instruction": "pass the taxi then turn"}),
+        TranscriptEvent("state_checkpoint", {"observation_id": "old"}),
+        TranscriptEvent("assistant_turn", AssistantTurn("t1", "measure", [call])),
+        TranscriptEvent("tool_result", ToolResult("range", call.tool_name, "ok",
+            data={"observation_id": "old", "candidates": []}, requested_args=call.args)),
+        TranscriptEvent("state_checkpoint", {"observation_id": "current"}),
     )
-    complete = AgentToolCall("done", "runtime.report_completed", {"reason": "arrived", "evidence_refs": ["obs2"]})
-    result = execute_builtin_control(complete, mission, loop_registry, history)
-    assert result.status == "rejected" and not mission.completed
-    assert "current observation" in result.message
-    fresh = history + (TranscriptEvent("tool_result", ToolResult("sense2", "sensor", "ok",
-                              data={"observation_id": "obs2"}, requested_args={"precise": True})),)
-    assert execute_builtin_control(complete, mission, loop_registry, fresh).status == "ok"
-
-
-def test_detection_only_does_not_activate_precision_gate(loop_registry):
-    loop_registry.register(replace(loop_registry.get("sensor"), metadata={"completion_evidence": {
-        "after_use": "current_observation_success", "when": {"field": "precise", "equals": True},
-    }}))
-    history = (TranscriptEvent("tool_result", ToolResult("sense", "sensor", "ok",
-                         data={"observation_id": "old"}, requested_args={"precise": False})),
-               TranscriptEvent("state_checkpoint", {"observation_id": "current"}))
-    complete = AgentToolCall("done", "runtime.report_completed", {"reason": "arrived", "evidence_refs": ["current"]})
-    assert execute_builtin_control(complete, state(), loop_registry, history).status == "ok"
+    complete = AgentToolCall("done", "runtime.report_completed", {
+        "reason": "Historical passage and subsequent turn", "evidence_refs": ["old", "current"]})
+    assert execute_builtin_control(complete, state(), registry, history).status == "ok"
+    assert "completion_evidence" not in registry.get(call.tool_name).metadata
+    invalid = AgentToolCall("bad", "runtime.report_completed", {
+        "reason": "arrived", "evidence_refs": ["invented"]})
+    assert execute_builtin_control(invalid, state(), registry, history).status == "rejected"
