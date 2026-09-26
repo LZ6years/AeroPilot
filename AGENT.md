@@ -156,9 +156,8 @@ audit data and are not replayed to the provider. Candidate tool evidence is not
 a new observation and does not change `CURRENT`; confidence alone is not proof
 that a candidate matches the instruction.
 
-The capability may declare a generic per-observation call limit and a conditional
-`current_observation_success` completion policy through ToolSpec JSON extensions.
-Runtime evaluates those declarations generically from the call arguments.
+Capabilities may declare a generic per-observation call limit through ToolSpec.
+Past distance-tool use does not impose a final-observation re-query.
 Evidence precision and geometric meaning must support the requested judgment;
 this does not impose an order between direct visual interpretation and callable
 localization. Image labels explain the sensor representation, not tool choice.
@@ -255,6 +254,11 @@ the model, such as hidden benchmark truth. Enforce that boundary in context and
 evaluation plumbing instead of asking the model to ignore unavailable fields.
 
 ## Change Discipline
+
+Offline flight-experience experiments live in plugins/research/flight_experience.
+They read saved evidence through their own adapters and use only src/llm; they
+must not import Agent/Runtime or register flight tools. Experimental summaries
+are guidance, never current environmental evidence.
 
 Optional plans preserve prior work using stable IDs. Evidence, not previous intent,
 supports progress; Runtime validates structure and references, not natural-language
