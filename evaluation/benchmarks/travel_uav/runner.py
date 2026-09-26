@@ -339,6 +339,10 @@ class TravelUavBenchmarkRunner:
             "samples": metrics.get("trajectory_ned", []),
             "uav_action_steps": metrics.get("uav_action_steps", trace["action_count"]),
         }
+        if infrastructure_error and (outcome.get("error") or {}).get("error_type") == "SceneRecoveryRequired":
+            metrics = {key: value for key, value in metrics.items()
+                       if key in {"trajectory_ned", "reference_path_ned", "uav_action_steps"}}
+            outcome["final_score_available"] = False
         case_result = {
             "episode_id": case.episode_id,
             "sequence_id": case.sequence_id,
@@ -588,6 +592,9 @@ def _infrastructure_error(
 ) -> dict[str, Any] | None:
     if execution is None:
         return setup_error or {"error_type": "SetupError", "error": "case setup failed"}
+    runtime_error = getattr(execution.outcome, "error", None)
+    if runtime_error and runtime_error.get("error_type") == "SceneRecoveryRequired":
+        return dict(runtime_error)
     if capabilities is None:
         scene_error = getattr(execution.outcome, "error", None)
         if scene_error:

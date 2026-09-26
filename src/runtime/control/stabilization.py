@@ -9,10 +9,12 @@ model only sees the final automatic observation for a phase window.
 from __future__ import annotations
 
 import time
+import math
 from typing import Any
 
 from src.agent.planning.schemas import PlannedStep
 from src.env_client import SceneCapabilities
+from src.env_client.errors import SceneRecoveryRequired
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.tools.dispatcher import ToolDispatcher
 from src.uav import pose_from_observation, velocity_norm_mps
@@ -38,6 +40,7 @@ class UavStabilizer:
         phase: str,
         step: PlannedStep,
         capabilities: SceneCapabilities | None = None,
+        post_action_state: str | None = None,
     ) -> dict[str, Any]:
         """Wait after a motion step and return a serializable summary."""
 
@@ -64,6 +67,16 @@ class UavStabilizer:
 
         started = time.monotonic()
         self._event("uav_stabilization_started", base)
+        if self.config.reuse_verified_post_action_state and not self.config.hover_after_brake and post_action_state:
+            consume = getattr(getattr(self.tools, "env_client", None), "consume_post_action_state", None)
+            pose = consume(scene_instance_id, agent_id, post_action_state) if callable(consume) else None
+            velocity = velocity_norm_mps(pose) if pose else None
+            if velocity is not None and math.isfinite(velocity) and velocity <= self.config.velocity_threshold_mps:
+                payload = {**base, "status": "completed", "reused_post_action_state": True,
+                           "elapsed_sec": time.monotonic() - started, "poll_count": 0,
+                           "last_velocity_norm_mps": velocity}
+                self._event("uav_stabilization_completed", payload)
+                return payload
         brake_data = self._zero_velocity_brake(
             scene_instance_id,
             agent_id,
@@ -269,6 +282,8 @@ class UavStabilizer:
             "uav_stabilization_brake_requested",
             {**base, "args": args, "result": result},
         )
+        if result.get("execution_state", {}).get("requires_scene_reset"):
+            raise SceneRecoveryRequired(result.get("message", "stabilization failed"))
         return result
 
     def _optional_hover(
@@ -292,6 +307,8 @@ class UavStabilizer:
             return result
         result = self.tools.call(scene_instance_id, agent_id, "uav.hover", {}).to_dict()
         self._event("uav_stabilization_hover_requested", {**base, "result": result})
+        if result.get("execution_state", {}).get("requires_scene_reset"):
+            raise SceneRecoveryRequired(result.get("message", "hover stabilization failed"))
         return result
 
     def _event(self, name: str, payload: dict[str, Any]) -> None:

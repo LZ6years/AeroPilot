@@ -476,6 +476,7 @@ class ActionResult:
     action: str
     message: str = ""
     data: dict[str, Any] = field(default_factory=dict)
+    execution_state: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         # Convert the action result into JSON-serializable data.

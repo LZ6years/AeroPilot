@@ -248,6 +248,11 @@ class SimulationServer:
             scene, agent_id, action, args
         )
 
+    def consume_post_action_state(self, scene_instance_id, agent_id, token):
+        backend = self.backends.get(scene_instance_id)
+        consume = getattr(backend, "consume_post_action_state", None)
+        return consume(scene_instance_id, agent_id, token) if callable(consume) else None
+
     def _prepare_remote_scene(
         self,
         package: MapPackage,

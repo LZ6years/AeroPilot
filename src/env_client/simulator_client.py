@@ -62,6 +62,11 @@ class SimulatorEnvClient:
             capture_sources=self.observation_profile.capture_sources,
         )
 
+    def consume_post_action_state(self, scene_instance_id, agent_id, token):
+        """Optional local control evidence; unsupported services fall back safely."""
+        consume = getattr(self.service, "consume_post_action_state", None)
+        return consume(scene_instance_id, agent_id, token) if callable(consume) else None
+
     def execute_action(
         self,
         scene_instance_id: str,

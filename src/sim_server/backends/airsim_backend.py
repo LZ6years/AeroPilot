@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from pathlib import Path
+from copy import deepcopy
+from uuid import uuid4
+from contextlib import nullcontext
 
 from src.adapters.airsim.uav import AirSimUavAdapter
 from src.adapters.airsim.control import resolve_airsim_control_strategy
 from src.adapters.airsim.client import probe_airsim_endpoint
+from src.adapters.airsim.performance import AirSimPerformance
 from src.adapters.uav_primitives import UavPrimitiveAdapter
 from src.env_client.schemas import (
     ActionResult,
@@ -38,6 +42,7 @@ class AirSimBackend:
         self.action_config = action_config or UavActionConfig()
         self.artifact_dir = Path(artifact_dir) if artifact_dir is not None else None
         self.save_artifacts = save_artifacts
+        self._post_action_state = None
 
     def probe(self, package: MapPackage, host: str, port: int) -> BackendProbe:
         """Verify AirSim RPC health instead of accepting a raw TCP listener."""
@@ -93,6 +98,7 @@ class AirSimBackend:
 
     def stop(self, scene: SceneInstance) -> None:
         # Close only this process's RPC client; process ownership lives above.
+        self._post_action_state = None
         close = getattr(self.uav, "close", None)
         if callable(close):
             close()
@@ -100,6 +106,7 @@ class AirSimBackend:
 
     def reset(self, scene: SceneInstance) -> SceneInstance:
         # Perform a soft simulator reset when supported by the concrete adapter.
+        self._post_action_state = None
         reset = getattr(self.uav, "reset", None)
         if callable(reset):
             result = reset()
@@ -115,6 +122,22 @@ class AirSimBackend:
         modalities: list[str],
         capture_sources: dict[str, str] | None = None,
     ) -> Observation:
+        performance = getattr(self.uav, "performance", None)
+        if not isinstance(performance, AirSimPerformance):
+            performance = None
+        try:
+            with performance.span("observation") if performance else nullcontext():
+                return self._observe(scene, agent_id, modalities, capture_sources)
+        except Exception:
+            # A failed read cannot certify that the same connected paused state
+            # is still available, even if no deliberate control write occurred.
+            self._post_action_state = None
+            raise
+        finally:
+            if performance:
+                performance.flush("observation")
+
+    def _observe(self, scene, agent_id, modalities, capture_sources):
         # Build raw observation data from primitive UAV calls.
         if self.uav is None:
             raise RuntimeError("AirSim Backend has no scene-bound adapter; start the scene first")
@@ -138,8 +161,45 @@ class AirSimBackend:
         self, scene: SceneInstance, agent_id: str, action: str, args: dict
     ) -> ActionResult:
         # Dispatch a primitive action and wrap the result for EnvClient.
-        result = self._dispatch(action, args)
-        return ActionResult(result.ok, action, result.message, result.data or {})
+        # Every write invalidates the previous receipt, including failed writes.
+        if action not in {"get_pose", "get_frames"}:
+            self._post_action_state = None
+        performance = getattr(self.uav, "performance", None)
+        if not isinstance(performance, AirSimPerformance):
+            performance = None
+        try:
+            with performance.span("action." + action) if performance else nullcontext():
+                result = self._dispatch(action, args)
+        except Exception:
+            self._post_action_state = None
+            raise
+        finally:
+            measurements = None
+            if performance:
+                measurements = performance.flush("action." + action)
+        execution = dict(result.execution_state)
+        data = dict(result.data or {})
+        # The AirSim boundary owns this legacy primitive diagnostic envelope.
+        # Runtime must neither interpret it nor forward it to the model.
+        diagnostics = data.pop("action_diagnostics", None)
+        if diagnostics is not None:
+            execution["action_diagnostics"] = diagnostics
+        if measurements is not None:
+            execution["performance"] = measurements
+        pose = execution.pop("verified_paused_pose", None)
+        if result.ok and pose and not execution.get("requires_scene_reset"):
+            token = uuid4().hex
+            self._post_action_state = (scene.scene_instance_id, agent_id, token, deepcopy(pose))
+            execution["post_action_state_token"] = token
+        return ActionResult(result.ok, action, result.message, data, execution)
+
+    def consume_post_action_state(self, scene_id, agent_id, token):
+        """Consume an opaque scene/action receipt once, without another RPC."""
+        cached = self._post_action_state
+        if cached is None or cached[:3] != (scene_id, agent_id, token):
+            return None
+        self._post_action_state = None
+        return deepcopy(cached[3])
 
     def _dispatch(self, action: str, args: dict):
         # Map server action names onto the UAV primitive adapter.

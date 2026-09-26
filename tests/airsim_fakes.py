@@ -67,6 +67,8 @@ class FakeAirSimClient:
         self.continue_frame_calls = []
         self.set_kinematics_calls = []
         self.rotate_calls = []
+        self.cancel_calls = []
+        self.cancel_error = None
         self.kinematics = FakeAirSim.KinematicsState()
         self.connection_calls = []
         self.reset_calls = 0
@@ -124,8 +126,14 @@ class FakeAirSimClient:
 
         return FakeAsyncFuture(self, effect)
 
-    def rotateToYawAsync(self, yaw: float, vehicle_name: str):
+    def cancelLastTask(self, vehicle_name: str):
+        self.cancel_calls.append(vehicle_name)
+        if self.cancel_error:
+            raise self.cancel_error
+
+    def rotateToYawAsync(self, yaw: float, vehicle_name: str, timeout_sec=3e38, margin=5):
         self.rotate_calls.append({"yaw": yaw, "vehicle_name": vehicle_name})
+        self.rotate_options = {"timeout_sec": timeout_sec, "margin": margin}
 
         def effect() -> None:
             if self.action_effect_scale == 0.0:

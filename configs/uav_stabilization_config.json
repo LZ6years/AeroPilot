@@ -6,6 +6,7 @@
   "initialization_min_settle_sec": 0.0,
   "zero_velocity_brake_duration_sec": 2.0,
   "hover_after_brake": false,
+  "reuse_verified_post_action_state": false,
   "motion_tools": [
     "uav.move_body",
     "uav.turn_relative"

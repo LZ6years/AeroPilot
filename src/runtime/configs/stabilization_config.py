@@ -19,9 +19,12 @@ class UavStabilizationConfig:
     initialization_min_settle_sec: float = 0.0
     zero_velocity_brake_duration_sec: float = 2.0
     hover_after_brake: bool = False
+    reuse_verified_post_action_state: bool = False
     motion_tools: set[str] = field(default_factory=lambda: {"uav.move_body", "uav.turn_relative"})
 
     def __post_init__(self) -> None:
+        if not isinstance(self.reuse_verified_post_action_state, bool):
+            raise ValueError("reuse_verified_post_action_state must be boolean")
         value = float(self.initialization_min_settle_sec)
         if not math.isfinite(value) or value < 0.0:
             raise ValueError(
@@ -47,6 +50,7 @@ class UavStabilizationConfig:
                 data.get("zero_velocity_brake_duration_sec", cls.zero_velocity_brake_duration_sec)
             ),
             hover_after_brake=bool(hover_after_brake),
+            reuse_verified_post_action_state=data.get("reuse_verified_post_action_state", False),
             motion_tools=set(data.get("motion_tools", cls().motion_tools)),
         )
 
@@ -67,6 +71,7 @@ class UavStabilizationConfig:
             ),
             "zero_velocity_brake_duration_sec": self.zero_velocity_brake_duration_sec,
             "hover_after_brake": self.hover_after_brake,
+            "reuse_verified_post_action_state": self.reuse_verified_post_action_state,
             "motion_tools": sorted(self.motion_tools),
         }
 

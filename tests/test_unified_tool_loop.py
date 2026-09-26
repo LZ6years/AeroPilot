@@ -361,6 +361,39 @@ def test_failed_first_physical_call_closes_remaining_as_skipped(tmp_path):
     assert [action for action, _ in backend.actions] == ["move_body", "hover"]
 
 
+@pytest.mark.parametrize("reuse_scene", [False, True])
+def test_scene_recovery_stops_public_runtime_and_pairs_calls(tmp_path, reuse_scene):
+    from src.env_client.errors import SceneRecoveryRequired
+    runtime, backend = public_runtime(tmp_path, [[move("fatal"), move("cancelled")], [done()]])
+    original = backend.execute_action
+    def execute(scene, agent, action, args):
+        if action == "move_body" and args.get("vx"):
+            backend.actions.append((action, args))
+            return ActionResult(False, action, "recreate scene", {},
+                                {"requires_scene_reset": True, "action_diagnostics": {"private": True}})
+        return original(scene, agent, action, args)
+    backend.execute_action = execute
+    with pytest.raises(SceneRecoveryRequired):
+        runtime.run_task("map", "Move", scene_policy="reuse_running" if reuse_scene else "isolated",
+                         stop_scene_on_finish=not reuse_scene)
+    results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
+    assert [(r.tool_call_id, r.status) for r in results] == [("fatal", "error"), ("cancelled", "skipped")]
+    assert "action_diagnostics" not in results[0].data
+    assert len(runtime.planner.contexts) == 1
+    assert backend.actions[-1][0] == "move_body"
+    if reuse_scene:
+        count = len(backend.actions)
+        runtime.safe_hover_reused_scene("map")
+        with pytest.raises(SceneRecoveryRequired):
+            runtime.run_task("map", "Retry without reset", scene_policy="reuse_running", stop_scene_on_finish=False)
+        state = MissionState("cleanup", "Move")
+        state.connected = True
+        runtime.finish_reused_scene("map", state)
+        assert len(backend.actions) == count and len(runtime.planner.contexts) == 1
+    assert backend.stops == ["scene"]
+    assert any(e.kind == "task_terminal" for e in runtime.agent_transcript.items)
+
+
 def test_instruction_motion_and_plan_updates_preserve_origins_and_last_window():
     state = MissionState("run", "Move")
     assert state.max_physical_windows == 300

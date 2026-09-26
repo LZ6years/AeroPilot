@@ -174,7 +174,7 @@ def test_paused_multirotor_action_failure_still_pauses(monkeypatch):
         "error_type": "RuntimeError",
         "error": "motion failed",
     }
-    assert client.pause_calls == [False, True]
+    assert client.pause_calls == [False, True, True]
 
 
 def test_paused_multirotor_false_rpc_result_is_not_reported_as_success(monkeypatch):
@@ -192,7 +192,7 @@ def test_paused_multirotor_false_rpc_result_is_not_reported_as_success(monkeypat
     assert not result.ok
     assert result.data["failure_kind"] == "controller_timeout_or_rejected"
     assert result.data["action_diagnostics"]["rpc"]["result"] is False
-    assert client.pause_calls == [False, True]
+    assert client.pause_calls == [False, True, True]
 
 
 def test_paused_multirotor_turn_wraps_target_and_measures_crossing(monkeypatch):
@@ -253,7 +253,7 @@ def test_paused_multirotor_move_no_effect_reports_collision(monkeypatch):
     assert diagnostics["after"]["collision"]["object_name"] == "Building_42"
 
 
-def test_paused_multirotor_partial_motion_is_not_rejected(monkeypatch):
+def test_paused_multirotor_negligible_partial_motion_is_rejected(monkeypatch):
     adapter = AirSimUavAdapter(
         mode="Multirotor",
         control_strategy="paused_multirotor",
@@ -265,7 +265,8 @@ def test_paused_multirotor_partial_motion_is_not_rejected(monkeypatch):
 
     result = adapter.move_body(2.0, 0.0, 0.0, 1.0)
 
-    assert result.ok
+    assert not result.ok
+    assert result.data["failure_kind"] == "control_insufficient_progress"
     assert result.data["action_diagnostics"]["tracking"][
         "observed_translation_m"
     ] == pytest.approx(0.1)
@@ -289,7 +290,7 @@ def test_paused_multirotor_preserves_rpc_and_freeze_errors(monkeypatch):
     diagnostics = result.data["action_diagnostics"]
     assert diagnostics["rpc"]["error"]["error"] == "rpc timed out"
     assert diagnostics["freeze"]["error"]["error"] == "freeze failed"
-    assert client.pause_calls == [False, True, True]
+    assert client.pause_calls == [False, True, True, True]
 
 
 def test_paused_multirotor_freeze_failure_has_distinct_failure_kind(monkeypatch):

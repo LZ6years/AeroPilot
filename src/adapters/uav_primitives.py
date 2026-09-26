@@ -7,7 +7,7 @@ backends that use another convention must convert at their own boundary.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -17,6 +17,8 @@ class PrimitiveResult:
     ok: bool
     message: str = ""
     data: dict[str, Any] | None = None
+    # Runtime-only control evidence; never part of model-visible tool data.
+    execution_state: dict[str, Any] = field(default_factory=dict)
 
 
 class UavPrimitiveAdapter(Protocol):

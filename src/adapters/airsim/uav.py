@@ -16,6 +16,7 @@ from src.uav import yaw_deg
 from ..uav_primitives import PrimitiveResult
 from .client import close_airsim_client
 from .capture import AirSimCapture
+from .performance import AirSimPerformance, MeasuredAirSimClient
 
 
 from .control import (
@@ -58,7 +59,9 @@ class AirSimUavAdapter:
         )
         self.artifact_dir = Path(artifact_dir) if artifact_dir is not None else None
         self.save_artifacts = save_artifacts
-        self.capture = AirSimCapture(camera_name, vehicle_name, self.artifact_dir, save_artifacts)
+        self.performance = AirSimPerformance(self.artifact_dir / "performance.jsonl" if self.artifact_dir else None)
+        self.capture = AirSimCapture(camera_name, vehicle_name, self.artifact_dir, save_artifacts,
+                                    performance=self.performance)
         self._client: Any | None = None
         strategy_type = {
             POSE_KINEMATIC_CONTROL: PoseKinematicControlStrategy,
@@ -74,7 +77,7 @@ class AirSimUavAdapter:
     def connect(self) -> PrimitiveResult:
         # Open the mode-specific AirSim client.
         self.close()
-        self._client = self._control.connect()
+        self._client = MeasuredAirSimClient(self._control.connect(), self.performance)
         return PrimitiveResult(
             True,
             f"AirSim {self.control_strategy} client connected",

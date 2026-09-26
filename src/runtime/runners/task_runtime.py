@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import math
+import time
 from collections.abc import Callable
 from typing import Any
 from src.agent.mission_state import MissionState
@@ -13,6 +14,7 @@ from src.agent.planning.schemas import PlannedStep
 from src.agent.safety import SafetySupervisor
 from src.agent.transcript import AgentToolCall, AgentTranscript, AssistantTurn, ToolResult
 from src.env_client import ActionResult, EnvClient, SceneInstance
+from src.env_client.errors import SceneRecoveryRequired
 from src.llm.audit import redact_provider_value
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
@@ -80,6 +82,7 @@ class TaskRuntime:
         self.memory_reader = MemoryRecordReader(recorder.run_dir)
         self.agent_transcript = AgentTranscript(self.memory_writer)
         self._preflight_scene_ids = set()
+        self._unusable_scene_ids = set()
         self._active_reused_scenes = {}
         self._active_flight_memories = {}
         self._state_flight_memories = {}
@@ -121,6 +124,8 @@ class TaskRuntime:
                 "protocol_context": protocol_context,
                 "loop_schema": "unified_tool_loop_v1", "physical_trace_schema": PHYSICAL_TRACE_SCHEMA_VERSION})
             instruction_ready = True
+            if scene.scene_instance_id in self._unusable_scene_ids:
+                raise SceneRecoveryRequired("Scene must be recreated before another instruction")
             self._validate_execution_options(scene, options)
             self._prepare_scene_for_task(scene, agent_id, state, options)
             self._execute_instruction_loop(scene, agent_id, state)
@@ -133,6 +138,8 @@ class TaskRuntime:
             return state
         except Exception as exc:
             primary_error = exc
+            if isinstance(exc, SceneRecoveryRequired):
+                self._unusable_scene_ids.add(scene.scene_instance_id)
             state.record_error(type(exc).__name__, str(exc))
             try:
                 self._write_state(state)
@@ -144,7 +151,7 @@ class TaskRuntime:
             # method has completed all scene cleanup.
             if instruction_ready and not any(item.kind == "task_terminal" for item in self.agent_transcript.items):
                 try:
-                    self._finalize_instruction(scene, agent_id, state)
+                    self._finalize_instruction(scene, agent_id, state, scene_unusable=isinstance(exc, SceneRecoveryRequired))
                 except Exception as final_error:
                     _attach_cleanup_error(exc, final_error, "final_observation")
             raise
@@ -164,22 +171,26 @@ class TaskRuntime:
                         raise
                     _attach_cleanup_error(primary_error, cleanup_error, "scene_stop")
 
-    def _finalize_instruction(self, scene, agent_id, state) -> None:
+    def _finalize_instruction(self, scene, agent_id, state, *, scene_unusable=False) -> None:
         """Close the instruction with real final evidence; preserve cleanup errors."""
         failures = []
-        if state.connected:
+        if state.connected and not scene_unusable:
             if scene.capabilities is None or scene.capabilities.supports("hover"):
                 try:
                     result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
                     self._record_action(state, "uav.hover", {}, result.to_dict())
+                    if result.execution_state.get("requires_scene_reset"):
+                        scene_unusable = True
+                        raise SceneRecoveryRequired(result.message)
                     if not result.ok:
                         raise RuntimeError(result.message)
                 except Exception as exc:
                     failures.append(exc)
             try:
-                self._record_observation(scene, agent_id, state, list(state.observation_modalities), "task_terminal")
-                context = self.context_builder.build(state, self._memory_for_state(state))
-                self.agent_transcript.append_state(context, state.latest_observation.get("observation_id"))
+                if not scene_unusable:
+                    self._record_observation(scene, agent_id, state, list(state.observation_modalities), "task_terminal")
+                    context = self.context_builder.build(state, self._memory_for_state(state))
+                    self.agent_transcript.append_state(context, state.latest_observation.get("observation_id"))
             except Exception as exc:
                 failures.append(exc)
         terminal = {**self._state_summary(state),
@@ -223,7 +234,7 @@ class TaskRuntime:
     def safe_hover_reused_scene(self, map_id: str, agent_id: str = "uav_1", scene_id: str | None = None) -> None:
         # Best-effort hover after an instruction failure in a reused scene.
         scene = self._active_reused_scenes.get(self._scene_key(map_id, scene_id))
-        if scene is None:
+        if scene is None or scene.scene_instance_id in self._unusable_scene_ids:
             self._debug_event("continuous_error_hover_skipped", {"reason": "not_running"})
             return
         if scene.capabilities and not scene.capabilities.supports("hover"):
@@ -641,6 +652,8 @@ class TaskRuntime:
                 self.agent_transcript.append_tool_result(transcript_result)
                 self._append_native_round_tool_result(native_meta, transcript_result)
             if not result.ok:
+                if result.execution_state.get("requires_scene_reset"):
+                    batch_error = SceneRecoveryRequired(result.message)
                 executed_steps.append(
                     {
                         **payload,
@@ -653,7 +666,7 @@ class TaskRuntime:
                     }
                 )
                 if not native_physical_calls:
-                    raise RuntimeError(f"Action failed: {step.tool}: {result.message}")
+                    raise batch_error or RuntimeError(f"Action failed: {step.tool}: {result.message}")
                 failed_native_index = index
                 break
             try:
@@ -663,6 +676,7 @@ class TaskRuntime:
                     None,
                     step,
                     capabilities=scene.capabilities,
+                    post_action_state=result.execution_state.get("post_action_state_token"),
                 )
             except Exception as exc:
                 # The backend already acknowledged this action. Preserve that
@@ -745,16 +759,24 @@ class TaskRuntime:
                             },
                         }
                     )
-            self._try_hover(scene, agent_id, state)
+            if not isinstance(batch_error, SceneRecoveryRequired):
+                try:
+                    self._try_hover(scene, agent_id, state)
+                except SceneRecoveryRequired as exc:
+                    batch_error = exc
         observation_after: dict[str, Any] = {}
         observation_error: Exception | None = None
         try:
-            observation_after = self._apply_automatic_observation_policy(scene, agent_id, state)
+            if not isinstance(batch_error, SceneRecoveryRequired):
+                observation_after = self._apply_automatic_observation_policy(scene, agent_id, state)
         except Exception as exc:
             observation_error = exc
             if batch_error is None:
                 batch_error = exc
-                self._try_hover(scene, agent_id, state)
+                try:
+                    self._try_hover(scene, agent_id, state)
+                except SceneRecoveryRequired as recovery:
+                    batch_error = recovery
         if batch_error is not None:
             # The normal caller cannot publish a window after this method raises.
             # Publish the actual partial evidence here; a missing after frame is
@@ -1199,7 +1221,11 @@ class TaskRuntime:
         observation = self.tools.observe(scene.scene_instance_id, agent_id, modalities)
         raw = RawObservation.from_env_observation(observation, source=source)
         data = raw.to_dict()
-        write_result = self.memory_writer.write_observation(data)
+        started = time.monotonic()
+        try:
+            write_result = self.memory_writer.write_observation(data)
+        finally:
+            self._debug_event("artifact_write_timing", {"kind": "observation", "elapsed_sec": time.monotonic() - started})
         observation_id = write_result["observation_ref"]["id"]
         data["observation_id"] = observation_id
         frames = data.get("frames")
@@ -1268,10 +1294,17 @@ class TaskRuntime:
             result = self.tools.call(scene.scene_instance_id, agent_id, "uav.hover", {})
             self._record_action(state, "uav.hover", {}, result.to_dict())
             self._debug_event("safety_hover_completed", result.to_dict())
+            if result.execution_state.get("requires_scene_reset"):
+                raise SceneRecoveryRequired(result.message)
+        except SceneRecoveryRequired:
+            raise
         except Exception as exc:
             self._debug_event("safety_hover_failed", {"error_type": type(exc).__name__, "error": str(exc)})
 
     def _run_shutdown(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
+        if scene.scene_instance_id in self._unusable_scene_ids:
+            self._debug_event("shutdown_skipped", {"reason": "scene_recovery_required"})
+            return
         if self.shutdown_policy == "none" or not state.connected:
             self._debug_event("shutdown_skipped", {"policy": self.shutdown_policy, "connected": state.connected})
             return
@@ -1440,6 +1473,7 @@ class TaskRuntime:
         return (map_id, str(scene_id) if scene_id is not None else None)
 
     def _forget_scene(self, scene: SceneInstance) -> None:
+        self._unusable_scene_ids.discard(scene.scene_instance_id)
         for key, active_scene in list(self._active_reused_scenes.items()):
             if active_scene.scene_instance_id == scene.scene_instance_id:
                 self._active_reused_scenes.pop(key, None)
@@ -1482,7 +1516,11 @@ class TaskRuntime:
 
     def _record_action(self, state: MissionState, tool: str, args: dict, result: dict) -> dict[str, Any]:
         state.record_action(tool, args, result)
-        write_result = self.memory_writer.write_action(tool, args, result)
+        started = time.monotonic()
+        try:
+            write_result = self.memory_writer.write_action(tool, args, result)
+        finally:
+            self._debug_event("artifact_write_timing", {"kind": "action", "elapsed_sec": time.monotonic() - started})
         memory = self._memory_for_state(state)
         memory.append_action_ref(write_result["action_ref"])
         memory.append_pose_ref(write_result.get("pose_ref"))

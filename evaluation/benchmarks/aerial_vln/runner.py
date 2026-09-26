@@ -539,6 +539,10 @@ class AerialVlnBenchmarkRunner:
                 "uav_action_steps", trace["action_count"]
             ),
         }
+        if infrastructure_error and (outcome.get("error") or {}).get("error_type") == "SceneRecoveryRequired":
+            metrics = {key: value for key, value in metrics.items()
+                       if key in {"trajectory_ned", "reference_path_ned", "uav_action_steps"}}
+            outcome["final_score_available"] = False
         case_result = {
             "episode_id": case.episode_id,
             "trajectory_id": case.trajectory_id,
@@ -1230,6 +1234,8 @@ def _infrastructure_error(
     if cleanup_errors:
         return {"stage": "cleanup", "errors": cleanup_errors}
     outcome_error = outcome.get("error")
+    if isinstance(outcome_error, dict) and outcome_error.get("error_type") == "SceneRecoveryRequired":
+        return {"stage": "scene_control", "error": dict(outcome_error)}
     if (
         isinstance(outcome_error, dict)
         and outcome_error.get("error_type") == "ProviderRequestError"

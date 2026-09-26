@@ -287,12 +287,7 @@ class PausedMultirotorControlStrategy(_AirSimStrategyBase):
         )
 
     def hover(self, client: Any) -> PrimitiveResult:
-        pose = self._freeze_at_current_pose(client)
-        return PrimitiveResult(
-            True,
-            "AirSim paused Multirotor pose held",
-            {"pose": pose.data or {}},
-        )
+        return self._actions.hold(client)
 
     def land(self, client: Any) -> PrimitiveResult:
         return PrimitiveResult(

@@ -147,4 +147,5 @@ def test_v1_response_schema_field_names_are_frozen():
         "action",
         "message",
         "data",
+        "execution_state",
     )

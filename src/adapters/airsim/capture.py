@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from ..uav_primitives import PrimitiveResult
+from .performance import AirSimPerformance
 
 @dataclass(frozen=True)
 class _AirSimCaptureSpec:
@@ -48,7 +49,8 @@ _DEFAULT_CAPTURE_SOURCE = {
 class AirSimCapture:
     """Scene-owned capture routing and optional artifact writer."""
 
-    def __init__(self, camera_name: str, vehicle_name: str, artifact_dir=None, save_artifacts=False):
+    def __init__(self, camera_name: str, vehicle_name: str, artifact_dir=None, save_artifacts=False, *, performance=None):
+        self.performance = performance or AirSimPerformance()
         self.camera_name = camera_name
         self.vehicle_name = vehicle_name
         self.artifact_dir = Path(artifact_dir) if artifact_dir is not None else None
@@ -91,10 +93,11 @@ class AirSimCapture:
                 "AirSim returned an unexpected response count: "
                 f"requested={len(resolved)}, received={len(responses)}"
             )
-        frames = {
-            modality: self._frame_metadata(modality, source, spec, response)
-            for (modality, source, spec), response in zip(resolved, responses)
-        }
+        with self.performance.span("capture.decode_and_write"):
+            frames = {
+                modality: self._frame_metadata(modality, source, spec, response)
+                for (modality, source, spec), response in zip(resolved, responses)
+            }
         return PrimitiveResult(True, "AirSim UAV frames", {"frames": frames})
 
     def _frame_metadata(self, modality: str, capture_source: str,
@@ -148,12 +151,14 @@ class AirSimCapture:
         if self.save_artifacts:
             path = self._next_artifact_path(folder, suffix)
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(payload)
+            with self.performance.span("capture.artifact_write"):
+                path.write_bytes(payload)
             metadata["artifact_path"] = str(path)
             if preview is not None:
                 preview_path = self._depth_preview_path(path)
                 preview_path.parent.mkdir(parents=True, exist_ok=True)
-                preview.save(preview_path, format="PNG")
+                with self.performance.span("capture.artifact_write"):
+                    preview.save(preview_path, format="PNG")
                 metadata["preview_path"] = str(preview_path)
         return metadata
 

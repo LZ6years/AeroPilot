@@ -104,7 +104,14 @@ ObservationProfile 是一次 Benchmark 运行的静态观测选择。它不进�
 - `Observation`
   - `scene_instance_id`、`agent_id`、`modalities`、`data`；
 - `ActionResult`
-  - `ok`、`action`、`message`、`data`。
+  - `ok`、`action`、`message`、`data`，以及默认空字典的可选 `execution_state`。
+
+`execution_state` 是控制层元数据，不进入模型工具结果。`requires_scene_reset=true`
+表示场景无法继续安全执行；Runtime 补齐未执行调用结果后抛出 `SceneRecoveryRequired`，
+由调用方清理场景。普通动作失败不设置此标记。
+`post_action_state_token` 是场景后端签发的一次性凭据；可选本地
+`consume_post_action_state(scene_instance_id, agent_id, token)` 只消费刚完成动作的冻结状态。
+新控制写入、重置、断连或场景关闭会使凭据失效。不支持此扩展的客户端维持原稳定流程。
 
 `Observation.data` 和 `ActionResult.data` 是扩展容器。Backend 可以增加新的内部键，
 但不能改变已有 canonical 字段的含义。调用方必须依据 `SceneCapabilities` 判断动作
@@ -121,6 +128,7 @@ ObservationProfile 是一次 Benchmark 运行的静态观测选择。它不进�
 - 增加新的 Backend 注册；
 - 增加新的 action 名称或 observation modality，并通过 capabilities 宣告；
 - 在扩展容器中增加不冲突的可选数据；
+- 增加默认空值的可选控制元数据，不改变原有字段、位置参数和必需方法；
 - 优化性能、重试、日志和 artifact。
 
 下列修改必须先升级 EnvClient 主版本并提供迁移说明：
