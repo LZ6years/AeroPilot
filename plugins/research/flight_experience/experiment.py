@@ -81,7 +81,8 @@ def prepare_output(bundle: EvidenceBundle, output: Path) -> Path:
     return output
 
 
-def _validate_candidate(value: Any, bundle: EvidenceBundle, images: set[str]) -> list[str]:
+def _validate_candidate(value: Any, bundle: EvidenceBundle, images: set[str],
+                        supplied_refs: set[str]) -> list[str]:
     """Return machine-checkable reasons to defer, not an automated semantic verdict."""
     if not isinstance(value, dict):
         return ["candidate_not_object"]
@@ -98,6 +99,8 @@ def _validate_candidate(value: Any, bundle: EvidenceBundle, images: set[str]) ->
         obs = []
     if set(refs) - bundle.evidence_ids:
         issues.append("unknown_evidence_reference")
+    if set(refs) - supplied_refs:
+        issues.append("full_evidence_not_supplied")
     if set(obs) - set(refs):
         issues.append("image_not_cited")
     if set(obs) - images:
@@ -141,9 +144,11 @@ def run_experiment(bundle: EvidenceBundle, output: Path, *, reflection: ModelCli
         return records
 
     def request(label: str, client: ModelClient, prompt: str, *,
-                selected: list[str] | None = None, extra: Any = None) -> dict[str, Any]:
+                selected: list[str] | None = None, extra: Any = None,
+                evidence: dict[str, Any] | None = None) -> dict[str, Any]:
         content: list[dict[str, Any]] = [{"type": "text", "text": json.dumps(
-            {"evidence": bundle.index(), "candidate_material": extra}, ensure_ascii=False)}]
+            {"evidence": evidence if evidence is not None else bundle.temporal_index(),
+             "candidate_material": extra}, ensure_ascii=False)}]
         for obs in selected or []:
             info = bundle.observations[obs]
             content.append({"type": "text", "text": f"ORIGINAL HISTORICAL RGB: {obs}; {info['timestamp']}"})
@@ -208,10 +213,12 @@ def run_experiment(bundle: EvidenceBundle, output: Path, *, reflection: ModelCli
 
     try:
         selected = select("reflection_select", reflection)
+        reflection_evidence = bundle.excerpt(selected)
+        reflection_refs = {row["id"] for row in reflection_evidence["timeline"]} | set(selected)
         proposed = request("reflection", reflection,
             f'Propose at most {cfg.max_candidates} candidate experiences. Return {{"candidates": [...]}}. '
             'An empty list is appropriate if there is no useful supported advice. ' + _CANDIDATE_SCHEMA,
-            selected=selected)
+            selected=selected, evidence=reflection_evidence)
         candidates = proposed.get("candidates")
         if not isinstance(candidates, list) or len(candidates) > cfg.max_candidates:
             raise ValueError("Invalid candidate collection")
@@ -219,7 +226,7 @@ def run_experiment(bundle: EvidenceBundle, output: Path, *, reflection: ModelCli
         valid = []
         seen = set()
         for candidate in candidates:
-            problems = _validate_candidate(candidate, bundle, set(selected))
+            problems = _validate_candidate(candidate, bundle, set(selected), reflection_refs)
             cid = candidate.get("id") if isinstance(candidate, dict) else None
             if isinstance(cid, str) and cid in seen:
                 raise ValueError("Duplicate candidate ID")
@@ -232,13 +239,15 @@ def run_experiment(bundle: EvidenceBundle, output: Path, *, reflection: ModelCli
         if valid:
             required = list(dict.fromkeys(obs for c in valid for obs in c["observation_ids"]))
             review_images = select("review_select", reviewer, extra=valid, required=required)
+            review_evidence = bundle.excerpt(review_images, [ref for c in valid for ref in c["evidence_refs"]])
+            review_refs = {row["id"] for row in review_evidence["timeline"]} | set(review_images)
             audited = request("review", reviewer,
                 'Independently audit every candidate against original evidence, scope, decision value '
                 'and conflicts. Do not trust the reflection narrative. Return {"reviews": [{"id": ID, '
                 '"decision": "adopt|revise|defer|discard", "reason": "evidence-based explanation", '
                 '"candidate": revised candidate only when decision is revise}]}. '
                 'Missing, weak or conflicting evidence requires defer or discard. ' + _CANDIDATE_SCHEMA,
-                selected=review_images, extra=valid)
+                selected=review_images, extra=valid, evidence=review_evidence)
             reviews = audited.get("reviews")
             if not isinstance(reviews, list) or len(reviews) != len(valid):
                 raise ValueError("Review must cover each valid candidate exactly once")
@@ -255,7 +264,7 @@ def run_experiment(bundle: EvidenceBundle, output: Path, *, reflection: ModelCli
                 reviewed.add(cid)
                 if decision in ("adopt", "revise"):
                     candidate = review.get("candidate") if decision == "revise" else by_id[cid]
-                    problems = _validate_candidate(candidate, bundle, set(review_images))
+                    problems = _validate_candidate(candidate, bundle, set(review_images), review_refs)
                     if isinstance(candidate, dict) and candidate.get("id") != cid:
                         problems.append("revision_changed_id")
                     if problems:

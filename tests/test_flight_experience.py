@@ -180,3 +180,24 @@ def test_prices_are_optional_and_invalid_budgets_rejected():
         ExperimentSettings(max_images=0)
     with pytest.raises(ValueError):
         ExperimentSettings(review_input_price=-1)
+
+
+def test_temporal_index_fetches_original_neighbor_windows_and_cited_rows(source):
+    bundle = read_run(source)
+    bundle.timeline = []
+    for i in range(6):
+        bundle.timeline.extend([
+            {"id": f"s{i}", "kind": "state_checkpoint", "observation_id": f"o{i}"},
+            {"id": f"a{i}", "kind": "assistant_turn", "unverified_intent": "claim" * 100},
+            {"id": f"r{i}", "kind": "tool_result", "status": "ok", "requested_args": {"vx": i}},
+        ])
+        bundle.observations[f"o{i}"] = {"image_status": "available"}
+    index = bundle.temporal_index()
+    assert index["timeline_index"][1]["excerpt_truncated"]
+    assert len(index["timeline_index"][1]["unverified_intent_excerpt"]) == 160
+    excerpt = bundle.excerpt(["o2"], ["r5"])
+    ids = [r["id"] for r in excerpt["timeline"]]
+    assert ids == ["s1", "a1", "r1", "s2", "a2", "r2", "s3", "r5"]
+    assert excerpt["timeline"][1]["unverified_intent"] == "claim" * 100
+    assert excerpt["omitted_event_count"] == 10
+    assert len(bundle.timeline) == 18

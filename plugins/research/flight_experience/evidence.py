@@ -70,6 +70,58 @@ class EvidenceBundle:
                 "observations": self.observations, "source_sha256": self.sources,
                 "limitations": self.limitations}
 
+    def temporal_index(self) -> dict[str, Any]:
+        """Small navigation index, explicitly not a replacement for full evidence.
+
+        Repeated plans and long narratives overwhelm a frame-selection request.
+        Keep IDs, event types, tool outcomes and short intent excerpts here;
+        readers must fetch the original segments before proposing experience.
+        """
+        events = []
+        for row in self.timeline:
+            item = {key: row[key] for key in ("id", "kind", "timestamp", "observation_id", "tool", "status")
+                    if key in row}
+            if row.get("requested_calls"):
+                item["requested_tools"] = [c["tool"] for c in row["requested_calls"]]
+            if isinstance(row.get("unverified_intent"), str):
+                item["unverified_intent_excerpt"] = row["unverified_intent"][:160]
+                item["excerpt_truncated"] = len(row["unverified_intent"]) > 160
+            events.append(item)
+        return {"instruction": self.instruction, "timeline_index": events,
+                "observations": {obs: {"timestamp": info.get("timestamp"), "image_status": info["image_status"]}
+                                 for obs, info in self.observations.items()},
+                "limitations": self.limitations,
+                "index_only": "Navigation excerpts are not full action/result evidence. Fetch original segments and RGB."}
+
+    def excerpt(self, observation_ids: list[str], evidence_refs: list[str] | None = None) -> dict[str, Any]:
+        """Fetch complete neighboring observation windows and explicitly cited rows.
+
+        Include the preceding and following checkpoint boundary so a reader sees
+        what caused a selected view and what followed it. Original order and all
+        fields in each selected row are retained. Omitted rows remain addressable
+        through the separate index, never silently replaced by model summaries.
+        """
+        checkpoints = [i for i, row in enumerate(self.timeline) if row["kind"] == "state_checkpoint"]
+        refs = set(evidence_refs or [])
+        selected = set()
+        for offset, position in enumerate(checkpoints):
+            if self.timeline[position].get("observation_id") not in observation_ids:
+                continue
+            start = checkpoints[offset - 1] if offset else 0
+            end = checkpoints[offset + 1] + 1 if offset + 1 < len(checkpoints) else len(self.timeline)
+            selected.update(range(start, end))
+        selected.update(i for i, row in enumerate(self.timeline) if row["id"] in refs)
+        # Legacy action journals cannot reliably align observation windows. Do
+        # not invent alignment or silently cut their action evidence by count.
+        if not checkpoints:
+            selected.update(range(len(self.timeline)))
+        return {"instruction": self.instruction,
+                "timeline": [row for i, row in enumerate(self.timeline) if i in selected],
+                "observations": {obs: self.observations[obs] for obs in observation_ids},
+                "omitted_event_count": len(self.timeline) - len(selected),
+                "source_sha256": self.sources, "limitations": self.limitations,
+                "image_ids_supplied": observation_ids}
+
     def image_part(self, observation_id: str) -> dict[str, Any]:
         mime, data = self.images[observation_id]
         return {"type": "image_url", "image_url": {
