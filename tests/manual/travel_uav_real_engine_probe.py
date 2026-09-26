@@ -41,7 +41,7 @@ def _write_action_diagnostics(result: dict[str, Any]) -> dict[str, str]:
         for action in audit.get("actions", []):
             action_result = action.get("result") or {}
             data = action_result.get("data") or {}
-            diagnostics = data.get("action_diagnostics")
+            diagnostics = action_result.get("execution_state", {}).get("action_diagnostics") or data.get("action_diagnostics")
             if not isinstance(diagnostics, dict):
                 continue
             actions.append(
