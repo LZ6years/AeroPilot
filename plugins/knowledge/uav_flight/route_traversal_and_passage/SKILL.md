@@ -1,6 +1,6 @@
 ---
 name: route_traversal_and_passage
-description: Applicable needs: following routes, passing landmarks, crossing openings or conditional turns; Decision questions: judge route continuity, junction arrival, road ends and passage progress; Contents: successive views, measured translation, route nodes, turn conditions and recovery; Limits: does not independently prove object identity or precise target distance.
+description: "Applicable needs: following routes, passing landmarks, crossing openings or conditional turns; Decision questions: judge route continuity, junction arrival, road ends and passage progress; Contents: successive views, measured translation, route nodes, turn conditions and recovery; Limits: does not independently prove object identity or precise target distance."
 summary: Select for through, past, between, passage, gap, corridor, opening, or explicit route-cue traversal tasks where route progress is the active concern.
 ---
 

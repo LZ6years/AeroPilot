@@ -1,6 +1,6 @@
 ---
 name: approach_and_standoff
-description: Applicable needs: approaching, retreating or holding a target-relative position; Decision questions: choose correction magnitude and decide when to stop; Contents: visual change, qualitative range, metric evidence and relative position; Limits: does not prove traversal or orbit coverage.
+description: "Applicable needs: approaching, retreating or holding a target-relative position; Decision questions: choose correction magnitude and decide when to stop; Contents: visual change, qualitative range, metric evidence and relative position; Limits: does not prove traversal or orbit coverage."
 summary: Select only when target-relative proximity, separation, following, or a final held front/back/side position is the terminal concern; exclude route traversal.
 ---
 

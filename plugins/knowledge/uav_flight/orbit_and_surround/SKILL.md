@@ -1,6 +1,6 @@
 ---
 name: orbit_and_surround
-description: Applicable needs: circling a target or covering a requested arc; Decision questions: separate heading change, radial repair and actual circulation progress; Contents: tangential movement, target relation, direction and coverage; Limits: yaw alone does not establish an orbit.
+description: "Applicable needs: circling a target or covering a requested arc; Decision questions: separate heading change, radial repair and actual circulation progress; Contents: tangential movement, target relation, direction and coverage; Limits: yaw alone does not establish an orbit."
 summary: Select for orbit, circle-around, surround, clockwise, counterclockwise, or radius-based target-relative loop tasks.
 ---
 

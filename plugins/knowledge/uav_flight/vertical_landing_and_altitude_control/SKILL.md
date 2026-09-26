@@ -1,6 +1,6 @@
 ---
 name: vertical_landing_and_altitude_control
-description: Applicable needs: ascending, descending, clearing obstacles or landing; Decision questions: judge height progress, clearance, adjustment magnitude and stopping; Contents: actual vertical motion, surface evidence, angled paths and landing relations; Limits: self-height change alone does not prove obstacle clearance or touchdown.
+description: "Applicable needs: ascending, descending, clearing obstacles or landing; Decision questions: judge height progress, clearance, adjustment magnitude and stopping; Contents: actual vertical motion, surface evidence, angled paths and landing relations; Limits: self-height change alone does not prove obstacle clearance or touchdown."
 summary: Select for altitude changes, vertical-path motion, landing, or stopping near a low-altitude region, ground, or surface.
 ---
 

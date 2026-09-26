@@ -1,6 +1,6 @@
 ---
 name: visual_target_task_reasoning
-description: Applicable needs: finding, identifying or facing a visual target; Decision questions: choose search direction, disambiguate candidates and decide when visibility is adequate; Contents: directional cues, viewpoint changes, candidate confirmation and alignment; Limits: does not establish passage, metric range or arrival.
+description: "Applicable needs: finding, identifying or facing a visual target; Decision questions: choose search direction, disambiguate candidates and decide when visibility is adequate; Contents: directional cues, viewpoint changes, candidate confirmation and alignment; Limits: does not establish passage, metric range or arrival."
 summary: Select for visual target search, confirmation, facing, centering, observation, or attention tasks.
 ---
 
