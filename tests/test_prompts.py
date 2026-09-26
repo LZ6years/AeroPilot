@@ -162,6 +162,7 @@ def test_descriptions_keep_capability_boundaries_and_explicit_planning_preferenc
     assert "cannot continue safely or meaningfully" in registry.get("runtime.report_blocked").description
     ground = registry.get("skill.visual_grounding.locate").to_provider_tool()["function"]
     assert "inconsistent_depth_surfaces" in ground["description"]
+    assert "failed call, not a negative detection" in ground["description"]
     assert "not_requested" in ground["description"]
     assert "directly observed appearance" in ground["parameters"]["properties"]["query"]["description"]
     assert "x-flyagent-completion-evidence" not in str(ground)
