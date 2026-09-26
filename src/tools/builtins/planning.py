@@ -21,8 +21,8 @@ def planning_tool() -> ToolSpec:
                           "required": ["id", "description", "status"],
                           "properties": {
                               "id": {"type": "string", "minLength": 1, "description": "Stable step identifier."},
-                              "description": {"type": "string", "minLength": 1, "description": "Required outcome."},
-                              "status": {"type": "string", "description": "Progress supported by observed results.",
+                              "description": {"type": "string", "minLength": 1, "description": "Required outcome, preserving order and triggering conditions. Keep unseen facts unconfirmed; specify motion parameters only when instructed or supported by evidence."},
+                              "status": {"type": "string", "description": "Progress supported by observed results, not merely issued actions. Revise earlier completion when contradicted by evidence.",
                                          "enum": ["pending", "in_progress", "completed", "cancelled"]}}}}),
         ),
     )
