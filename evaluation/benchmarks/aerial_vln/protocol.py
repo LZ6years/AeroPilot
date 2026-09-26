@@ -1,7 +1,7 @@
-"""AerialVLN benchmark protocol identity and parser-only semantics.
+"""AerialVLN benchmark protocol identity and task-context semantics.
 
 This context clarifies the official episode-termination meaning of landing
-language for the shared TaskParser. It does not change the raw dataset
+language for the shared tool-loop agent. It does not change the raw dataset
 instruction, Runtime tools, simulator control, or metric computation.
 """
 
@@ -11,10 +11,11 @@ from __future__ import annotations
 AERIAL_VLN_PROTOCOL = "aerial_vln.uav_agent_native_actions.v2"
 
 AERIAL_VLN_PARSER_PROTOCOL_CONTEXT = """AerialVLN episode protocol:
-- Interpret \"land on X\", \"land in X\", and \"land by X\" as reaching the target region associated with X and then ending the episode.
-- In parsed task_goal and phase name/goal text, express episode-level landing as reaching the requested target region and ending the episode. Do not carry land, landing, landed, or touchdown wording from that terminal phrase into the parsed semantic structure; the original user instruction remains unchanged. Preserve separately requested ascent, descent, approach, and intermediate route checkpoints in their own semantic objectives.
-- The final completion conditions may require confirmation of the target region and the position relation requested by the instruction.
-- This episode-level landing language does not require physical ground contact, an AirSim landed state, or calling uav.land.
-- In completion conditions, reaching the target region and confirming the requested position relation is the complete result. Do not require or claim a landed, landing, touchdown, ground-contact, landing-readiness, or suitable-for-landing state.
-- Do not infer descent, low altitude, surface proximity, or surface clearance from the episode-level landing phrase. Preserve one of those requirements only when the instruction requests it separately.
+Task goal: Follow the natural-language route in its specified order and reach the requested final region.
+Instruction interpretation: Preserve landmark-triggered actions and separately requested ascent, descent, approach and intermediate checkpoints. Seeing a landmark is different from reaching or passing it.
+Information characteristics: Upcoming landmarks may not yet be visible. Track route outcomes and conditions, not a predetermined sequence of parameters through unseen areas. Historical observations and subsequent motion can support completed passage events without keeping every landmark visible.
+Completion conditions:
+- Interpret "land on X", "land in X", and "land by X" as reaching the target region associated with X and then ending the episode.
+- Confirm the requested target region and position relation. This episode-level landing language does not require physical ground contact, an AirSim landed state, calling uav.land, or a landing-readiness claim.
+- Do not infer descent, low altitude, surface proximity, or surface clearance from the episode-level landing phrase. Preserve those requirements when independently requested.
 """.strip()

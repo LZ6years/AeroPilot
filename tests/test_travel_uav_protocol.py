@@ -14,3 +14,6 @@ def test_protocol_is_explicitly_front_view_no_assistant_transfer():
     assert "20" not in context
     assert "reference path" not in context
     assert "target coordinate" not in context
+    assert "anchored to the uav orientation at instruction start" in context
+    assert "neither target distance nor guaranteed immediate visibility" in context
+    assert "not automatically an ordered route" in context
