@@ -54,12 +54,17 @@ evidence_refs / observation_ids`。必须引用真实时序事件及本轮实际
 ```powershell
 python tests/manual/flight_experience_probe.py inspect --source <原运行目录> --output <新检查目录>
 python tests/manual/flight_experience_probe.py run --source <原运行目录> --output <新实验目录> --max-images 8 --max-candidates 6
+python tests/manual/flight_experience_probe.py run --source <原运行目录> --output <另一新目录> --observations obs_0033 obs_0036 obs_0037
 ```
 
 默认读取 `.env` 中的现有连接，分别指定 `--reflection-model`、`--review-model`
 可覆盖模型名；连接仍使用同一提供商。`--env` 可选择独立实验配置文件。不要为实验
 修改正式飞行配置。`--reflection-input-price` 等四个价格参数单位为美元/百万 token，
 只计算输入/输出 token 的估算费用；未提供价格或 usage 时费用记为未知，不记为零。
+
+对明确要检查的片段，可从 `inspect` 输出中选择 `--observations`，跳过模型选帧。
+两个独立读者都会收到这些原图及对应时序片段，通常只需复盘和审核两次调用。
+产物明确记录人工指定的观察范围；这不是模型自主选帧实验，也不能推断未查看部分。
 
 产物包含：
 

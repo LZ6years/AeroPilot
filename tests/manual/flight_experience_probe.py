@@ -32,6 +32,7 @@ def main() -> int:
     parser.add_argument("--review-model")
     parser.add_argument("--max-images", type=int, default=8)
     parser.add_argument("--max-candidates", type=int, default=6)
+    parser.add_argument("--observations", nargs="+", help="Explicit original observation IDs for both independent readers; skips model frame selection")
     for role in ("reflection", "review"):
         for direction in ("input", "output"):
             parser.add_argument(f"--{role}-{direction}-price", type=float, help="USD per million tokens; omit if unknown")
@@ -49,6 +50,7 @@ def main() -> int:
     review = replace(model.to_provider_settings(), model_name=args.review_model or model.model_name)
     settings = ExperimentSettings(max_images=args.max_images, max_candidates=args.max_candidates,
         reflection_model=reflection.model_name, review_model=review.model_name,
+        observation_ids=tuple(args.observations) if args.observations is not None else None,
         **{f"{role}_{direction}_price": getattr(args, f"{role}_{direction}_price")
            for role in ("reflection", "review") for direction in ("input", "output")})
     parameters = {"thinking": {"type": model.thinking_mode}} if model.thinking_mode else {}

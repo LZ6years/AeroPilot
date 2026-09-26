@@ -30,6 +30,9 @@ Do not invent intermediate observations or generalize a single successful batch
 into a fixed action recipe. Produce useful conditional advice with explicit
 limitations and counterexamples. No claim of improved closed-loop performance
 or cross-scene validation is justified by this experiment. Reply as JSON only.
+Recorded platform rejections describe historical protocol behavior, not universal
+flight requirements. Do not recommend preserving a historical verification gate
+without a supported applicability boundary; current platform rules are unknown.
 """
 _CANDIDATE_SCHEMA = """Each candidate has exactly: id (string), applicability
 (string), observed_evidence (string), recommendation (string), limitations
@@ -57,10 +60,17 @@ class ExperimentSettings:
     reflection_output_price: float | None = None
     review_input_price: float | None = None
     review_output_price: float | None = None
+    observation_ids: tuple[str, ...] | None = None
 
     def __post_init__(self) -> None:
         if self.max_images < 1 or self.max_candidates < 1:
             raise ValueError("Image and candidate budgets must be positive")
+        if self.observation_ids is not None and (
+            not self.observation_ids or len(self.observation_ids) > self.max_images
+            or any(not isinstance(obs, str) or not obs for obs in self.observation_ids)
+            or len(set(self.observation_ids)) != len(self.observation_ids)
+        ):
+            raise ValueError("Explicit observation IDs must be unique and fit the image budget")
         for value in (self.reflection_input_price, self.reflection_output_price,
                       self.review_input_price, self.review_output_price):
             if value is not None and value < 0:
@@ -127,6 +137,8 @@ def run_experiment(bundle: EvidenceBundle, output: Path, *, reflection: ModelCli
     result: dict[str, Any] = {"status": "running", "source": str(bundle.source),
         "experiment_only": True, "closed_loop_benefit": "not_evaluated", "calls": calls,
         "reflection_model": cfg.reflection_model, "review_model": cfg.review_model,
+        "frame_selection": "explicit_observation_ids" if cfg.observation_ids is not None else "model_index_selection",
+        "explicit_observation_ids": cfg.observation_ids,
         "candidates": [], "reviews": [], "accepted": [], "human_corrections": None}
     started = time.monotonic()
     image_links: dict[str, str] = {}
@@ -199,6 +211,11 @@ def run_experiment(bundle: EvidenceBundle, output: Path, *, reflection: ModelCli
     def select(label: str, client: ModelClient, *, extra: Any = None,
                required: list[str] | None = None) -> list[str]:
         required = required or []
+        if cfg.observation_ids is not None:
+            ids = list(cfg.observation_ids)
+            if set(ids) - set(bundle.images) or set(required) - set(ids):
+                raise ValueError("Explicit frame selection lacks available required RGB")
+            return ids
         reply = request(label, client, 'Select useful time points before inspecting RGB. Return '
             '{"observation_ids": [IDs], "reason": "selection rationale"}. '
             f'Select at most {cfg.max_images} available original RGBs. Required candidate frames: '

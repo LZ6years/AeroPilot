@@ -201,3 +201,14 @@ def test_temporal_index_fetches_original_neighbor_windows_and_cited_rows(source)
     assert excerpt["timeline"][1]["unverified_intent"] == "claim" * 100
     assert excerpt["omitted_event_count"] == 10
     assert len(bundle.timeline) == 18
+
+
+def test_explicit_observation_scope_skips_selection_but_keeps_independent_audit(source, tmp_path):
+    reflection = FakeClient([{"candidates": [_candidate()]}])
+    reviewer = FakeClient([{"reviews": [{"id": "e1", "decision": "adopt", "reason": "Supported by actual motion"}]}])
+    result = run_experiment(read_run(source), tmp_path / "experiment", reflection=reflection, reviewer=reviewer,
+                            settings=ExperimentSettings(observation_ids=("o1",)))
+    assert result["status"] == "completed" and len(result["accepted"]) == 1
+    assert result["frame_selection"] == "explicit_observation_ids"
+    assert len(reflection.requests) == len(reviewer.requests) == 1
+    assert [c["stage"] for c in result["calls"]] == ["reflection", "review"]
