@@ -1,0 +1,368 @@
+{
+  "git_head": "b0f14dd473811791611f1a1662e859080001f1a8",
+  "created_at": "2026-09-26T14:54:40.241244+00:00",
+  "source": "original_captured_runs; not offline replay",
+  "baseline_artifact_directory": "tests/manual_outputs/agent_guidance_baseline_20260926",
+  "source_sha256": {
+    "AGENT.md": "3927ff7c9aecd37d5de965b1709f28c62862f242cc9bb22a898be5d523f9a642",
+    "configs/plugins.json": "de1fe2e56168903134be7f1aabb0c92c587f1d57f254b5b6880fc0d9a0737946",
+    "evaluation/benchmarks/aerial_vln/protocol.py": "ab5b0d38ef7d0e860692abc4519482daa3050f88f0dbbac2a8d5ac1729c2c7c6",
+    "evaluation/benchmarks/travel_uav/protocol.py": "9c3d2bdfa36f7e93766afc2af45fa15af0c43403e9a8228e6fd5eeebea2508d9",
+    "plugins/capabilities/visual_grounding/locate/capability.json": "42654b91110507e83e197cc15b8104a97caa38bd5d8464bafa1097c384fe0e80",
+    "plugins/knowledge/uav_flight/approach_and_standoff/SKILL.md": "50125341cc931e8b3c6f98797662815ca22bfbad0282e863233682c363a93dc2",
+    "plugins/knowledge/uav_flight/orbit_and_surround/SKILL.md": "a05b8fafbb2ee750cffbd5b7369ea1727b96d77c25df6aeb0d02dfa008df1bed",
+    "plugins/knowledge/uav_flight/route_traversal_and_passage/SKILL.md": "37838b0c1897f678571fa31020f93e1eda772fc29aa69dda13ad6b54396495e7",
+    "plugins/knowledge/uav_flight/vertical_landing_and_altitude_control/SKILL.md": "f06952469c497ee40b182456b652b3d551049db4d73b7e36e8726c737ee50456",
+    "plugins/knowledge/uav_flight/visual_target_task_reasoning/SKILL.md": "53155b9886c7a171eb2a6633fb6f6f1edb2d9ade55ca89968d4bdb7146fb1489",
+    "plugins/knowledge/uav_flight/route_traversal_and_passage/references/route_progress_examples.md": "1764f93cf535619667e7b29ac38465c37017c910b4175e1e89f009362723264d",
+    "plugins/knowledge/uav_flight/vertical_landing_and_altitude_control/references/angled_vertical_motion.md": "13e3366192f81eb372b6306698ee2a232c25453ffdfcf11d571f0ed04030e1ee",
+    "plugins/knowledge/uav_flight/visual_target_task_reasoning/references/search_under_uncertainty.md": "3676b0b6765efa73efdcbe2868806e9691c95a198e1262c3ee4445c9536384e9",
+    "src/tools/registry.py": "e8f6495237b35dea2d07ed8140da1e130fbd8bab3f2b99acce6039e51bdc4586",
+    "src/agent/planning/prompts/agent_tool_loop_system.txt": "63cb471c4b3aed5b2569a49798d8b65153631c5975388dad4c633872c39d8e8d",
+    "src/runtime/control/executor.py": "1b6fab056d174265f5dc431ee6769009dd0f14a57cc45d1434d945bb737885ec",
+    "src/runtime/control/actions/terminal.py": "f621f4c8260b1a37fbdbfd5102d3765f758c32eab52847341dbc168e41eee139",
+    "src/tools/builtins/knowledge.py": "e91284fbba19b93efcf9fcc1da6c370f4f2ce12094ad52c3bf34093703728baa",
+    "src/tools/builtins/planning.py": "ecedc47e44e2c7f02869334ecce64c2877ba3b08390bf192de77d7007f715989"
+  },
+  "runs": [
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/01_aerial_39GHHAVOMOP8ZV27ILH5P0TV5F6J4A/runs/aerial_vln_39GHHAVOMOP8ZV27ILH5P0TV5F6J4A_20260923_233536_6f50e9",
+      "transcript_sha256": "20be44948627a7f09c0a32d9bb6d6a5a9ca70b93d7c85969401a2869484c3735",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 5,
+        "uav.move_body": 12,
+        "skill.visual_grounding.locate": 16,
+        "uav.turn_relative": 5,
+        "runtime.report_completed": 3
+      },
+      "physical_batches": {
+        "1": 15,
+        "2": 1
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/02_aerial_34PGFRQONX9K8XLRSRNOKSCMRL2JWL/runs/aerial_vln_34PGFRQONX9K8XLRSRNOKSCMRL2JWL_20260923_234439_1d0de2",
+      "transcript_sha256": "83301a70169f1ecb96e07c3738c47b6f4245d1684719795923c47afa3f289e82",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 4,
+        "uav.turn_relative": 3,
+        "uav.move_body": 10,
+        "skill.visual_grounding.locate": 9,
+        "runtime.report_completed": 3
+      },
+      "physical_batches": {
+        "1": 11,
+        "2": 1
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/03_aerial_3MD9PLUKKRCKLIHHICZNC3NLE6HZNW/runs/aerial_vln_3MD9PLUKKRCKLIHHICZNC3NLE6HZNW_20260923_235008_35d1ef",
+      "transcript_sha256": "8881badcb5325efaec6f4f243b4cbedecfd0cdbecd30b1f2cb5d9bdbe757b2ac",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 4,
+        "uav.move_body": 9,
+        "uav.turn_relative": 5,
+        "skill.visual_grounding.locate": 7,
+        "runtime.report_completed": 3
+      },
+      "physical_batches": {
+        "1": 14
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/04_aerial_3NL0RFNU0OL3AF8P06HHQFT8T3F4KA/runs/aerial_vln_3NL0RFNU0OL3AF8P06HHQFT8T3F4KA_20260923_235557_5150bd",
+      "transcript_sha256": "0b3e5424752e4f183ccf764b5fbcbf560ec1c22066c31c4f531abffb7a4b2891",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 6,
+        "uav.move_body": 27,
+        "uav.turn_relative": 13,
+        "skill.visual_grounding.locate": 8,
+        "runtime.report_completed": 2
+      },
+      "physical_batches": {
+        "1": 33,
+        "2": 2,
+        "3": 1
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/05_aerial_3OWEPKL08IA118BBZH74LJUM4SMN74/runs/aerial_vln_3OWEPKL08IA118BBZH74LJUM4SMN74_20260924_000904_881495",
+      "transcript_sha256": "89900f0403c252f09982b06348879d83bf6a189572237804fb99c3d0038366e4",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 2,
+        "uav.move_body": 17,
+        "uav.turn_relative": 4,
+        "skill.visual_grounding.locate": 8
+      },
+      "physical_batches": {
+        "2": 4,
+        "1": 13
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/06_aerial_37Q970SNZN6K6ZOEIX7HJ3DFVRM1S4/runs/aerial_vln_37Q970SNZN6K6ZOEIX7HJ3DFVRM1S4_20260924_082811_1a9429",
+      "transcript_sha256": "dde51652dede64c085560e02b902b8d4702f52abb496092e50f09a9847f40b4d",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 5,
+        "uav.move_body": 12,
+        "skill.visual_grounding.locate": 9,
+        "uav.turn_relative": 6,
+        "runtime.report_completed": 2
+      },
+      "physical_batches": {
+        "1": 18
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/07_aerial_3GDTJDAPV39ZJ4VUXLKAM41HGS98ML/runs/aerial_vln_3GDTJDAPV39ZJ4VUXLKAM41HGS98ML_20260924_083514_4bc83a",
+      "transcript_sha256": "16faa9e6bcbd55880d972a1ccdb2ded9126c8c7b3c147f5c0a406f49d52cfba7",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 5,
+        "knowledge.load": 1,
+        "uav.move_body": 14,
+        "skill.visual_grounding.locate": 7,
+        "uav.turn_relative": 1,
+        "runtime.report_completed": 2
+      },
+      "physical_batches": {
+        "1": 15
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/08_aerial_3IGI0VL64GI8ME3AG3O6W5GIJ4VONV/runs/aerial_vln_3IGI0VL64GI8ME3AG3O6W5GIJ4VONV_20260924_084124_d154f3",
+      "transcript_sha256": "8fa8273f5c33637ee176cc6419d13a2b5be2d808ae96a5a680619688bdcc12c9",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 4,
+        "uav.move_body": 12,
+        "uav.turn_relative": 9,
+        "skill.visual_grounding.locate": 9,
+        "runtime.report_completed": 3
+      },
+      "physical_batches": {
+        "1": 21
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/09_aerial_3CPLWGV3MXX5FRZ4EE5OZFLSW76N9N/runs/aerial_vln_3CPLWGV3MXX5FRZ4EE5OZFLSW76N9N_20260924_084831_12d0d4",
+      "transcript_sha256": "c65b21516aa86299632a1ba597171c52e84f493c3bdf5dd42fb92c4b36fae819",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 7,
+        "uav.move_body": 44,
+        "skill.visual_grounding.locate": 6,
+        "uav.turn_relative": 15,
+        "runtime.report_completed": 3
+      },
+      "physical_batches": {
+        "1": 49,
+        "2": 5
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/10_aerial_3L4D84MIL8Q2B7Q2XS1OJP2Z8KEJHG/runs/aerial_vln_3L4D84MIL8Q2B7Q2XS1OJP2Z8KEJHG_20260924_090847_85dcba",
+      "transcript_sha256": "b470eeac92ba7d4b3d258a49c2643262730608bf4ef4ffa676219e6ac79f18d5",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 5,
+        "uav.move_body": 35,
+        "uav.turn_relative": 12,
+        "skill.visual_grounding.locate": 8,
+        "runtime.report_completed": 2
+      },
+      "physical_batches": {
+        "1": 47
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/11_travel_Carla_Town05__27940e4d-36b6-4021-a727-9c457d173c79/runs/travel_uav_Carla_Town05__27940e4d-36b6-4021-a727-9c457d173c79_20260924_093136_b33b8a",
+      "transcript_sha256": "bccc19818800e2b5057673fc32843b6287c783c65baa1f243e1e95172a708406",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "knowledge.load": 1,
+        "runtime.update_plan": 2,
+        "skill.visual_grounding.locate": 37,
+        "uav.turn_relative": 17,
+        "uav.move_body": 25,
+        "runtime.report_completed": 1
+      },
+      "physical_batches": {
+        "1": 42
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/12_travel_Carla_Town10HD__53e4e305-2f7f-46ef-ad07-554ba86b380f/runs/travel_uav_Carla_Town10HD__53e4e305-2f7f-46ef-ad07-554ba86b380f_20260924_100729_539ae8",
+      "transcript_sha256": "92225f0d256bff7e5ce2edd269570a3c736a134ef46540052d6768e731556eb2",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 3,
+        "uav.turn_relative": 7,
+        "skill.visual_grounding.locate": 10,
+        "knowledge.load": 1,
+        "uav.move_body": 11,
+        "runtime.report_completed": 1
+      },
+      "physical_batches": {
+        "1": 18
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/13_travel_ModernCityMap__a2625ae8-d423-4708-a6d3-cc33606a7e6e/runs/travel_uav_ModernCityMap__a2625ae8-d423-4708-a6d3-cc33606a7e6e_20260924_101604_a92eef",
+      "transcript_sha256": "d16d37d70fa3db98f2a5ff798f437460d96374c559cbf59bc8a642bf7cd8e55b",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 2,
+        "uav.turn_relative": 4,
+        "skill.visual_grounding.locate": 13,
+        "uav.move_body": 13,
+        "runtime.report_completed": 3
+      },
+      "physical_batches": {
+        "1": 17
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/14_travel_NYCEnvironmentMegapa__bc86986b-c79a-43a0-ae6b-6408e568589f/runs/travel_uav_NYCEnvironmentMegapa__bc86986b-c79a-43a0-ae6b-6408e568589f_20260924_102401_56f51b",
+      "transcript_sha256": "6ffa96c48a0e618fd7d831bc5b941ff34e7e8007117c02ae7fc8e5dc809b5864",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 2,
+        "uav.turn_relative": 7,
+        "skill.visual_grounding.locate": 12,
+        "uav.move_body": 9,
+        "runtime.report_completed": 2
+      },
+      "physical_batches": {
+        "1": 6,
+        "2": 5
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/15_travel_NYCEnvironmentMegapa__c3f9fc36-7c55-4a48-8213-5adce9b35b12/runs/travel_uav_NYCEnvironmentMegapa__c3f9fc36-7c55-4a48-8213-5adce9b35b12_20260924_103112_575c3c",
+      "transcript_sha256": "53161e78a1420593bc4db51c0172836c3509bc36ea0356c6b56ed411bcaca925",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 3,
+        "uav.turn_relative": 15,
+        "skill.visual_grounding.locate": 41,
+        "uav.move_body": 19,
+        "knowledge.load": 1,
+        "runtime.report_completed": 1
+      },
+      "physical_batches": {
+        "1": 24,
+        "2": 5
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/16_travel_NewYorkCity__2a070f7b-50d0-490b-a648-633759e51e3b/runs/travel_uav_NewYorkCity__2a070f7b-50d0-490b-a648-633759e51e3b_20260924_105506_716675",
+      "transcript_sha256": "b6443cc6d280330eeea4ef3bbf429fa6745eb79387e11f45cf9470f44e360729",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 1,
+        "uav.move_body": 9,
+        "knowledge.load": 1,
+        "skill.visual_grounding.locate": 1,
+        "uav.turn_relative": 2,
+        "runtime.report_blocked": 2
+      },
+      "physical_batches": {
+        "1": 8,
+        "3": 1
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/17_travel_TropicalIsland__b2665c19-3db6-45ff-be2d-795004aaeb5b/runs/travel_uav_TropicalIsland__b2665c19-3db6-45ff-be2d-795004aaeb5b_20260924_105939_c7089d",
+      "transcript_sha256": "a245d9dd52e2c107e382bfde98f77e5c483dfb739f8da702dddf1aec3d7c919e",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 2,
+        "uav.turn_relative": 9,
+        "uav.move_body": 20,
+        "skill.visual_grounding.locate": 21,
+        "knowledge.load": 2,
+        "runtime.report_completed": 1
+      },
+      "physical_batches": {
+        "1": 17,
+        "2": 6
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/18_travel_Carla_Town01__5a7c4254-ad4f-4fda-a3c7-569094b61fc1/runs/travel_uav_Carla_Town01__5a7c4254-ad4f-4fda-a3c7-569094b61fc1_20260924_111340_0bf86e",
+      "transcript_sha256": "99ce5d2f20082fff1ec14c07b8d880f989ea2a7e3d028c4a15271e524310dd7c",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 2,
+        "uav.turn_relative": 4,
+        "uav.move_body": 8,
+        "skill.visual_grounding.locate": 6,
+        "knowledge.load": 1
+      },
+      "physical_batches": {
+        "2": 4,
+        "1": 4
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/19_travel_NYCEnvironmentMegapa__f69693c6-bf6e-4d27-a349-6c9726e93053/runs/travel_uav_NYCEnvironmentMegapa__f69693c6-bf6e-4d27-a349-6c9726e93053_20260924_111739_9d8825",
+      "transcript_sha256": "128b9f07d1c588214cc9307cf1b7b4f94a8bc3f8cff3c7112c3ff4cc0325939c",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 3,
+        "uav.turn_relative": 3,
+        "skill.visual_grounding.locate": 6,
+        "uav.move_body": 4,
+        "runtime.report_completed": 1
+      },
+      "physical_batches": {
+        "2": 1,
+        "1": 5
+      },
+      "source": "original_captured_run"
+    },
+    {
+      "run_dir": "tests/manual_outputs/benchmark_20_flash_20260923_v2/cases/20_travel_NYCEnvironmentMegapa__931ce3da-8d3c-404c-af16-5b6bdf6bfe0c/runs/travel_uav_NYCEnvironmentMegapa__931ce3da-8d3c-404c-af16-5b6bdf6bfe0c_20260924_112147_9e34d3",
+      "transcript_sha256": "09c542336200faf572cef4b0b9fb63d9bc94dfcc73322afa834bd4333feb1b58",
+      "model": "qwen3.8-flash",
+      "calls": {
+        "runtime.update_plan": 2,
+        "uav.turn_relative": 18,
+        "uav.move_body": 29,
+        "skill.visual_grounding.locate": 21,
+        "knowledge.load": 1,
+        "runtime.report_completed": 1
+      },
+      "physical_batches": {
+        "1": 19,
+        "2": 14
+      },
+      "source": "original_captured_run"
+    }
+  ]
+}
