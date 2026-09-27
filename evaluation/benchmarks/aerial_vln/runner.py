@@ -104,8 +104,10 @@ class AerialVlnBenchmarkRunner:
         *,
         simulation_server_factory: Any = None,
         stmr_session: Any | None = None,
+        read_only_execution_config=None,
     ) -> None:
         self.config = config
+        self.read_only_execution_config = read_only_execution_config
         self._simulation_server_factory = simulation_server_factory or SimulationServer
         # Dataset-only validation must not read model credentials or construct
         # model clients. Runtime creation resolves this lazily.
@@ -816,6 +818,7 @@ class AerialVlnBenchmarkRunner:
             ),
             context_builder=context_builder,
             model_config=model_config,
+            read_only_execution_config=self.read_only_execution_config,
         )
 
     def _planner_context_builder(

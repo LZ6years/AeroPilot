@@ -3,6 +3,22 @@
 import pytest
 
 
+def test_concurrent_delivery_is_atomic_and_new_instruction_is_independent(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    service = KnowledgeService(catalog(tmp_path))
+    barrier = threading.Barrier(4)
+    def load(_):
+        barrier.wait(timeout=3)
+        return service.load("navigation", ["reference.md"])
+    with ThreadPoolExecutor(4) as pool:
+        results = list(pool.map(load, range(4)))
+    assert sum(result["body_included"] for result in results) == 1
+    assert sum(len(result["references"]) for result in results) == 1
+    assert service.loaded_index()[0]["reference_paths"] == ["reference.md"]
+    assert KnowledgeService(catalog(tmp_path)).load("navigation")["body_included"]
+
+
 def test_flight_catalog_has_consistent_selection_fields_without_schema_expansion():
     from src.plugins import PluginRegistry
     service = KnowledgeService(PluginRegistry.from_config().skill_catalog)

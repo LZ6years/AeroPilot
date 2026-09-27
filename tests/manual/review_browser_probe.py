@@ -1,20 +1,82 @@
 """Check real file:// image decoding and scroll screenshots in Chrome and Edge.
 
 Uses an isolated headless browser profile and CDP; no simulator/model requests.
-Requires websocket-client. Writes validation evidence inside the review bundle.
+Uses websocket-client when installed, or Windows' native .NET WebSocket client.
+Writes validation evidence inside the review bundle; never installs packages.
 """
 
 import argparse
 import base64
 import json
+import os
 from pathlib import Path
 import subprocess
+import shutil
 import tempfile
 import time
 from urllib.request import urlopen
 
-import websocket
 import psutil
+
+
+class NativeWebSocket:
+    """Small JSON-lines adapter to the existing Windows .NET WebSocket API."""
+
+    def __init__(self, endpoint):
+        shell = shutil.which('pwsh') or shutil.which('powershell')
+        if os.name != 'nt' or not shell:
+            raise RuntimeError('CDP requires websocket-client or Windows PowerShell/.NET')
+        self.process = subprocess.Popen([shell, '-NoProfile', '-NonInteractive', '-File',
+            str(Path(__file__).with_name('cdp_websocket.ps1')), '-Endpoint', endpoint],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding='utf-8', creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        try:
+            if not self._read().get('ready'):
+                raise RuntimeError('Native CDP transport not ready')
+        except BaseException:
+            self.process.kill()
+            self.process.communicate(timeout=5)
+            raise
+
+    def _read(self):
+        line = self.process.stdout.readline()
+        if not line:
+            raise RuntimeError('Native CDP transport exited without a reply')
+        reply = json.loads(line)
+        if 'error' in reply:
+            raise RuntimeError(reply['error'])
+        return reply
+
+    def _command(self, op, **values):
+        self.process.stdin.write(json.dumps({'op': op, **values}) + '\n')
+        self.process.stdin.flush()
+        return self._read()
+
+    def send(self, payload):
+        self._command('send', payload=payload)
+
+    def recv(self):
+        return self._command('recv')['data']
+
+    def close(self):
+        try:
+            if self.process.poll() is None:
+                self._command('close')
+                self.process.wait(timeout=5)
+        finally:
+            if self.process.poll() is None:
+                self.process.kill()
+            self.process.communicate(timeout=5)
+
+
+def connect_cdp(endpoint):
+    try:
+        import websocket
+    except ModuleNotFoundError as exc:
+        if exc.name != 'websocket':
+            raise
+        return NativeWebSocket(endpoint)
+    return websocket.create_connection(endpoint, suppress_origin=True, timeout=30)
 
 
 def close_owned_browser(profile, executable):
@@ -56,7 +118,7 @@ def inspect(executable: Path, root: Path, pages: list[str], name: str) -> list[d
             port = port_file.read_text().splitlines()[0]
             with urlopen(f'http://127.0.0.1:{port}/json/list') as response:
                 target = next(t for t in json.load(response) if t['type'] == 'page')
-            connection = websocket.create_connection(target['webSocketDebuggerUrl'], suppress_origin=True, timeout=30)
+            connection = connect_cdp(target['webSocketDebuggerUrl'])
             sequence = 0
 
             def call(method, params=None):
@@ -111,11 +173,14 @@ def inspect(executable: Path, root: Path, pages: list[str], name: str) -> list[d
                     call('Browser.close')
                 except Exception:
                     pass
-                connection.close()
-            close_owned_browser(profile, executable)
-            if process.poll() is None:
-                process.terminate()
-            process.wait(timeout=15)
+            try:
+                if connection:
+                    connection.close()
+            finally:
+                close_owned_browser(profile, executable)
+                if process.poll() is None:
+                    process.terminate()
+                process.wait(timeout=15)
 
 
 if __name__ == '__main__':

@@ -1,0 +1,5 @@
+{
+  "max_workers": 4,
+  "max_capability_calls": 2,
+  "capability_limits": {"skill.visual_grounding.locate": 2}
+}

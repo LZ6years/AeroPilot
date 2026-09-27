@@ -7,6 +7,8 @@ from typing import BinaryIO
 from typing import Any, Sequence
 
 import numpy as np
+import threading
+from src.perception.inference_resources import serialized_inference
 from PIL import Image
 
 from plugins.capabilities.visual_grounding.locate.scripts.contracts import CandidateMask, GroundedCandidate
@@ -19,10 +21,15 @@ class SamBackend:
         self._processor: Any | None = None
         self._model: Any | None = None
         self._device: str | None = None
+        self._device_lock = threading.RLock()
 
     def segment(self, rgb_path: Path | BinaryIO, candidates: Sequence[GroundedCandidate]) -> list[CandidateMask]:
         if not candidates:
             return []
+        return self._segment(rgb_path, candidates)
+
+    @serialized_inference
+    def _segment(self, rgb_path: Path | BinaryIO, candidates: Sequence[GroundedCandidate]) -> list[CandidateMask]:
         torch = self._torch()
         processor, model = self._load()
         with Image.open(rgb_path) as source:
@@ -52,20 +59,24 @@ class SamBackend:
 
     @property
     def device(self) -> str:
-        if self._device is None:
-            self._device = self.requested_device if self.requested_device != "auto" else ("cuda" if self._torch().cuda.is_available() else "cpu")
-        return self._device
+        with self._device_lock:
+            if self._device is None:
+                resolved = self.requested_device if self.requested_device != "auto" else ("cuda" if self._torch().cuda.is_available() else "cpu")
+                self._device = f"cuda:{self._torch().cuda.current_device()}" if resolved == "cuda" else resolved
+            return self._device
 
+    @serialized_inference
     def _load(self) -> tuple[Any, Any]:
         if self._processor is None or self._model is None:
             try:
                 from transformers import SamModel, SamProcessor
             except ModuleNotFoundError as exc:
                 raise RuntimeError("SAM backend requires transformers") from exc
-            self._processor = SamProcessor.from_pretrained(self.model_name)
-            self._model = SamModel.from_pretrained(self.model_name)
-            self._model.eval()
-            self._model.to(self.device)
+            processor = SamProcessor.from_pretrained(self.model_name)
+            model = SamModel.from_pretrained(self.model_name)
+            model.eval()
+            model.to(self.device)
+            self._processor, self._model = processor, model
         return self._processor, self._model
 
     @staticmethod

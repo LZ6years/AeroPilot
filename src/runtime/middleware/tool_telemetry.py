@@ -9,6 +9,7 @@ actions; TaskRuntime owns those behaviors.
 from __future__ import annotations
 
 from collections.abc import Callable
+import threading
 from typing import Any
 
 from src.env_client import ActionResult
@@ -25,6 +26,16 @@ class ToolTelemetryMiddleware:
     ) -> None:
         self.dispatcher = dispatcher
         self.debug_event = debug_event
+        self._read_event_lock = threading.Lock()
+
+    def read_event_sink(self, decision_id: str):
+        """Capture identity before workers start; only the recorder is shared."""
+        def emit(event, payload):
+            # A caller may supply a synchronous JSONL recorder. Do not assume
+            # its append operation is safe across multiple worker threads.
+            with self._read_event_lock:
+                self.debug_event(event, {"decision_id": decision_id, **payload})
+        return emit
 
     def call_step(
         self,

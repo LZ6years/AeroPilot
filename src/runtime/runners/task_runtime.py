@@ -24,6 +24,8 @@ from src.plugins import PluginRegistry
 from src.plugins.skills.knowledge_service import KnowledgeService
 from src.plugins.contracts.skill import SKILL_ARTIFACT_REFS_KEY, SKILL_MODEL_INPUTS_KEY
 from src.runtime.control.executor import execute_builtin_control
+from src.runtime.control.read_only_executor import ReadJob, ReadOnlyBatchExecutor
+from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
 from src.runtime.control.stabilization import UavStabilizer
 from src.runtime.configs.action_config import UavActionConfig
 from src.runtime.configs.model_config import ModelConfig
@@ -49,6 +51,7 @@ class TaskRuntime:
         runtime_loop_guard_windows: int = 300, enable_action_planner_debug: bool = False,
         context_builder: ObservationContextBuilder | None = None,
         model_config: ModelConfig | None = None, plugin_registry: PluginRegistry | None = None,
+        read_only_execution_config: ReadOnlyExecutionConfig | None = None,
     ) -> None:
         if shutdown_policy not in self.SHUTDOWN_POLICIES:
             raise ValueError(f"Unsupported shutdown policy: {shutdown_policy}")
@@ -58,6 +61,7 @@ class TaskRuntime:
             raise ValueError("TaskRuntime requires planner or explicit model_config")
         self.env_client, self.recorder = env_client, recorder
         self.model_config = model_config or ModelConfig()
+        self.read_only_execution_config = read_only_execution_config or ReadOnlyExecutionConfig()
         self.planner = planner or ModelActionPlanner(self.model_config)
         self.safety = safety or SafetySupervisor()
         self.shutdown_policy = shutdown_policy
@@ -1042,22 +1046,23 @@ class TaskRuntime:
         public_intent: str,
         calls: list[AgentToolCall],
     ) -> list[dict[str, Any]]:
-        recorded_results: list[dict[str, Any]] = []
+        # Prevalidation belongs to the enclosing turn. Workers only dispatch
+        # isolated snapshots; all mission/memory/transcript writes stay below.
+        jobs = []
         for call in calls:
-            try:
-                result = self.tools.call(
-                    scene.scene_instance_id, agent_id, call.tool_name, call.args,
-                    runtime_context={
-                        "latest_observation": dict(state.latest_observation),
-                        "run_dir": str(self.recorder.run_dir),
-                        "public_intent": public_intent, "tool_call_id": call.tool_call_id,
-                    },
-                )
-            except Exception as exc:
-                # A failed independent read must still close its call and must
-                # not suppress the results of other prevalidated reads.
-                result = ActionResult(ok=False, action=call.tool_name, message=str(exc),
-                                      data={"error_type": type(exc).__name__})
+            args = copy.deepcopy(call.args)
+            context = {"latest_observation": copy.deepcopy(state.latest_observation),
+                       "run_dir": str(self.recorder.run_dir),
+                       "public_intent": public_intent, "tool_call_id": call.tool_call_id}
+            def invoke(tool=call.tool_name, args=args, context=context):
+                return self.tools.call(scene.scene_instance_id, agent_id, tool, args, runtime_context=context)
+            jobs.append(ReadJob(call.tool_call_id, call.tool_name,
+                                self.tools.read_execution_hints(call.tool_name, args), invoke))
+        executor = ReadOnlyBatchExecutor(self.read_only_execution_config,
+            self.tool_telemetry.read_event_sink(f"decision_{self._decision_index:04d}"))
+        results = executor.execute(jobs)
+        recorded_results: list[dict[str, Any]] = []
+        for call, result in zip(calls, results):
             result_data = dict(result.data)
             capability_artifact_refs = _pop_string_list(
                 result_data,

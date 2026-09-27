@@ -266,6 +266,8 @@ def harness(tmp_path, batches):
         registry.register(spec)
     backend = Backend()
     runtime = TaskRuntime.__new__(TaskRuntime)
+    from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
+    runtime.read_only_execution_config = ReadOnlyExecutionConfig()
     runtime.recorder = Recorder(tmp_path)
     runtime.tools = ToolDispatcher(backend, registry, plugins, KnowledgeService(plugins.skill_catalog))
     runtime.safety = SafetySupervisor()
@@ -325,11 +327,14 @@ def test_simple_task_can_move_and_finish_without_plan(tmp_path):
     assert backend.observations == 2
 
 
-def test_mixed_turn_rejected_before_any_action_then_corrected(tmp_path):
+@pytest.mark.parametrize("workers", [1, 4])
+def test_mixed_turn_rejected_before_any_action_then_corrected(tmp_path, workers):
     runtime, state, scene, backend = harness(tmp_path, [
         [call("read", "knowledge.load", name="guide"), move("bad_move")],
         [move("good_move")], [done()],
     ])
+    from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
+    runtime.read_only_execution_config = ReadOnlyExecutionConfig(workers)
     runtime._execute_instruction_loop(scene, "uav", state)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert [r.status for r in results] == ["rejected", "rejected", "ok", "ok"]

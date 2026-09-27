@@ -85,12 +85,18 @@ class BenchmarkReviewRenderer:
         self,
         eval_dir: str | Path,
         case: BenchmarkCaseReview,
+        *,
+        directory_name: str | None = None,
     ) -> dict[str, str]:
         """Write one finalized case without requiring the batch to finish."""
 
         root = Path(eval_dir)
         style_path = self._write_style(root)
-        case_dir = root / "cases" / case.case_id
+        # Display identity stays authoritative while exports can use short paths.
+        name = case.case_id if directory_name is None else directory_name
+        if not name or name in {".", ".."} or any(c in name for c in '/\\:'):
+            raise ValueError("Case directory must be one relative path component")
+        case_dir = root / "cases" / name
         case_dir.mkdir(parents=True, exist_ok=True)
         case_html = case_dir / ("audit_review.html" if self.detailed_audit else "review.html")
         atomic_write_text(

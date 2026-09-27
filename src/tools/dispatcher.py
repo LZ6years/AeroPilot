@@ -8,10 +8,24 @@ from src.plugins import PluginRegistry
 from src.plugins.skills.dispatcher import SkillCapabilityDispatcher
 from src.plugins.skills.knowledge_service import KnowledgeService
 from src.tools.registry import ToolRegistry, default_registry
+from src.tools.schemas import ReadExecutionHints
 from src.tools.validation import validate_tool_args
 
 
 class ToolDispatcher:
+    def read_execution_hints(self, tool_name: str, args: dict) -> ReadExecutionHints:
+        """Resolve internal resource identity from the registered tool kind."""
+        spec = self.registry.get(tool_name)
+        if spec.runtime.effect != "read_only":
+            raise ValueError("only read-only tools have read execution hints")
+        if spec.kind == "knowledge":
+            return ReadExecutionHints(serial_key="knowledge:" + str(args.get("name", "")))
+        if spec.kind == "skill_capability":
+            return ReadExecutionHints("capability", capability_key=spec.name)
+        # Internal environment reads share a client and are never submitted as
+        # parallel model calls under their current single-call contracts.
+        return ReadExecutionHints(serial_key="environment")
+
     def __init__(
         self,
         env_client: EnvClient,

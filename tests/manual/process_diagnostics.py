@@ -1,6 +1,7 @@
 """Diagnostic-only stage tracing and subprocess supervision; never repairs model output."""
 
 from functools import wraps
+from contextlib import ExitStack
 import importlib.metadata
 import json
 import os
@@ -15,7 +16,7 @@ def write_json(path, value):
     Path(path).write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding='utf-8')
 
 
-def supervise(command, directory, timeout=None):
+def supervise(command, directory, timeout=None, *, monitor_gpu=False):
     """Keep logs and exit evidence in a parent that survives native child exits."""
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=False)
@@ -24,7 +25,10 @@ def supervise(command, directory, timeout=None):
     timed_out = False
     with (directory/'stdout.log').open('w', encoding='utf-8') as stdout, \
             (directory/'stderr.log').open('w', encoding='utf-8') as stderr, \
-            (directory/'resources.jsonl').open('w', encoding='utf-8') as resources:
+            (directory/'resources.jsonl').open('w', encoding='utf-8') as resources, ExitStack() as diagnostics:
+        if monitor_gpu:
+            from tests.manual.gpu_resource_monitor import GpuResourceMonitor
+            diagnostics.enter_context(GpuResourceMonitor(directory / 'gpu_resources.jsonl'))
         process = subprocess.Popen(command, stdout=stdout, stderr=stderr,
                                    env={**os.environ, 'PYTHONUNBUFFERED': '1', 'PYTHONFAULTHANDLER': '1'})
         try:

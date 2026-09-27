@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import threading
 from typing import Any
 
 from src.plugins.skills.catalog import SkillCatalog
@@ -21,6 +22,7 @@ class KnowledgeService:
     def __init__(self, catalog: SkillCatalog) -> None:
         self._entries: dict[str, dict[str, Any]] = {}
         self._delivered: dict[str, set[str]] = {}
+        self._delivery_lock = threading.Lock()
         for skill in catalog.skills:
             # Callable capabilities are executable tools, not knowledge files.
             if skill.capability is not None:
@@ -46,9 +48,11 @@ class KnowledgeService:
                 for entry in self._entries.values()]
 
     def loaded_index(self) -> list[dict[str, Any]]:
+        with self._delivery_lock:
+            delivered_items = [(name, set(paths)) for name, paths in self._delivered.items()]
         return [{"name": name, "version": self._entries[name]["version"],
                  "reference_paths": sorted(path for path in delivered if path)}
-                for name, delivered in self._delivered.items()]
+                for name, delivered in delivered_items]
 
     def load(self, name: str, reference_paths: list[str] | None = None) -> dict[str, Any]:
         """Return only newly requested text; invalid requests change no state."""
@@ -62,6 +66,13 @@ class KnowledgeService:
         entry = self._entries[name]
         if any(path not in entry["references"] for path in requested):
             raise ValueError("reference is not declared by this knowledge entry")
+        # Snapshot text was loaded at instruction creation. No disk/model work
+        # belongs in this short atomic delivery transaction. The scheduler owns
+        # same-entry ordering; this lock also protects direct service callers.
+        with self._delivery_lock:
+            return self._deliver(name, entry, requested)
+
+    def _deliver(self, name, entry, requested):
         delivered = self._delivered.get(name, set())
         result: dict[str, Any] = {
             "name": name, "version": entry["version"],

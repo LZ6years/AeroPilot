@@ -4,6 +4,15 @@ This file records the project-level working agreement for future Codex work in
 this repository. Keep changes aligned with these boundaries before adding new
 logic.
 
+## Local Execution Environment
+
+Use the Conda `flyagent` interpreter at `F:\conda_env\flyagent\python.exe`
+for local project execution, tests, probes and background jobs. The shell may
+default to the base environment, so use the explicit executable path.
+See [AGENTS.md](AGENTS.md#required-local-python-environment) for command examples,
+child-process requirements and GPU verification. These are developer execution
+instructions; do not copy them into the UAV agent's model-facing memory/prompts.
+
 ## Responsibility Boundaries
 
 - `src/llm/` owns stateless model communication, wire adapters, HTTP retries

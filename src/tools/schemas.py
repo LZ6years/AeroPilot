@@ -24,6 +24,21 @@ ToolBatching = Literal["single", "ordered", "parallel_safe", "sidecar"]
 
 
 @dataclass(frozen=True)
+class ReadExecutionHints:
+    """Private dispatch hints; never projected into provider tool declarations."""
+
+    category: Literal["light", "capability"] = "light"
+    capability_key: str | None = None
+    serial_key: str | None = None
+
+    def __post_init__(self):
+        if self.category not in {"light", "capability"}:
+            raise ValueError("unsupported read execution category")
+        if self.category == "capability" and not self.capability_key:
+            raise ValueError("capability execution requires an identifier")
+
+
+@dataclass(frozen=True)
 class ToolRuntimePolicy:
     """Describe model exposure, side effects, feedback, and batching."""
 

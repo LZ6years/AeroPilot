@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
 from io import BytesIO
 from pathlib import Path
 from typing import BinaryIO
@@ -183,10 +184,18 @@ class VisualGroundingService:
 
 
 _SERVICE_CACHE: dict[str, VisualGroundingService] = {}
+_SERVICE_CACHE_LOCK = threading.Lock()
 
 
 def service_from_settings(raw_settings: dict[str, Any]) -> VisualGroundingService:
     """Build one cached default service solely from capability.json settings."""
+
+    with _SERVICE_CACHE_LOCK:
+        return _service_from_settings_locked(raw_settings)
+
+
+def _service_from_settings_locked(raw_settings):
+    """Construction is lightweight; models remain lazily loaded by backends."""
 
     cache_key = json.dumps(raw_settings, sort_keys=True, ensure_ascii=False)
     cached = _SERVICE_CACHE.get(cache_key)

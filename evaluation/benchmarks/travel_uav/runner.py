@@ -83,8 +83,10 @@ class TravelUavBenchmarkRunner:
         simulation_server_factory: Any = None,
         planner_factory: Callable[[Any], Any] | None = None,
         scenario_controller_factory: Callable[[], Any] | None = None,
+        read_only_execution_config=None,
     ) -> None:
         self.config = config
+        self.read_only_execution_config = read_only_execution_config
         self._simulation_server_factory = simulation_server_factory or SimulationServer
         self.map_packages, self.port_policy = load_map_config(config.map_config_path)
         self.map_packages_by_id = {package.map_id: package for package in self.map_packages}
@@ -463,6 +465,7 @@ class TravelUavBenchmarkRunner:
             runtime_loop_guard_windows=self.config.runtime_loop_guard_windows,
             enable_action_planner_debug=self.config.enable_action_planner_debug,
             model_config=model_config,
+            read_only_execution_config=self.read_only_execution_config,
         )
 
     def _scenario_controller(self) -> Any:
