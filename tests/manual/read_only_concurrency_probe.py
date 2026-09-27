@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+from contextlib import nullcontext
 from dataclasses import asdict
 import hashlib
 import html
@@ -191,6 +192,12 @@ def child(directory, number, workers, *, kind="comparison"):
     env["preflight_sec"] = time.perf_counter() - preflight_started
     write_json(directory / "environment.json", env)
     validate_environment(env, require_cuda=manifest.get("require_cuda", False), expected=manifest.get("environment"))
+    if manifest.get("cuda_trace_repeats"):
+        from tests.manual.cuda_timeline import require_cuda_profiler
+        require_cuda_profiler(directory)
+    if manifest.get('sam_coordinate_ab'):
+        from tests.manual.sam_coordinate_probe import validate_coordinates
+        validate_coordinates(directory)
     dispatcher = ToolDispatcher(NoEnvironment())
     calls = copy.deepcopy(item["calls"])
     if kind == "mixed":
@@ -217,10 +224,29 @@ def child(directory, number, workers, *, kind="comparison"):
                     lambda c=call, a=args, ctx=context: dispatcher.call("offline", "uav0", c["tool_name"], a, ctx)))
             def event(name, payload):
                 profile.emit({"event": name, "decision": repeat + 1, **payload})
+            profiled = repeat + 1 in manifest.get("cuda_trace_repeats", [])
+            event_profiled = repeat + 1 in manifest.get("cuda_event_repeats", [])
+            diagnostic = nullcontext()
+            coordinate_candidate = manifest.get('sam_coordinate_ab') and repeat > 0 and (repeat - 1) % 4 in (1, 2)
+            if coordinate_candidate:
+                from tests.manual.sam_coordinate_probe import candidate_coordinates
+                diagnostic = candidate_coordinates()
+            if profiled:
+                from tests.manual.cuda_timeline import capture_batch
+                diagnostic = capture_batch(output)
+            elif event_profiled:
+                from tests.manual.cuda_event_probe import capture_events
+                diagnostic = capture_events(output, sam_modules=manifest.get('sam_module_events', False))
             started = time.perf_counter()
-            with profile.span("experiment.batch"):
-                results = ReadOnlyBatchExecutor(config, event).execute(jobs)
+            with diagnostic:
+                with profile.span("experiment.batch"):
+                    results = ReadOnlyBatchExecutor(config, event).execute(jobs)
+                if profiled or event_profiled:
+                    # Preserve completed tool outputs even if trace export fails.
+                    write_json(output / "tool_results.json", [asdict(result) for result in results])
             row = {"repeat": repeat + 1, "cold": repeat == 0, "wall_sec": time.perf_counter() - started,
+                   "profiled": profiled or event_profiled,
+                   "coordinate_variant": 'device' if coordinate_candidate else 'original',
                    "tool_call_ids": [c["tool_call_id"] for c in calls], "constructed_input": kind == "mixed",
                    "results": [asdict(result) for result in results]}
             rows.append(row)
@@ -248,7 +274,8 @@ def percentile(values, fraction):
 
 
 def condition_summary(directory):
-    rows = read(directory / "results.json") if (directory / "results.json").exists() else []
+    rows = read(directory / "results.json") if (directory / "results.json").exists() else sorted(
+        (read(p) for p in directory.glob("r*/results.json")), key=lambda row: row["repeat"])
     profile = summarize(directory / "timings.jsonl")
     spans, events = profile.get("spans", []), profile.get("device_events", [])
     active, peaks = {}, {}
@@ -257,7 +284,7 @@ def condition_summary(directory):
             device = event["device"]
             active[device] = active.get(device, 0) + (1 if event["event"] == "device_execution_started" else -1)
             peaks[device] = max(peaks.get(device, 0), active[device])
-    warm = [r["wall_sec"] for r in rows if not r["cold"]]
+    warm = [r["wall_sec"] for r in rows if not r["cold"] and not r.get("profiled", False)]
     queued, waits, calls = {}, [], []
     for event in events:
         key = (event.get("decision"), event.get("tool_call_id"))
@@ -324,7 +351,7 @@ def render(root, manifest, conditions, *, state, error=None):
                         name = f'{directory.name}_r{row["repeat"]}_c{call_index}_{source.name[-20:]}'
                         shutil.copyfile(source, target / name)
                         sections.append(f'<img src="{html.escape(name)}" width="720">')
-            for name in ("timings.jsonl", "gpu_resources.jsonl", "resources.jsonl", "process.json", "stdout.log", "stderr.log", "environment.json", "execution_config.json"):
+            for name in ("timings.jsonl", "gpu_resources.jsonl", "resources.jsonl", "process.json", "stdout.log", "stderr.log", "environment.json", "execution_config.json", "windows_gpu_memory.jsonl", "windows_gpu_memory.stderr.log", "windows_gpu_monitor.json"):
                 if (directory / name).is_file():
                     copy_name = f'{directory.name}_{name}'
                     shutil.copyfile(directory / name, target / copy_name)

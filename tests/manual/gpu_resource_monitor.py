@@ -35,6 +35,43 @@ def sample_gpu(*, run=subprocess.run):
         return {"available": False, "error_type": type(exc).__name__, "error": str(exc)[:1000], "devices": []}
 
 
+def sample_gpu_detailed(*, run=subprocess.run):
+    """Opt-in clocks/power/process evidence, without changing GPU policy.
+
+    Compute-app visibility is incomplete on WDDM: unknown memory is null and
+    graphics processes may be absent. These records cannot prove exclusive use.
+    An unsupported detailed query does not discard the basic device sample.
+    """
+    result = sample_gpu(run=run)
+    queries = {
+        "performance": ("--query-gpu=uuid,pstate,clocks.current.sm,clocks.current.memory,power.draw,power.limit,temperature.gpu",
+                        ("uuid", "pstate", "sm_mhz", "memory_mhz", "power_w", "power_limit_w", "temperature_c"), 2),
+        "compute_processes": ("--query-compute-apps=gpu_uuid,pid,process_name,used_gpu_memory",
+                              ("uuid", "pid", "name", "used_mib"), None),
+    }
+    for key, (query, names, numeric_start) in queries.items():
+        try:
+            response = run(["nvidia-smi", query, "--format=csv,noheader,nounits"],
+                           capture_output=True, text=True, timeout=2, check=False)
+            if response.returncode:
+                raise ValueError(response.stderr.strip()[:1000])
+            rows = []
+            for values in csv.reader(response.stdout.splitlines()):
+                if len(values) != len(names):
+                    raise ValueError("Unexpected detailed NVIDIA column count")
+                row = dict(zip(names, (v.strip() for v in values)))
+                for name in (names[numeric_start:] if numeric_start is not None else ("pid", "used_mib")):
+                    try:
+                        row[name] = float(row[name])
+                    except ValueError:
+                        row[name] = None
+                rows.append(row)
+            result[key] = {"available": True, "rows": rows}
+        except (OSError, subprocess.TimeoutExpired, ValueError) as exc:
+            result[key] = {"available": False, "rows": [], "error": str(exc)[:1000]}
+    return result
+
+
 class GpuResourceMonitor:
     """One background sampler in the surviving parent, independent of child exit."""
 

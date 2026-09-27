@@ -6,6 +6,30 @@ import subprocess
 import sys
 import threading
 from tests.manual.gpu_resource_monitor import sample_gpu, GpuResourceMonitor
+from tests.manual.gpu_resource_monitor import sample_gpu_detailed
+
+
+def test_detailed_gpu_preserves_unknown_process_memory_and_power():
+    outputs = iter([
+        '0, GPU-id, GPU, 6144, 2000, 4144, 30, 10\n',
+        'GPU-id, P0, 1700, 7000, 70, N/A, 65\n',
+        'GPU-id, 123, python.exe, [N/A]\n',
+    ])
+    result = sample_gpu_detailed(run=lambda *a, **k: SimpleNamespace(returncode=0, stderr='', stdout=next(outputs)))
+    assert result['performance']['rows'][0]['sm_mhz'] == 1700
+    assert result['performance']['rows'][0]['power_limit_w'] is None
+    assert result['compute_processes']['rows'][0]['used_mib'] is None
+
+
+def test_detailed_query_failure_retains_basic_sample():
+    def run(command, **kwargs):
+        if '--query-gpu=index' in command[1]:
+            return SimpleNamespace(returncode=0, stderr='', stdout='0, GPU-id, GPU, 6144, 2000, 4144, 30, 10\n')
+        return SimpleNamespace(returncode=1, stderr='unsupported', stdout='')
+    result = sample_gpu_detailed(run=run)
+    assert result['available']
+    assert not result['performance']['available']
+    assert not result['compute_processes']['available']
 
 
 def test_gpu_csv_unknown_values_are_not_zero():
