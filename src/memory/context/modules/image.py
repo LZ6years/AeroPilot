@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.perception.frame_payload import rgb_data_url, load_rgb_frame, load_depth_frame
+from src.perception.frame_payload import rgb_data_url, load_rgb_frame, load_depth_frame, RgbEncodingCache
 
 import base64
 import math
@@ -85,26 +85,33 @@ class DefaultImageContextModule(ContextModule):
         *,
         include_current_depth: bool = False,
         depth_display_max_m: float = _DEFAULT_DEPTH_DISPLAY_MAX_M,
+        rgb_encoding_cache_max_bytes: int = 0,
     ) -> None:
         if type(include_current_depth) is not bool:
             raise ValueError("include_current_depth must be boolean")
         self.include_current_depth = include_current_depth
         self.depth_display_max_m = float(depth_display_max_m)
+        self._rgb_encoding_cache = RgbEncodingCache(rgb_encoding_cache_max_bytes)
         if not math.isfinite(self.depth_display_max_m) or self.depth_display_max_m <= 0.0:
             raise ValueError("depth_display_max_m must be positive")
 
     def configure(self, options: dict[str, Any]) -> None:
         """Image processing options do not affect sensor acquisition or sampling."""
-        if set(options) - {"include_current_depth", "depth_display_max_m"}:
+        if set(options) - {"include_current_depth", "depth_display_max_m", "rgb_encoding_cache_max_bytes"}:
             raise ValueError("Unknown image context option")
         include_depth = options.get("include_current_depth", getattr(self, "include_current_depth", False))
         maximum = options.get("depth_display_max_m", getattr(self, "depth_display_max_m", _DEFAULT_DEPTH_DISPLAY_MAX_M))
+        cache_bytes = options.get("rgb_encoding_cache_max_bytes", getattr(getattr(self, "_rgb_encoding_cache", None), "max_bytes", 0))
+        cache = RgbEncodingCache(cache_bytes)
         if type(include_depth) is not bool:
             raise ValueError("include_current_depth must be boolean")
         if type(maximum) not in (int, float) or not math.isfinite(maximum) or maximum <= 0:
             raise ValueError("depth_display_max_m must be a positive finite number")
         self.include_current_depth = include_depth
         self.depth_display_max_m = float(maximum)
+        # Reconfiguration always starts a new cache lifetime, including when
+        # the numerical options happen to remain unchanged.
+        self._rgb_encoding_cache = cache
 
     def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
         memory = sources.flight_memory
@@ -153,7 +160,16 @@ class DefaultImageContextModule(ContextModule):
                         "source": self.__class__.__name__,
                     }
                 )
-        model_inputs = rgb_model_inputs_from_frames(selected_rgb_frames)
+        cache = getattr(self, "_rgb_encoding_cache", None)
+        namespace = (memory.run_id, memory.scene_instance_id, memory.reset_epoch,
+                     memory.active_instruction_id, memory.active_instruction)
+        if cache is not None and cache.max_bytes:
+            cache.set_namespace(namespace)
+        # Depth-overlay mode keeps the original path, including its RGB helper.
+        if cache is not None and cache.max_bytes and not self.include_current_depth:
+            model_inputs = rgb_model_inputs_from_frames(selected_rgb_frames, cache=cache, namespace=namespace)
+        else:
+            model_inputs = rgb_model_inputs_from_frames(selected_rgb_frames)
         depth_overlay_input = (
             current_rgb_depth_overlay_model_input(
                 current_depth,
@@ -345,10 +361,12 @@ def frame_debug_metadata(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return metadata
 
 
-def rgb_model_inputs_from_frames(frames: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def rgb_model_inputs_from_frames(frames: list[dict[str, Any]], *, cache=None, namespace=None) -> list[dict[str, Any]]:
     """Encode the checkpoint's one current RGB frame without in-image labels."""
 
-    return latest_rgb_model_inputs_from_frame(frames[-1] if frames else None)
+    if cache is None:
+        return latest_rgb_model_inputs_from_frame(frames[-1] if frames else None)
+    return latest_rgb_model_inputs_from_frame(frames[-1] if frames else None, cache=cache, namespace=namespace)
 
 
 def _replace_current_with_depth_overlay_input(
@@ -489,7 +507,7 @@ def _artifact_ref(record: dict[str, Any], frame_ref: dict[str, Any] | None) -> s
     return ref if isinstance(ref, str) and ref else None
 
 
-def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> list[dict[str, Any]]:
+def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None, *, cache=None, namespace=None) -> list[dict[str, Any]]:
     """Encode one latest real RGB frame for model multimodal input.
 
     Mock frames attach no image. Real file or memory payloads are validated;
@@ -501,7 +519,9 @@ def latest_rgb_model_inputs_from_frame(latest_rgb: dict[str, Any] | None) -> lis
     role = str(latest_rgb.get("selection_role") or "latest")
     input_id = str(latest_rgb.get("input_id") or _image_input_id(1, role))
     usage = str(latest_rgb.get("usage") or latest_rgb.get("selection_reason") or "")
-    data_url, (scene_width, scene_height) = rgb_data_url(latest_rgb)
+    data_url, (scene_width, scene_height) = (
+        cache.encode(latest_rgb, namespace=namespace) if cache is not None else rgb_data_url(latest_rgb)
+    )
     return [
         {
             "type": "image",

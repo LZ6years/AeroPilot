@@ -5,8 +5,11 @@ normalized; callers asking for metric depth must explicitly require meters.
 """
 
 import base64
+from collections import OrderedDict
+import hashlib
 from io import BytesIO
 from pathlib import Path
+from threading import RLock
 from typing import Any
 
 import numpy as np
@@ -77,3 +80,76 @@ def rgb_data_url(frame: dict[str, Any]) -> tuple[str, tuple[int, int]]:
     output = BytesIO()
     image.save(output, format="PNG")
     return "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii"), image.size
+
+
+class RgbEncodingCache:
+    """Bounded instance-owned RGB encoding cache, never a source-byte cache.
+
+    Source precedence and validation stay identical to the uncached path. The
+    byte budget counts retained ASCII Data URL payloads, not total process RSS.
+    A lock covers lookup through insertion so concurrent same-image requests
+    cannot duplicate encoding or corrupt LRU accounting. No GPU objects live here.
+    """
+
+    def __init__(self, max_bytes: int) -> None:
+        if type(max_bytes) is not int or max_bytes < 0:
+            raise ValueError("RGB encoding cache bytes must be a non-negative integer")
+        self.max_bytes = max_bytes
+        self._entries: OrderedDict[str, tuple[str, tuple[int, int]]] = OrderedDict()
+        self._bytes = 0
+        self._namespace: Any = None
+        self._lock = RLock()
+        self._hits = self._misses = self._encodes = self._evictions = 0
+
+    def clear(self) -> None:
+        """Release retained results; diagnostic counters remain cumulative."""
+        with self._lock:
+            self._entries.clear()
+            self._bytes = 0
+            self._namespace = None
+
+    def stats(self) -> dict[str, int]:
+        """Human diagnostics only; callers must not insert these into context."""
+        with self._lock:
+            return dict(hits=self._hits, misses=self._misses, encodes=self._encodes,
+                        evictions=self._evictions, entries=len(self._entries), payload_bytes=self._bytes)
+
+    def set_namespace(self, namespace: Any) -> None:
+        """Clear on lifecycle changes even when the new build has no image."""
+        with self._lock:
+            if self._namespace != namespace:
+                self.clear()
+                self._namespace = namespace
+
+    def encode(self, frame: dict[str, Any], *, namespace: Any = None) -> tuple[str, tuple[int, int]]:
+        if not self.max_bytes:
+            return rgb_data_url(frame)
+        # Always re-read using the existing source priority. Same path/stat is
+        # insufficient: even equal-size same-timestamp replacements must miss.
+        raw = frame_bytes(frame)
+        key = hashlib.sha256(raw).hexdigest()
+        with self._lock:
+            self.set_namespace(namespace)
+            if key in self._entries:
+                result = self._entries[key]
+                _validate_dimensions(frame, *result[1])
+                self._entries.move_to_end(key)
+                self._hits += 1
+                return result
+            self._misses += 1
+            with Image.open(BytesIO(raw)) as source:
+                image = source.convert("RGB")
+            _validate_dimensions(frame, *image.size)
+            output = BytesIO()
+            image.save(output, format="PNG")
+            result = "data:image/png;base64," + base64.b64encode(output.getvalue()).decode("ascii"), image.size
+            self._encodes += 1
+            size = len(result[0])  # Data URLs contain ASCII characters only.
+            if size <= self.max_bytes:
+                while self._entries and (len(self._entries) >= 4 or self._bytes + size > self.max_bytes):
+                    _, removed = self._entries.popitem(last=False)
+                    self._bytes -= len(removed[0])
+                    self._evictions += 1
+                self._entries[key] = result
+                self._bytes += size
+            return result
