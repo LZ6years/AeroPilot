@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import asyncio
+from contextlib import contextmanager
+from contextvars import ContextVar
+from threading import get_ident
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -185,8 +189,61 @@ class MemoryEventWriter:
 
 
 class MemoryRecordReader:
+    """Read independent records, optionally sharing file text within one build.
+
+    Scope state is context-local and owner-checked: asyncio tasks inherit context
+    variables, but must not inherit their parent's mutable file cache.
+    """
+
     def __init__(self, run_dir: str | Path) -> None:
         self.run_dir = Path(run_dir)
+        self._read_scope: ContextVar = ContextVar("memory_record_read_scope", default=None)
+
+    @staticmethod
+    def _scope_owner():
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        return get_ident(), task
+
+    @contextmanager
+    def read_scope(self):
+        """Reuse successful file reads until the outermost local scope exits.
+
+        Text, rather than mutable parsed records, is cached. Missing files and
+        I/O failures remain retryable. A fresh build always sees fresh files.
+        """
+        owner = self._scope_owner()
+        current = self._read_scope.get()
+        if current is not None and current[0] == owner:
+            yield
+            return
+        token = self._read_scope.set((owner, {}))
+        try:
+            yield
+        finally:
+            self._read_scope.reset(token)
+
+    def _read_lines(self, path: Path) -> list[str] | None:
+        current = self._read_scope.get()
+        cache = current[1] if current is not None and current[0] == self._scope_owner() else None
+        # Path.resolve() can itself query the filesystem on Windows. Repeated
+        # references must hit the lexical key before doing that work again.
+        key = path
+        if cache is not None:
+            if path in cache:
+                return cache[path]
+            key = path.resolve()
+            if key in cache:
+                cache[path] = cache[key]
+                return cache[key]
+        if not path.exists():
+            return None
+        lines = path.read_text(encoding="utf-8").splitlines()
+        if cache is not None:
+            cache[key] = cache[path] = lines
+        return lines
 
     def read_ref(self, ref: dict[str, Any] | str | None) -> dict[str, Any] | None:
         if ref is None:
@@ -200,11 +257,11 @@ class MemoryRecordReader:
         except ValueError:
             return None
         path = self.run_dir / relative_path
-        if not path.exists():
+        lines = self._read_lines(path)
+        if lines is None:
             return None
-        for index, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-            if index == line_number:
-                return json.loads(line)
+        if 1 <= line_number <= len(lines):
+            return json.loads(lines[line_number - 1])
         return None
 
     def read_refs(self, refs: list[dict[str, Any]] | None) -> list[dict[str, Any]]:

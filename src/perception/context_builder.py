@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import nullcontext
 from typing import Any
 
 from src.agent.mission_state import MissionState
@@ -48,11 +49,15 @@ class ObservationContextBuilder:
         if flight_memory is None:
             raise ValueError("ObservationContextBuilder requires a FlightMemory manifest; MissionState is not a memory source")
         memory = flight_memory
-        stage_context = self._stage_context_from_state(state, memory)
-        return self.composer.compose(
-            MemorySourceBundle(memory, self.map_memory, self.run_memory),
-            stage_context,
-        )
+        # Custom readers retain their existing structural interface. The scope
+        # covers only this build, never later observations or state changes.
+        scope = getattr(memory.memory_reader, "read_scope", None)
+        with scope() if callable(scope) else nullcontext():
+            stage_context = self._stage_context_from_state(state, memory)
+            return self.composer.compose(
+                MemorySourceBundle(memory, self.map_memory, self.run_memory),
+                stage_context,
+            )
 
     def _stage_context_from_state(self, state: MissionState, memory: FlightMemory) -> TaskContextInput:
         return TaskContextInput(
