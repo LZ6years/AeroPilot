@@ -7,6 +7,11 @@ from types import SimpleNamespace
 from src.tools.builtins import builtin_tools
 from src.tools.validation import validate_tool_args
 from src.agent.transcript import AgentToolCall, AssistantTurn, ToolResult, TranscriptEvent
+from src.memory.context.contracts import (
+    ContextFragment,
+    StateCheckpoint,
+    checkpoint_fingerprint,
+)
 from src.runtime.control.actions.task_plan import apply_plan_update
 from src.runtime.control.actions.terminal import apply_terminal, environmental_evidence_refs
 from src.runtime.control.executor import execute_builtin_control
@@ -20,6 +25,19 @@ from src.agent.planning.tool_contract_validator import (
 def state():
     return SimpleNamespace(task_plan=None, completed=False, stopped=False,
                            stopped_reason=None, stop_source=None, window_count=7)
+
+
+def checkpoint(observation_id: str, index: int = 1) -> StateCheckpoint:
+    fragment = ContextFragment("test", {})
+    return StateCheckpoint(
+        f"checkpoint_{index:04d}",
+        "instruction_start" if index == 1 else "physical_window_completed",
+        observation_id,
+        None,
+        (),
+        (fragment,),
+        checkpoint_fingerprint(observation_id, None, (), (fragment,)),
+    )
 
 
 def test_builtin_declarations_have_explicit_policies():
@@ -129,7 +147,7 @@ def test_evidence_requires_returned_environment_result_not_intent_or_knowledge()
              AgentToolCall("seen", "sensor"), AgentToolCall("pending", "sensor"),
              AgentToolCall("failed", "sensor")]
     events = [TranscriptEvent("user_instruction", {"instruction": "go"}),
-              TranscriptEvent("state_checkpoint", {"observation_id": "obs1"}),
+              TranscriptEvent("state_checkpoint", checkpoint("obs1")),
               TranscriptEvent("assistant_turn", AssistantTurn("turn1", "look", calls))]
     events.extend(TranscriptEvent("tool_result", result) for result in [
         ToolResult("loaded", "knowledge.load", "ok", result_ref="knowledge_ref"),
@@ -245,7 +263,7 @@ def test_control_executor_terminal_and_circular_evidence(loop_registry):
     args = {"reason": "Reached the endpoint", "evidence_refs": ["complete1"]}
     call = AgentToolCall("complete1", "runtime.report_completed", args)
     history = (TranscriptEvent("user_instruction", {"instruction": "go"}),
-               TranscriptEvent("state_checkpoint", {"observation_id": "obs1"}),
+               TranscriptEvent("state_checkpoint", checkpoint("obs1")),
                TranscriptEvent("assistant_turn", AssistantTurn("turn1", "done", [call])))
     assert execute_builtin_control(call, mission, loop_registry, history).status == "rejected"
     assert not mission.completed
@@ -255,17 +273,18 @@ def test_control_executor_terminal_and_circular_evidence(loop_registry):
 
 
 def test_prior_distance_call_does_not_require_current_requery():
+    from src.plugins import PluginRegistry
     from src.tools.registry import default_registry
-    registry = default_registry()
+    registry = default_registry(PluginRegistry.from_config())
     call = AgentToolCall("range", "skill.visual_grounding.locate", {
         "observation_id": "old", "query": "taxi", "include_distance": True})
     history = (
         TranscriptEvent("user_instruction", {"instruction": "pass the taxi then turn"}),
-        TranscriptEvent("state_checkpoint", {"observation_id": "old"}),
+        TranscriptEvent("state_checkpoint", checkpoint("old")),
         TranscriptEvent("assistant_turn", AssistantTurn("t1", "measure", [call])),
         TranscriptEvent("tool_result", ToolResult("range", call.tool_name, "ok",
             data={"observation_id": "old", "candidates": []}, requested_args=call.args)),
-        TranscriptEvent("state_checkpoint", {"observation_id": "current"}),
+        TranscriptEvent("state_checkpoint", checkpoint("current", 2)),
     )
     complete = AgentToolCall("done", "runtime.report_completed", {
         "reason": "Historical passage and subsequent turn", "evidence_refs": ["old", "current"]})

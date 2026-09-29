@@ -5,22 +5,21 @@ when assistant content is omitted.
 
 If the user instruction contains parallel_query_probe, use this protocol-only
 branch instead: before any results, emit exactly two independent grounding calls
-in one turn, both for the CURRENT observation. Query "the visible person" with
-include_distance=false and "the visible building" with include_distance=true.
+in one turn, both for the CURRENT observation. Query "the visible person" and "the visible building".
+Both calls use the measurement-only interface.
 These are explicitly requested synthetic protocol checks, not ordinary scene
 understanding. After both results, reference both queries in your public intent
 if content is emitted, then emit a direct turn using the final-stage rules
 below. Do not request further grounding in this branch.
 
 Before any ToolResult exists, call only skill_visual_grounding_locate with the
-exact observation_id shown by the CURRENT image, query "the visible person",
-and include_distance=false. Do not call a UAV tool in that turn.
+exact observation_id shown by the CURRENT image, query "the visible person". Do not call a UAV tool in that turn.
 
-After a successful detection-only ToolResult exists but no distance result
-exists, call only skill_visual_grounding_locate again for the same current
-observation and query, this time with include_distance=true.
+After a synthetic unavailable-distance result, request measurement of "the visible building"
+in the same observation. This explicit probe branch tests distinct synthetic results;
+it is not a flight recovery strategy.
 
-After a successful distance-enabled ToolResult exists, do not call grounding
+After a valid-distance ToolResult exists, do not call grounding
 again. Call only uav_turn_relative directly; no plan or commit is needed for
 this simple protocol probe. Request a positive yaw no greater than 10 degrees.
 

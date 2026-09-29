@@ -28,6 +28,7 @@ from evaluation.benchmarks.core import (
 )
 from src.env_client import ObservationProfile, SceneCapabilities, SceneInstance
 from src.runtime.configs import TaskExecutionOptions
+from src.runtime.context.checkpoints import UnsupportedRunSchema
 
 
 def test_readable_provider_request_keeps_latest_strategy_and_escapes_text(tmp_path):
@@ -100,7 +101,7 @@ def test_unified_capture_reader_obeys_frozen_event_boundary(tmp_path):
     folder.mkdir(parents=True)
     for index in (1, 2):
         decision = f"decision_{index:04d}"
-        payload = {"loop_schema": "unified_tool_loop_v1", "decision_id": decision,
+        payload = {"loop_schema": "unified_tool_loop_v2", "decision_id": decision,
                    "decision_index": index, "checkpoint_observation_id": "obs_0001",
                    "model_context": {"task_plan": None}, "model_rounds": []}
         (folder / f"{decision}.json").write_text(json.dumps(payload), encoding="utf-8")
@@ -127,7 +128,7 @@ def test_unified_capture_reports_unsafe_or_missing_artifact(tmp_path, ref):
 
 def test_unified_review_displays_checkpoint_plan_without_future_backfill(tmp_path):
     from evaluation.benchmarks.core.review import _phase_decision_review, _initial_plan_review
-    first = {"loop_schema": "unified_tool_loop_v1", "decision_id": "d1", "decision_index": 1,
+    first = {"loop_schema": "unified_tool_loop_v2", "decision_id": "d1", "decision_index": 1,
              "checkpoint_observation_id": "obs1", "model_context": {"task_plan": None},
              "model_rounds": []}
     second = {**first, "decision_id": "d2", "decision_index": 2,
@@ -1277,7 +1278,7 @@ def test_core_review_correlates_completion_and_renders_planner_window(
     assert "Runtime Applied Phase State" in case_html
     assert "coupled_planner" in case_html
     assert "Saved Planner Context (legacy; not an exact provider request)" in case_html
-    assert "planner_context_not_saved" in case_html
+    assert "provider_request_media_not_captured" in case_html
     assert "yaw-only so far" in case_html
     assert "data:image/png;base64" not in case_html
     assert "&lt;binary payload omitted&gt;" in case_html
@@ -1481,14 +1482,8 @@ def test_core_review_renders_exact_successful_model_images_and_steps(tmp_path):
     case_dir = eval_dir / "cases" / "planner"
     case_html = (case_dir / "audit_review.html").read_text(encoding="utf-8")
     assets = sorted((case_dir / "review_assets" / "planner_inputs").glob("*.png"))
-    assert len(assets) == 4
-    assert [item.name for item in assets if item.name.startswith("window_001")] == [
-        "window_001_01_overlay.png"
-    ]
-    assert len([item for item in assets if item.name.startswith("window_002")]) == 3
-    assert "Model Input Images" in case_html
-    assert "image_mode=current_only" in case_html
-    assert "image_mode=all" in case_html
+    assert assets == []
+    assert "provider_request_media_not_captured" in case_html
     assert "Steps" in case_html
     assert "accepted ToolCall" in case_html
     assert "safety-reviewed call" in case_html
@@ -1497,7 +1492,6 @@ def test_core_review_renders_exact_successful_model_images_and_steps(tmp_path):
     assert "success" in case_html
     assert "failed" in case_html
     assert "stabilization: completed (velocity settled)" in case_html
-    assert "Unavailable: #4 auxiliary_view: invalid_model_image_data_url" in case_html
     assert "data:image/png;base64" not in case_html
     renderer.write_case(eval_dir, case_review)
     assert sorted((case_dir / "review_assets" / "planner_inputs").glob("*.png")) == assets
@@ -1746,126 +1740,22 @@ def test_core_review_renders_provider_rounds_and_keeps_terminal_decision_separat
     assert len(copied) == 1
 
 
-def test_legacy_tool_transcript_reconstructs_three_decisions_without_overwrite(
-    tmp_path,
-):
+def test_legacy_tool_transcript_is_rejected(tmp_path):
     run_dir = tmp_path / "legacy_run"
     write_audit_fixture(run_dir)
     transcript_path = run_dir / "memory" / "agent_transcript.jsonl"
-    physical_args = {
-        "phase": "align",
-        "completion_assessment": {
-            "done_when": [{"index": 0, "status": "unknown", "evidence": "not yet"}]
-        },
-    }
     records = [
-        _transcript_event(
-            "assistant_turn",
-            {
-                "public_intent": "turn left",
-                "public_intent_source": "provider_content",
-                "tool_calls": [
-                    {
-                        "tool_call_id": "commit_1",
-                        "tool_name": "runtime.commit_phase_turn",
-                        "args": physical_args,
-                    },
-                    {
-                        "tool_call_id": "turn_1",
-                        "tool_name": "uav.turn_relative",
-                        "args": {"yaw_deg": -15},
-                    },
-                ],
-            },
-            3,
-        ),
-        _tool_result_event("turn_1", "uav.turn_relative", 4),
-        _transcript_event(
-            "state_checkpoint",
-            {"observation_id": "obs_0002", "context": {"current_phase": {"name": "align"}}},
-            5,
-        ),
-        _transcript_event(
-            "assistant_turn",
-            {
-                "public_intent": "turn a little more",
-                "public_intent_source": "provider_content",
-                "tool_calls": [
-                    {
-                        "tool_call_id": "commit_2",
-                        "tool_name": "runtime.commit_phase_turn",
-                        "args": physical_args,
-                    },
-                    {
-                        "tool_call_id": "turn_2",
-                        "tool_name": "uav.turn_relative",
-                        "args": {"yaw_deg": -10},
-                    },
-                ],
-            },
-            6,
-        ),
-        _tool_result_event("turn_2", "uav.turn_relative", 7),
-        _transcript_event(
-            "state_checkpoint",
-            {"observation_id": "obs_0003", "context": {"current_phase": {"name": "align"}}},
-            8,
-        ),
-        _transcript_event(
-            "assistant_turn",
-            {
-                "public_intent": "complete",
-                "public_intent_source": "provider_content",
-                "tool_calls": [
-                    {
-                        "tool_call_id": "commit_3",
-                        "tool_name": "runtime.commit_phase_turn",
-                        "args": {
-                            "phase": "align",
-                            "completion_assessment": {
-                                "done_when": [
-                                    {
-                                        "index": 0,
-                                        "status": "supported",
-                                        "evidence": "aligned",
-                                    }
-                                ]
-                            },
-                        },
-                    }
-                ],
-            },
-            9,
-        ),
+        json.loads(line)
+        for line in transcript_path.read_text(encoding="utf-8").splitlines()
     ]
     for record in records:
-        record["instruction_id"] = "inst_1"
-        append_jsonl(transcript_path, record)
-
-    audit = BenchmarkAuditReader().read(EpisodeAuditCursor.freeze(run_dir))
-    eval_dir = tmp_path / "eval"
-    BenchmarkReviewRenderer(detailed_audit=True).write_case(
-        eval_dir,
-        BenchmarkCaseReview(
-            case_id="legacy",
-            benchmark_name="Test",
-            protocol_variant="test.v1",
-            instruction="Turn",
-            outcome={"status": "ok"},
-            metrics={},
-            audit=audit,
-            frame_assets=(),
-        ),
-    )
-    page = (eval_dir / "cases" / "legacy" / "audit_review.html").read_text(
-        encoding="utf-8"
+        record.pop("schema_version", None)
+    transcript_path.write_text(
+        "\n".join(json.dumps(item) for item in records), encoding="utf-8"
     )
 
-    assert "Exact provider request unavailable: run predates provider exchange capture" in page
-    assert "Decision 1 · obs_0001 · 1 model round · continue_current_phase · physical window 1" in page
-    assert "Decision 2 · obs_0002 · 1 model round · continue_current_phase · physical window 2" in page
-    assert "Decision 3 · obs_0003 · 1 model round · complete_task_or_advance_phase · no physical window" in page
-    assert "model output absent" not in page
+    with pytest.raises(UnsupportedRunSchema, match="agent_transcript_v2"):
+        BenchmarkAuditReader().read(EpisodeAuditCursor.freeze(run_dir))
 
 
 def make_episode(
@@ -2264,6 +2154,7 @@ def write_audit_fixture(run_dir: Path) -> None:
         memory / "agent_transcript.jsonl",
         {
             "id": "turn_0001",
+            "schema_version": "agent_transcript_v2",
             "timestamp": "2026-01-01T00:00:00.500000+00:00",
             "instruction_id": "inst_1",
             "kind": "user_instruction",
@@ -2274,10 +2165,12 @@ def write_audit_fixture(run_dir: Path) -> None:
         memory / "agent_transcript.jsonl",
         {
             "id": "turn_0002",
+            "schema_version": "agent_transcript_v2",
             "timestamp": "2026-01-01T00:00:01.100000+00:00",
             "instruction_id": "inst_1",
             "kind": "state_checkpoint",
             "payload": {
+                "schema_version": "state_checkpoint_v2",
                 "observation_id": "obs_0001",
                 "context": {"current_phase": {"name": "align"}},
             },
@@ -2309,6 +2202,7 @@ def _png_bytes() -> bytes:
 def _transcript_event(kind: str, payload: dict, index: int) -> dict:
     return {
         "id": f"turn_{index:04d}",
+        "schema_version": "agent_transcript_v2",
         "timestamp": f"2026-01-01T00:00:{index:02d}+00:00",
         "instruction_id": "inst_transcript",
         "kind": kind,

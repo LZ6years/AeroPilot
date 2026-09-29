@@ -389,7 +389,7 @@ def main() -> int:
     parser.add_argument("--eval-id", default=None)
     parser.add_argument(
         "--output-dir",
-        default="tests/manual_outputs/aerial_vln_remote_readiness",
+        default="runs/experiments/aerial_vln_remote_readiness",
     )
     args = parser.parse_args()
     config = AerialVlnEvalConfig.from_file(args.config)

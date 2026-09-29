@@ -6,6 +6,7 @@ from src.env_client.simulator_client import SimulatorEnvClient
 from src.env_client.schemas import MapPackage
 from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
+from src.tools.registry import default_registry
 from tests.simulator_fakes import in_memory_backend_registry
 
 
@@ -31,7 +32,7 @@ def test_tool_dispatcher_routes_uav_actions_through_env_client(tmp_path):
         )
     )
     scene = client.start_scene("m1")
-    dispatcher = ToolDispatcher(client)
+    dispatcher = ToolDispatcher(client, default_registry())
 
     result = dispatcher.call(scene.scene_instance_id, "uav_1", "uav.connect", {})
     set_pose = dispatcher.call(

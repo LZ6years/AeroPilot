@@ -4,10 +4,19 @@ from dataclasses import asdict
 
 import pytest
 
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
+from src.plugins import PluginRegistry
 from src.tools.registry import default_registry
-from tests.test_model_action_planner import StubPlanner, make_transcript, response_with_calls
-from tests.test_unified_tool_loop import harness, call, done, move
+from tests.support.planner import (
+    BaselinePlanner,
+    GUIDANCE_BASELINE,
+    StubPlanner,
+    make_transcript,
+    response_with_calls,
+    guidance_probe,
+    treatments,
+)
+from tests.support.runtime import call, done, harness, move, run_loop
 
 
 @pytest.mark.parametrize("index,expected", [(None, False), (1, False), (5, False),
@@ -60,7 +69,7 @@ def test_rejected_read_and_physical_turns_share_runtime_clock(tmp_path):
         [call("read", "knowledge.load", name="guide")],
         [move("move")], [done()],
     ])
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     assert state.completed
     assert runtime.planner.decision_indices == [1, 2, 3, 4]
     assert backend.observations == 2
@@ -71,17 +80,20 @@ def test_protocol_rejection_counts_as_a_decision(tmp_path):
         [call("bad", "uav.turn_relative", yaw_deg=999)],
         [move("move")], [done()],
     ])
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     assert state.completed
     assert runtime.planner.decision_indices == [1, 2, 3]
     assert any(e.payload.status == "rejected" for e in runtime.agent_transcript.items if e.kind == "tool_result")
 
 
-def test_probe_changes_only_guidance_and_preserves_runtime_schema():
+def test_probe_changes_only_guidance_and_preserves_runtime_schema(monkeypatch):
     import copy
     import json
-    from tests.manual.task_progress_guidance_probe import BASELINE, treatments
-    baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+    baseline = json.loads(GUIDANCE_BASELINE.read_text(encoding="utf-8"))
+    from types import SimpleNamespace
+    frozen_tools = copy.deepcopy(baseline['tools'])
+    monkeypatch.setattr(guidance_probe, 'default_registry', lambda: SimpleNamespace(model_specs=lambda: [
+        SimpleNamespace(to_provider_tool=lambda t=t: copy.deepcopy(t)) for t in frozen_tools]))
     payload = {"messages": [{"role": "system", "content": baseline["system_prompt"]},
                             {"role": "user", "content": "recorded observation"}],
                "tools": baseline["tools"]}
@@ -122,14 +134,16 @@ def test_invalid_decision_index(tmp_path, index):
 
 def test_simulation_baseline_preserves_actual_safety_bounds_and_original_registry(tmp_path):
     import json
-    from src.runtime.configs.safety_config import UavSafetyConfig
-    from tests.manual.task_progress_simulation_probe import BaselinePlanner, BASELINE
+    from src.uav.config import UavSafetyConfig
     planner = BaselinePlanner(ModelConfig(model_name="stub", api_key="test-key"))
     planner._request = lambda payload: response_with_calls(("turn", "uav_turn_relative", {"yaw_deg": 10}))
-    registry = default_registry(safety_config=UavSafetyConfig(max_yaw_step_deg=90))
+    registry = default_registry(
+        PluginRegistry.from_config(),
+        safety_config=UavSafetyConfig(max_yaw_step_deg=90),
+    )
     before = [s.to_provider_tool() for s in registry.model_specs()]
     planner.plan_turn(make_transcript(tmp_path), registry, decision_index=6)
-    saved = json.loads(BASELINE.read_text(encoding="utf-8"))
+    saved = json.loads(GUIDANCE_BASELINE.read_text(encoding="utf-8"))
     actual = planner.last_request["tools"]
     assert [t["function"]["description"] for t in actual] == [t["function"]["description"] for t in saved["tools"]]
     assert [t["function"]["parameters"] for t in actual] == [t["function"]["parameters"] for t in before]

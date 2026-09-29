@@ -24,7 +24,7 @@ from tests.manual.tool_selection_ablation_probe import restore_request, digest, 
 from src.llm import DefaultModelClient, ModelRequest
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import public_response_snapshot
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import load_model_config
 from src.tools.registry import default_registry
 
 BASELINE = ROOT / 'tests/fixtures/task_progress_baseline.json'

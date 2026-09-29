@@ -52,8 +52,8 @@ def main() -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     if not rgb_path.is_file():
         raise SystemExit(f"RGB frame does not exist: {rgb_path}")
-    if args.include_distance and (depth_path is None or not depth_path.is_file()):
-        raise SystemExit("--include-distance requires an existing --depth metric-depth .npy file")
+    if depth_path is not None and not depth_path.is_file():
+        raise SystemExit("--depth must reference an existing metric-depth .npy file")
 
     capability = json.loads(CAPABILITY_JSON.read_text(encoding="utf-8"))
     settings = capability.get("settings")
@@ -95,7 +95,6 @@ def main() -> None:
             observation={"observation_id": args.observation_id, "frames": frames},
             observation_id=args.observation_id,
             query=args.query,
-            include_distance=args.include_distance,
             run_dir=str(output_dir),
             tool_call_id="offline_visual_grounding_probe",
         )
@@ -106,7 +105,6 @@ def main() -> None:
         "input": {
             "observation_id": args.observation_id,
             "query": args.query,
-            "include_distance": args.include_distance,
             "rgb": str(rgb_path),
             "depth": str(depth_path) if depth_path else None,
         },
@@ -138,7 +136,6 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--depth", default=None, help="Matching metric-depth .npy path.")
     parser.add_argument("--query", required=True, help="Natural-language target query.")
     parser.add_argument("--observation-id", default="obs_probe_0001")
-    parser.add_argument("--include-distance", action="store_true")
     parser.add_argument(
         "--grounding-model",
         default=None,

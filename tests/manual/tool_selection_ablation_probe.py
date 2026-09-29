@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 from src.llm import DefaultModelClient, ModelRequest
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import public_response_snapshot
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import load_model_config
 from src.tools.validation import validate_tool_args
 
 PREFIXES = ('FlyAgent identity and operating rules:\n', 'User preferences:\n')

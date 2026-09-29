@@ -119,22 +119,34 @@ def test_async_child_does_not_share_inherited_cache(tmp_path):
 
 def test_builder_opens_scope_and_keeps_custom_reader_compatible(tmp_path):
     from types import SimpleNamespace
-    from src.perception.context_builder import ObservationContextBuilder
+    from src.agent.mission_state import MissionState
+    from src.memory.context.builder import ModelContextBuilder
+    from src.memory.flight_memory import FlightMemory
     reader, _ = setup_reader(tmp_path)
-    builder = ObservationContextBuilder.__new__(ObservationContextBuilder)
+    builder = ModelContextBuilder.__new__(ModelContextBuilder)
     builder.map_memory = builder.run_memory = None
-    builder._stage_context_from_state = lambda state, memory: None
-    def compose(sources, stage):
+    builder._stage_context_from_state = lambda state: None
+    def build_fragments(sources, stage):
         if sources.flight_memory.memory_reader is reader:
             assert reader._read_scope.get() is not None
-        return {"ok": True}
-    builder.composer = SimpleNamespace(compose=compose)
+        return ()
+    builder.registry = SimpleNamespace(build_fragments=build_fragments)
+    state = MissionState("run", "Inspect")
     for custom in (reader, object(), None):
-        assert builder.build(None, SimpleNamespace(memory_reader=custom)) == {"ok": True}
+        memory = FlightMemory("run", "map", "scene", "uav", memory_reader=custom)
+        checkpoint, audits = builder.build_checkpoint(
+            state, memory, checkpoint_id="checkpoint_0001", reason="instruction_start"
+        )
+        assert checkpoint.fragments == () and audits == ()
     assert reader._read_scope.get() is None
     def fail(*args):
-        raise RuntimeError("compose failed")
-    builder.composer.compose = fail
+        raise RuntimeError("build failed")
+    builder.registry.build_fragments = fail
     with pytest.raises(RuntimeError):
-        builder.build(None, SimpleNamespace(memory_reader=reader))
+        builder.build_checkpoint(
+            state,
+            FlightMemory("run", "map", "scene", "uav", memory_reader=reader),
+            checkpoint_id="checkpoint_0001",
+            reason="instruction_start",
+        )
     assert reader._read_scope.get() is None

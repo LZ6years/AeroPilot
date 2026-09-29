@@ -122,7 +122,10 @@ def agent_message_pair() -> list[dict]:
 
 def write_completed_run_boilerplate(run_dir: Path) -> None:
     write_json(run_dir / "latest_state.json", {"completed": True, "connected": True, "airborne": True})
-    write_json(run_dir / "contexts" / "latest_context.json", {"phase_execution_summary": {}})
+    write_json(
+        run_dir / "contexts" / "latest_checkpoint.json",
+        {"schema_version": "state_checkpoint_v2", "checkpoint_id": "checkpoint_0001"},
+    )
 
 
 def test_evaluator_extracts_compound_task_metrics_and_artifacts(tmp_path):

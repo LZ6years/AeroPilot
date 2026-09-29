@@ -7,7 +7,7 @@ import pytest
 
 from src.llm import ModelResponse
 from src.llm.providers.openai_compatible import encode_request
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 class CaptureClient:

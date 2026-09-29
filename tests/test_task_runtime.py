@@ -13,11 +13,13 @@ from src.env_client.schemas import MapPackage, SceneCapabilities
 from src.runtime.configs.task_execution_options import InitialPose, TaskExecutionOptions
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.runners.task_runtime import TaskRuntime
+from src.runtime.factory import RuntimeFactory
+from src.plugins import PluginRegistry
 from tests.simulator_fakes import FakeAirSimBackend as AirSimBackend
 from src.sim_server.backends.registry import BackendRegistry
 from src.sim_server.server import SimulationServer
 from tests.simulator_fakes import in_memory_backend_registry
-from tests.manual.benchmark_probe_support import CompleteProbePlanner
+from tests.support.benchmark import CompleteProbePlanner
 
 LAMP_TASK = "Observe the lamp"
 ENTRANCE_TASK = "Observe the entrance"
@@ -59,17 +61,23 @@ def load_event_records(run_dir):
     return sorted(events, key=lambda record: str(record.get("timestamp", "")))
 
 
+def build_runtime(client, recorder, planner):
+    """Use the production composition root with a deterministic test planner."""
+
+    return RuntimeFactory(plugin_registry=PluginRegistry()).create_task_runtime(
+        client,
+        recorder,
+        planner=planner,
+        shutdown_policy="none",
+    )
+
+
 
 def test_task_runtime_applies_initial_pose_before_first_configured_observation(tmp_path):
     run_dir = tmp_path / "task_execution_options"
     recorder = AsyncRunLogger(run_dir)
     server = SimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(
-        SimulatorEnvClient(server),
-        recorder,
-        planner=TerminalPlanner(),
-        shutdown_policy="none",
-    )
+    runtime = build_runtime(SimulatorEnvClient(server), recorder, TerminalPlanner())
     options = TaskExecutionOptions(
         observation_modalities=("rgb", "pose"),
         initial_pose=InitialPose(4.0, 5.0, 12.0, yaw_deg=35.0),
@@ -86,8 +94,8 @@ def test_task_runtime_applies_initial_pose_before_first_configured_observation(t
         if record["event"] == "initial_observation_updated"
     )
     actions_text = (run_dir / "memory/actions.jsonl").read_text(encoding="utf-8")
-    latest_context = json.loads(
-        (run_dir / "contexts/latest_context.json").read_text(encoding="utf-8")
+    latest_checkpoint = json.loads(
+        (run_dir / "contexts/latest_checkpoint.json").read_text(encoding="utf-8")
     )
     flight_memory = json.loads(
         (run_dir / "state/flight_memory.json").read_text(encoding="utf-8")
@@ -105,7 +113,11 @@ def test_task_runtime_applies_initial_pose_before_first_configured_observation(t
     assert state.observation_modalities == ("rgb", "pose")
     assert state.latest_observation["modalities"] == ["rgb", "pose"]
     assert "depth" not in state.latest_observation.get("frames", {})
-    assert latest_context["observation_policy"]["modalities"] == ["rgb", "pose"]
+    motion = next(
+        fragment for fragment in latest_checkpoint["fragments"]
+        if fragment["name"] == "motion"
+    )
+    assert motion["model_content"]["observation_policy"]["modalities"] == ["rgb", "pose"]
     assert "uav.set_pose" not in actions_text
     assert flight_memory["reset_epoch"] == 1
 
@@ -115,12 +127,7 @@ def test_task_runtime_reapplies_initial_pose_when_scene_is_reused(tmp_path):
     run_dir = tmp_path / "reused_episode_initial_pose"
     recorder = AsyncRunLogger(run_dir)
     server = SimulationServer([make_package()], run_dir=run_dir)
-    runtime = TaskRuntime(
-        SimulatorEnvClient(server),
-        recorder,
-        planner=TerminalPlanner(),
-        shutdown_policy="none",
-    )
+    runtime = build_runtime(SimulatorEnvClient(server), recorder, TerminalPlanner())
 
     first_state = runtime.run_task(
         "m1",
@@ -166,12 +173,7 @@ def test_task_runtime_rejects_unsupported_observation_modalities_before_planning
     recorder = AsyncRunLogger(run_dir)
     server = SimulationServer([make_package()], run_dir=run_dir)
     planner = TerminalPlanner()
-    runtime = TaskRuntime(
-        SimulatorEnvClient(server),
-        recorder,
-        planner=planner,
-        shutdown_policy="none",
-    )
+    runtime = build_runtime(SimulatorEnvClient(server), recorder, planner)
 
     with pytest.raises(RuntimeError, match="does not support.*mask"):
         runtime.run_task(
@@ -237,12 +239,7 @@ def test_task_runtime_rejects_initial_pose_without_backend_capability(tmp_path):
         backend_registry=registry,
     )
     planner = TerminalPlanner()
-    runtime = TaskRuntime(
-        SimulatorEnvClient(server),
-        recorder,
-        planner=planner,
-        shutdown_policy="none",
-    )
+    runtime = build_runtime(SimulatorEnvClient(server), recorder, planner)
 
     with pytest.raises(RuntimeError, match="does not support set_pose"):
         runtime.run_task(
@@ -278,12 +275,7 @@ def test_task_runtime_reports_initial_pose_action_failure_before_planning(tmp_pa
         backend_registry=registry,
     )
     planner = TerminalPlanner()
-    runtime = TaskRuntime(
-        SimulatorEnvClient(server),
-        recorder,
-        planner=planner,
-        shutdown_policy="none",
-    )
+    runtime = build_runtime(SimulatorEnvClient(server), recorder, planner)
 
     with pytest.raises(RuntimeError, match="Episode initial pose failed"):
         runtime.run_task(

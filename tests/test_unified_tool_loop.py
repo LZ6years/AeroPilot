@@ -16,21 +16,28 @@ from src.agent.transcript import AgentToolCall, AgentTranscript, AssistantTurn
 from src.env_client import ActionResult, Observation
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
+from src.memory.context.builder import ModelContextBuilder
 from src.memory.context.registry import ContextModuleRegistry
-from src.perception.context_builder import ObservationContextBuilder
 from src.plugins import PluginRegistry
 from src.plugins.contracts.skill import Skill
 from src.plugins.skills.catalog import SkillCatalog
 from src.plugins.skills.knowledge_service import KnowledgeService
-from src.runtime.configs.model_config import ModelConfig
-from src.runtime.configs.safety_config import UavSafetyConfig
+from src.agent.config import ModelConfig
+from src.runtime.context import ContextCheckpointService
+from src.runtime.task import RuntimeJournal
+from src.runtime.task.loop import InstructionLoop, TaskLoopGuard
+from src.runtime.task.physical_window import PhysicalWindowExecutor
+from src.runtime.task.session import InstructionSession
+from src.runtime.task.turn_executor import TurnExecutor
 from src.runtime.control.actions.task_plan import apply_plan_update
 from src.runtime.middleware import ToolTelemetryMiddleware
 from src.runtime.runners.task_runtime import TaskRuntime
+from src.runtime.factory import RuntimeFactory
 from src.tools.builtins import builtin_tools
 from src.tools.dispatcher import ToolDispatcher
 from src.tools.registry import ToolRegistry, default_registry
 from src.uav import pose_measurements
+from src.uav.config import UavSafetyConfig
 from src.uav.motion import body_velocity_to_world_delta
 
 
@@ -81,7 +88,13 @@ class ScriptedPlanner:
 
     def plan_turn(self, transcript, registry, **kwargs):
         self.decision_indices.append(kwargs.get("decision_index"))
-        self.contexts.append(transcript.latest_context())
+        checkpoint = transcript.latest_checkpoint()
+        self.contexts.append(
+            {
+                "envelope": transcript.instruction_envelope(),
+                "checkpoint": checkpoint.to_dict() if checkpoint else {},
+            }
+        )
         self.histories.append(transcript.snapshot())
         calls = next(self.batches)
         return AssistantTurn(f"turn_{len(self.contexts)}", "Use the current evidence", calls)
@@ -126,9 +139,8 @@ def public_runtime(tmp_path, batches, plugins=None):
     from src.runtime.configs.stabilization_config import UavStabilizationConfig
     plugins = plugins or PluginRegistry(skill_catalog=SkillCatalog([]))
     backend = ManagedFakeBackend()
-    runtime = TaskRuntime(
+    runtime = RuntimeFactory(plugin_registry=plugins).create_task_runtime(
         backend, Recorder(tmp_path), planner=ScriptedPlanner(batches),
-        plugin_registry=plugins,
         stabilization_config=UavStabilizationConfig(enabled=False),
     )
     return runtime, backend
@@ -140,7 +152,7 @@ def test_public_constructor_raw_instruction_and_terminal_lifecycle(tmp_path):
     assert state.completed and state.task_plan is None
     assert state.physical_window_count == 1
     assert backend.stops == ["scene"]
-    assert runtime.planner.contexts[0]["protocol_context"] == "Do not land."
+    assert runtime.planner.contexts[0]["envelope"]["protocol_context"] == "Do not land."
     events = [name for name, _ in runtime.recorder.events]
     assert events.index("physical_window_recorded") < events.index("task_terminal") < events.index("scene_stopped")
     terminal = [e for e in runtime.agent_transcript.items if e.kind == "task_terminal"]
@@ -250,8 +262,11 @@ def test_public_runtime_reused_scene_starts_fresh_instruction_state(tmp_path):
     assert first.completed and second.completed
     assert second.loaded_knowledge == [] and second.physical_window_count == 0
     assert backend.starts == 1 and backend.stops == ["scene"]
-    assert runtime.agent_transcript.items[0].kind == "user_instruction"
-    assert runtime.planner.contexts[-1]["active_instruction"] == "Second instruction"
+    assert runtime.agent_transcript.items[0].kind == "instruction_envelope"
+    instruction_events = [
+        event for event in runtime.agent_transcript.items if event.kind == "user_instruction"
+    ]
+    assert instruction_events[0].payload["instruction"] == "Second instruction"
 
 
 def harness(tmp_path, batches):
@@ -269,28 +284,64 @@ def harness(tmp_path, batches):
     from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
     runtime.read_only_execution_config = ReadOnlyExecutionConfig()
     runtime.recorder = Recorder(tmp_path)
-    runtime.tools = ToolDispatcher(backend, registry, plugins, KnowledgeService(plugins.skill_catalog))
+    from src.plugins.skills.dispatcher import SkillCapabilityDispatcher
+    runtime.tools = ToolDispatcher(
+        backend,
+        registry,
+        SkillCapabilityDispatcher(plugins),
+        KnowledgeService(plugins.skill_catalog),
+    )
     runtime.safety = SafetySupervisor()
     runtime.tool_telemetry = ToolTelemetryMiddleware(runtime.tools, runtime._debug_event)
     runtime.stabilizer = SimpleNamespace(wait_after_step=lambda *a, **k: {"status": "ok"})
     runtime.model_config = ModelConfig()
+    runtime.loop_guard = TaskLoopGuard(
+        runtime.model_config.max_consecutive_protocol_rejections
+    )
+    runtime.physical_windows = PhysicalWindowExecutor(
+        runtime, runtime._pose_from_observation
+    )
+    runtime.turn_executor = TurnExecutor(runtime, runtime.physical_windows)
+    runtime.instruction_loop = InstructionLoop(
+        runtime, runtime.loop_guard, runtime.turn_executor
+    )
     runtime.planner = ScriptedPlanner(batches)
-    runtime.context_builder = ObservationContextBuilder(
-        registry=ContextModuleRegistry.default(plugin_registry=plugins), plugin_registry=plugins,
+    runtime.context_builder = ModelContextBuilder(
+        registry=ContextModuleRegistry.default(plugin_warnings=plugins.warnings),
+        knowledge_catalog=[
+            {"name": item.name, "description": item.description}
+            for item in plugins.skill_catalog.skills
+        ],
     )
     runtime.memory_writer = MemoryEventWriter(tmp_path)
     runtime.agent_transcript = AgentTranscript(runtime.memory_writer)
-    runtime.agent_transcript.start_instruction("Go to the endpoint", "inst_1")
     memory = FlightMemory("run", "map", "scene", "uav", active_instruction="Go to the endpoint",
                           active_instruction_id="inst_1", memory_reader=MemoryRecordReader(tmp_path))
+    state = MissionState("run", "Go to the endpoint", protocol_context="Episode-specific guidance.")
+    runtime.checkpoints = ContextCheckpointService(
+        runtime.context_builder, runtime.agent_transcript, runtime.recorder
+    )
+    runtime.checkpoints.begin_instruction(state, memory)
     runtime._state_flight_memories = {"run": memory}
     runtime._decision_index = 0
-    runtime._persisted_provider_media = set()
-    runtime.event_sink = None
-    state = MissionState("run", "Go to the endpoint", protocol_context="Episode-specific guidance.")
+    runtime.journal = RuntimeJournal(runtime.recorder)
     scene = SimpleNamespace(scene_instance_id="scene", capabilities=None)
     runtime._record_observation(scene, "uav", state, ["pose"], "instruction_start")
+    runtime.checkpoints.publish(state, memory, "instruction_start")
     return runtime, state, scene, backend
+
+
+def run_loop(runtime, state, scene):
+    memory = runtime._memory_for_state(state)
+    runtime.instruction_loop.run(
+        InstructionSession(
+            scene=scene,
+            agent_id="uav",
+            state=state,
+            memory=memory,
+            transcript=runtime.agent_transcript,
+        )
+    )
 
 
 def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
@@ -300,7 +351,7 @@ def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
             {"id": "go", "description": "Reach the endpoint", "status": "in_progress"}])],
         [move("m1"), move("m2")], [done()],
     ])
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     assert state.completed and not state.stopped
     assert state.physical_window_count == 1 and backend.observations == 2
     assert state.latest_pose["x"] == 4
@@ -315,14 +366,15 @@ def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
     assert windows[0]["observation_after_id"] == "obs_0002"
     assert [s["tool_call_id"] for s in windows[0]["ordered_steps"]] == ["m1", "m2"]
     for context in runtime.planner.contexts:
-        assert not {"current_phase", "phase_strategy", "semantic_plan"} & context.keys()
-        assert context["protocol_context"] == "Episode-specific guidance."
+        checkpoint = context["checkpoint"]
+        assert not {"current_phase", "phase_strategy", "semantic_plan"} & checkpoint.keys()
+        assert context["envelope"]["protocol_context"] == "Episode-specific guidance."
     assert len([k for k in runtime.recorder.artifacts if k.startswith("debug/tool_loop/")]) == 4
 
 
 def test_simple_task_can_move_and_finish_without_plan(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [[move("m1")], [done()]])
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     assert state.completed and state.task_plan is None
     assert backend.observations == 2
 
@@ -335,7 +387,7 @@ def test_mixed_turn_rejected_before_any_action_then_corrected(tmp_path, workers)
     ])
     from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
     runtime.read_only_execution_config = ReadOnlyExecutionConfig(workers)
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert [r.status for r in results] == ["rejected", "rejected", "ok", "ok"]
     assert len(backend.actions) == 1 and state.loaded_knowledge == []
@@ -346,7 +398,7 @@ def test_plan_changes_cannot_reset_nonphysical_guard(tmp_path):
              for i in range(2)]
     runtime, state, scene, backend = harness(tmp_path, plans)
     state.max_nonphysical_rounds = 2
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     assert state.stopped_reason == "nonphysical_round_limit"
     assert state.task_plan.revision == 2 and state.physical_window_count == 0
     assert backend.actions == [] and backend.observations == 1
@@ -359,7 +411,7 @@ def test_failed_first_physical_call_closes_remaining_as_skipped(tmp_path):
               reason="Motion unavailable", evidence_refs=["obs_0002"])],
     ])
     backend.fail_move = True
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert [r.status for r in results] == ["error", "skipped", "ok"]
     assert backend.observations == 2 and state.stopped and not state.completed
@@ -426,13 +478,14 @@ def test_missing_pose_is_unknown_not_zero():
 
 def test_context_never_selects_knowledge_or_exposes_unloaded_body(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [[done(observation="obs_0001")]])
-    module = runtime.context_builder.composer.registry.modules["skills"]
+    module = runtime.context_builder.registry.modules["skills"]
     module.skill_selector = SimpleNamespace(select=lambda *args: pytest.fail("context must not select knowledge"))
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     context = runtime.planner.contexts[0]
-    content = next(f["content"] for f in context["fragments"] if f["name"] == "skills")
-    assert content == {"knowledge_catalog": [{"name": "guide", "description": "Navigation guidance"}],
-                       "loaded_knowledge": []}
+    assert context["envelope"]["knowledge_catalog"] == [
+        {"name": "guide", "description": "Navigation guidance"}
+    ]
+    assert context["checkpoint"]["loaded_knowledge"] == []
     assert "phase_start" not in runtime._memory_for_state(state).observation_anchors
 
 
@@ -440,7 +493,7 @@ def test_reused_call_id_is_provider_rejection_not_duplicate_canonical_result(tmp
     runtime, state, scene, backend = harness(tmp_path, [
         [move("one")], [move("one")], [done()],
     ])
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     results = [e.payload.tool_call_id for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert results == ["one", "done"]
     assert len(backend.actions) == 1
@@ -450,7 +503,7 @@ def test_reused_call_id_is_provider_rejection_not_duplicate_canonical_result(tmp
 def test_instruction_guard_keeps_final_after_checkpoint(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [[move("one")], [move("two")]])
     state.max_physical_windows = 2
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     assert state.physical_window_count == 2 and state.stopped_reason == "instruction_physical_window_limit"
     assert backend.observations == 3
     assert runtime.agent_transcript.latest_observation_id() == "obs_0003"
@@ -462,7 +515,7 @@ def test_safety_modification_is_associated_with_its_own_batch_step(tmp_path):
         [done()],
     ])
     runtime.safety = SafetySupervisor(UavSafetyConfig(max_linear_velocity_mps=0.5))
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert results[0].requested_args["vx"] == 1 and results[0].executed_args["vx"] == 0.5
     assert results[0].safety_interventions[0]["step_index"] == 0
@@ -475,7 +528,7 @@ def test_unknown_knowledge_returns_error_and_can_be_corrected(tmp_path):
         [call("unknown", "knowledge.load", name="not_enabled")],
         [call("known", "knowledge.load", name="guide")], [done(observation="obs_0001")],
     ])
-    runtime._execute_instruction_loop(scene, "uav", state)
+    run_loop(runtime, state, scene)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert [result.status for result in results] == ["error", "ok", "ok"]
     assert state.physical_window_count == 0 and backend.observations == 1
@@ -495,7 +548,7 @@ def test_stabilization_failure_closes_batch_and_preserves_original_error(tmp_pat
             raise OSError("camera unavailable")
         backend.get_observation = fail_camera
     with pytest.raises(TimeoutError) as failure:
-        runtime._execute_instruction_loop(scene, "uav", state)
+        run_loop(runtime, state, scene)
     assert failure.value is original
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert [(r.tool_call_id, r.status) for r in results] == [("ack", "ok"), ("not_run", "skipped")]
@@ -516,7 +569,7 @@ def test_after_camera_failure_preserves_action_results_without_fake_observation(
 
     backend.get_observation = fail_camera
     with pytest.raises(OSError, match="camera unavailable"):
-        runtime._execute_instruction_loop(scene, "uav", state)
+        run_loop(runtime, state, scene)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert [(r.tool_call_id, r.status) for r in results] == [("ack1", "ok"), ("ack2", "ok")]
     windows = [p for name, p in runtime.recorder.events if name == "physical_window_recorded"]
@@ -528,13 +581,13 @@ def test_after_camera_failure_preserves_action_results_without_fake_observation(
 
 def test_capture_context_does_not_duplicate_image_binary(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [])
-    context = {"task_plan": None, "model_inputs": [{"data": "data:image/png;base64,abc"}]}
-    runtime.agent_transcript.append_state(context, "obs_0001")
     runtime._capture_instruction_exchange("decision_0001")
     ref = runtime.recorder.events[-1][1]["debug_ref"]
     artifact = runtime.recorder.artifacts[ref]
-    assert artifact["model_context"]["model_inputs"][0]["data"] == "[image_data_url]"
-    assert runtime.agent_transcript.latest_context() == context
+    checkpoint = runtime.agent_transcript.latest_checkpoint()
+    assert checkpoint is not None
+    assert "data:image/" not in str(artifact["model_context"])
+    assert artifact["model_context"] == checkpoint.to_dict()
     assert runtime.recorder.events[-1][0] == "model_turn_recorded"
 
 
@@ -543,7 +596,20 @@ def test_instruction_captures_do_not_overwrite_previous_decisions(tmp_path):
     runtime._capture_instruction_exchange("decision_0001")
     first_ref = runtime.recorder.events[-1][1]["debug_ref"]
     first_snapshot = copy.deepcopy(runtime.recorder.artifacts[first_ref])
-    runtime.agent_transcript.start_instruction("Another task", "../different/instruction")
+    from src.memory.context.contracts import InstructionEnvelope
+
+    runtime.agent_transcript.start_instruction(
+        "Another task",
+        "../different/instruction",
+        InstructionEnvelope(
+            instruction_id="../different/instruction",
+            protocol_context="",
+            identity={},
+            user_preferences={},
+            knowledge_catalog=(),
+            static_module_guidance=(),
+        ),
+    )
     runtime._capture_instruction_exchange("decision_0001")
     second_ref = runtime.recorder.events[-1][1]["debug_ref"]
     assert first_ref != second_ref and ".." not in second_ref

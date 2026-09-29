@@ -20,13 +20,13 @@ from plugins.research.custom_map.context_modules.custom_map.projection_geometry 
 from plugins.research.custom_map.context_modules.custom_map.records import read_custom_map_records
 from plugins.research.custom_map.context_modules.custom_map.schemas import PosePoint
 from plugins.research.custom_map.context_modules.custom_map.trajectory import build_trajectory
-from src.memory.context.composer import ContextComposer
 from src.memory.context.registry import ContextModuleRegistry
-from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
+from src.memory.context.contracts import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.plugins.core.discovery import PluginDiscovery
 from src.plugins.core.registry import PluginRegistry
+from src.plugins.context import load_plugin_context_module
 
 
 def test_custom_map_declares_semantic_evidence_boundary():
@@ -200,23 +200,25 @@ def test_custom_map_builds_fragment_image_matrix_and_path_summary(tmp_path):
     _write_pose_action_history(tmp_path, memory)
     _write_mask_observation(tmp_path, memory, with_label=True)
 
-    fragment = PluginContextModule().build(MemorySourceBundle(memory), _stage_context()).to_dict()
+    result = PluginContextModule().build(MemorySourceBundle(memory), _stage_context())
+    fragment = result.fragment.to_dict()
+    content = fragment["model_content"]
 
     assert fragment["name"] == "custom_map"
-    assert fragment["content"]["path_summary"]["pose_count"] == 4
-    assert fragment["content"]["path_summary"]["failed_action_count"] == 1
-    assert fragment["content"]["center_pose"]["x"] == 10.0
-    assert fragment["content"]["semantic_legend"]["-1"]["label"] == "visited_path"
-    assert fragment["content"]["semantic_legend"]["0"]["label"] == "free"
-    assert fragment["content"]["semantic_legend"]["2"]["label"] == "building"
-    assert any(2 in row for row in fragment["content"]["semantic_matrix"])
-    assert any(-1 in row for row in fragment["content"]["semantic_matrix"])
-    assert fragment["content"]["map_config"]["semantic_projection"] == "mask_downsampled_without_depth_projection"
-    assert fragment["content"]["rendered_html"]["artifact_path"].endswith("latest_custom_map.html")
+    assert content["path_summary"]["pose_count"] == 4
+    assert content["path_summary"]["failed_action_count"] == 1
+    assert content["center_pose"]["x"] == 10.0
+    assert content["semantic_legend"]["-1"]["label"] == "visited_path"
+    assert content["semantic_legend"]["0"]["label"] == "free"
+    assert content["semantic_legend"]["2"]["label"] == "building"
+    assert any(2 in row for row in content["semantic_matrix"])
+    assert any(-1 in row for row in content["semantic_matrix"])
+    assert content["map_config"]["semantic_projection"] == "mask_downsampled_without_depth_projection"
+    assert result.audit.metadata["html_report"].endswith("latest_custom_map.html")
     assert fragment["model_inputs"][0]["type"] == "image"
-    assert fragment["model_inputs"][0]["role"] == "custom_map"
-    rendered_path = Path(fragment["content"]["rendered_map"]["artifact_path"])
-    html_path = Path(fragment["content"]["rendered_html"]["artifact_path"])
+    assert fragment["model_inputs"][0]["media_ref"]["role"] == "custom_map"
+    rendered_path = tmp_path / fragment["model_inputs"][0]["media_ref"]["ref"]
+    html_path = Path(result.audit.metadata["html_report"])
     assert rendered_path.exists()
     assert html_path.exists()
 
@@ -310,10 +312,12 @@ def test_custom_map_html_contains_projected_point_cloud_debug(tmp_path):
     _write_pose_action_history(tmp_path, memory)
     _write_depth_mask_observation(tmp_path, yaw_deg=0.0)
 
-    fragment = PluginContextModule().build(MemorySourceBundle(memory), _stage_context()).to_dict()
+    result = PluginContextModule().build(MemorySourceBundle(memory), _stage_context())
+    fragment = result.fragment.to_dict()
+    content = fragment["model_content"]
 
-    assert fragment["content"]["map_config"]["semantic_projection"] == "depth_mask_projected_to_topdown"
-    projection_debug = fragment["content"]["projection_debug"]
+    assert content["map_config"]["semantic_projection"] == "depth_mask_projected_to_topdown"
+    projection_debug = result.audit.metadata["projection_debug"]
     assert projection_debug["point_count"] > 0
     assert projection_debug["sampled_points"]
     assert projection_debug["semantic_point_counts"]["2"] > 0
@@ -321,7 +325,7 @@ def test_custom_map_html_contains_projected_point_cloud_debug(tmp_path):
     assert "semantic_raw_label_examples" in projection_debug
     assert projection_debug["semantic_classes"][0]["label"] == "building"
     assert projection_debug["source_frames_by_observation_id"]
-    html_path = Path(fragment["content"]["rendered_html"]["artifact_path"])
+    html_path = Path(result.audit.metadata["html_report"])
     html = html_path.read_text(encoding="utf-8")
     assert "CUSTOM_MAP_DATA" in html
     assert "depth_mask_projected_to_topdown" in html
@@ -408,7 +412,7 @@ def test_trajectory_compresses_actions_without_raw_log_exposure(tmp_path):
     assert len(trajectory.failed_markers) == 1
 
 
-def test_configured_context_composer_includes_custom_map_schema(tmp_path):
+def test_configured_registry_includes_custom_map_schema(tmp_path):
     memory = _memory(tmp_path)
     _write_pose_action_history(tmp_path, memory)
     registry = PluginRegistry.discover(
@@ -422,18 +426,22 @@ def test_configured_context_composer_includes_custom_map_schema(tmp_path):
             },
         }
     )
+    contribution = registry.context_module_for("custom_map", "research.custom_map")
+    assert contribution is not None
     module_registry = ContextModuleRegistry.from_dict(
         {"context_modules": {"custom_map": "research.custom_map"}},
-        plugin_registry=registry,
+        plugin_modules={"custom_map": load_plugin_context_module(contribution)},
     )
 
-    context = ContextComposer(module_registry).compose(MemorySourceBundle(memory), _stage_context())
+    result = module_registry.build_fragments(
+        MemorySourceBundle(memory), _stage_context()
+    )[0]
 
-    assert context["fragments"][0]["name"] == "custom_map"
-    schema = context["context_schema"]["module_content_fields"]["custom_map"]
+    assert result.fragment.name == "custom_map"
+    schema = module_registry.describe_modules()["custom_map"]["model_fields"]
     assert "semantic_matrix" in schema
-    assert schema["semantic_matrix"] == PluginContextModule().describe_output()["content_fields"]["semantic_matrix"]
-    assert context["fragments"][0]["model_inputs"][0]["role"] == "custom_map"
+    assert schema["semantic_matrix"] == PluginContextModule().describe_output()["model_fields"]["semantic_matrix"]
+    assert result.fragment.model_inputs[0]["media_ref"]["role"] == "custom_map"
 
 
 def _has_green_uav_marker(image: Image.Image) -> bool:

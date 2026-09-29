@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.env_client import ObservationProfile
 from src.runtime.configs import TaskExecutionOptions
-from src.runtime.runners.interactive_runtime import (
+from src.runtime.task.interactive_session import (
     InteractiveTaskSession,
     agent_messages_for_summary,
     build_turn_summary,

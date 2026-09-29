@@ -78,7 +78,7 @@ def _manifest(config: UavFlowEvalConfig, selected: list[str]) -> dict:
     cases = load_cases(config.uav_flow_repo_path, case_ids=selected)
     return {
         "schema_version": RUN_MANIFEST_SCHEMA,
-        "loop_schema": "unified_tool_loop_v1",
+        "loop_schema": "unified_tool_loop_v2",
         "git_commit": "abc123",
         "git_dirty": False,
         "resolved_config": resolved,

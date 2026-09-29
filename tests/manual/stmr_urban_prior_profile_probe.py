@@ -6,6 +6,7 @@ import argparse
 import importlib.util
 import json
 import os
+from datetime import datetime
 from pathlib import Path
 import sys
 from typing import Any
@@ -26,7 +27,7 @@ from plugins.research.stmr_map.profiling_report import write_profile_report
 
 
 DEFAULT_SOURCE_ROOT = Path("tests/manual_outputs/stmr_light_regen_v2")
-DEFAULT_OUTPUT_ROOT = Path("tests/manual_outputs/stmr_incremental_profile")
+DEFAULT_OUTPUT_ROOT = Path("runs/experiments/stmr_incremental_profile") / datetime.now().strftime("%Y%m%d_%H%M%S")
 DEFAULT_CLASSES = ("Turn", "Shift", "Approach")
 
 

@@ -25,7 +25,7 @@ sys.path.insert(0, str(ROOT))
 from evaluation.benchmarks.core import BenchmarkAuditReader, EpisodeAuditCursor, write_audit_json
 from evaluation.benchmarks.travel_uav.config import TravelUavEvalConfig
 from evaluation.benchmarks.travel_uav.runner import TravelUavBenchmarkRunner
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import load_model_config
 from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
 from tests.manual.airsim_phase2_probe import BASELINE, MAPS, stage_summary, verify_cleanup
 from tests.manual.experiment_sources import source_hashes

@@ -15,6 +15,7 @@ from plugins.capabilities.visual_grounding.locate.scripts.contracts import (
 from plugins.capabilities.visual_grounding.locate.scripts.service import (
     VisualGroundingService,
 )
+from src.agent.context.media import MediaHydrator
 
 
 class FakeGrounder:
@@ -60,7 +61,7 @@ def test_memory_only_rgb_depth_are_consumed_without_backend_artifacts(tmp_path):
 
     service = VisualGroundingService(ReadingGrounder([_candidate()]), None, _settings())
     result = service.locate(observation=observation, observation_id="obs_memory",
-        query="person", include_distance=True, run_dir=None, tool_call_id="fixture")
+        query="person", run_dir=None, tool_call_id="fixture")
     assert result["data"]["candidates"][0]["distance_m"] == 7.0
     assert result["data"]["candidates"][0]["distance_status"] == "ok"
     assert not list(tmp_path.iterdir())
@@ -111,11 +112,16 @@ def test_configured_threshold_filters_before_evidence_and_depth(tmp_path):
     service = VisualGroundingService(FakeGrounder(candidates), None,
                                      _settings(box_threshold=0.4))
     result = service.locate(observation=_observation(tmp_path), observation_id="obs_0001",
-                            query="object", include_distance=False,
+                            query="object",
                             run_dir=str(tmp_path), tool_call_id="threshold")
     assert [c["confidence"] for c in result["data"]["candidates"]] == [0.401, 0.4]
     assert result["data"]["audit_details"]["filtered_candidate_count"] == 1
     assert len(result["model_inputs"]) == 1
+    media_ref = result["model_inputs"][0]["media_ref"]
+    assert media_ref["ref"].startswith("artifacts/tool_evidence/")
+    assert MediaHydrator(base_dir=tmp_path).hydrate(media_ref).data_url.startswith(
+        "data:image/png;base64,"
+    )
 
 
 def test_all_low_candidates_do_not_segment_or_emit_empty_image(tmp_path):
@@ -124,7 +130,7 @@ def test_all_low_candidates_do_not_segment_or_emit_empty_image(tmp_path):
         FakeGrounder([GroundedCandidate((1, 1, 10, 10), "weak", 0.399)]),
         segmenter, _settings(box_threshold=0.4))
     result = service.locate(observation=_observation(tmp_path), observation_id="obs_0001",
-                            query="object", include_distance=True,
+                            query="object",
                             run_dir=str(tmp_path), tool_call_id="empty")
     assert result["data"]["candidates"] == []
     assert not result["artifact_refs"] and not result["model_inputs"]
@@ -141,23 +147,23 @@ def test_empty_detection_handler_reports_uncertainty(monkeypatch, tmp_path):
     assert result.data["candidates"] == []
 
 
-def test_detection_only_never_invokes_segmentation_or_depth(tmp_path):
+def test_missing_depth_retains_candidate_with_unavailable_distance(tmp_path):
     grounder = FakeGrounder([_candidate()])
-    segmenter = FakeSegmenter(error=AssertionError("segmentation should not run"))
+    segmenter = FakeSegmenter()
     service = VisualGroundingService(grounder, segmenter, _settings())
 
     result = service.locate(
         observation=_observation(tmp_path),
         observation_id="obs_0001",
         query="穿红衣服的人",
-        include_distance=False,
+
         run_dir=str(tmp_path),
         tool_call_id="call_1",
     )
 
-    assert segmenter.calls == 0
+    assert segmenter.calls == 1
     assert grounder.calls[0][1] == "穿红衣服的人"
-    assert result["data"]["candidates"][0]["distance_status"] == "not_requested"
+    assert result["data"]["candidates"][0]["distance_status"] == "metric_depth_unavailable"
     assert result["data"]["candidates"][0]["distance_m"] is None
     assert len(result["artifact_refs"]) == 1
     assert len(result["model_inputs"]) == 1
@@ -179,7 +185,7 @@ def test_distance_uses_segmented_surface_robust_median(tmp_path):
         observation=_observation(tmp_path, depth),
         observation_id="obs_0001",
         query="person",
-        include_distance=True,
+
         run_dir=str(tmp_path),
         tool_call_id="call_2",
     )
@@ -205,7 +211,7 @@ def test_segmentation_failure_falls_back_to_inset_detector_box(tmp_path):
         observation=_observation(tmp_path, depth),
         observation_id="obs_0001",
         query="person",
-        include_distance=True,
+
         run_dir=None,
         tool_call_id=None,
     )
@@ -234,7 +240,7 @@ def test_multiple_depth_surfaces_return_unavailable_instead_of_a_number(tmp_path
         observation=_observation(tmp_path, depth),
         observation_id="obs_0001",
         query="person",
-        include_distance=True,
+
         run_dir=None,
         tool_call_id=None,
     )
@@ -244,7 +250,7 @@ def test_multiple_depth_surfaces_return_unavailable_instead_of_a_number(tmp_path
     assert candidate["distance_status"] == "inconsistent_depth_surfaces"
     from plugins.capabilities.visual_grounding.locate.scripts import handler
     monkeypatch.setattr(handler, "service_from_settings", lambda settings: service)
-    public = handler.handle({"args": {"observation_id": "obs_0001", "query": "person", "include_distance": True},
+    public = handler.handle({"args": {"observation_id": "obs_0001", "query": "person"},
                              "runtime_context": {"latest_observation": _observation(tmp_path, depth)}})
     assert "0 valid distance estimate(s)" in public.message
     assert "execution success is not measurement validity" in public.message
@@ -256,7 +262,7 @@ def test_empty_candidates_and_stale_observation_are_explicit(tmp_path):
         observation=_observation(tmp_path),
         observation_id="obs_0001",
         query="a red vehicle",
-        include_distance=False,
+
         run_dir=None,
         tool_call_id=None,
     )
@@ -267,7 +273,7 @@ def test_empty_candidates_and_stale_observation_are_explicit(tmp_path):
             observation=_observation(tmp_path),
             observation_id="obs_old",
             query="a red vehicle",
-            include_distance=False,
+
             run_dir=None,
             tool_call_id=None,
         )

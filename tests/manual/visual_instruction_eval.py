@@ -25,11 +25,13 @@ planner payload, so it is safe for normal local checks.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -37,18 +39,26 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.agent.planning.model_inputs import build_model_user_content
+from src.agent.context.media import MediaHydrator
+from src.agent.context.request_assembler import RequestAssembler
+from src.agent.mission_state import MissionState
 from src.agent.model_support import loads_json_object as _loads_json_object
-from src.memory.context.composer import ContextComposer
+from src.memory.context.builder import ModelContextBuilder
+from src.memory.context.documents import ContextDocuments
 from src.memory.context.registry import ContextModuleRegistry
-from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MapMemoryStore, MemoryEventWriter, MemoryRecordReader
-from src.runtime.configs.model_config import ModelConfig, load_model_config
+from src.agent.config import ModelConfig, load_model_config
 
 
 DEFAULT_CASES = REPO_ROOT / "tests" / "fixtures" / "visual_instruction_cases.json"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "tests" / "manual_outputs" / "visual_instruction_eval"
+DEFAULT_OUTPUT_DIR = (
+    REPO_ROOT
+    / "runs"
+    / "experiments"
+    / "visual_instruction_eval"
+    / datetime.now().strftime("%Y%m%d_%H%M%S")
+)
 DEFAULT_CONTEXT_CONFIG = REPO_ROOT / "configs" / "plugins.json"
 DEFAULT_LIMIT = 8
 
@@ -176,11 +186,47 @@ def build_case_context(
     )
     memory.append_observation_ref(now_write["observation_ref"])
     memory.append_frame_refs(now_write["frame_refs"])
-    stage_context = TaskContextInput(
-        active_instruction=str(case["instruction"]),
+    config = json.loads(_repo_path(context_config).read_text(encoding="utf-8-sig"))
+    registry = ContextModuleRegistry.from_dict(config)
+    builder = ModelContextBuilder(
+        registry=registry,
+        documents=ContextDocuments(identity={}, user_preferences={}),
+        map_memory=MapMemoryStore(),
     )
-    registry = ContextModuleRegistry.from_config(_repo_path(context_config))
-    return ContextComposer(registry).compose(MemorySourceBundle(memory, MapMemoryStore()), stage_context)
+    state = MissionState("visual_instruction_eval", str(case["instruction"]))
+    state.record_observation(
+        {
+            "observation_id": now_write["observation_ref"]["id"],
+            "source": "visual_instruction_eval_current",
+            "modalities": ["rgb"],
+        }
+    )
+    checkpoint, audits = builder.build_checkpoint(
+        state,
+        memory,
+        checkpoint_id="checkpoint_0001",
+        reason="instruction_start",
+    )
+    return {**checkpoint.to_dict(), "fragment_audits": list(audits)}
+
+
+def build_model_user_content(
+    context: dict[str, Any],
+    *,
+    run_dir: str | Path,
+) -> str | list[dict[str, Any]]:
+    """Hydrate the checkpoint media only for this synthetic provider request."""
+
+    model_inputs = [
+        item
+        for fragment in context.get("fragments", [])
+        if isinstance(fragment, dict)
+        for item in fragment.get("model_inputs", [])
+        if isinstance(item, dict)
+    ]
+    return RequestAssembler(MediaHydrator(base_dir=run_dir)).checkpoint_content(
+        context, model_inputs=model_inputs, timeline_role="CURRENT"
+    )
 
 
 def _write_rgb_observation(
@@ -191,11 +237,17 @@ def _write_rgb_observation(
 ) -> dict[str, Any]:
     """Write one real RGB observation record for local payload inspection."""
 
+    source_bytes = image_path.read_bytes()
+    digest = hashlib.sha256(source_bytes).hexdigest()
+    run_image = writer.run_dir / "artifacts" / "manual_input" / f"{digest}.png"
+    run_image.parent.mkdir(parents=True, exist_ok=True)
+    if not run_image.exists():
+        run_image.write_bytes(source_bytes)
     return writer.write_observation(
         {
             "source": source,
             "modalities": ["rgb"],
-            "frames": {"rgb": {"path": str(image_path), "mock": False}},
+            "frames": {"rgb": {"path": str(run_image), "mock": False}},
         }
     )
 
@@ -226,8 +278,7 @@ def evaluate_case_context(
     must_mentions_hit = [term for term in must_mentions if term and term in output_text]
     metrics = {
         "has_image_model_input": bool(image_inputs),
-        "image_input_is_data_url": isinstance(image_input.get("data"), str)
-        and image_input.get("data", "").startswith("data:image/"),
+        "image_input_is_data_url": _has_image_part(user_content),
         "json_text_omits_base64": isinstance(text_part, str)
         and "data:image/" not in text_part
         and "<omitted encoded model input data" not in text_part,
@@ -254,7 +305,13 @@ def evaluate_case_context(
     }
 
 
-def call_visual_eval_model(config: ModelConfig, context: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
+def call_visual_eval_model(
+    config: ModelConfig,
+    context: dict[str, Any],
+    case: dict[str, Any],
+    *,
+    run_dir: str | Path,
+) -> dict[str, Any]:
     if not config.api_key:
         raise RuntimeError("Missing FLYAGENT_MODEL_API_KEY; API key will not be printed.")
     system_prompt = (
@@ -263,7 +320,9 @@ def call_visual_eval_model(config: ModelConfig, context: dict[str, Any], case: d
     )
     expected = case.get("expected", {}) if isinstance(case.get("expected"), dict) else {}
     eval_context = dict(context)
-    eval_context["visual_eval_request"] = {
+    request_fragment = {
+        "name": "visual_eval_request",
+        "model_content": {
         "case_id": case["id"],
         "must_mention_any": expected.get("must_mention_any", []),
         "forbidden_terms": expected.get("forbidden_terms", []),
@@ -273,12 +332,23 @@ def call_visual_eval_model(config: ModelConfig, context: dict[str, Any], case: d
             "forbidden_terms": ["movement advice or forbidden terms if present"],
             "uses_image": True,
         },
+        },
+        "model_inputs": [],
     }
+    eval_context["fragments"] = [
+        *list(context.get("fragments", [])), request_fragment
+    ]
     payload = {
         "model": config.model_name,
         "messages": [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": build_model_user_content(eval_context)},
+            {
+                "role": "user",
+                "content": build_model_user_content(
+                    eval_context,
+                    run_dir=run_dir,
+                ),
+            },
         ],
         "temperature": 0,
         "response_format": {"type": "json_object"},
@@ -395,13 +465,23 @@ def main() -> None:
     results: list[dict[str, Any]] = []
     redacted_payloads: list[dict[str, Any]] = []
     for index, case in enumerate(cases, start=1):
+        case_run_dir = work_root / str(case["id"])
         context = build_case_context(
             case,
             context_config=args.context_config,
-            work_dir=work_root / str(case["id"]),
+            work_dir=case_run_dir,
         )
-        user_content = build_model_user_content(context)
-        model_result = call_visual_eval_model(model_config, context, case) if model_config else None
+        user_content = build_model_user_content(context, run_dir=case_run_dir)
+        model_result = (
+            call_visual_eval_model(
+                model_config,
+                context,
+                case,
+                run_dir=case_run_dir,
+            )
+            if model_config
+            else None
+        )
         result = evaluate_case_context(case, context, user_content, model_result)
         results.append(result)
         redacted_payloads.append(_redacted_payload_summary(case, context, user_content))
@@ -468,7 +548,18 @@ def _repo_path(path: str | Path) -> Path:
 
 
 def _fragment(context: dict[str, Any], name: str) -> dict[str, Any]:
-    return next(fragment for fragment in context.get("fragments", []) if fragment.get("name") == name)
+    fragment = next(
+        fragment for fragment in context.get("fragments", [])
+        if fragment.get("name") == name
+    )
+    audit = next(
+        (
+            item for item in context.get("fragment_audits", [])
+            if isinstance(item, dict) and item.get("name") == name
+        ),
+        {},
+    )
+    return {**fragment, "_audit": audit}
 
 
 def _has_image_part(user_content: str | list[dict[str, Any]]) -> bool:
@@ -509,31 +600,29 @@ def _structural_pass(metrics: dict[str, Any]) -> bool:
 
 
 def _image_fragment_summary(fragment: dict[str, Any]) -> dict[str, Any]:
-    content = fragment.get("content", {}) if isinstance(fragment.get("content"), dict) else {}
+    content = fragment.get("model_content", {}) if isinstance(fragment.get("model_content"), dict) else {}
+    audit = fragment.get("_audit", {}) if isinstance(fragment.get("_audit"), dict) else {}
+    metadata = audit.get("metadata", {}) if isinstance(audit.get("metadata"), dict) else {}
     model_inputs = fragment.get("model_inputs", []) if isinstance(fragment.get("model_inputs"), list) else []
     summaries = []
     for item in model_inputs:
         if not isinstance(item, dict):
             continue
+        media_ref = item.get("media_ref", {}) if isinstance(item.get("media_ref"), dict) else {}
         summary = {
             "type": item.get("type"),
-            "source": item.get("source"),
-            "role": item.get("role"),
-            "mime_type": item.get("mime_type"),
-            "encoding": item.get("encoding"),
-            "metadata": dict(item.get("metadata", {})) if isinstance(item.get("metadata"), dict) else {},
+            "role": media_ref.get("role"),
+            "mime_type": media_ref.get("mime_type"),
+            "sha256": media_ref.get("sha256"),
         }
-        if isinstance(item.get("data"), str):
-            summary["data_chars"] = len(item["data"])
-            summary["data_summary"] = "data:image/*;base64,<omitted>"
         summaries.append(summary)
     return {
-        "source": fragment.get("source"),
-        "visual_evidence": content.get("visual_evidence", {}),
+        "source": audit.get("source"),
+        "visual_evidence": metadata.get("visual_evidence", {}),
         "has_visual_description": "visual_description" in content,
         "model_inputs": summaries,
-        "artifact_refs": list(fragment.get("artifact_refs", [])),
-        "warnings": list(fragment.get("warnings", [])),
+        "artifact_refs": list(audit.get("artifact_refs", [])),
+        "warnings": list(audit.get("warnings", [])),
     }
 
 

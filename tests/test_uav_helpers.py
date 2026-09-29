@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from src.runtime.configs.action_config import UavActionConfig
+from src.uav.config import UavActionConfig
 from src.uav.commands import MOVE_BODY_ARGUMENT_SEMANTICS
 from src.uav.frames import SIGNED_YAW_SEMANTICS
 from src.uav import (

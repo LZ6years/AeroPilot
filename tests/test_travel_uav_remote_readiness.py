@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 
 from evaluation.benchmarks.travel_uav.config import TravelUavEvalConfig
-from tests.manual.travel_uav_remote_readiness import (
-    _REMOTE_SNAPSHOT,
-    inspect_remote_readiness,
+from tests.support.environment import (
+    TRAVEL_REMOTE_SNAPSHOT as _REMOTE_SNAPSHOT,
+    inspect_travel_remote_readiness as inspect_remote_readiness,
 )
 from tests.travel_uav_test_support import case, write_index
 

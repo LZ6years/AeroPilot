@@ -11,7 +11,7 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
@@ -40,13 +40,16 @@ def main() -> int:
     parser.add_argument("--velocity", nargs=3, type=float, default=[1, 0, 0])
     parser.add_argument("--duration", type=float, default=1)
     parser.add_argument("--case-id", help="Use exact TravelUAV dataset pose and target placement")
+    parser.add_argument("--skip-target", action="store_true", help="Diagnostic variant only: omit generated target")
+    parser.add_argument("--diagnostic-pose", nargs=6, type=float,
+                        help="Diagnostic variant only: override pose X Y Z YAW PITCH ROLL")
     parser.add_argument("--sequence-file", type=Path, help="Frozen list of {action,args}")
     parser.add_argument("--reuse-verified-post-action-state", action="store_true")
     parser.add_argument("--diagnostic-snapshots", action="store_true")
     parser.add_argument("--yaw-timeout", type=float, help="Diagnostic-only single-variable deadline experiment")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--save-artifacts", action=argparse.BooleanOptionalAction, default=True)
-    parser.add_argument("--output-root", default="tests/manual_outputs/airsim_action_regression")
+    parser.add_argument("--output-root", default="runs/experiments/airsim_action_regression")
     args = parser.parse_args()
     output = args.output_dir or Path(args.output_root) / datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     output.mkdir(parents=True, exist_ok=False)
@@ -82,7 +85,14 @@ def main() -> int:
         if args.pose is None:
             parser.error("--pose or --case-id is required")
         pose = dict(zip(("x", "y", "z", "yaw_deg", "pitch_deg", "roll_deg"), args.pose))
+    report["original_initial_pose"] = dict(pose)
+    report["diagnostic_variant"] = bool(args.skip_target or args.diagnostic_pose)
+    report["skip_target"] = args.skip_target
+    if args.diagnostic_pose:
+        pose = dict(zip(("x", "y", "z", "yaw_deg", "pitch_deg", "roll_deg"), args.diagnostic_pose))
     report["requested_initial_pose"] = pose
+    if prepared:
+        report["scenario_target"] = asdict(prepared.scenario_payload.target)
     sequence = json.loads(args.sequence_file.read_text(encoding="utf-8")) if args.sequence_file else [
         {"action": "turn_relative", "args": {"yaw_deg": args.turn}},
         {"action": "move_body", "args": dict(zip(("vx", "vy", "vz"), args.velocity)) | {"duration": args.duration}}]
@@ -95,7 +105,7 @@ def main() -> int:
         report["scene"] = scene.to_dict()
         (output / "state").mkdir()
         (output / "state/scene_instance.json").write_text(json.dumps(scene.to_dict()), encoding="utf-8")
-        if prepared:
+        if prepared and not args.skip_target:
             TravelUavScenarioController().prepare_episode(scene, prepared.scenario_payload)
         def action(name, arguments):
             result = client.execute_action(scene.scene_instance_id, "Drone_1", name, arguments)
@@ -109,6 +119,8 @@ def main() -> int:
             raise RuntimeError(connected.message)
         adapter = service.backends[scene.scene_instance_id].uav
         executor = adapter._control._actions
+        report["initial_api_control_enabled"] = adapter._client.isApiControlEnabled("Drone_1")
+        report["snapshots"].append({"stage": "before_placement", "state": executor._multirotor_snapshot(adapter._client)})
         if args.yaw_timeout is not None:
             executor.policy = replace(executor.policy, yaw_timeout_sec=args.yaw_timeout)
         if args.diagnostic_snapshots:
@@ -145,10 +157,15 @@ def main() -> int:
         if not args.save_artifacts and list((output / "artifacts").rglob("*")):
             raise RuntimeError("Memory-only capture created backend artifacts")
         for item in sequence:
+            before_action = executor._multirotor_snapshot(adapter._client)
             started = time.monotonic()
             rpc_before = adapter.performance.rpc_count_total
             result = action(item["action"], item["args"])
             window = {"action": item["action"], "args": item["args"], "result": result.to_dict()}
+            after_action = executor._multirotor_snapshot(adapter._client)
+            window["diagnostic_before"] = before_action
+            window["diagnostic_after"] = after_action
+            window["collision_observation"] = collision_change(before_action, after_action)
             report["windows"].append(window)
             if result.ok:
                 window["stabilization"] = stabilizer.wait_after_step(
@@ -182,6 +199,18 @@ def main() -> int:
         print(path)
     failed_action = any(not row["ok"] for row in report["actions"])
     return 1 if failed_action or report.get("error") or not report.get("cleanup", {}).get("ok") else 0
+
+
+def collision_change(before: dict, after: dict) -> dict:
+    """Separate a new contact timestamp from a retained name; not a collision gate."""
+    first, last = before.get("collision", {}), after.get("collision", {})
+    start, end = first.get("time_stamp"), last.get("time_stamp")
+    return {"reported_contact": last.get("has_collided"),
+            "object_name": last.get("object_name"),
+            "before_timestamp": start, "after_timestamp": end,
+            "new_contact_timestamp": isinstance(start, (int, float)) and
+                isinstance(end, (int, float)) and end > start,
+            "interpretation": "A retained object name alone is not a new contact or proof of blockage."}
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 def load_smoke_module():
@@ -53,7 +53,7 @@ def test_multimodal_smoke_config_uses_existing_key_with_qwen_override(tmp_path, 
 def test_multimodal_smoke_payload_uses_encoded_image_without_leaking_secret_or_duplicate_data(tmp_path):
     smoke = load_smoke_module()
     context = smoke.build_probe_context(tmp_path)
-    image_data = context["fragments"][0]["model_inputs"][0]["data"]
+    assert "data:image" not in json.dumps(context)
     config = ModelConfig(
         model_name="qwen3-vl-plus",
         api_key="secret-key",
@@ -65,6 +65,8 @@ def test_multimodal_smoke_payload_uses_encoded_image_without_leaking_secret_or_d
 
     user_content = payload["messages"][1]["content"]
     assert isinstance(user_content, list)
+    image_data = user_content[1]["image_url"]["url"]
+    assert image_data.startswith("data:image/png;base64,")
     assert user_content[1] == {"type": "image_url", "image_url": {"url": image_data}}
     assert image_data not in user_content[0]["text"]
     assert "secret-key" not in json.dumps(redacted)

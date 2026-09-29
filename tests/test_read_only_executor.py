@@ -176,7 +176,7 @@ def test_fatal_exit_cancels_unscheduled_and_waits_for_started_work():
 
 
 def test_runtime_results_and_observations_remain_ordered_and_isolated(tmp_path):
-    from tests.test_unified_tool_loop import harness, call
+    from tests.support.runtime import call, execute_read_only, harness
     from src.tools.schemas import ToolSpec, ToolRuntimePolicy
     runtime, state, scene, _ = harness(tmp_path, [])
     runtime.read_only_execution_config = ReadOnlyExecutionConfig(4)
@@ -199,6 +199,6 @@ def test_runtime_results_and_observations_remain_ordered_and_isolated(tmp_path):
     runtime.tools.call = dispatch
     state.latest_observation["nested"] = {"changed": None}
     calls = [call("a", "test.read", id="a"), call("b", "test.read", id="b")]
-    results = runtime._execute_native_read_calls(scene, "uav", state, "read", calls)
+    results = execute_read_only(runtime, state, scene, calls)
     assert [r["tool_call_id"] for r in results] == written == ["a", "b"]
     assert state.latest_observation["nested"] == {"changed": None}

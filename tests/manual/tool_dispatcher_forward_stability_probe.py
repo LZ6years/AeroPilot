@@ -38,7 +38,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.env_client.simulator_client import SimulatorEnvClient
-from src.runtime.configs.action_config import load_uav_action_config
+from src.uav.config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
 from src.runtime.configs.stabilization_config import load_uav_stabilization_config
 from src.runtime.control import UavStabilizer
@@ -46,6 +46,7 @@ from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
+from src.tools.registry import default_registry
 from src.uav import pose_from_observation, pose_measurements, velocity_norm_mps, yaw_deg
 from src.agent.planning.schemas import PlannedStep
 
@@ -112,7 +113,7 @@ def main() -> None:
         save_artifacts=args.save_artifacts,
     )
     client = SimulatorEnvClient(server)
-    tools = ToolDispatcher(client)
+    tools = ToolDispatcher(client, default_registry())
     stabilizer = UavStabilizer(tools, recorder, stabilization_config)
     scene = client.start_scene(args.map_id)
     base_cases = select_cases(args)

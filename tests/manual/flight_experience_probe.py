@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from plugins.research.flight_experience import ExperimentSettings, read_run, run_experiment
 from plugins.research.flight_experience.experiment import prepare_output, write_json
 from src.llm import DefaultModelClient
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import load_model_config
 
 
 def main() -> int:
@@ -31,8 +31,11 @@ def main() -> int:
     parser.add_argument("--reflection-model")
     parser.add_argument("--review-model")
     parser.add_argument("--max-images", type=int, default=8)
-    parser.add_argument("--max-candidates", type=int, default=6)
-    parser.add_argument("--observations", nargs="+", help="Explicit original observation IDs for both independent readers; skips model frame selection")
+    parser.add_argument("--max-candidates", type=int, default=3)
+    parser.add_argument('--timeout',type=float,default=180)
+    parser.add_argument('--checkpoints',type=Path)
+    parser.add_argument('--database',type=Path)
+    parser.add_argument("--observations", nargs="+", help="Explicit initial observation IDs; reviewer still independently selects original counterevidence")
     for role in ("reflection", "review"):
         for direction in ("input", "output"):
             parser.add_argument(f"--{role}-{direction}-price", type=float, help="USD per million tokens; omit if unknown")
@@ -46,9 +49,9 @@ def main() -> int:
         print(f"Indexed {len(bundle.timeline)} events, {len(bundle.images)} original RGBs: {output}")
         return 0
     model = load_model_config(args.env)
-    reflection = replace(model.to_provider_settings(), model_name=args.reflection_model or model.model_name)
-    review = replace(model.to_provider_settings(), model_name=args.review_model or model.model_name)
-    settings = ExperimentSettings(max_images=args.max_images, max_candidates=args.max_candidates,
+    reflection = replace(model.to_provider_settings(), model_name=args.reflection_model or model.model_name,timeout_sec=args.timeout,provider_timeout_retries=1)
+    review = replace(model.to_provider_settings(), model_name=args.review_model or model.model_name,timeout_sec=args.timeout,provider_timeout_retries=1)
+    settings = ExperimentSettings(max_images=args.max_images, max_candidates=args.max_candidates,checkpoint_directory=args.checkpoints,library_path=args.database,
         reflection_model=reflection.model_name, review_model=review.model_name,
         observation_ids=tuple(args.observations) if args.observations is not None else None,
         **{f"{role}_{direction}_price": getattr(args, f"{role}_{direction}_price")

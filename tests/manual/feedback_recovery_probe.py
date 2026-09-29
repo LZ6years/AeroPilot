@@ -15,7 +15,7 @@ sys.path.insert(0, str(ROOT))
 from src.agent.planning.model_action_planner import _parse_assistant_turn, AgentProtocolError
 from src.agent.transcript import AgentToolCall, AssistantTurn, ToolResult, TranscriptEvent
 from src.runtime.control.actions.terminal import environmental_evidence_refs, apply_terminal
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import load_model_config
 from src.tools.registry import default_registry
 from src.llm import DefaultModelClient, ModelRequest
 from src.llm.audit import snapshot_request

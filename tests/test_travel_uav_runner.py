@@ -25,7 +25,7 @@ class CompletePlanner:
         pass
 
     def plan_turn(self, transcript, registry, **kwargs):
-        type(self).last_protocol_context = transcript.latest_context().get("protocol_context")
+        type(self).last_protocol_context = transcript.instruction_envelope().get("protocol_context")
         return AssistantTurn("fixture_turn", "Hold at the observed endpoint", [
             AgentToolCall("fixture_done", "runtime.report_completed", {
                 "reason": "Fixture endpoint observed",

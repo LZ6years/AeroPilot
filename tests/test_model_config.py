@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from src.runtime.configs.model_config import ModelConfig
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import ModelConfig
+from src.agent.config import load_model_config
 
 
 def test_model_config_defaults_to_model_mode_without_env(tmp_path, monkeypatch):
@@ -105,3 +105,15 @@ def test_removed_parser_configuration_fails_explicitly(tmp_path, monkeypatch):
 def test_removed_control_environment_fails_explicitly():
     with pytest.raises(ValueError, match="Legacy runtime control configuration was removed"):
         ModelConfig.from_env({"FLYAGENT_RUNTIME_CONTROL_CONFIG": "obsolete.json"})
+
+
+def test_thinking_mode_is_optional_validated_and_not_transport():
+    import pytest
+    from dataclasses import asdict
+    for mode in ('', 'enabled', 'disabled'):
+        config = ModelConfig.from_env({'FLYAGENT_MODEL_THINKING_MODE': mode})
+        assert config.thinking_mode == mode
+        assert config.redacted_summary()['thinking_mode'] == mode
+        assert 'thinking_mode' not in asdict(config.to_provider_settings())
+    with pytest.raises(ValueError, match='thinking_mode'):
+        ModelConfig(thinking_mode='automatic')

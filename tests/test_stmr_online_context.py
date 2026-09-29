@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import math
 from pathlib import Path
@@ -16,8 +15,9 @@ from plugins.research.stmr_map.online import StmrOnlineMapBuilder, StmrOnlineMap
 from plugins.research.stmr_map.perception import StmrPerceptionSession
 from plugins.research.stmr_map.perception.grounding_dino_backend import DetectionResult
 from plugins.research.stmr_map.perception.sam_backend import SamMaskResult
-from src.agent.planning.model_inputs import build_model_user_content
-from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
+from src.agent.context.request_assembler import RequestAssembler
+from src.memory.context.contracts import MemorySourceBundle, TaskContextInput
+from src.memory.context.media_refs import image_media_ref
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MapMemoryStore, MemoryRecordReader
 
@@ -231,20 +231,30 @@ def test_map_context_shadow_is_baseline_and_planner_adds_one_image(tmp_path):
         json_path=None,
     )
     fake = _FakeOnlineBuilder(result)
-    sources = MemorySourceBundle(FlightMemory("run", "map", "scene", "uav"), MapMemoryStore())
+    sources = MemorySourceBundle(
+        FlightMemory(
+            "run",
+            "map",
+            "scene",
+            "uav",
+            memory_reader=MemoryRecordReader(tmp_path),
+        ),
+        MapMemoryStore(),
+    )
 
     shadow = PluginContextModule(mode="shadow", online_builder=fake).build(sources, _stage_context())
     planner = PluginContextModule(mode="planner", online_builder=fake).build(sources, _stage_context())
 
-    assert shadow.model_inputs == []
-    assert "stmr" not in shadow.content
-    assert len(planner.model_inputs) == 1
-    assert planner.model_inputs[0]["usage"] == STMR_MAP_USAGE
-    assert "START/ENTRY to NOW" in planner.model_inputs[0]["usage"]
-    assert "image top is current forward" in planner.model_inputs[0]["usage"]
-    assert planner.content["stmr"]["representation"] == "semantic_history_not_traversability"
-    assert planner.content["stmr"]["trajectory_summary"]["pose_count"] == 1
-    assert "trajectory_trace" not in planner.content["stmr"]
+    assert shadow.fragment.model_inputs == ()
+    assert "stmr" not in shadow.fragment.model_content
+    assert len(planner.fragment.model_inputs) == 1
+    ref = planner.fragment.model_inputs[0]["media_ref"]
+    assert ref["usage"] == STMR_MAP_USAGE
+    assert "START/ENTRY to NOW" in ref["usage"]
+    assert "image top is current forward" in ref["usage"]
+    assert planner.fragment.model_content["stmr"]["representation"] == "semantic_history_not_traversability"
+    assert planner.fragment.model_content["stmr"]["trajectory_summary"]["pose_count"] == 1
+    assert "trajectory_trace" not in planner.fragment.model_content["stmr"]
 
 
 def test_map_context_failure_falls_back_without_model_input():
@@ -259,17 +269,23 @@ def test_map_context_failure_falls_back_without_model_input():
         _stage_context(),
     )
 
-    assert planner.model_inputs == []
-    assert planner.risks[-1]["type"] == "stmr_map_unavailable"
-    assert shadow.model_inputs == []
-    assert shadow.risks == []
+    assert planner.fragment.model_inputs == ()
+    assert "stmr_map_failed:RuntimeError" in planner.audit.warnings
+    assert shadow.fragment.model_inputs == ()
+    assert shadow.audit.warnings == ()
 
 
 def test_stmr_planner_summary_stays_bounded_as_history_grows(tmp_path):
     png = tmp_path / "stmr.png"
     Image.new("RGB", (4, 4), (20, 40, 60)).save(png)
     sources = MemorySourceBundle(
-        FlightMemory("run", "map", "scene", "uav"),
+        FlightMemory(
+            "run",
+            "map",
+            "scene",
+            "uav",
+            memory_reader=MemoryRecordReader(tmp_path),
+        ),
         MapMemoryStore(),
     )
 
@@ -312,61 +328,60 @@ def test_stmr_planner_summary_stays_bounded_as_history_grows(tmp_path):
 
     short = fragment_for(1)
     long = fragment_for(1000)
-    short_text = json.dumps(short.content, sort_keys=True)
-    long_text = json.dumps(long.content, sort_keys=True)
+    short_text = json.dumps(short.fragment.model_content, sort_keys=True)
+    long_text = json.dumps(long.fragment.model_content, sort_keys=True)
 
-    assert len(long.model_inputs) == len(short.model_inputs) == 1
+    assert len(long.fragment.model_inputs) == len(short.fragment.model_inputs) == 1
     assert "trajectory_trace" not in long_text
     assert "frame_history" not in long_text
     assert len(long_text) - len(short_text) < 32
 
 
 def test_stmr_media_follows_rgb_and_precedes_context_json(tmp_path):
-    rgb_data = _tiny_png_data_url(tmp_path / "rgb.png", (10, 20, 30))
-    map_data = _tiny_png_data_url(tmp_path / "map.png", (30, 20, 10))
-    context = {
-        "active_instruction": "follow the road",
+    rgb_path = _tiny_png(tmp_path / "rgb.png", (10, 20, 30))
+    map_path = _tiny_png(tmp_path / "map.png", (30, 20, 10))
+    rgb_ref = image_media_ref(
+        rgb_path, observation_id="obs", frame_id="rgb", role="current_observation",
+        usage="NOW | CURRENT OBSERVATION.",
+    )
+    map_ref = image_media_ref(
+        map_path, observation_id="obs", frame_id="map", role="stmr_semantic_map",
+        usage=STMR_MAP_USAGE,
+    )
+    checkpoint = {
+        "schema_version": "state_checkpoint_v2",
+        "checkpoint_id": "checkpoint_0001",
+        "reason": "instruction_start",
+        "observation_id": "obs",
+        "task_plan": None,
+        "loaded_knowledge": [],
         "fragments": [
             {
                 "name": "image",
-                "content": {"selected_frames": [{"role": "current_observation"}]},
-                "model_inputs": [
-                    {
-                        "type": "image",
-                        "role": "current_observation",
-                        "usage": "NOW | CURRENT OBSERVATION.",
-                        "encoding": "data_url",
-                        "data": rgb_data,
-                    }
-                ],
+                "model_content": {},
+                "model_inputs": [rgb_ref.to_model_input()],
             },
             {
                 "name": "map",
-                "content": {"stmr": {"representation": "semantic_history_not_traversability"}},
-                "model_inputs": [
-                    {
-                        "type": "image",
-                        "role": "stmr_semantic_map",
-                        "usage": STMR_MAP_USAGE,
-                        "encoding": "data_url",
-                        "data": map_data,
-                    }
-                ],
+                "model_content": {"stmr": {"representation": "semantic_history_not_traversability"}},
+                "model_inputs": [map_ref.to_model_input()],
             },
         ],
     }
 
-    content = build_model_user_content(context)
+    content = RequestAssembler().checkpoint_content(
+        checkpoint,
+        model_inputs=[rgb_ref.to_model_input(), map_ref.to_model_input()],
+        timeline_role="CURRENT",
+    )
 
     assert isinstance(content, list)
     assert [part["type"] for part in content] == ["text", "image_url", "text", "image_url", "text"]
-    assert content[0]["text"] == (
-        "Image role=current_observation. NOW | CURRENT OBSERVATION."
-    )
-    assert content[2]["text"] == f"Image role=stmr_semantic_map. {STMR_MAP_USAGE}"
-    assert content[1]["image_url"]["url"] == rgb_data
-    assert content[3]["image_url"]["url"] == map_data
-    assert map_data not in content[-1]["text"]
+    assert "NOW | CURRENT OBSERVATION." in content[0]["text"]
+    assert STMR_MAP_USAGE in content[2]["text"]
+    assert content[1]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert content[3]["image_url"]["url"].startswith("data:image/png;base64,")
+    assert "data:image" not in content[-1]["text"]
     assert json.loads(content[-1]["text"])["fragments"][-1]["name"] == "map"
 
 
@@ -480,6 +495,6 @@ def _stage_context() -> TaskContextInput:
     )
 
 
-def _tiny_png_data_url(path: Path, color: tuple[int, int, int]) -> str:
+def _tiny_png(path: Path, color: tuple[int, int, int]) -> Path:
     Image.new("RGB", (2, 2), color).save(path)
-    return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
+    return path

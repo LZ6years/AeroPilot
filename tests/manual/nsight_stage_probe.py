@@ -70,12 +70,12 @@ def traced_child(directory, sample):
         with torch.cuda.nvtx.range(name), original_span(self, name):
             yield
 
-    def execute(executor, jobs):
+    def execute(executor, jobs, **kwargs):
         nonlocal count, captured, previous_sec
         count += 1
         if not should_capture(count, target, previous_sec, captured is not None, manifest.get('nsight_capture_on_slow', False)):
             began = time.perf_counter()
-            result = original_execute(executor, jobs)
+            result = original_execute(executor, jobs, **kwargs)
             previous_sec = time.perf_counter() - began
             return result
         captured = count
@@ -85,7 +85,7 @@ def traced_child(directory, sample):
         torch.cuda.profiler.start()
         try:
             with patch.object(TaskProfile, 'span', nvtx_span):
-                return original_execute(executor, jobs)
+                return original_execute(executor, jobs, **kwargs)
         finally:
             torch.cuda.synchronize()
             torch.cuda.profiler.stop()

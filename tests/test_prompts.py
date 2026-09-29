@@ -150,19 +150,20 @@ def test_runtime_boundaries_document_the_single_loop():
 
 
 def test_descriptions_keep_capability_boundaries_and_explicit_planning_preference():
+    from src.plugins import PluginRegistry
     from src.tools.registry import default_registry
-    registry = default_registry()
+    registry = default_registry(PluginRegistry.from_config())
     plan = registry.get("runtime.update_plan").description
     assert "before the first physical action" in plan
     assert "simple single-step task can act directly" in plan
     assert "stable step IDs" in plan and "revision" in plan
     assert "methods or explanations" in registry.get("knowledge.load").description
-    assert "empty detection does not prove absence" in registry.get("skill.visual_grounding.locate").description
+    assert "empty candidate list leaves presence uncertain" in registry.get("skill.visual_grounding.locate").description
     assert "Plan status alone is not completion evidence" in registry.get("runtime.report_completed").description
     assert "cannot continue safely or meaningfully" in registry.get("runtime.report_blocked").description
     ground = registry.get("skill.visual_grounding.locate").to_provider_tool()["function"]
     assert "inconsistent_depth_surfaces" in ground["description"]
-    assert "failed call, not a negative detection" in ground["description"]
-    assert "not_requested" in ground["description"]
+    assert "failed call, not negative scene evidence" in ground["description"]
+    assert "metric_depth_unavailable" in ground["description"]
     assert "directly observed appearance" in ground["parameters"]["properties"]["query"]["description"]
     assert "x-flyagent-completion-evidence" not in str(ground)

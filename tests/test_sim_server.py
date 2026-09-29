@@ -9,7 +9,7 @@ import pytest
 import src.sim_server.server as server_module
 from src.env_client.schemas import MapPackage, PortPolicy, SceneInstance
 from src.adapters.airsim.uav import AirSimUavAdapter
-from src.runtime.configs.action_config import UavActionConfig
+from src.uav.config import UavActionConfig
 from src.sim_server.backends.airsim_backend import AirSimBackend
 from src.sim_server.backends.registry import BackendContext, BackendRegistry
 from src.sim_server.process_manager import ProcessManager, windows_path_to_wsl

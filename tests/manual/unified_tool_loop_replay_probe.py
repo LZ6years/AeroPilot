@@ -21,10 +21,11 @@ from src.plugins import PluginRegistry
 from src.plugins.contracts.skill import Skill
 from src.plugins.skills.catalog import SkillCatalog
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
-from src.runtime.configs.action_config import UavActionConfig
+from src.uav.config import UavActionConfig
 from src.runtime.logging.async_run_logger import AsyncRunLogger
-from src.runtime.runners.task_runtime import TaskRuntime
-from tests.test_unified_tool_loop import ManagedFakeBackend, ScriptedPlanner, call, move, done
+from src.runtime.factory import RuntimeFactory
+from tests.test_unified_tool_loop import ManagedFakeBackend, ScriptedPlanner
+from tests.support.runtime import call, done, move
 from tests.manual.native_tool_loop_real_audit import _audit_transcript, _audit_physical_trace
 from evaluation.benchmarks.uav_flow.metric_suite import _backend_action_tracking
 
@@ -50,15 +51,20 @@ def run_replay(output: Path, rgb: Path | None = None) -> dict:
             {"id": "move", "description": "Exercise one ordered motion batch", "status": "in_progress"}])],
         [move("move1"), move("move2")], [done()],
     ])
-    runtime = TaskRuntime(backend, recorder, planner=planner,
-        plugin_registry=PluginRegistry(skill_catalog=SkillCatalog([
+    plugins = PluginRegistry(skill_catalog=SkillCatalog([
             Skill(plugin_id="knowledge.offline_fixture", name="offline_guide",
                   description="Scripted offline demonstration", summary="In-memory fixture",
                   skill_dir=output, skill_path=output / "IN_MEMORY_FIXTURE",
                   body="This fixture exercises explicit loading; it does not establish navigation success.")
-        ])),
+        ]))
+    runtime = RuntimeFactory(
+        output / "plugins.json", plugin_registry=plugins
+    ).create_task_runtime(
+        backend,
+        recorder,
+        planner=planner,
         stabilization_config=UavStabilizationConfig(enabled=False),
-        enable_action_planner_debug=True)
+    )
     try:
         state = runtime.run_task("map", "Offline scripted two-move replay",
                                  protocol_context="Offline fixture; not a navigation experiment.")
@@ -79,7 +85,7 @@ def run_replay(output: Path, rgb: Path | None = None) -> dict:
     # Dataclass asdict retains tuples; durable JSON correctly contains arrays.
     case_data = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
     paths = BenchmarkReviewRenderer().write_case(output, BenchmarkCaseReview(
-        case_id="replay", benchmark_name="Offline scripted replay", protocol_variant="unified_tool_loop_v1",
+        case_id="replay", benchmark_name="Offline scripted replay", protocol_variant="unified_tool_loop_v2",
         instruction=state.user_instruction, outcome={"status": "ok", **state.to_dict()},
         metrics={"backend_action_tracking": tracking},
         audit=audit, frame_assets=assets,
@@ -88,7 +94,7 @@ def run_replay(output: Path, rgb: Path | None = None) -> dict:
     violations = []
     BenchmarkReviewRenderer().write_summary(output, BenchmarkSummaryReview(
         benchmark_name="Scripted offline replay — no Provider or navigation assessment",
-        protocol_variant="unified_tool_loop_v1", metrics={},
+        protocol_variant="unified_tool_loop_v2", metrics={},
         cases=({"case_id": "replay", "status": "scripted"},),
     ))
     coverage = _audit_transcript(list(audit.agent_transcript), audit_payload, case_data, case_dir,

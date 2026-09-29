@@ -7,6 +7,12 @@ import json
 from pathlib import Path
 import sys
 
+from src.memory.context.contracts import (
+    INSTRUCTION_ENVELOPE_SCHEMA,
+    STATE_CHECKPOINT_SCHEMA,
+    TRANSCRIPT_SCHEMA,
+)
+
 
 SCRIPT = Path(__file__).parent / "manual" / "native_tool_loop_real_audit.py"
 SPEC = importlib.util.spec_from_file_location("native_tool_loop_real_audit", SCRIPT)
@@ -17,6 +23,11 @@ SPEC.loader.exec_module(MODULE)
 
 
 def _write_json(path: Path, value) -> None:
+    if isinstance(value, dict) and isinstance(value.get("agent_transcript"), list):
+        for item in value["agent_transcript"]:
+            if isinstance(item, dict):
+                item.setdefault("schema_version", TRANSCRIPT_SCHEMA)
+                item.setdefault("instruction_id", "inst_1")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False), encoding="utf-8")
 
@@ -53,7 +64,7 @@ def test_advisory_audit_checks_applied_revision_and_rejected_updates():
             {"tool_call_id": "p", "tool_name": "runtime.update_plan", "args": args}]}},
         {"kind": "tool_result", "payload": {"tool_call_id": "p", "status": "ok",
             "data": {"previous_revision": 0, "plan": plan}}},
-        {"kind": "state_checkpoint", "payload": {"context": {"task_plan": plan}}},
+        {"kind": "state_checkpoint", "payload": {"task_plan": plan}},
     ]
     violations = []
     MODULE._audit_advisory_state(records, violations, "case")
@@ -215,6 +226,19 @@ def _valid_eval(tmp_path: Path) -> Path:
     )
     transcript = [
         {
+            "id": "turn_0",
+            "kind": "instruction_envelope",
+            "payload": {
+                "schema_version": INSTRUCTION_ENVELOPE_SCHEMA,
+                "instruction_id": "inst_1",
+                "protocol_context": "",
+                "identity": {},
+                "user_preferences": {},
+                "knowledge_catalog": [],
+                "static_module_guidance": [],
+            },
+        },
+        {
             "id": "turn_1",
             "kind": "user_instruction",
             "payload": {"instruction": "turn and move"},
@@ -223,8 +247,14 @@ def _valid_eval(tmp_path: Path) -> Path:
             "id": "turn_2",
             "kind": "state_checkpoint",
             "payload": {
+                "schema_version": STATE_CHECKPOINT_SCHEMA,
+                "checkpoint_id": "checkpoint_0001",
+                "reason": "instruction_start",
                 "observation_id": "obs_1",
-                "context": {"task_plan": None},
+                "task_plan": None,
+                "loaded_knowledge": [],
+                "fragments": [],
+                "fingerprint": "fixture-1",
             },
         },
         {
@@ -276,8 +306,14 @@ def _valid_eval(tmp_path: Path) -> Path:
             "id": "turn_7",
             "kind": "state_checkpoint",
             "payload": {
+                "schema_version": STATE_CHECKPOINT_SCHEMA,
+                "checkpoint_id": "checkpoint_0002",
+                "reason": "physical_window_completed",
                 "observation_id": "obs_2",
-                "context": {"task_plan": None},
+                "task_plan": None,
+                "loaded_knowledge": [],
+                "fragments": [],
+                "fingerprint": "fixture-2",
             },
         },
         {
@@ -309,6 +345,9 @@ def _valid_eval(tmp_path: Path) -> Path:
         {"id": "terminal", "kind": "task_terminal", "payload": {
             "completed": True, "stopped": False, "stop_source": "runtime.report_completed"}},
     ]
+    for item in transcript:
+        item["schema_version"] = TRANSCRIPT_SCHEMA
+        item["instruction_id"] = "inst_1"
     _write_json(
         case_dir / "audit.json",
         {
@@ -365,7 +404,7 @@ def test_audit_accepts_detection_only_visual_grounding_and_marks_manual_review(
     root = _valid_eval(tmp_path)
     audit_path = root / "cases" / "case-1" / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    audit["agent_transcript"][2:2] = [
+    audit["agent_transcript"][3:3] = [
         {
             "id": "grounding_turn",
             "kind": "assistant_turn",
@@ -455,7 +494,7 @@ def test_audit_accepts_generic_report_blocked_terminal(tmp_path):
     case_dir = root / "cases" / "case-1"
     audit_path = case_dir / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    audit["agent_transcript"][6:] = [
+    audit["agent_transcript"][7:] = [
         {
             "id": "turn_8",
             "kind": "assistant_turn",
@@ -511,7 +550,7 @@ def test_audit_rejects_report_blocked_with_unknown_evidence_and_physical_call(tm
     root = _valid_eval(tmp_path)
     audit_path = root / "cases" / "case-1" / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    turn = audit["agent_transcript"][2]["payload"]
+    turn = audit["agent_transcript"][3]["payload"]
     turn["tool_calls"].insert(
         1,
         {
@@ -525,7 +564,7 @@ def test_audit_rejects_report_blocked_with_unknown_evidence_and_physical_call(tm
         },
     )
     audit["agent_transcript"].insert(
-        3,
+        4,
         {
             "id": "result_report_bad",
             "kind": "tool_result",
@@ -550,14 +589,14 @@ def test_audit_rejects_duplicate_missing_and_orphan_results(tmp_path):
     audit_path = root / "cases" / "case-1" / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     transcript = audit["agent_transcript"]
-    transcript[2]["payload"]["tool_calls"][1]["tool_call_id"] = "turn_1"
+    transcript[3]["payload"]["tool_calls"][1]["tool_call_id"] = "turn_1"
     transcript[:] = [
         item
         for item in transcript
         if item.get("payload", {}).get("tool_call_id") != "move_1"
     ]
     transcript.insert(
-        4,
+        5,
         {
             "id": "orphan",
             "kind": "tool_result",
@@ -583,7 +622,7 @@ def test_audit_rejects_stale_read_only_observation_and_mixed_turn(tmp_path):
     audit_path = root / "cases" / "case-1" / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     transcript = audit["agent_transcript"]
-    transcript[2]["payload"]["tool_calls"].insert(
+    transcript[3]["payload"]["tool_calls"].insert(
         0,
         {
             "tool_call_id": "detect_1",
@@ -592,7 +631,7 @@ def test_audit_rejects_stale_read_only_observation_and_mixed_turn(tmp_path):
         },
     )
     transcript.insert(
-        3,
+        4,
         {
             "id": "detect_result",
             "kind": "tool_result",
@@ -651,7 +690,7 @@ def test_audit_reports_exhausted_native_tool_loop(tmp_path):
     )
     _write_json(case_dir / "case.json", case)
     audit = json.loads((case_dir / "audit.json").read_text(encoding="utf-8"))
-    audit["agent_transcript"] = audit["agent_transcript"][:2] + [
+    audit["agent_transcript"] = audit["agent_transcript"][:3] + [
         {
             "id": f"feedback_{index}",
             "kind": "protocol_feedback",
@@ -684,8 +723,8 @@ def test_audit_accepts_fallback_intent_and_closed_provider_rejection(tmp_path):
     audit_path = root / "cases" / "case-1" / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     transcript = audit["agent_transcript"]
-    transcript[2]["payload"]["public_intent_source"] = "tool_arguments_fallback"
-    transcript[2:2] = [
+    transcript[3]["payload"]["public_intent_source"] = "tool_arguments_fallback"
+    transcript[3:3] = [
         {
             "id": "provider_rejected",
             "kind": "provider_turn_rejected",
@@ -723,7 +762,7 @@ def test_audit_excludes_closed_runtime_rejection_from_accepted_windows(tmp_path)
     root = _valid_eval(tmp_path)
     audit_path = root / "cases" / "case-1" / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    audit["agent_transcript"][2:2] = [
+    audit["agent_transcript"][3:3] = [
         {
             "id": "assistant_rejected",
             "kind": "assistant_turn",
@@ -781,9 +820,9 @@ def test_audit_rejects_invalid_intent_source_and_missing_rejection_feedback(tmp_
     audit_path = root / "cases" / "case-1" / "audit.json"
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
     transcript = audit["agent_transcript"]
-    transcript[2]["payload"]["public_intent_source"] = "invented_reasoning"
+    transcript[3]["payload"]["public_intent_source"] = "invented_reasoning"
     transcript.insert(
-        2,
+        3,
         {
             "id": "provider_rejected",
             "kind": "provider_turn_rejected",

@@ -10,7 +10,6 @@ are exported. This is a small selection diagnostic, not a navigation benchmark.
 from __future__ import annotations
 
 import argparse
-import base64
 import copy
 from dataclasses import replace
 import hashlib
@@ -25,12 +24,19 @@ sys.path.insert(0, str(ROOT))
 from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.planning.tool_contract_validator import validate_native_turn
 from src.agent.transcript import AgentToolCall, AgentTranscript, AssistantTurn, ToolResult
-from src.memory.context.composer import ContextComposer
+from src.memory.context.contracts import (
+    ContextFragment,
+    InstructionEnvelope,
+    StateCheckpoint,
+    checkpoint_fingerprint,
+)
+from src.memory.context.documents import ContextDocuments
+from src.memory.context.media_refs import image_media_ref
 from src.memory.context.modules.image import CURRENT_IMAGE_USAGE
 from src.memory.stores import MemoryEventWriter
 from src.plugins import PluginRegistry
-from src.runtime.configs.model_config import load_model_config
-from src.runtime.configs.safety_config import load_uav_safety_config
+from src.agent.config import load_model_config
+from src.uav.config import load_uav_safety_config
 from src.tools.registry import default_registry
 
 
@@ -97,10 +103,9 @@ def source_snapshot():
 
 def corpus():
     """Fixed synthetic cases; the recorded fixture is an illustration, not a live view."""
-    fixture = Path("tests/fixtures/visual_description_images/frame_000001.png").read_bytes()
-    image_url = "data:image/png;base64," + base64.b64encode(fixture).decode("ascii")
+    fixture = Path("tests/fixtures/visual_description_images/frame_000001.png")
     return [{"name": name, "instruction": instruction, "expected": expected,
-             "image": image_url if name == "explicit_distance" else None,
+             "image": str(fixture) if name == "explicit_distance" else None,
              "scene": ("Synthetic safety observation: immediate flight area is obstructed in every direction; "
                        "sensors cannot establish any safe movement or evidence-producing recovery."
                        if name == "unsafe_blocked" else
@@ -110,32 +115,89 @@ def corpus():
 
 
 def build_transcript(case, output, plugins):
-    composer = ContextComposer()
     transcript = AgentTranscript(MemoryEventWriter(output))
-    transcript.start_instruction(case["instruction"], "synthetic_instruction")
+    documents = ContextDocuments()
+    catalog = tuple(
+        {"name": skill.name, "description": skill.description}
+        for skill in plugins.skill_catalog.skills if skill.capability is None
+    )
+    transcript.start_instruction(
+        case["instruction"],
+        "synthetic_instruction",
+        InstructionEnvelope(
+            instruction_id="synthetic_instruction",
+            protocol_context="",
+            identity=documents.identity,
+            user_preferences=documents.user_preferences,
+            knowledge_catalog=catalog,
+            static_module_guidance=(),
+        ),
+    )
     observation = {"observation_id": "synthetic_obs_1", "description": case["scene"]}
     if case["name"] == "supported_completion":
-        transcript.append_state({"evaluation_note": "Synthetic pre-action state.", "fragments": []}, "synthetic_obs_0")
+        _append_synthetic_checkpoint(
+            transcript, "synthetic_obs_0", "Synthetic pre-action state.", index=1
+        )
         transcript.append_assistant(AssistantTurn("synthetic_prior_turn", "Turn right by 15 degrees.",
                                    [AgentToolCall("synthetic_prior_call", "uav.turn_relative", {"yaw_deg": 15})]))
         transcript.append_tool_result(ToolResult("synthetic_prior_call", "uav.turn_relative", "ok",
             "Synthetic recorded result: requested 15-degree right turn executed; measured yaw change +15 degrees.",
             data={"observation_id": "synthetic_obs_1", "yaw_delta_deg": 15}))
         observation["description"] = "Synthetic post-action observation: measured right turn is 15 degrees; stable."
-    fragments = [{"name": "skills", "content": {"knowledge_catalog": [
-        {"name": skill.name, "description": skill.description}
-        for skill in plugins.skill_catalog.skills if skill.capability is None], "loaded_knowledge": []}}]
+    fragments = [
+        ContextFragment(
+            "evaluation",
+            {
+                "observation": observation,
+                "evaluation_note": (
+                    "Synthetic offline evaluation; attached media, if any, is a "
+                    "recorded illustration, not a live observation."
+                ),
+            },
+        )
+    ]
     if case["image"]:
-        fragments.append({"name": "image", "model_inputs": [{"type": "image", "role": "current_observation",
-            "encoding": "data_url", "data": case["image"], "observation_id": "synthetic_obs_1",
-            "frame_id": "synthetic_frame_1", "scene_width": 224, "scene_height": 224,
-            "usage": CURRENT_IMAGE_USAGE}]})
-    transcript.append_state({"active_instruction": case["instruction"], "task_plan": None,
-        "observation": observation, "fragments": fragments, "rules": composer.rules,
-        "user_preferences": composer.user_preferences,
-        "evaluation_note": "Synthetic offline evaluation; attached media, if any, is a recorded illustration, not a live observation."},
-        observation["observation_id"])
+        ref = image_media_ref(
+            case["image"],
+            observation_id="synthetic_obs_1",
+            frame_id="synthetic_frame_1",
+            role="current_observation",
+            usage=CURRENT_IMAGE_USAGE,
+            scene_width=224,
+            scene_height=224,
+        )
+        fragments.append(ContextFragment("image", {}, (ref.to_model_input(),)))
+    index = 2 if case["name"] == "supported_completion" else 1
+    fragments_tuple = tuple(fragments)
+    transcript.append_state(
+        StateCheckpoint(
+            checkpoint_id=f"checkpoint_{index:04d}",
+            reason="instruction_start" if index == 1 else "physical_window_completed",
+            observation_id=observation["observation_id"],
+            task_plan=None,
+            loaded_knowledge=(),
+            fragments=fragments_tuple,
+            fingerprint=checkpoint_fingerprint(
+                observation["observation_id"], None, (), fragments_tuple
+            ),
+        )
+    )
     return transcript, observation
+
+
+def _append_synthetic_checkpoint(transcript, observation_id, note, *, index):
+    fragment = ContextFragment("evaluation", {"evaluation_note": note})
+    transcript.append_state(
+        StateCheckpoint(
+            checkpoint_id=f"checkpoint_{index:04d}",
+            reason="instruction_start",
+            observation_id=observation_id,
+            task_plan=None,
+            loaded_knowledge=(),
+            fragments=(fragment,),
+            fingerprint=checkpoint_fingerprint(observation_id, None, (), (fragment,)),
+        )
+    )
 
 
 def selection_metrics(case, turn):
@@ -144,7 +206,7 @@ def selection_metrics(case, turn):
     expected = case["expected"]
     arguments_match = True
     if case["name"] == "explicit_distance":
-        arguments_match = any(c.tool_name == expected and c.args.get("include_distance") is True
+        arguments_match = any(c.tool_name == expected and "include_distance" not in c.args
                               and c.args.get("observation_id") == "synthetic_obs_1" for c in turn.tool_calls)
     elif case["name"] == "explicit_knowledge":
         arguments_match = any(c.tool_name == expected and c.args.get("name") == "orbit_and_surround"

@@ -72,7 +72,9 @@ def test_context_command_prints_debug_artifact_paths(tmp_path, capsys):
     out = capsys.readouterr().out
     payload = json.loads(out)
     assert should_continue is True
-    assert payload["latest_context"] == str(tmp_path / "contexts" / "latest_context.json")
+    assert payload["latest_checkpoint"] == str(
+        tmp_path / "contexts" / "latest_checkpoint.json"
+    )
     assert payload["latest_state"] == str(tmp_path / "state" / "latest_state.json")
     assert payload["flight_memory"] == str(tmp_path / "state" / "flight_memory.json")
     assert payload["semantic_plan"] == str(tmp_path / "state" / "semantic_plan.json")

@@ -96,8 +96,7 @@ def test_real_adapter_path_saves_five_rpc_without_losing_observation(monkeypatch
     from src.adapters.airsim.uav import AirSimUavAdapter
     from src.env_client.simulator_client import SimulatorEnvClient
     from src.tools.dispatcher import ToolDispatcher
-    from src.plugins import PluginRegistry
-    from src.plugins.skills.catalog import SkillCatalog
+    from src.tools.registry import default_registry
     from tests.airsim_fakes import FakeAirSim, FakeAirSimClient, FakeImageResponse
     counts = []
     for reuse in (False, True):
@@ -113,7 +112,7 @@ def test_real_adapter_path_saves_five_rpc_without_losing_observation(monkeypatch
             get_observation=lambda sid, agent, modalities, capture_sources: backend.get_observation(scene, agent, modalities, capture_sources),
             consume_post_action_state=backend.consume_post_action_state)
         client = SimulatorEnvClient(service)
-        tools = ToolDispatcher(client, plugin_registry=PluginRegistry(skill_catalog=SkillCatalog([])))
+        tools = ToolDispatcher(client, default_registry())
         result = client.execute_action("scene", "uav", "move_body", {"vx": 1, "vy": 0, "vz": 0, "duration": 1})
         stable = UavStabilizer(tools, config=UavStabilizationConfig(reuse_verified_post_action_state=reuse)).wait_after_step(
             "scene", "uav", "diagnostic", PlannedStep.tool_step("uav.move_body", {}, "test"),

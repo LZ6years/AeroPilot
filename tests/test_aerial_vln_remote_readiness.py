@@ -7,9 +7,9 @@ import json
 from pathlib import Path
 
 from evaluation.benchmarks.aerial_vln.config import AerialVlnEvalConfig
-from tests.manual.aerial_vln_remote_readiness import (
-    _REMOTE_SNAPSHOT,
-    inspect_remote_readiness,
+from tests.support.environment import (
+    AERIAL_REMOTE_SNAPSHOT as _REMOTE_SNAPSHOT,
+    inspect_aerial_remote_readiness as inspect_remote_readiness,
 )
 
 

@@ -2,7 +2,7 @@
 
 The probe uses the production ``ModelActionPlanner``, canonical ``ToolRegistry``,
 and ``AgentTranscript`` provider projection. It normally performs three paid
-model calls: detection-only grounding, distance-enabled grounding, then one
+model calls: unavailable measurement, valid measurement, then one
 a direct UAV turn after synthetic ToolResults. A genuinely
 invalid provider response may add a bounded repair round. No UAV command is
 executed.
@@ -20,7 +20,6 @@ inspected after the call.
 from __future__ import annotations
 
 import argparse
-import base64
 import copy
 import json
 from datetime import datetime, timezone
@@ -40,9 +39,16 @@ from src.agent.planning.model_action_planner import (
     ModelActionPlanner,
 )
 from src.agent.transcript import AgentTranscript, ToolResult
+from src.memory.context.contracts import (
+    ContextFragment,
+    InstructionEnvelope,
+    StateCheckpoint,
+    checkpoint_fingerprint,
+)
+from src.memory.context.media_refs import image_media_ref
 from src.memory.stores import MemoryEventWriter
 from src.plugins import PluginRegistry
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import load_model_config
 from src.tools.registry import default_registry
 
 
@@ -81,15 +87,28 @@ def main() -> None:
         output_dir / "artifacts" / "tool_evidence" / "distance_candidates.png",
         color=(30, 180, 255),
     )
-    transcript.start_instruction(
-        ("parallel_query_probe: request independent person localization and building measurement, then one small right turn."
-         if args.parallel_queries else "Locate the visible person, measure it only when needed, then request one small right turn."),
-        "provider_protocol_probe",
+    instruction = (
+        "parallel_query_probe: request independent person localization and building measurement, then one small right turn."
+        if args.parallel_queries
+        else "Locate the visible person, measure it only when needed, then request one small right turn."
     )
-    for observation_id in ("obs_probe_start", "obs_probe_before", "obs_probe_0001"):
+    transcript.start_instruction(
+        instruction,
+        "provider_protocol_probe",
+        InstructionEnvelope(
+            instruction_id="provider_protocol_probe",
+            protocol_context="",
+            identity={},
+            user_preferences={},
+            knowledge_catalog=(),
+            static_module_guidance=(),
+        ),
+    )
+    for index, observation_id in enumerate(
+        ("obs_probe_start", "obs_probe_before", "obs_probe_0001"), start=1
+    ):
         transcript.append_state(
-            _probe_context(image_paths[observation_id], observation_id),
-            observation_id,
+            _probe_checkpoint(image_paths[observation_id], observation_id, index)
         )
 
     planner = ModelActionPlanner(config, prompt_path=str(PROBE_PROMPT))
@@ -100,9 +119,9 @@ def main() -> None:
         planner,
         transcript,
         registry,
-        stage="detection_only_grounding",
+        stage="unavailable_measurement",
     )
-    _assert_grounding_turn(first_turn, include_distance=False)
+    _assert_grounding_turn(first_turn)
     transcript.append_assistant(first_turn)
     detection_call = first_turn.tool_calls[0]
     transcript.append_tool_result(
@@ -110,11 +129,11 @@ def main() -> None:
             tool_call_id=detection_call.tool_call_id,
             tool_name=detection_call.tool_name,
             status="ok",
-            message="Located one candidate without requesting metric depth.",
+            message="Synthetic candidate has unavailable metric depth.",
             data={
                 "observation_id": "obs_probe_0001",
                 "query": "the visible person",
-                "include_distance": False,
+                "include_distance": True,
                 "candidates": [
                     {
                         "candidate_id": "candidate_01",
@@ -122,7 +141,7 @@ def main() -> None:
                         "confidence": 0.91,
                         "box_normalized": [0.4, 0.1, 0.6, 0.8],
                         "distance_m": None,
-                        "distance_status": "not_requested",
+                        "distance_status": "metric_depth_unavailable",
                     }
                 ],
                 "audit_details": {"grounding_backend": "probe_stub"},
@@ -131,15 +150,13 @@ def main() -> None:
             requested_args=dict(detection_call.args),
             executed_args=dict(detection_call.args),
             model_inputs=[
-                {
-                    "type": "image",
-                    "role": "visual_grounding_candidates",
-                    "observation_id": "obs_probe_0001",
-                    "path": str(detection_evidence_path),
-                    "artifact_ref": str(detection_evidence_path),
-                    "mime_type": "image/png",
-                    "usage": "Confirm candidate_01 against the instruction; confidence alone is not proof.",
-                }
+                image_media_ref(
+                    detection_evidence_path,
+                    observation_id="obs_probe_0001",
+                    frame_id="detection_candidates",
+                    role="visual_grounding_candidates",
+                    usage="Confirm candidate_01 against the instruction; confidence alone is not proof.",
+                ).to_model_input()
             ],
         )
     )
@@ -150,7 +167,7 @@ def main() -> None:
         registry,
         stage="distance_enabled_grounding",
     )
-    _assert_grounding_turn(second_turn, include_distance=True)
+    _assert_grounding_turn(second_turn)
     transcript.append_assistant(second_turn)
     distance_call = second_turn.tool_calls[0]
     transcript.append_tool_result(
@@ -179,15 +196,13 @@ def main() -> None:
             requested_args=dict(distance_call.args),
             executed_args=dict(distance_call.args),
             model_inputs=[
-                {
-                    "type": "image",
-                    "role": "visual_grounding_candidates",
-                    "observation_id": "obs_probe_0001",
-                    "path": str(distance_evidence_path),
-                    "artifact_ref": str(distance_evidence_path),
-                    "mime_type": "image/png",
-                    "usage": "Candidate evidence associated with the robust distance result.",
-                }
+                image_media_ref(
+                    distance_evidence_path,
+                    observation_id="obs_probe_0001",
+                    frame_id="distance_candidates",
+                    role="visual_grounding_candidates",
+                    usage="Candidate evidence associated with the robust distance result.",
+                ).to_model_input()
             ],
         )
     )
@@ -274,19 +289,25 @@ def _parallel_query_probe(planner, transcript, registry, output_dir, evidence_pa
     calls = first.tool_calls
     if len(calls) != 2 or any(call.tool_name != "skill.visual_grounding.locate" for call in calls):
         raise RuntimeError("Parallel probe did not produce two independent grounding calls; branch not observed.")
-    if {call.args.get("include_distance") for call in calls} != {False, True}:
-        raise RuntimeError("Parallel probe must cover both localization and measurement.")
+    if any("include_distance" in call.args for call in calls):
+        raise RuntimeError("Parallel probe accepts measurement-only inputs.")
     if any(call.args.get("observation_id") != "obs_probe_0001" for call in calls):
         raise RuntimeError("Parallel probe referenced stale observation.")
     transcript.append_assistant(first)
-    for call in calls:
-        distance = call.args["include_distance"]
+    for i, call in enumerate(calls):
+        distance = i == 1
         transcript.append_tool_result(ToolResult(
             tool_call_id=call.tool_call_id, tool_name=call.tool_name, status="ok",
             message="Synthetic protocol evidence only; no detector or UAV executed.",
-            data={"observation_id": "obs_probe_0001", "query": call.args["query"], "candidates": [{"candidate_id": "candidate_01", "distance_m": 2.9 if distance else None, "distance_status": "ok" if distance else "not_requested"}]},
+            data={"observation_id": "obs_probe_0001", "query": call.args["query"], "candidates": [{"candidate_id": "candidate_01", "distance_m": 2.9 if distance else None, "distance_status": "ok" if distance else "metric_depth_unavailable"}]},
             requested_args=dict(call.args), executed_args=dict(call.args),
-            model_inputs=[{"type": "image", "role": "visual_grounding_candidates", "observation_id": "obs_probe_0001", "path": str(evidence_path), "artifact_ref": str(evidence_path), "mime_type": "image/png", "usage": "Synthetic probe evidence, not detector accuracy validation."}],
+            model_inputs=[image_media_ref(
+                evidence_path,
+                observation_id="obs_probe_0001",
+                frame_id="parallel_candidates",
+                role="visual_grounding_candidates",
+                usage="Synthetic probe evidence, not detector accuracy validation.",
+            ).to_model_input()],
         ))
     second, second_request, second_attempts = _plan_with_protocol_repair(planner, transcript, registry, stage="physical_after_parallel_queries")
     _assert_physical_turn(second, registry)
@@ -327,40 +348,33 @@ def _registry():
     return registry
 
 
-def _probe_context(image_path: Path, observation_id: str) -> dict[str, Any]:
-    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+def _probe_checkpoint(
+    image_path: Path, observation_id: str, index: int
+) -> StateCheckpoint:
     frame_id = f"frame_{observation_id}"
-    selected_frames = [{"role": "current_observation", "observation_id": observation_id, "frame_id": frame_id}]
-    model_inputs = [{
-        "type": "image",
-        "input_id": frame_id,
-        "frame_id": frame_id,
-        "observation_id": observation_id,
-        "role": "current_observation",
-        "usage": "Original RGB preserves scene colors. Use grounding only when the next decision requires it.",
-        "scene_width": 240,
-        "scene_height": 180,
-        "display_width": 240,
-        "display_height": 180,
-        "mime_type": "image/png",
-        "encoding": "data_url",
-        "data": f"data:image/png;base64,{encoded}",
-        "artifact_ref": str(image_path),
-    }]
-    return {
-        "active_instruction": (
-            "Locate the visible person, measure it only when needed, then "
-            "request one small right turn."
+    media = image_media_ref(
+        image_path,
+        observation_id=observation_id,
+        frame_id=frame_id,
+        role="current_observation",
+        usage="Original RGB preserves scene colors. Use grounding only when the next decision requires it.",
+        scene_width=240,
+        scene_height=180,
+    )
+    fragments = (
+        ContextFragment("image", {}, (media.to_model_input(),)),
+    )
+    return StateCheckpoint(
+        checkpoint_id=f"checkpoint_{index:04d}",
+        reason=("instruction_start" if index == 1 else "physical_window_completed"),
+        observation_id=observation_id,
+        task_plan=None,
+        loaded_knowledge=(),
+        fragments=fragments,
+        fingerprint=checkpoint_fingerprint(
+            observation_id, None, (), fragments
         ),
-        "task_plan": None,
-        "fragments": [
-            {
-                "name": "image",
-                "content": {"selected_frames": selected_frames},
-                "model_inputs": model_inputs,
-            }
-        ],
-    }
+    )
 
 
 def _write_probe_images(directory: Path) -> dict[str, Path]:
@@ -450,7 +464,7 @@ def _plan_with_protocol_repair(
     )
 
 
-def _assert_grounding_turn(turn, *, include_distance: bool) -> None:
+def _assert_grounding_turn(turn) -> None:
     names = [call.tool_name for call in turn.tool_calls]
     if names != ["skill.visual_grounding.locate"]:
         raise RuntimeError(
@@ -462,9 +476,9 @@ def _assert_grounding_turn(turn, *, include_distance: bool) -> None:
             "Visual-grounding call did not preserve the image observation_id: "
             f"{turn.tool_calls[0].args}"
         )
-    if turn.tool_calls[0].args.get("include_distance") is not include_distance:
+    if "include_distance" in turn.tool_calls[0].args:
         raise RuntimeError(
-            "Visual-grounding stage used the wrong include_distance value: "
+            "Measurement-only call contains retired include_distance: "
             f"{turn.tool_calls[0].args}"
         )
 

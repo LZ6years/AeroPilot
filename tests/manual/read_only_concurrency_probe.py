@@ -28,6 +28,7 @@ from src.perception.frame_payload import frame_bytes, frame_metadata, load_rgb_f
 from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
 from src.runtime.control.read_only_executor import ReadJob, ReadOnlyBatchExecutor
 from src.tools.dispatcher import ToolDispatcher
+from src.tools.registry import default_registry
 from src.plugins.contracts.skill import SKILL_ARTIFACT_REFS_KEY
 from tests.manual.experiment_sources import source_hashes
 from tests.manual.process_diagnostics import supervise, write_json
@@ -198,8 +199,10 @@ def child(directory, number, workers, *, kind="comparison"):
     if manifest.get('sam_coordinate_ab'):
         from tests.manual.sam_coordinate_probe import validate_coordinates
         validate_coordinates(directory)
-    dispatcher = ToolDispatcher(NoEnvironment())
+    dispatcher = ToolDispatcher(NoEnvironment(), default_registry())
     calls = copy.deepcopy(item["calls"])
+    if any("include_distance" in call.get("args", {}) for call in calls):
+        raise ValueError("Historical optional-distance input cannot execute against the measurement-only interface; preserve this experiment and prepare new calls.")
     if kind == "mixed":
         from src.plugins.skills.knowledge_service import KnowledgeService
         dispatcher.knowledge_service = KnowledgeService(dispatcher.plugin_registry.skill_catalog)

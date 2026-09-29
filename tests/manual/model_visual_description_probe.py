@@ -4,7 +4,7 @@ This probe is a bridge toward a future custom image module mode that captions
 images before planner use. It sends each fixture through the current
 MultimodalImageContextModule model_inputs[data_url] path, asks Qwen-VL for a
 structured visual_description_v1 object, and writes reviewable JSON/Markdown
-logs under tests/manual_outputs.
+logs under a timestamped `runs/experiments` directory.
 
 PowerShell:
 
@@ -15,6 +15,7 @@ PowerShell:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
 import json
 import sys
@@ -22,6 +23,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -40,14 +42,20 @@ from plugins.research.multimodal_image.context_modules import (
     caption_model_config,
     normalize_visual_description as normalize_module_visual_description,
 )
-from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
+from src.memory.context.contracts import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 DEFAULT_IMAGE_DIR = REPO_ROOT / "tests" / "fixtures" / "visual_description_images"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "tests" / "manual_outputs" / "visual_description_real_engine"
+DEFAULT_OUTPUT_DIR = (
+    REPO_ROOT
+    / "runs"
+    / "experiments"
+    / "visual_description_real_engine"
+    / datetime.now().strftime("%Y%m%d_%H%M%S")
+)
 DEFAULT_INSTRUCTION = "寻找建筑入口。"
 DEFAULT_PHASE_NAME = "search_visual_target"
 DEFAULT_PHASE_MEANING = "寻找建筑入口、门廊、入口标识或建筑底层开口。"
@@ -167,11 +175,19 @@ def build_description_context(
     writer = MemoryEventWriter(case_run_dir)
     reader = MemoryRecordReader(case_run_dir)
     memory = FlightMemory("visual_description_probe", "real_engine_fixture", image_path.stem, "uav_1", memory_reader=reader)
+    # Runtime media is run-local. Keep the original fixture path in human
+    # metadata, but copy provider evidence into the probe's portable run.
+    source_bytes = image_path.read_bytes()
+    source_digest = hashlib.sha256(source_bytes).hexdigest()
+    run_image = case_run_dir / "artifacts" / "manual_input" / f"{source_digest}.png"
+    run_image.parent.mkdir(parents=True, exist_ok=True)
+    if not run_image.exists():
+        run_image.write_bytes(source_bytes)
     observation_write = writer.write_observation(
         {
             "source": "manual_visual_description_probe",
             "modalities": ["rgb"],
-            "frames": {"rgb": {"path": str(image_path), "mock": False}},
+            "frames": {"rgb": {"path": str(run_image), "mock": False}},
         }
     )
     memory.append_observation_ref(observation_write["observation_ref"])
@@ -179,18 +195,20 @@ def build_description_context(
     stage_context = TaskContextInput(
         active_instruction=instruction,
     )
-    fragment = MultimodalImageContextModule(
+    module_result = MultimodalImageContextModule(
         model_config=model_config,
         caption_client=caption_client,
     ).build(
         MemorySourceBundle(memory),
         stage_context,
-    ).to_dict()
+    )
+    fragment = module_result.fragment.to_dict()
     _assert_visual_caption_input(fragment)
     return {
         "active_instruction": instruction,
         "task_plan": None,
         "fragments": [fragment],
+        "fragment_audits": [module_result.audit.to_dict()],
         "metadata": {"source_image": str(image_path), "case_index": case_index},
     }
 
@@ -361,7 +379,7 @@ def main() -> None:
             model_config=config,
         )
         fragment = context["fragments"][0]
-        description = fragment["content"]["visual_description"]
+        description = fragment["model_content"]["visual_description"]
         call_metrics = _caption_call_metrics(fragment)
         results.append(
             {
@@ -409,7 +427,7 @@ def _model_input_summary(context: dict[str, Any]) -> dict[str, Any]:
 
 
 def _caption_call_metrics(fragment: dict[str, Any]) -> dict[str, Any]:
-    processing = fragment["content"].get("visual_processing", {})
+    processing = fragment["model_content"].get("visual_processing", {})
     metrics = processing.get("caption_metrics", {}) if isinstance(processing, dict) else {}
     usage = metrics.get("usage", {}) if isinstance(metrics, dict) else {}
     return {
@@ -419,14 +437,14 @@ def _caption_call_metrics(fragment: dict[str, Any]) -> dict[str, Any]:
 
 
 def _redacted_caption_summary(fragment: dict[str, Any], config: ModelConfig, image_path: Path) -> dict[str, Any]:
-    processing = fragment["content"].get("visual_processing", {})
+    processing = fragment["model_content"].get("visual_processing", {})
     return {
         "source_image": str(image_path),
         "model": config.model_name,
         "base_url": config.base_url,
         "has_api_key": bool(config.api_key),
         "visual_processing": processing,
-        "has_visual_description": "visual_description" in fragment["content"],
+        "has_visual_description": "visual_description" in fragment["model_content"],
         "model_input_count": len(fragment.get("model_inputs", [])),
     }
 
@@ -481,7 +499,7 @@ def _assert_visual_caption_input(fragment: dict[str, Any]) -> None:
     assert first["type"] == "text"
     assert first["role"] == "visual_caption"
     assert "visual_description" in first["text"]
-    assert "visual_description" in fragment["content"]
+    assert "visual_description" in fragment["model_content"]
 
 
 def _list_of_strings(value: Any) -> list[str]:

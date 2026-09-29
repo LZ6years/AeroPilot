@@ -99,7 +99,8 @@ def close_owned_browser(profile, executable):
     psutil.wait_procs(alive, timeout=5)
 
 
-def inspect(executable: Path, root: Path, pages: list[str], name: str) -> list[dict]:
+def inspect(executable: Path, root: Path, pages: list[str], name: str,
+            image_selector: str = '.phase-timeline img') -> list[dict]:
     with tempfile.TemporaryDirectory(prefix='fly_review_browser_') as profile:
         process = subprocess.Popen([str(executable), '--headless', '--disable-gpu', '--no-first-run',
             '--remote-debugging-port=0', '--user-data-dir=' + profile, 'about:blank'],
@@ -150,11 +151,12 @@ def inspect(executable: Path, root: Path, pages: list[str], name: str) -> list[d
                     const imgs = [...document.images];
                     imgs.forEach(i => i.loading = 'eager');
                     await Promise.all(imgs.map(i => i.decode().catch(() => null)));
-                    const frame = document.querySelector('.phase-timeline img');
+                    const frame = document.querySelector(IMAGE_SELECTOR);
                     if (frame) frame.scrollIntoView({block:'center'});
                     return {images: imgs.length, failed: imgs.filter(i => !i.naturalWidth).map(i => i.getAttribute('src')),
                             timelineImageWidth: frame ? frame.naturalWidth : 0, url: location.href};
                 })()"""
+                expression = expression.replace('IMAGE_SELECTOR', json.dumps(image_selector))
                 result = call('Runtime.evaluate', {'expression': expression, 'awaitPromise': True, 'returnByValue': True})
                 if 'exceptionDetails' in result:
                     raise RuntimeError(result['exceptionDetails'])
@@ -187,6 +189,8 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--review-root', type=Path, required=True)
     parser.add_argument('--cases', nargs='+', help='Short case numbers; default first available case per benchmark')
+    parser.add_argument('--image-selector', default='.phase-timeline img',
+                        help='Image region to scroll to and verify; default remains the decision timeline')
     args = parser.parse_args()
     root = args.review_root.resolve()
     (root / 'browser_validation').mkdir(exist_ok=True)
@@ -206,7 +210,7 @@ if __name__ == '__main__':
         ('chrome', Path('C:/Program Files/Google/Chrome/Application/chrome.exe')),
         ('edge', Path('C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe')),
     ):
-        results[name] = inspect(executable, root, pages, name)
+        results[name] = inspect(executable, root, pages, name, args.image_selector)
     (root / 'browser_validation/results.json').write_text(json.dumps(results, ensure_ascii=False, indent=2), encoding='utf-8')
     print(json.dumps({name: [{'page': row['page'], 'images': row['images'], 'failed': row['failed']} for row in rows]
                       for name, rows in results.items()}))

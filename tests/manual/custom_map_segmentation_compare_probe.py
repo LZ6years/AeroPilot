@@ -96,7 +96,7 @@ def main() -> None:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Compare segmentation models on existing custom_map sweep runs")
-    parser.add_argument("--sweep-dir", default="tests/manual_outputs/custom_map_semantic_sweep")
+    parser.add_argument("--sweep-dir", default="runs/experiments/custom_map_semantic_sweep")
     parser.add_argument("--run-dir", nargs="*", help="Explicit run directories; overrides preset selection")
     parser.add_argument("--preset", choices=["representative_5"], default="representative_5")
     parser.add_argument("--all-runs", action="store_true")

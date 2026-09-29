@@ -143,7 +143,12 @@ def install_profile(profile):
     from src.tools.dispatcher import ToolDispatcher
     from src.runtime.control.read_only_executor import ReadOnlyBatchExecutor
     from src.perception.inference_resources import inference_observer
-    from src.perception.context_builder import ObservationContextBuilder
+    from src.memory.context.builder import ModelContextBuilder
+    from src.runtime.task.loop import InstructionLoop
+    from src.runtime.task.physical_window import PhysicalWindowExecutor
+    from src.runtime.task.scene_session import SceneSessionService
+    from src.runtime.task.turn_executor import TurnExecutor
+    from src.runtime.task import turn_executor
     from evaluation.benchmarks.travel_uav.scenario import TravelUavScenarioController
     from plugins.capabilities.visual_grounding.locate.scripts import service
     from plugins.capabilities.visual_grounding.locate.scripts.backends.grounding_dino import GroundingDinoBackend
@@ -164,21 +169,32 @@ def install_profile(profile):
         profile.wrap(stack, ModelActionPlanner, "plan_turn", "model.plan_turn",
                      before=lambda a, k: profile.decision.set(k.get("decision_index")))
         profile.wrap(stack, DefaultModelClient, "request", "model.request")
-        profile.wrap(stack, ObservationContextBuilder, "build", "runtime.context")
+        profile.wrap(stack, ModelContextBuilder, "build_checkpoint", "runtime.context")
+        profile.wrap(stack, SceneSessionService, "acquire", "scene.acquire")
         profile.wrap(stack, TravelUavScenarioController, "prepare_episode", "scene.target_setup")
         for method, label in (
-            ("run_task", "runtime.task"), ("_resolve_scene", "scene.acquire"),
+            ("run_task", "runtime.task"),
             ("_prepare_scene_for_task", "scene.prepare"),
             ("_apply_initial_pose", "scene.initial_pose"),
-            ("_execute_instruction_loop", "runtime.decisions"),
-            ("_execute_physical_batch", "runtime.physical_window"),
-            ("_execute_native_read_calls", "runtime.read_calls"),
             ("_record_observation", "runtime.observation"),
             ("_capture_instruction_exchange", "audit.exchange"),
             ("_write_state", "audit.state"), ("_run_shutdown", "scene.shutdown"),
         ):
             profile.wrap(stack, task_runtime.TaskRuntime, method, label)
-        profile.wrap(stack, task_runtime, "execute_builtin_control", "runtime.control")
+        profile.wrap(stack, InstructionLoop, "run", "runtime.decisions")
+        profile.wrap(
+            stack,
+            PhysicalWindowExecutor,
+            "execute",
+            "runtime.physical_window",
+        )
+        profile.wrap(
+            stack,
+            TurnExecutor,
+            "_execute_native_read_calls",
+            "runtime.read_calls",
+        )
+        profile.wrap(stack, turn_executor, "execute_builtin_control", "runtime.control")
         profile.wrap(stack, UavStabilizer, "wait_after_step", "runtime.stabilize")
         profile.wrap(stack, ToolDispatcher, "call",
                      lambda a, k: "tool." + str(k.get("tool_name", a[3] if len(a) > 3 else "unknown")))

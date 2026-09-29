@@ -14,20 +14,25 @@ import pytest
 from src.agent.transcript import AgentToolCall, AssistantTurn
 from src.memory.context.modules.image import CURRENT_IMAGE_USAGE, CURRENT_RGB_DEPTH_OVERLAY_USAGE
 from src.plugins import PluginRegistry
-from src.runtime.configs.safety_config import load_uav_safety_config
+from src.uav.config import load_uav_safety_config
 from src.tools.registry import default_registry
-from tests.manual import tool_contract_behavior_probe as probe
+from tests.support.environment import tool_contract_behavior_probe as probe
 
 
 def test_description_cleanup_preserves_contracts_except_retired_completion_gate():
     baseline = json.loads(Path("tests/fixtures/tool_description_contract_baseline.json").read_text(encoding="utf-8"))
-    registry = default_registry(safety_config=load_uav_safety_config())
+    registry = default_registry(
+        PluginRegistry.from_config(),
+        safety_config=load_uav_safety_config(),
+    )
     current = probe.tool_snapshot(registry)
     # Keep the historical fixture intact. The later grounding migration removes
     # only this task-global policy; schemas, limits and hidden tools stay fixed.
     for tool in baseline:
         if tool["name"] == "skill.visual_grounding.locate":
             tool["schema"].pop("x-flyagent-completion-evidence", None)
+            tool["schema"]["properties"].pop("include_distance")
+            tool["schema"]["required"].remove("include_distance")
     assert probe.structural_contracts(current) == probe.structural_contracts(baseline)
     assert sum(tool["runtime"]["model_exposed"] for tool in current) == 7
     for before, after in zip(baseline, current):
@@ -40,19 +45,17 @@ def test_description_cleanup_preserves_contracts_except_retired_completion_gate(
 
 
 def test_arguments_explain_units_and_effects_not_selection_order():
-    registry = default_registry()
+    registry = default_registry(PluginRegistry.from_config())
     movement = registry.get("uav.move_body").input_schema["properties"]
     for name in ("vx", "vy", "vz"):
         assert "m/s" in movement[name]["description"]
     measurement = registry.get("skill.visual_grounding.locate").input_schema["properties"]
     assert "CURRENT" in measurement["observation_id"]["description"]
-    toggle = measurement["include_distance"]["description"]
-    assert "true" in toggle and "false" in toggle
-    assert "Enable only" not in toggle and "threshold" not in toggle
+    assert set(measurement) == {"observation_id", "query"}
 
 
 def test_provider_prose_removes_repeated_global_rules_but_keeps_local_policies():
-    registry = default_registry()
+    registry = default_registry(PluginRegistry.from_config())
     for spec in registry.model_specs():
         text = spec.to_provider_tool()["function"]["description"]
         assert "effect=" in text and "result_timing=" in text
@@ -108,15 +111,19 @@ def test_probe_uses_default_memory_fixed_cases_and_no_backend(tmp_path, index):
     cases = probe.corpus()
     assert len(cases) == 10 and probe.digest(cases) == probe.digest(probe.corpus())
     transcript, observation = probe.build_transcript(cases[index], tmp_path, PluginRegistry.from_config())
-    context = transcript.latest_context()
-    assert "Who You Are" in context["rules"]["text"]
-    assert "Precision And Judgment" in context["user_preferences"]["text"]
-    assert "Synthetic" in context["evaluation_note"]
+    envelope = transcript.instruction_envelope()
+    checkpoint = transcript.latest_checkpoint()
+    assert checkpoint is not None
+    assert "Who You Are" in envelope["identity"]["text"]
+    assert "Precision And Judgment" in envelope["user_preferences"]["text"]
+    assert "Synthetic" in json.dumps(checkpoint.to_dict())
     assert observation["observation_id"] in transcript.prior_evidence_reference_ids()
     if index == 8:
         assert "synthetic_prior_call" in transcript.prior_evidence_reference_ids()
     if index == 7:
-        assert context["fragments"][-1]["model_inputs"][0]["data"].startswith("data:image/png;base64,")
+        media_ref = checkpoint.fragments[-1].model_inputs[0]["media_ref"]
+        assert media_ref["ref"].endswith("frame_000001.png")
+        assert len(media_ref["sha256"]) == 64
 
 
 def test_probe_distinguishes_missing_call_extra_call_and_wrong_toggle():

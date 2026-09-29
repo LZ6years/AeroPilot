@@ -7,7 +7,13 @@ from demos import llm_context_demo as demo
 from src.agent.transcript import AgentTranscript
 from src.llm import ProviderRequestError, ProviderSettings
 from src.memory.stores import MemoryEventWriter
-from src.runtime.configs.model_config import ModelConfig
+from src.memory.context.contracts import (
+    ContextFragment,
+    InstructionEnvelope,
+    StateCheckpoint,
+    checkpoint_fingerprint,
+)
+from src.agent.config import ModelConfig
 
 
 def test_mock_two_rounds_persist_and_replay(tmp_path, monkeypatch):
@@ -27,9 +33,10 @@ def test_mock_two_rounds_persist_and_replay(tmp_path, monkeypatch):
     records = [json.loads(line) for line in
                (output / "memory/agent_transcript.jsonl").read_text(encoding="utf-8").splitlines()]
     assert [r["kind"] for r in records] == [
-        "user_instruction", "state_checkpoint", "assistant_turn",
+        "instruction_envelope", "user_instruction", "state_checkpoint", "assistant_turn",
         "state_checkpoint", "assistant_turn"]
-    answer = records[2]["payload"]["public_intent"]
+    assert all(record["schema_version"] == "agent_transcript_v2" for record in records)
+    answer = records[3]["payload"]["public_intent"]
     assert second["request"]["messages"][3]["content"] == answer
     original = (output / "final_history.json").read_bytes()
     assert demo.main(["--output-dir", str(output)]) == 1
@@ -38,8 +45,23 @@ def test_mock_two_rounds_persist_and_replay(tmp_path, monkeypatch):
 
 def test_builder_does_not_mutate_transcript(tmp_path):
     transcript = AgentTranscript(MemoryEventWriter(tmp_path))
-    transcript.start_instruction("test", "instruction")
-    transcript.append_state({"demo_state": {"note": "test"}}, "obs_1")
+    transcript.start_instruction(
+        "test",
+        "instruction",
+        InstructionEnvelope("instruction", "", {}, {}, (), ()),
+    )
+    fragment = ContextFragment("demo", {"note": "test"})
+    transcript.append_state(
+        StateCheckpoint(
+            "checkpoint_0001",
+            "instruction_start",
+            "obs_1",
+            None,
+            (),
+            (fragment,),
+            checkpoint_fingerprint("obs_1", None, (), (fragment,)),
+        )
+    )
     before = transcript.to_dict()
     request, audit = demo.build_request(transcript)
     request.messages[1]["content"] = "changed request copy"

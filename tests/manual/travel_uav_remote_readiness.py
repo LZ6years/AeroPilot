@@ -345,7 +345,7 @@ def main() -> int:
     limits.add_argument("--limit-per-difficulty", type=int)
     limits.add_argument("--all-per-difficulty", action="store_true")
     parser.add_argument("--case-ids", help="Comma-separated compact-index IDs")
-    parser.add_argument("--output-dir", default="tests/manual_outputs/travel_uav_remote_readiness")
+    parser.add_argument("--output-dir", default="runs/experiments/travel_uav_remote_readiness")
     args = parser.parse_args()
     config_data = json.loads(Path(args.config).read_text(encoding="utf-8-sig"))
     if args.split:

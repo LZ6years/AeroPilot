@@ -44,7 +44,6 @@ def test_callable_skill_is_discovered_from_json_and_exposes_schema():
     assert listings[0]["input_schema"]["required"] == [
         "observation_id",
         "query",
-        "include_distance",
     ]
     assert listings[0]["runtime"] == {
         "effect": "read_only",
@@ -77,10 +76,20 @@ def test_registry_exposes_builtin_and_plugin_tools_without_context():
     assert tools[capability.call_name].input_schema == capability.input_schema
 
 
+@pytest.mark.parametrize("value", [False, True])
+def test_retired_distance_toggle_is_rejected(value):
+    registry = default_registry(_capability_registry())
+    turn = AssistantTurn("t", "Measure", [AgentToolCall("c", "skill.visual_grounding.locate",
+        {"observation_id": "obs_1", "query": "visible object", "include_distance": value})])
+    with pytest.raises(NativeTurnValidationError):
+        validate_native_turn(turn, registry, allowed_names={"skill.visual_grounding.locate"},
+                             latest_observation={"observation_id": "obs_1"})
+
+
 @pytest.mark.parametrize("extra", [False, True])
 def test_skill_tool_validator_checks_schema_before_execution(extra):
     registry = default_registry(_capability_registry())
-    args = {"observation_id": "obs_0001", "query": "person", "include_distance": False}
+    args = {"observation_id": "obs_0001", "query": "person"}
     if extra:
         args["extra"] = True
     turn = AssistantTurn("turn", "Confirm identity", [
@@ -116,7 +125,6 @@ def test_dispatcher_passes_private_settings_only_to_handler(monkeypatch):
         {
             "observation_id": "obs_0001",
             "query": "路口右侧的人",
-            "include_distance": False,
         },
         runtime_context={"latest_observation": {"observation_id": "obs_0001"}},
     )

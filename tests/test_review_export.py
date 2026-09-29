@@ -8,7 +8,13 @@ from PIL import Image
 import pytest
 
 from evaluation.benchmarks.core import BenchmarkAuditLog
-from tests.manual.export_benchmark_review import checked, export_batch, validate_bundle, write_json
+from tests.support.review import (
+    checked,
+    export_batch,
+    review_exporter,
+    validate_bundle,
+    write_json,
+)
 
 
 def fixture_batch(tmp_path):
@@ -80,13 +86,12 @@ def test_native_exit_partial_page_has_no_score(tmp_path):
 
 
 def test_export_failure_is_recorded_without_rewriting_navigation(tmp_path, monkeypatch):
-    from tests.manual import export_benchmark_review as exporter
-    from tests.manual.export_benchmark_review import refresh_reviews
+    from tests.support.review import refresh_reviews
     root, source = fixture_batch(tmp_path)
     original = (source / 'case_result.json').read_bytes()
     def fail(*_args):
         raise ValueError('missing image')
-    monkeypatch.setattr(exporter, 'export_batch', fail)
+    monkeypatch.setattr(review_exporter, 'export_batch', fail)
     with pytest.raises(ValueError, match='missing image'):
         refresh_reviews(root, tmp_path / 'review')
     assert json.loads((root / 'review_failure.json').read_text(encoding='utf-8'))['error'] == 'missing image'

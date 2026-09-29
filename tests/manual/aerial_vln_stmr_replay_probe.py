@@ -32,7 +32,7 @@ from plugins.research.stmr_map.perception.grounding_dino_backend import (
     DEFAULT_GROUNDING_DINO_MODEL,
 )
 from plugins.research.stmr_map.perception.sam_backend import DEFAULT_SAM_MODEL
-from src.memory.context.schemas import TaskContextInput
+from src.memory.context.contracts import TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryRecordReader
 
@@ -46,8 +46,8 @@ def main() -> None:
         Path(args.output_dir).resolve()
         if args.output_dir
         else REPO_ROOT
-        / "tests"
-        / "manual_outputs"
+        / "runs"
+        / "experiments"
         / (
             "aerial_vln_stmr_replay_"
             + datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")

@@ -4,13 +4,15 @@ import json
 
 import pytest
 
+from src.plugins import PluginRegistry
 from src.tools.registry import default_registry
-from tests.manual.agent_guidance_probe import revised_request
+from tests.support.planner import revised_request
 
 
 def test_revised_request_changes_guidance_not_original_history_or_pixels():
     history = {"role": "tool", "tool_call_id": "prior", "content": "original knowledge result"}
-    original = {"model": "unchanged", "tools": [s.to_provider_tool() for s in default_registry().model_specs()],
+    plugins = PluginRegistry.from_config()
+    original = {"model": "unchanged", "tools": [s.to_provider_tool() for s in default_registry(plugins).model_specs()],
         "messages": [{"role": "system", "content": "You are FlyAgent's mission tool-loop agent. old"},
             history, {"role": "user", "content": [
                 {"type": "text", "text": json.dumps({"protocol_context": "TravelUAV old context",

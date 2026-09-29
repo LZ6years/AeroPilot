@@ -6,7 +6,7 @@ import pytest
 
 from src.agent.safety import SafetySupervisor, SafetyViolation
 from src.agent.planning.schemas import PlannedStep
-from src.runtime.configs.safety_config import UavSafetyConfig
+from src.uav.config import UavSafetyConfig
 
 
 def test_physical_safety_needs_no_phase_and_reuses_existing_algorithm():

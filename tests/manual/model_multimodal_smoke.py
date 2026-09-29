@@ -2,7 +2,7 @@
 
 This probe verifies the real end-to-end path:
 
-    generated image -> encoded model_inputs data_url
+    generated image -> durable MediaRef -> request-scoped PreparedMedia
     -> OpenAI-compatible image_url message -> Qwen multimodal JSON response
 
 It intentionally lives under tests/manual and is not collected by pytest. It
@@ -22,9 +22,7 @@ PowerShell examples:
 from __future__ import annotations
 
 import argparse
-import base64
 import json
-import mimetypes
 import os
 import sys
 import tempfile
@@ -40,8 +38,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from src.agent.planning.model_inputs import build_model_user_content
-from src.runtime.configs.model_config import ModelConfig, load_model_config
+from src.agent.context.media import MediaHydrator
+from src.agent.context.request_assembler import RequestAssembler
+from src.agent.config import ModelConfig, load_model_config
+from src.memory.context.media_refs import image_media_ref
 
 
 DEFAULT_MULTIMODAL_MODEL = "qwen3-vl-plus"
@@ -79,17 +79,30 @@ def build_probe_context(run_dir: Path) -> dict[str, Any]:
     image_path = run_dir / "artifacts" / "rgb" / "qwen_multimodal_smoke.png"
     write_probe_image(image_path)
     context = {
-        "active_instruction": "请判断测试图中是否有红色方块和蓝色圆点。",
-        "current_phase": {"name": "manual_multimodal_smoke"},
-        "semantic_goal": {"target": "red square and blue dot smoke test"},
+        "schema_version": "state_checkpoint_v2",
+        "checkpoint_id": "checkpoint_0001",
+        "reason": "instruction_start",
+        "observation_id": "obs_probe_0001",
+        "task_plan": None,
+        "loaded_knowledge": [],
         "fragments": [
             {
                 "name": "manual_probe_image",
-                "content": {"source_image": str(image_path)},
-                "model_inputs": [_encoded_image_model_input(image_path)],
+                "model_content": {
+                    "target": "red square and blue dot smoke test"
+                },
+                "model_inputs": [
+                    image_media_ref(
+                        image_path,
+                        observation_id="obs_probe_0001",
+                        frame_id="frame_probe_0001",
+                        role="current_observation",
+                        usage="Judge whether both visual markers are present.",
+                    ).to_model_input()
+                ],
             }
         ],
-        "metadata": {"run_dir": str(run_dir), "probe": "model_multimodal_smoke"},
+        "fingerprint": "manual_probe",
     }
     _assert_encoded_image_input(context)
     return context
@@ -106,6 +119,16 @@ def write_probe_image(path: Path) -> None:
 
 
 def build_payload(config: ModelConfig, context: dict[str, Any]) -> dict[str, Any]:
+    inputs = [
+        item
+        for fragment in context["fragments"]
+        for item in fragment.get("model_inputs", [])
+    ]
+    content = RequestAssembler(MediaHydrator()).checkpoint_content(
+        context,
+        model_inputs=inputs,
+        timeline_role="CURRENT",
+    )
     return {
         "model": config.model_name,
         "messages": [
@@ -116,7 +139,7 @@ def build_payload(config: ModelConfig, context: dict[str, Any]) -> dict[str, Any
                     "with booleans sees_red_square and sees_blue_dot plus a short description."
                 ),
             },
-            {"role": "user", "content": build_model_user_content(context)},
+            {"role": "user", "content": content},
         ],
         "temperature": 0,
         "response_format": {"type": "json_object"},
@@ -211,21 +234,8 @@ def _assert_encoded_image_input(context: dict[str, Any]) -> None:
     assert model_inputs, "custom image module did not produce model_inputs"
     first = model_inputs[0]
     assert first["type"] == "image"
-    assert first["encoding"] == "data_url"
-    assert first["data"].startswith("data:image/png;base64,")
-
-
-def _encoded_image_model_input(path: Path) -> dict[str, Any]:
-    mime_type = mimetypes.guess_type(path.name)[0] or "image/png"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    return {
-        "type": "image",
-        "role": "latest_observation",
-        "mime_type": mime_type,
-        "encoding": "data_url",
-        "data": f"data:{mime_type};base64,{encoded}",
-        "metadata": {"source_path": str(path), "modality": "rgb", "processing": "manual_smoke_probe"},
-    }
+    assert first["media_ref"]["role"] == "current_observation"
+    assert "data" not in first
 
 
 def _merged_env_values(env_path: Path) -> dict[str, str]:

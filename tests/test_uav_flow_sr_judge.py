@@ -6,7 +6,7 @@ import json
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.sr_judge import judge_success, metric_success_assessment, _payload
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 def make_case(class_name: str = "Move") -> UavFlowCase:

@@ -6,7 +6,7 @@ import importlib.util
 import json
 from pathlib import Path
 
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 def load_probe_module():
@@ -128,8 +128,8 @@ def test_visual_description_probe_builds_context_with_encoded_model_input(tmp_pa
     )
 
     fragment = context["fragments"][0]
-    assert fragment["content"]["visual_processing"]["status"] == "captioned"
-    assert fragment["content"]["visual_description"]["phase"]["name"] == "search_visual_target"
+    assert fragment["model_content"]["visual_processing"]["status"] == "captioned"
+    assert fragment["model_content"]["visual_description"]["phase"]["name"] == "search_visual_target"
     assert fragment["model_inputs"][0]["type"] == "text"
     assert fragment["model_inputs"][0]["role"] == "visual_caption"
     assert "data:image/png;base64," not in fragment["model_inputs"][0]["text"]

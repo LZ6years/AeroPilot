@@ -34,12 +34,21 @@ def test_provider_projection_exposes_execution_policy_not_private_metadata():
 
 
 def test_grounding_config_permits_independent_calls_without_changing_quota():
+    from src.plugins import PluginRegistry
     from src.tools.registry import default_registry
-    spec = default_registry().get("skill.visual_grounding.locate")
+    plugins = PluginRegistry.discover(
+        {
+            "plugins": {
+                "roots": ["plugins/capabilities"],
+                "enabled": ["capabilities.visual_grounding"],
+            }
+        }
+    )
+    spec = default_registry(plugins).get("skill.visual_grounding.locate")
     assert spec.runtime.batching == "parallel_safe"
     assert spec.runtime.max_calls_per_observation == 2
-    assert "observed plausible object candidate" in spec.description
-    assert "Tool execution success does not imply valid distance" in spec.description
+    assert "candidate already observed" in spec.description
+    assert "Execution success does not imply a valid measurement" in spec.description
     blocked = default_registry().get("runtime.report_blocked").to_provider_tool()
     assert "only call in its batch" in blocked["function"]["description"]
 

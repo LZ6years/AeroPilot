@@ -27,12 +27,13 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.env_client.simulator_client import SimulatorEnvClient
-from src.runtime.configs.action_config import load_uav_action_config
+from src.uav.config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
+from src.tools.registry import default_registry
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -67,7 +68,7 @@ def main() -> None:
         action_config=action_config,
     )
     client = SimulatorEnvClient(server)
-    tools = ToolDispatcher(client)
+    tools = ToolDispatcher(client, default_registry())
     scene = None
     agent_id = "uav_1"
     try:

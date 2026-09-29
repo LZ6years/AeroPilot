@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
-import base64
+import hashlib
 import http.client
 import json
+from io import BytesIO
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from src.agent.planning.model_action_planner import (
     AgentProtocolError,
@@ -15,8 +17,15 @@ from src.agent.planning.model_action_planner import (
     ModelActionPlannerConfigError,
 )
 from src.agent.transcript import AgentTranscript, ToolResult
+from src.memory.context.contracts import (
+    ContextFragment,
+    InstructionEnvelope,
+    MediaRef,
+    StateCheckpoint,
+    checkpoint_fingerprint,
+)
 from src.memory.stores import MemoryEventWriter
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 from src.tools.registry import default_registry
 
 
@@ -62,14 +71,26 @@ def response_with_calls(*calls, content="Inspect and act from the current eviden
 
 def make_transcript(tmp_path):
     transcript = AgentTranscript(MemoryEventWriter(tmp_path))
-    transcript.start_instruction("move toward the target", "inst_0001")
+    envelope = InstructionEnvelope(
+        instruction_id="inst_0001",
+        protocol_context="",
+        identity={"text": "fly safely"},
+        user_preferences={},
+        knowledge_catalog=(),
+        static_module_guidance=(),
+    )
+    transcript.start_instruction("move toward the target", "inst_0001", envelope)
+    fragment = ContextFragment("pose", {})
     transcript.append_state(
-        {
-            "user_instruction": "move toward the target", "task_plan": None,
-            "fragments": [],
-            "rules": {"text": "fly safely"},
-        },
-        "obs_0001",
+        StateCheckpoint(
+            checkpoint_id="checkpoint_0001",
+            reason="instruction_start",
+            observation_id="obs_0001",
+            task_plan=None,
+            loaded_knowledge=(),
+            fragments=(fragment,),
+            fingerprint=checkpoint_fingerprint("obs_0001", None, (), (fragment,)),
+        )
     )
     return transcript
 
@@ -235,34 +256,49 @@ def test_native_planner_transport_retry_is_one_model_round_and_not_transcript(
 
 
 def test_native_planner_captures_exact_public_exchange_and_hashed_media(tmp_path):
-    image_bytes = b"\x89PNG\r\n\x1a\nprovider-image"
-    image_data = "data:image/png;base64," + base64.b64encode(image_bytes).decode()
+    output = BytesIO()
+    Image.new("RGB", (256, 256), (10, 20, 30)).save(output, format="PNG")
+    image_bytes = output.getvalue()
+    image_path = tmp_path / "frame.png"
+    image_path.write_bytes(image_bytes)
     transcript = AgentTranscript(MemoryEventWriter(tmp_path))
-    transcript.start_instruction("inspect", "inst_media")
+    transcript.start_instruction(
+        "inspect",
+        "inst_media",
+        InstructionEnvelope(
+            instruction_id="inst_media",
+            protocol_context="",
+            identity={"text": "fly safely"},
+            user_preferences={},
+            knowledge_catalog=(),
+            static_module_guidance=(),
+        ),
+    )
+    media_ref = MediaRef(
+        ref=str(image_path),
+        sha256=hashlib.sha256(image_bytes).hexdigest(),
+        mime_type="image/png",
+        observation_id="obs_media",
+        frame_id="frame_media",
+        role="current_observation",
+        width=256,
+        height=256,
+        display_width=256,
+        display_height=298,
+    )
+    fragment = ContextFragment(
+        "image", {}, (media_ref.to_model_input(),)
+    )
     transcript.append_state(
-        {
-            "current_phase": {"name": "approach", "done_when": ["near"]},
-            "fragments": [
-                {
-                    "name": "image",
-                    "model_inputs": [
-                        {
-                            "type": "image",
-                            "role": "current_observation",
-                            "encoding": "data_url",
-                            "data": image_data,
-                            "observation_id": "obs_media",
-                            "frame_id": "frame_media",
-                            "scene_width": 256,
-                            "scene_height": 256,
-                            "display_width": 256,
-                            "display_height": 298,
-                        }
-                    ],
-                }
-            ],
-        },
-        "obs_media",
+        StateCheckpoint(
+            checkpoint_id="checkpoint_0001",
+            reason="instruction_start",
+            observation_id="obs_media",
+            task_plan=None,
+            loaded_knowledge=(),
+            fragments=(fragment,),
+            fingerprint=checkpoint_fingerprint("obs_media", None, (), (fragment,)),
+        )
     )
     response = response_with_calls(("call_1", "uav_hover", {}), content=None)
     response["choices"][0]["finish_reason"] = "tool_calls"
@@ -278,7 +314,7 @@ def test_native_planner_captures_exact_public_exchange_and_hashed_media(tmp_path
     assert "data:image" not in request_text
     assert "provider_media sha256=" in request_text
     assert exchange["media"][0]["data"] == image_bytes
-    assert exchange["media"][0]["request_path"][:2] == ["messages", 4]
+    assert exchange["media"][0]["request_path"][:2] == ["messages", 5]
     assert exchange["media"][0]["timeline_role"] == "CURRENT"
     assert exchange["media"][0]["observation_id"] == "obs_media"
     assert exchange["media"][0]["frame_id"] == "frame_media"
@@ -462,3 +498,17 @@ def test_model_action_planner_uses_configured_native_prompt(tmp_path):
     )
 
     assert planner.system_prompt == "custom native tool protocol"
+
+
+@pytest.mark.parametrize('mode', ['', 'disabled', 'enabled'])
+def test_thinking_mode_reaches_wire_and_public_option_audit(tmp_path, mode):
+    planner = StubPlanner(response_with_calls(('call_1', 'uav_turn_relative', {'yaw_deg': 10})), thinking_mode=mode)
+    planner.plan_turn(make_transcript(tmp_path), default_registry())
+    payload = planner.payloads[0]
+    if mode:
+        assert payload['thinking'] == {'type': mode}
+        assert planner.last_request['thinking'] == {'type': mode}
+    else:
+        assert 'thinking' not in payload
+    assert 'reasoning_effort' not in payload
+    assert payload['temperature'] == 0

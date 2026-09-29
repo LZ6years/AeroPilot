@@ -17,6 +17,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from src.agent.transcript import AgentToolCall, AgentTranscript, AssistantTurn, ToolResult
+from src.memory.context.contracts import (
+    ContextFragment,
+    InstructionEnvelope,
+    StateCheckpoint,
+    checkpoint_fingerprint,
+)
 from src.memory.stores import MemoryEventWriter
 from src.plugins import PluginRegistry
 from src.tools.registry import default_registry
@@ -34,14 +40,31 @@ def main() -> None:
     registry = default_registry(plugins)
     with tempfile.TemporaryDirectory(prefix="flyagent_transcript_") as temp_dir:
         transcript = AgentTranscript(MemoryEventWriter(temp_dir))
-        transcript.start_instruction("确认画面中的人，然后小幅转向并前进", "inst_demo")
+        transcript.start_instruction(
+            "确认画面中的人，然后小幅转向并前进",
+            "inst_demo",
+            InstructionEnvelope(
+                instruction_id="inst_demo",
+                protocol_context="",
+                identity={},
+                user_preferences={},
+                knowledge_catalog=(),
+                static_module_guidance=(),
+            ),
+        )
+        fragment = ContextFragment("probe", {"debug_only": True})
         transcript.append_state(
-            {
-                "task_plan": None,
-                "fragments": [],
-                "allowed_action_constraints": {"debug_only": True},
-            },
-            "obs_0001",
+            StateCheckpoint(
+                checkpoint_id="checkpoint_0001",
+                reason="instruction_start",
+                observation_id="obs_0001",
+                task_plan=None,
+                loaded_knowledge=(),
+                fragments=(fragment,),
+                fingerprint=checkpoint_fingerprint(
+                    "obs_0001", None, (), (fragment,)
+                ),
+            )
         )
         transcript.append_assistant(
             AssistantTurn(

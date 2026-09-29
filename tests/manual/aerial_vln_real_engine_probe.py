@@ -11,6 +11,7 @@ import json
 import math
 import sys
 from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 
 
@@ -325,7 +326,10 @@ def _parser() -> argparse.ArgumentParser:
                         help="Diagnostic override only; source map JSON is unchanged.")
     parser.add_argument(
         "--output-dir",
-        default="tests/manual_outputs/aerial_vln_real_engine_probe",
+        default=(
+            "runs/experiments/aerial_vln_real_engine_probe/"
+            + datetime.now().strftime("%Y%m%d_%H%M%S")
+        ),
     )
     return parser
 

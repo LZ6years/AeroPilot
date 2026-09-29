@@ -14,15 +14,15 @@ from demos.real_engine_instruction_demo import (
     compact_summary,
     write_common_config,
 )
-from tests.manual.task_runtime_episode_options_probe import (
+from tests.support.environment import (
     PROBE_INSTRUCTION,
     _initial_pose_from_observation,
 )
 from src.env_client.observation_profile import ObservationProfile
 from src.env_client.schemas import MapPackage
-from src.runtime.configs.action_config import UavActionConfig
-from src.runtime.configs.model_config import ModelConfig
-from src.runtime.configs.safety_config import UavSafetyConfig
+from src.uav.config import UavActionConfig
+from src.agent.config import ModelConfig
+from src.uav.config import UavSafetyConfig
 from src.runtime.configs.task_execution_options import TaskExecutionOptions
 
 
@@ -203,7 +203,7 @@ def test_real_engine_demo_compact_summary_keeps_terminal_output_readable(tmp_pat
     assert compact["action_window"]["expected_effect"] == "forward displacement increases"
     assert compact["phase_progress"]["measurements"]["forward_m"] == 4.9
     assert "world_pose" not in compact["phase_progress"]
-    assert compact["inspect_files"]["planner_context"].endswith(str(Path("contexts") / "latest_context.json"))
+    assert compact["inspect_files"]["planner_context"].endswith(str(Path("contexts") / "latest_checkpoint.json"))
 
 
 def test_real_engine_demo_artifact_inventory_ignores_missing_artifact_metadata():

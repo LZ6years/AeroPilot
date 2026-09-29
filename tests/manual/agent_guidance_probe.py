@@ -23,7 +23,7 @@ from src.llm import DefaultModelClient, ModelRequest
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import public_response_snapshot
 from src.plugins import PluginRegistry
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import load_model_config
 from src.tools.registry import default_registry
 from tests.manual.tool_selection_ablation_probe import digest, restore_request, write_json, wire_check
 
@@ -31,11 +31,12 @@ from tests.manual.tool_selection_ablation_probe import digest, restore_request, 
 def revised_request(original: dict) -> dict:
     """Change current guidance, preserving image pixels, task facts and past calls."""
     payload = copy.deepcopy(original)
-    registry = default_registry()
+    plugins = PluginRegistry.from_config()
+    registry = default_registry(plugins)
     specs = {s.wire_name: s.to_provider_tool() for s in registry.model_specs()}
     payload["tools"] = [specs[t["function"]["name"]] for t in original["tools"]]
     catalog = [{"name": s.name, "description": s.description}
-               for s in PluginRegistry.from_config().skill_catalog.skills if s.capability is None]
+               for s in plugins.skill_catalog.skills if s.capability is None]
 
     def update_context(value):
         if isinstance(value, list):

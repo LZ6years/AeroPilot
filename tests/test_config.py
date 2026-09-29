@@ -7,8 +7,12 @@ from pathlib import Path
 
 import pytest
 
-from src.runtime.configs.action_config import UavActionConfig, load_uav_action_config
-from src.runtime.configs.safety_config import UavSafetyConfig, load_uav_safety_config
+from src.uav.config import (
+    UavActionConfig,
+    UavSafetyConfig,
+    load_uav_action_config,
+    load_uav_safety_config,
+)
 from src.runtime.configs.stabilization_config import UavStabilizationConfig, load_uav_stabilization_config
 from src.runtime.configs.map_config import load_map_config
 

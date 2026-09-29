@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 import sys
 
-from tests.manual.unified_tool_loop_replay_probe import run_replay
+from tests.support.review import run_replay
 
 
 def test_transcript_projection_cold_process_has_no_eager_planner_cycle():

@@ -12,7 +12,7 @@ from email.message import Message
 import pytest
 
 from src.llm import DefaultModelClient, ModelRequest, ProviderRequestError
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 def _request_json(config, payload, *, error_prefix, transport_trace=None):

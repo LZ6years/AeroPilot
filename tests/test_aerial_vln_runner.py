@@ -19,9 +19,9 @@ from evaluation.benchmarks.aerial_vln.runner import (
     _infrastructure_error,
 )
 from plugins.research.stmr_map.online import StmrOnlineMapResult
-from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
+from src.memory.context.contracts import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
-from src.memory.stores import MapMemoryStore
+from src.memory.stores import MapMemoryStore, MemoryRecordReader
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 
 
@@ -94,9 +94,7 @@ def test_aerial_vln_stmr_config_and_context_modes(tmp_path):
     )
     shadow._prepare_stmr()
     shadow._prepare_stmr()
-    shadow_context, shadow_module = shadow._planner_context_builder(
-        FakePlanner()
-    )
+    shadow_context, shadow_module = shadow._planner_context_builder(tmp_path / "shadow")
 
     assert shadow.config.stmr_prior == "urban_aerial_v1"
     assert shadow.config.stmr_max_queries == 9
@@ -110,18 +108,16 @@ def test_aerial_vln_stmr_config_and_context_modes(tmp_path):
         AerialVlnEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, **base, "stmr_mode": "planner"}),
         stmr_session=planner_session,
     )
-    context_builder, stmr_module = planner._planner_context_builder(
-        FakePlanner()
-    )
+    context_builder, stmr_module = planner._planner_context_builder(tmp_path / "planner")
 
     assert context_builder is not None
     assert stmr_module is not None
     assert stmr_module.mode == "planner"
     assert stmr_module.online_builder.session is planner_session
-    assert context_builder.composer.registry.modules["map"] is stmr_module
-    assert context_builder.composer.registry.module_order.index(
+    assert context_builder.registry.modules["map"] is stmr_module
+    assert context_builder.registry.module_order.index(
         "image"
-    ) < context_builder.composer.registry.module_order.index("map")
+    ) < context_builder.registry.module_order.index("map")
 
 
 def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
@@ -139,13 +135,13 @@ def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
         ),
         stmr_session=FakeStmrSession(),
     )
-    context_builder, stmr_module = runner._planner_context_builder(
-        FakePlanner()
-    )
+    run_dir = tmp_path / "ready"
+    context_builder, stmr_module = runner._planner_context_builder(run_dir)
     assert context_builder is not None
     assert stmr_module is not None
-    image_module = context_builder.composer.registry.modules["image"]
-    png_path = tmp_path / "stmr.png"
+    image_module = context_builder.registry.modules["image"]
+    png_path = run_dir / "contexts" / "stmr_map" / "stmr.png"
+    png_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (4, 4), (20, 40, 60)).save(png_path)
     stmr_module.online_builder = FakeOnlineStmrBuilder(
         StmrOnlineMapResult(
@@ -173,20 +169,26 @@ def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
         )
     )
     sources = MemorySourceBundle(
-        FlightMemory("run", "map", "scene", "uav"),
+        FlightMemory(
+            "run",
+            "map",
+            "scene",
+            "uav",
+            memory_reader=MemoryRecordReader(run_dir),
+        ),
         MapMemoryStore(),
     )
     stage = TaskContextInput(active_instruction="follow the road")
 
     ready_fragment = stmr_module.build(sources, stage)
 
-    assert ready_fragment.model_inputs[0]["role"] == "stmr_semantic_map"
+    assert ready_fragment.fragment.model_inputs[0]["media_ref"]["role"] == "stmr_semantic_map"
     assert not hasattr(image_module, "include_phase_start_reference")
 
     stmr_module.online_builder = FailingOnlineStmrBuilder()
     failed_fragment = stmr_module.build(sources, stage)
 
-    assert failed_fragment.model_inputs == []
+    assert failed_fragment.fragment.model_inputs == ()
     assert not hasattr(image_module, "include_phase_start_reference")
 
 
@@ -292,7 +294,7 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     assert case_result["dataset_split"] == "val_seen"
     assert case_result["dataset_split_label"] == "Validation Seen"
     assert case_result["task_plan_diagnostics"] == {
-        "loop_schema": "unified_tool_loop_v1",
+            "loop_schema": "unified_tool_loop_v2",
         "plan_created": False,
         "task_plan": None,
         "stopped_reason": None,
@@ -1091,7 +1093,7 @@ class FakePlanner:
         pass
 
     def plan_turn(self, transcript, registry, **kwargs):
-        type(self).last_protocol_context = transcript.latest_context().get("protocol_context")
+        type(self).last_protocol_context = transcript.instruction_envelope().get("protocol_context")
         return AssistantTurn("fixture_turn", "Hold at the observed endpoint", [
             AgentToolCall("fixture_done", "runtime.report_completed", {
                 "reason": "Fixture endpoint observed",

@@ -8,11 +8,14 @@ import pytest
 from src.llm import ModelResponse
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import encode_request
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 from src.tools.registry import default_registry
-from tests.manual import task_progress_guidance_probe as probe
-from tests.manual.task_progress_simulation_probe import AuditedPlanner
-from tests.test_model_action_planner import make_transcript, response_with_calls
+from tests.support.planner import (
+    AuditedPlanner,
+    guidance_probe as probe,
+    make_transcript,
+    response_with_calls,
+)
 
 
 def test_model_override_is_immutable_and_optional():
@@ -26,6 +29,11 @@ def test_model_override_is_immutable_and_optional():
 
 def test_probe_wire_payload_matches_manifest_and_preserves_capture(tmp_path, monkeypatch):
     saved = json.loads(probe.BASELINE.read_text(encoding='utf-8'))
+    # This historical prose-only experiment requires a matching historical
+    # schema. Do not weaken its drift guard to accept today's retired toggle.
+    from types import SimpleNamespace
+    monkeypatch.setattr(probe, 'default_registry', lambda: SimpleNamespace(model_specs=lambda: [
+        SimpleNamespace(to_provider_tool=lambda t=t: copy.deepcopy(t)) for t in saved['tools']]))
     payload = {'model': 'original', 'messages': [{'role': 'system', 'content': saved['system_prompt']},
                {'role': 'user', 'content': 'recorded observation'}], 'tools': saved['tools'],
                'temperature': 0, 'tool_choice': 'auto'}

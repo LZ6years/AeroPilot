@@ -5,13 +5,19 @@ from pathlib import Path
 import pytest
 from types import SimpleNamespace
 
-from tests.manual.aerial_vln_selected_case_probe import SelectedCaseProbe, validate_episode_ids
+from tests.support.environment import (
+    SelectedCaseProbe,
+    _probe_checkpoint,
+    _write_probe_images,
+    aerial_vln_case_gate,
+    audit_case,
+    validate_episode_ids,
+)
 from evaluation.benchmarks.aerial_vln.config import AerialVlnEvalConfig
 
 
 def test_strict_gate_failure_is_visible_to_existing_batch_abort(tmp_path, monkeypatch):
     from evaluation.benchmarks.aerial_vln.runner import AerialVlnBenchmarkRunner
-    from tests.manual import aerial_vln_case_gate
     probe = SelectedCaseProbe.__new__(SelectedCaseProbe)
     probe.strict_case_gates = True
     probe.config = SimpleNamespace(scene_map={"12": "map"})
@@ -36,7 +42,6 @@ def test_strict_gate_failure_is_visible_to_existing_batch_abort(tmp_path, monkey
 
 
 def test_manual_gate_missing_artifacts_fails_closed(tmp_path):
-    from tests.manual.aerial_vln_case_gate import audit_case
     report = audit_case(tmp_path, {}, None)
     assert report["passed"] is False
     assert "FileNotFoundError" in report["error"]
@@ -50,12 +55,13 @@ def test_invalid_ids_fail(ids):
 
 def test_provider_probe_uses_matching_rgb_dimensions(tmp_path):
     from PIL import Image
-    from tests.manual.model_native_tool_loop_smoke import _write_probe_images, _probe_context
     for observation_id, path in _write_probe_images(tmp_path / "rgb").items():
-        item = _probe_context(path, observation_id)["fragments"][0]["model_inputs"][0]
+        item = _probe_checkpoint(
+            path, observation_id, 1
+        ).fragments[0].model_inputs[0]["media_ref"]
         with Image.open(path) as image:
             assert image.size == (item["display_width"], item["display_height"]) == (240, 180)
-        assert item["scene_height"] == item["display_height"]
+        assert item["height"] == item["display_height"]
         assert "Original RGB" in item["usage"]
 
 

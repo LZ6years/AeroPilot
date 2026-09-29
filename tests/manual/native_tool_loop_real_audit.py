@@ -34,6 +34,12 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from src.tools.registry import ToolRegistry, default_registry
+from src.plugins import PluginRegistry
+from src.memory.context.contracts import (
+    INSTRUCTION_ENVELOPE_SCHEMA,
+    STATE_CHECKPOINT_SCHEMA,
+    TRANSCRIPT_SCHEMA,
+)
 
 
 SCHEMA_VERSION = "unified_tool_loop_real_audit_v1"
@@ -99,7 +105,7 @@ def audit_evaluation(eval_dir: str | Path) -> dict[str, Any]:
     if not case_dirs:
         violations.append(Violation("cases_missing", f"no case directories under {cases_root}"))
 
-    registry = default_registry()
+    registry = default_registry(PluginRegistry.from_config())
     case_reports: list[dict[str, Any]] = []
     for case_dir in case_dirs:
         case_reports.append(_audit_case(case_dir, registry, violations))
@@ -262,11 +268,15 @@ def _audit_transcript(
     }
     if not records:
         return coverage
-    if records[0].get("kind") != "user_instruction":
+    if (
+        len(records) < 2
+        or records[0].get("kind") != "instruction_envelope"
+        or records[1].get("kind") != "user_instruction"
+    ):
         violations.append(
             Violation(
                 "instruction_not_first",
-                "the first transcript item must be user_instruction",
+                "instruction_envelope followed by user_instruction must start the transcript",
                 case_id=case_id,
                 transcript_id=_record_id(records[0]),
             )
@@ -301,7 +311,28 @@ def _audit_transcript(
         kind = item.get("kind")
         payload = _payload(item)
         transcript_id = _record_id(item)
+        if item.get("schema_version") != TRANSCRIPT_SCHEMA:
+            violations.append(Violation(
+                "transcript_schema_unsupported",
+                f"expected {TRANSCRIPT_SCHEMA}",
+                case_id,
+                transcript_id,
+            ))
+        if kind == "instruction_envelope" and payload.get("schema_version") != INSTRUCTION_ENVELOPE_SCHEMA:
+            violations.append(Violation(
+                "instruction_envelope_schema_unsupported",
+                f"expected {INSTRUCTION_ENVELOPE_SCHEMA}",
+                case_id,
+                transcript_id,
+            ))
         if kind == "state_checkpoint":
+            if payload.get("schema_version") != STATE_CHECKPOINT_SCHEMA:
+                violations.append(Violation(
+                    "checkpoint_schema_unsupported",
+                    f"expected {STATE_CHECKPOINT_SCHEMA}",
+                    case_id,
+                    transcript_id,
+                ))
             observation_id = payload.get("observation_id")
             if not isinstance(observation_id, str) or not observation_id:
                 violations.append(
@@ -332,33 +363,22 @@ def _audit_transcript(
                             transcript_id,
                         )
                     )
-            context = payload.get("context")
-            if not isinstance(context, dict):
-                violations.append(
-                    Violation(
-                        "checkpoint_context_invalid",
-                        "state checkpoint context must be an object",
-                        case_id,
-                        transcript_id,
-                    )
-                )
-            elif _contains_forbidden_history_key(context):
+            if _contains_forbidden_history_key(payload):
                 violations.append(
                     Violation(
                         "checkpoint_duplicates_transcript",
-                        "state context embeds agent transcript/tool-call history",
+                        "state checkpoint embeds agent transcript/tool-call history",
                         case_id,
                         transcript_id,
                     )
                 )
-            if isinstance(context, dict):
-                _audit_checkpoint_image_contract(
-                    context,
-                    observation_id if isinstance(observation_id, str) else "",
-                    violations,
-                    case_id,
-                    transcript_id,
-                )
+            _audit_checkpoint_image_contract(
+                payload,
+                observation_id if isinstance(observation_id, str) else "",
+                violations,
+                case_id,
+                transcript_id,
+            )
         elif kind == "assistant_turn":
             coverage["assistant_turns"] += 1
             intent = payload.get("public_intent")
@@ -695,7 +715,9 @@ def _audit_visual_grounding_result(
 
     requested = payload.get("requested_args")
     requested = requested if isinstance(requested, dict) else {}
-    include_distance = requested.get("include_distance")
+    # Absent toggle denotes the measurement-only interface; old requests retain
+    # their recorded false/true semantics and are never rewritten.
+    include_distance = requested.get("include_distance", True)
     data = payload.get("data")
     data = data if isinstance(data, dict) else {}
     candidates = data.get("candidates")
@@ -1217,7 +1239,7 @@ def _audit_read_only_observation_ids(
 
 
 def _audit_checkpoint_image_contract(
-    context: dict[str, Any],
+    checkpoint: dict[str, Any],
     observation_id: str,
     violations: list[Violation],
     case_id: str,
@@ -1225,7 +1247,7 @@ def _audit_checkpoint_image_contract(
 ) -> None:
     """Require one current image reference per chronological checkpoint."""
 
-    fragments = context.get("fragments")
+    fragments = checkpoint.get("fragments")
     if not isinstance(fragments, list):
         return
     image_fragment = next(
@@ -1238,9 +1260,13 @@ def _audit_checkpoint_image_contract(
     )
     if not isinstance(image_fragment, dict):
         return
-    selected = _object(image_fragment.get("content")).get("selected_frames")
-    selected = [item for item in selected if isinstance(item, dict)] if isinstance(selected, list) else []
-    rgb = [item for item in selected if item.get("role") != "current_depth"]
+    inputs = image_fragment.get("model_inputs")
+    inputs = [item for item in inputs if isinstance(item, dict)] if isinstance(inputs, list) else []
+    refs = [item.get("media_ref") for item in inputs if isinstance(item.get("media_ref"), dict)]
+    rgb = [item for item in refs if item.get("role") != "current_depth"]
+    unavailable = _object(image_fragment.get("model_content")).get("visual_evidence") == "current_rgb_unavailable"
+    if unavailable and not rgb:
+        return
     if len(rgb) != 1 or rgb[0].get("role") != "current_observation":
         violations.append(
             Violation(
@@ -1284,8 +1310,7 @@ def _audit_advisory_state(records, violations, case_id):
                 if isinstance(call.get("tool_call_id"), str):
                     calls[call["tool_call_id"]] = call
         elif kind == "state_checkpoint":
-            context = _object(payload.get("context"))
-            if "task_plan" in context and not _json_equal(context["task_plan"], plan.to_dict() if plan else None):
+            if "task_plan" in payload and not _json_equal(payload["task_plan"], plan.to_dict() if plan else None):
                 fail("checkpoint_plan_mismatch", "checkpoint plan differs from successfully applied updates")
         elif kind == "tool_result":
             call = calls.get(_string(payload.get("tool_call_id")))

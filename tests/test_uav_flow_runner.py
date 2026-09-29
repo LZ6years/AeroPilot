@@ -49,7 +49,7 @@ class FakePlanner:
         pass
 
     def plan_turn(self, transcript, registry, **kwargs):
-        type(self).last_protocol_context = transcript.latest_context().get("protocol_context")
+        type(self).last_protocol_context = transcript.instruction_envelope().get("protocol_context")
         return AssistantTurn("fixture_turn", "Hold at the observed endpoint", [
             AgentToolCall("fixture_done", "runtime.report_completed", {
                 "reason": "Fixture endpoint observed",
@@ -405,23 +405,20 @@ def test_config_roundtrip_includes_stmr_experiment_fields():
     assert UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, }).stmr_mode == "off"
 
 
-def test_runner_builds_case_local_stmr_context_without_global_config():
-    class Planner:
-        planner_mode = "model"
-
+def test_runner_builds_case_local_stmr_context_without_global_config(tmp_path):
     session = object()
     runner = UavFlowBenchmarkRunner(
         UavFlowEvalConfig.from_dict({**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True}, "stmr_mode": "shadow", "stmr_device": "cpu"}),
         stmr_session=session,
     )
 
-    context_builder, stmr_module = runner._context_builder(Planner())
+    context_builder, stmr_module = runner._context_builder(tmp_path / "shadow")
 
     assert context_builder is not None
     assert stmr_module is not None
     assert stmr_module.mode == "shadow"
     assert stmr_module.online_builder.session is session
-    assert context_builder.composer.registry.modules["map"] is stmr_module
+    assert context_builder.registry.modules["map"] is stmr_module
 
 
 def test_runner_profile_capture_is_independent_from_planner_depth_context():
@@ -449,10 +446,7 @@ def test_runner_profile_capture_is_independent_from_planner_depth_context():
     )
 
 
-def test_runner_builds_depth_image_context_without_stmr():
-    class Planner:
-        planner_mode = "model"
-
+def test_runner_builds_depth_image_context_without_stmr(tmp_path):
     runner = UavFlowBenchmarkRunner(
         UavFlowEvalConfig.from_dict(
             {**{"execution_mode": "managed", "save_artifacts": True, "enable_action_planner_debug": True},
@@ -462,13 +456,13 @@ def test_runner_builds_depth_image_context_without_stmr():
         )
     )
 
-    context_builder, stmr_module = runner._context_builder(Planner())
+    context_builder, stmr_module = runner._context_builder(tmp_path / "depth")
 
     assert context_builder is not None
     assert stmr_module is None
-    image_module = context_builder.composer.registry.modules["image"]
+    image_module = context_builder.registry.modules["image"]
     assert image_module.include_current_depth is True
-    assert context_builder.composer.registry.modules["map"].name == "map"
+    assert context_builder.registry.modules["map"].name == "map"
     assert any(
             capability.startswith("Metric-depth fusion:")
         for capability in context_builder.semantic_evidence_capabilities()

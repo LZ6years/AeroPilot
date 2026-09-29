@@ -30,13 +30,14 @@ if str(REPO_ROOT) not in sys.path:
 
 from src.uav import pose_measurements
 from src.env_client.simulator_client import SimulatorEnvClient
-from src.runtime.configs.action_config import load_uav_action_config
+from src.uav.config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import load_model_config
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
+from src.tools.registry import default_registry
 
 
 YAW_CASES = [0.0, 90.0, 180.0, -90.0]
@@ -80,7 +81,7 @@ def main() -> None:
         save_artifacts=args.save_artifacts,
     )
     client = SimulatorEnvClient(server)
-    tools = ToolDispatcher(client)
+    tools = ToolDispatcher(client, default_registry())
     scene = client.start_scene(args.map_id)
     agent_id = "uav_1"
     results: list[dict[str, Any]] = []

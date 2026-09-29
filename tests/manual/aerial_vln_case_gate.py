@@ -14,7 +14,7 @@ import numpy as np
 from PIL import Image
 
 from evaluation.benchmarks.uav_flow.metric_suite import _backend_action_tracking
-from src.runtime.configs.action_config import load_uav_action_config
+from src.uav.config import load_uav_action_config
 from src.sim_server.remote.control import RemoteSceneControl
 from src.tools.registry import default_registry
 from src.uav.frames import pose_value, yaw_deg

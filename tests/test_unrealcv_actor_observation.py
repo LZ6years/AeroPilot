@@ -16,7 +16,7 @@ from PIL import Image
 import pytest
 
 from src.perception.raw_observation import RawObservation
-from tests.manual.unrealcv_local_actor_probe import (
+from tests.support.environment import (
     _assert_acceptance,
     _parse_object_color,
     _required_agl,

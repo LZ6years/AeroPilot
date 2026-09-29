@@ -7,8 +7,6 @@ import json
 from pathlib import Path
 import base64
 
-from src.agent.planning.model_inputs import build_model_user_content
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TINY_PNG = base64.b64decode(
@@ -45,8 +43,9 @@ def test_default_image_context_passes_latest_real_rgb_to_model_parts(tmp_path):
     module = load_eval_module()
     case = module.load_cases()[0]
 
-    context = module.build_case_context(case, work_dir=tmp_path / "case")
-    user_content = build_model_user_content(context)
+    run_dir = tmp_path / "case"
+    context = module.build_case_context(case, work_dir=run_dir)
+    user_content = module.build_model_user_content(context, run_dir=run_dir)
     result = module.evaluate_case_context(case, context, user_content)
 
     metrics = result["metrics"]
@@ -63,8 +62,9 @@ def test_default_image_context_passes_latest_real_rgb_to_model_parts(tmp_path):
 def test_visual_eval_results_are_redacted(tmp_path):
     module = load_eval_module()
     case = module.load_cases()[0]
-    context = module.build_case_context(case, work_dir=tmp_path / "case")
-    user_content = build_model_user_content(context)
+    run_dir = tmp_path / "case"
+    context = module.build_case_context(case, work_dir=run_dir)
+    user_content = module.build_model_user_content(context, run_dir=run_dir)
     result = module.evaluate_case_context(case, context, user_content)
 
     paths = module.write_outputs(
@@ -79,7 +79,7 @@ def test_visual_eval_results_are_redacted(tmp_path):
     redacted_text = (paths["redacted_payloads"] / f"{case['id']}.json").read_text(encoding="utf-8")
     assert "data:image/png;base64," not in output_text
     assert "data:image/png;base64," not in redacted_text
-    assert "<omitted>" in output_text
+    assert '"sha256"' in output_text
 
 
 def test_run_dir_can_generate_ad_hoc_visual_cases(tmp_path):
@@ -107,17 +107,20 @@ def test_explicit_past_now_pair_projects_only_latest_checkpoint_image(tmp_path):
         instruction="Describe only what is currently visible.",
     )
 
-    context = module.build_case_context(case, work_dir=tmp_path / "pair")
+    run_dir = tmp_path / "pair"
+    context = module.build_case_context(case, work_dir=run_dir)
     image = next(
         fragment for fragment in context["fragments"]
         if fragment["name"] == "image"
     )
-    assert [item["role"] for item in image["model_inputs"]] == ["current_observation"]
+    assert [
+        item["media_ref"]["role"] for item in image["model_inputs"]
+    ] == ["current_observation"]
 
-    content = build_model_user_content(context)
+    content = module.build_model_user_content(context, run_dir=run_dir)
     assert isinstance(content, list)
     assert [item["type"] for item in content] == ["text", "image_url", "text"]
-    assert json.loads(content[2]["text"])["active_instruction"] == case["instruction"]
+    assert json.loads(content[2]["text"])["observation_id"] == "obs_0002"
 
 
 def test_summary_counts_structural_passes():

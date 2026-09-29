@@ -6,7 +6,7 @@ from evaluation.benchmarks.aerial_vln.protocol import (
     AERIAL_VLN_PARSER_PROTOCOL_CONTEXT,
     AERIAL_VLN_PROTOCOL,
 )
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 def test_aerial_vln_v2_protocol_defines_episode_stop_without_physical_land():
@@ -21,7 +21,7 @@ def test_aerial_vln_v2_protocol_defines_episode_stop_without_physical_land():
     assert "parsed task_goal" not in context
     assert "phase name/goal" not in context
     assert "Seeing a landmark is different from reaching or passing it" in context
-    assert "Historical observations" in context
+    assert "historical passage requirements" in context
     assert "does not require physical ground contact" in context
     assert "Do not infer descent" in context
     assert "independently requested" in context

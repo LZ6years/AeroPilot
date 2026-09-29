@@ -9,13 +9,13 @@ from pathlib import Path
 import pytest
 
 from src.memory.context.modules.skills import DefaultSkillsContextModule
-from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
+from src.memory.context.contracts import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.plugins.core.discovery import PluginDiscovery
 from src.plugins.core.registry import PluginRegistry
 from src.plugins.skills import SkillContentLoader
 from src.plugins.skills.loader import DEFAULT_MAX_SKILL_CHARS
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 EXPECTED_UAV_FLIGHT_SKILLS = {
@@ -121,8 +121,8 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
     assert "Visual Target Task Reasoning" in summary["skill_text"]
     normalized_summary = " ".join(summary["skill_text"].split())
     assert "## Evidence Model" in summary["skill_text"]
-    assert "target absent" in normalized_summary
-    assert "weak candidate" in normalized_summary
+    assert "no candidate currently observed" in normalized_summary
+    assert "uncertain candidate" in normalized_summary
     assert "directional cue" in normalized_summary
     assert "usable bearing" in normalized_summary
     assert "Current bearing supports alignment" in normalized_summary
@@ -133,7 +133,7 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
     assert "correct only when the cue is near the frame boundary" not in normalized_summary
     assert "broad usable forward region" not in normalized_summary
     assert "an explicit request" in normalized_summary
-    assert "Do not restart or reverse broad search" in normalized_summary
+    assert "Contradicted attributes" in normalized_summary
     assert "alternate around an already usable bearing" in normalized_summary
     assert "left/negative yaw" not in normalized_summary
     assert "right/positive yaw" not in normalized_summary
@@ -153,8 +153,8 @@ def test_skill_loader_lists_references_without_executing_scripts():
 
     visual_refs = summaries["visual_target_task_reasoning"]["available_references"]
     assert visual_refs == ["references/search_under_uncertainty.md"]
-    assert "target absent" in summaries["visual_target_task_reasoning"]["skill_text"]
-    assert "weak candidate" in summaries["visual_target_task_reasoning"]["skill_text"]
+    assert "no candidate currently observed" in summaries["visual_target_task_reasoning"]["skill_text"]
+    assert "uncertain candidate" in summaries["visual_target_task_reasoning"]["skill_text"]
     assert "30-45 degrees" not in summaries["visual_target_task_reasoning"]["skill_text"]
     assert summaries["visual_target_task_reasoning"]["assets"]["scripts"] == []
     planner_guidance = SkillContentLoader().load_planner_guidance(accepted[0])
@@ -174,7 +174,7 @@ def test_skill_loader_lists_references_without_executing_scripts():
         requested_references=["references/search_under_uncertainty.md"],
     )
     assert planner_guidance_with_ref["requested_references"][0]["path"] == "references/search_under_uncertainty.md"
-    assert "30-45 degrees" in planner_guidance_with_ref["requested_references"][0]["text"]
+    assert "view overlap" in planner_guidance_with_ref["requested_references"][0]["text"]
 
 
 def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmation():
@@ -185,21 +185,18 @@ def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmati
     normalized_skill_text = " ".join(skill_text.split())
     normalized_reference_text = " ".join(reference_text.split())
 
-    assert "target absent" in normalized_skill_text
-    assert "weak candidate" in normalized_skill_text
+    assert "no candidate currently observed" in normalized_skill_text
+    assert "uncertain candidate" in normalized_skill_text
     assert "directional cue" in normalized_skill_text
     assert "30-45 degrees" not in normalized_skill_text
     assert "current phase decision" not in normalized_skill_text
     assert "artifact paths" not in normalized_skill_text
     assert "hidden benchmark" not in normalized_skill_text
-    assert "sweep consistently into new views" in normalized_skill_text
-    assert "Absence alone does not justify reversal" in normalized_skill_text
-    assert "stop broad search" in normalized_skill_text
-    assert "30-45 degrees is broad search, not a small/local confirmation turn" in normalized_reference_text
-    assert "stop broad sweeping and compare the available evidence" in normalized_reference_text
-    assert "5-15 degree yaw can expose missing detail" in normalized_reference_text
-    assert "continue a 30-45 degree broad sweep as if it were confirmation" in normalized_reference_text
-    assert "Reverse a broad sweep only when" in normalized_reference_text
+    assert "Inspection does not accept identity" in normalized_skill_text
+    assert "Contradicted attributes" in normalized_skill_text
+    assert "view overlap" in normalized_reference_text
+    assert "30-45" not in reference_text and "5-15" not in reference_text
+    assert "Reorient when evidence changes" in normalized_reference_text
 
 
 def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_reference():
@@ -302,25 +299,13 @@ def test_approach_skill_stops_before_overshoot_and_excludes_route_references():
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill_text.split())
 
-    assert "Exclude routes ending through, past, beyond, across, or around a reference" in normalized
-    assert "final held front/back/side position" in normalized
-    assert "A side relation belongs here only when the UAV must stop or hold there" in normalized
-    assert "target visibility can conflict with traversal" in normalized
-    assert "Target identity and target-relative range are independently assessable facts" not in normalized
-    assert "For qualitative requests, form a credible rough range" in normalized
-    assert "Assess identity and range separately" not in normalized
-    assert "precision and geometric meaning match the requested tolerance" in normalized
-    assert "Yaw cannot reach a distance or side relation" in normalized
-    assert "familiar scale, ground contact" not in normalized
-    assert "clearly place the UAV too far" in normalized
-    assert "clearly place it too near" in normalized
+    assert "Traversal belongs to route guidance" in normalized
+    assert "Observation-only approach does not establish identity" in normalized
+    assert "UAV displacement is not target distance" in normalized
     assert "before correcting distance" in normalized
-    assert "Completion requires credible target identity. Separately" not in normalized
-    assert "broadly near the requested relation" in normalized
-    assert "explicit metric standoff additionally requires fresh target-relative distance evidence" in normalized
-    assert "Do not infer a decimal distance from the color bar" in normalized
-    assert "Reverse only when new evidence clearly places the relation on the opposite side" in normalized
-    assert "contains the requested value" not in normalized
+    assert "Numeric standoff needs valid target-relative measurement" in normalized
+    assert "no repeated measurement is imposed" in normalized
+    assert "not an obligatory direction" in normalized
     forbidden_terms = [
         "UAV-Flow",
         "UnrealCV",
@@ -464,11 +449,11 @@ def test_skill_catalog_rejects_unknown_reference_paths():
 
 def test_skills_context_is_directory_only_and_load_index_is_isolated():
     registry = _uav_flight_registry()
-    module = DefaultSkillsContextModule(plugin_registry=registry)
+    module = DefaultSkillsContextModule(warnings=registry.warnings)
     state = TaskContextInput("Inspect route", loaded_knowledge=[{"name": "route_traversal_and_passage"}])
-    fragment = module.build(MemorySourceBundle(None), state)
-    assert fragment.content["knowledge_catalog"]
-    assert "skill_text" not in str(fragment.content)
-    assert "selected_skills" not in fragment.content
-    fragment.content["loaded_knowledge"].clear()
+    result = module.build(MemorySourceBundle(None), state)
+    assert result.fragment.model_content == {}
+    assert "skill_text" not in str(result.fragment.model_content)
+    assert "selected_skills" not in result.fragment.model_content
+    assert "knowledge_catalog" not in result.fragment.model_content
     assert len(state.loaded_knowledge) == 1

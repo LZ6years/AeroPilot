@@ -26,7 +26,7 @@ from plugins.research.custom_map.perception import (
     run_closed_set_segmentation,
 )
 from plugins.research.custom_map.perception.segmentation_writer import append_segmentation_result
-from src.memory.context.schemas import MemorySourceBundle, TaskContextInput
+from src.memory.context.contracts import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryRecordReader
 

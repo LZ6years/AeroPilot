@@ -7,8 +7,9 @@ import numpy as np
 import pytest
 
 from src.adapters.airsim.capture import AirSimCapture
+from src.agent.context.media import MediaHydrator
+from src.memory.context.media_refs import image_media_ref
 from src.perception.frame_payload import load_rgb_frame, load_depth_frame
-from src.memory.context.modules.image import latest_rgb_model_inputs_from_frame
 from plugins.capabilities.visual_grounding.locate.scripts.depth import load_metric_depth
 
 
@@ -25,7 +26,16 @@ def test_capture_memory_and_file_have_identical_pixels_and_depth(tmp_path):
         rgb = capture(root, "scene", save=save, raw=bytes(range(12)))
         depth = capture(root, "depth_perspective", save=save, floats=[1, 2, 3, 4])
         assert root.exists() is save
-        assert latest_rgb_model_inputs_from_frame(rgb)[0]["data"].startswith("data:image/png;base64,")
+        if save:
+            ref = image_media_ref(
+                rgb["artifact_path"],
+                observation_id="obs_1",
+                frame_id="frame_1",
+                role="current_observation",
+            )
+            assert MediaHydrator().hydrate(ref).data_url.startswith(
+                "data:image/png;base64,"
+            )
         np.testing.assert_array_equal(load_depth_frame(depth, require_metric=True), load_metric_depth(depth))
         results.append((load_rgb_frame(rgb).tobytes(), load_depth_frame(depth), rgb["base64"], depth["base64"]))
     assert results[0][0] == results[1][0]
@@ -54,7 +64,7 @@ def test_depth_vis_cannot_be_consumed_as_meters(tmp_path):
 @pytest.mark.parametrize("payload", ["bad%%%", base64.b64encode(b"not an image").decode()])
 def test_bad_payload_is_explicit_failure(payload):
     with pytest.raises((ValueError, OSError)):
-        latest_rgb_model_inputs_from_frame({"base64": payload})
+        load_rgb_frame({"base64": payload})
 
 
 def test_nested_metadata_and_missing_file_fall_back_to_valid_payload(tmp_path):

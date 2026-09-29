@@ -9,7 +9,7 @@ from PIL import Image
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.visual_diagnostics import write_visual_diagnostics
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 def make_case() -> UavFlowCase:

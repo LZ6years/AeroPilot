@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -23,7 +24,14 @@ from evaluation.benchmarks.uav_flow.cases import UavFlowCase, load_cases, load_c
 from evaluation.benchmarks.uav_flow.config import DEFAULT_UAV_FLOW_REPO
 
 
-DEFAULT_OUTPUT = REPO_ROOT / "tests" / "manual_outputs" / "uav_flow_skill_selection_cases.json"
+DEFAULT_OUTPUT = (
+    REPO_ROOT
+    / "runs"
+    / "experiments"
+    / "uav_flow_skill_selection_cases"
+    / datetime.now().strftime("%Y%m%d_%H%M%S")
+    / "cases.json"
+)
 
 
 def _semantic_hint(

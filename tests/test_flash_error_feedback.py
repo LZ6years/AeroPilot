@@ -10,11 +10,9 @@ import pytest
 from src.agent.planning.model_action_planner import _parse_assistant_turn, AgentProtocolError
 from src.runtime.control.actions.terminal import apply_terminal
 from src.tools.registry import default_registry
-from tests.manual.process_diagnostics import supervise
-from tests.manual.supervised_flight_probe import cleanup_owned, write_review
-from tests.manual.task_progress_guidance_probe import schema_contract
-from tests.test_model_action_planner import response_with_calls
-from tests.test_unified_tool_loop import harness, move, done
+from tests.support.planner import response_with_calls, schema_contract
+from tests.support.process import cleanup_owned, supervise, write_review
+from tests.support.runtime import done, harness, move, run_loop
 
 
 @pytest.mark.parametrize('number',['00.3','00.5','-00.3'])
@@ -56,7 +54,7 @@ def test_rejected_turn_executes_no_action_before_retry(tmp_path):
             raise AgentProtocolError('invalid JSON; no actions executed')
         return original(*args,**kwargs)
     runtime.planner.plan_turn=reject_then_continue
-    runtime._execute_instruction_loop(scene,'uav',state)
+    run_loop(runtime, state, scene)
     assert state.completed and state.physical_window_count==1
     assert sum(action=='move_body' for action,_ in backend.actions)==1
 
