@@ -30,7 +30,7 @@ from evaluation.benchmarks.uav_flow.reports import failure_counts
 
 
 RUN_MANIFEST_SCHEMA = "uav_flow_run_manifest_v1"
-LOOP_SCHEMA = "unified_tool_loop_v1"
+LOOP_SCHEMA = "unified_tool_loop_v2"
 CAMPAIGN_AUDIT_SCHEMA = "uav_flow_campaign_audit_v1"
 _CONFIG_SELECTOR_FIELDS = {"case_ids", "classes", "limit_per_class", "max_cases"}
 _CONFIG_LOCATION_FIELDS = {"output_dir", "run_root", "env_path"}
@@ -173,7 +173,7 @@ def audit_campaign(
         if manifest.get("loop_schema") != LOOP_SCHEMA:
             segment_compatible = False
             _violate(violations, "loop_schema_mismatch",
-                     "formal campaigns require unified_tool_loop_v1; legacy or mixed loops cannot be merged",
+                     "formal campaigns require unified_tool_loop_v2; legacy or mixed loops cannot be merged",
                      segment=segment_name)
 
         if manifest.get("schema_version") != RUN_MANIFEST_SCHEMA:

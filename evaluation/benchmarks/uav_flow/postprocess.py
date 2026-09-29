@@ -315,6 +315,7 @@ def _audit_from_payload(payload: dict[str, Any]) -> BenchmarkAuditLog:
         agent_transcript=tuple(
             _dict_items(payload.get("agent_transcript"))
         ),
+        tool_completions=tuple(_dict_items(payload.get("tool_completions"))),
         observation_anchors={
             str(key): dict(value)
             for key, value in _optional_dict(

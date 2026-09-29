@@ -14,6 +14,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from src.runtime.context.checkpoints import (
+    UnsupportedRunSchema,
+    load_state_checkpoint,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -83,7 +88,16 @@ def evaluate_run(run_dir: Path, suite: dict[str, Any], task_id: str | None = Non
         run_dir / "latest_state.json",
         run_dir / "mission_state.json",
     ) or {}
-    latest_context = load_json(run_dir / "contexts" / "latest_context.json") or {}
+    checkpoint_path = run_dir / "contexts" / "latest_checkpoint.json"
+    legacy_context_path = run_dir / "contexts" / "latest_context.json"
+    if checkpoint_path.is_file():
+        latest_checkpoint = load_state_checkpoint(checkpoint_path)
+    elif legacy_context_path.is_file():
+        raise UnsupportedRunSchema(
+            f"V1 context artifact is unsupported: {legacy_context_path}"
+        )
+    else:
+        latest_checkpoint = {}
     latest_action_context = load_json(run_dir / "contexts" / "latest_action_planner_model_context.json") or {}
     demo_summary = load_json(run_dir / "demo" / "summary.json") or {}
     run_config = load_json(run_dir / "config" / "model_config.json") or {}
@@ -97,7 +111,7 @@ def evaluate_run(run_dir: Path, suite: dict[str, Any], task_id: str | None = Non
     metrics = {
         "run_dir": str(run_dir),
         "task": task_summary(task),
-        "basic": evaluate_basic(latest_state, latest_context, phase_contexts, demo_summary),
+        "basic": evaluate_basic(latest_state, latest_checkpoint, phase_contexts, demo_summary),
         "actions": evaluate_actions(action_sequence),
         "action_windows": evaluate_action_windows(phase_contexts, all_events),
         "agent_messages": evaluate_agent_messages(all_events, demo_summary),
@@ -112,7 +126,7 @@ def evaluate_run(run_dir: Path, suite: dict[str, Any], task_id: str | None = Non
             "legacy_mission_state": (run_dir / "mission_state.json").exists(),
             "events": (run_dir / "events.jsonl").exists(),
             "debug_events": (run_dir / "debug" / "debug_events.jsonl").exists(),
-            "latest_context": (run_dir / "contexts" / "latest_context.json").exists(),
+            "latest_checkpoint": checkpoint_path.exists(),
             "latest_action_planner_model_context": (run_dir / "contexts" / "latest_action_planner_model_context.json").exists(),
         },
     }
@@ -323,7 +337,7 @@ def extract_observations(events: list[dict[str, Any]], latest_state: dict[str, A
 
 def evaluate_basic(
     latest_state: dict[str, Any],
-    latest_context: dict[str, Any],
+    latest_checkpoint: dict[str, Any],
     phase_contexts: list[dict[str, Any]],
     demo_summary: dict[str, Any],
 ) -> dict[str, Any]:
@@ -331,11 +345,11 @@ def evaluate_basic(
     completed_values = [item.get("completed") for item in instructions if isinstance(item, dict)]
     completed = bool(latest_state.get("completed")) or bool(completed_values and all(value is True for value in completed_values))
     return {
-        "passed": completed and bool(latest_context),
+        "passed": completed and bool(latest_checkpoint),
         "completed": completed,
         "connected": latest_state.get("connected"),
         "airborne": latest_state.get("airborne"),
-        "has_latest_context": bool(latest_context),
+        "has_latest_checkpoint": bool(latest_checkpoint),
         "has_phase_context": bool(phase_contexts),
         "instruction_count": len(instructions) if isinstance(instructions, list) else 0,
     }
@@ -832,7 +846,7 @@ def build_markdown_report(metrics: dict[str, Any]) -> str:
         f"- completed: `{metrics['basic'].get('completed')}`",
         f"- connected: `{metrics['basic'].get('connected')}`",
         f"- airborne: `{metrics['basic'].get('airborne')}`",
-        f"- has latest context: `{metrics['basic'].get('has_latest_context')}`",
+        f"- has latest checkpoint: `{metrics['basic'].get('has_latest_checkpoint')}`",
         f"- has phase context: `{metrics['basic'].get('has_phase_context')}`",
         "",
         "## Actions",

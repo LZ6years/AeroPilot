@@ -15,7 +15,7 @@ TRAVEL_UAV_PROTOCOL = (
 TRAVEL_UAV_PARSER_PROTOCOL_CONTEXT = """TravelUAV transfer-evaluation protocol:
 Task goal: Find the described target using its initial direction, appearance and surrounding spatial relations.
 Instruction interpretation: A relative yaw supplied in the initial instruction is anchored to the UAV orientation at instruction start; do not reinterpret it relative to each later heading. Surrounding-scene descriptions help identify the target and are not automatically an ordered route to traverse.
-Information characteristics: A direction supplies neither target distance nor guaranteed immediate visibility. Turning toward it may need to be followed by movement through observed feasible space to reveal the target. The transfer setting uses available front-view observations, not an assumed multi-view assistant.
+Information characteristics: An initial direction supplies neither target distance nor guaranteed immediate visibility; a search direction and a visible target are different information. The transfer setting uses available front-view observations, not an assumed multi-view assistant.
 Completion conditions:
 - Navigate until the described target object and its surrounding spatial relation are visually confirmed.
 - A distant or ambiguous candidate sighting is not sufficient for completion; finish only after reaching a nearby, judgeable target region and then end the episode.

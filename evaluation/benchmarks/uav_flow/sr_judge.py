@@ -8,7 +8,7 @@ import urllib.request
 from typing import Any
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
-from src.runtime.configs.model_config import ModelConfig, load_model_config
+from src.agent.config import ModelConfig, load_model_config
 
 LOW_NDTW_FAILURE_THRESHOLD = 0.05
 ROTATION_CLASSES = {"Turn", "Rotate"}

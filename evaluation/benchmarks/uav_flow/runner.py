@@ -63,16 +63,16 @@ from src.env_client import (
     load_observation_profile,
 )
 from src.memory.context.modules import DefaultImageContextModule
+from src.memory.context.builder import ModelContextBuilder
 from src.memory.context.registry import ContextModuleRegistry
-from src.perception.context_builder import ObservationContextBuilder
-from src.plugins import PluginRegistry
 from src.runtime.configs import load_map_config
-from src.runtime.configs.action_config import load_uav_action_config
-from src.runtime.configs.model_config import load_model_config
-from src.runtime.configs.safety_config import load_uav_safety_config
+from src.agent.config import load_model_config
+from src.runtime.context import ModelMediaStore
+from src.runtime.factory import RuntimeFactory
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
 from src.runtime.runners.task_runtime import TaskRuntime
+from src.uav.config import load_uav_action_config, load_uav_safety_config
 from src.sim_server.execution import SimulationExecutionMode
 from src.sim_server.server import SimulationServer
 
@@ -94,7 +94,8 @@ class UavFlowBenchmarkRunner:
         self.model_config = load_model_config(config.env_path)
         self.action_config = _benchmark_action_config(config)
         self.safety_config = _benchmark_safety_config(config)
-        self.plugin_registry = PluginRegistry.from_config()
+        self.runtime_factory = RuntimeFactory()
+        self.plugin_registry = self.runtime_factory.plugin_registry
         self._stmr_session = stmr_session
         self._stmr_warmed = False
         self._case_reviews: dict[str, BenchmarkCaseReview] = {}
@@ -355,7 +356,7 @@ class UavFlowBenchmarkRunner:
                     session.prepare_episode(episode)
                 episode_prepared = False
                 planner = ModelActionPlanner(self.model_config)
-                context_builder, stmr_module = self._context_builder(planner)
+                context_builder, stmr_module = self._context_builder(run_dir)
                 runtime = self._make_runtime(
                     run_dir,
                     recorder,
@@ -813,7 +814,7 @@ class UavFlowBenchmarkRunner:
         recorder: AsyncRunLogger,
         *,
         planner: Any,
-        context_builder: ObservationContextBuilder | None,
+        context_builder: ModelContextBuilder | None,
         env_client: SimulatorEnvClient | None = None,
     ) -> TaskRuntime:
         if env_client is None:
@@ -821,15 +822,13 @@ class UavFlowBenchmarkRunner:
             env_client = SimulatorEnvClient(
                 server, observation_profile=self.observation_profile
             )
-        return TaskRuntime(
+        return self.runtime_factory.create_task_runtime(
             env_client,
             recorder,
             planner=planner,
             safety=SafetySupervisor(self.safety_config),
             shutdown_policy=self.config.shutdown_policy,
-            action_config=self.action_config,
             runtime_loop_guard_windows=self.config.runtime_loop_guard_windows,
-            enable_action_planner_debug=self.config.enable_action_planner_debug,
             context_builder=context_builder,
             model_config=self.model_config,
         )
@@ -919,22 +918,20 @@ class UavFlowBenchmarkRunner:
 
     def _context_builder(
         self,
-        planner: Any,
+        run_dir: Path,
     ) -> tuple[
-        ObservationContextBuilder | None, StmrMapContextModule | None
+        ModelContextBuilder | None, StmrMapContextModule | None
     ]:
         include_depth = self.config.planner_depth_input == "now"
         include_stmr = self.config.stmr_mode != "off"
         if not include_depth and not include_stmr:
             return None, None
-        default_registry = ContextModuleRegistry.default(
-            plugin_registry=self.plugin_registry,
-
-        )
+        default_registry = self.runtime_factory.context_registry(run_dir)
         modules = dict(default_registry.modules)
         if include_depth:
             modules["image"] = DefaultImageContextModule(
-                include_current_depth=True
+                include_current_depth=True,
+                media_writer=ModelMediaStore(run_dir),
             )
         stmr_module: StmrMapContextModule | None = None
         if include_stmr:
@@ -950,12 +947,17 @@ class UavFlowBenchmarkRunner:
             modules,
             disabled=default_registry.disabled,
             module_order=default_registry.module_order,
+            history_policies=default_registry.history_policies,
         )
         return (
-            ObservationContextBuilder(
+            ModelContextBuilder(
                 safety_config=self.safety_config,
                 registry=registry,
-                plugin_registry=self.plugin_registry,
+                knowledge_catalog=[
+                    {"name": skill.name, "description": skill.description}
+                    for skill in self.plugin_registry.skill_catalog.skills
+                    if skill.capability is None
+                ],
             ),
             stmr_module,
         )

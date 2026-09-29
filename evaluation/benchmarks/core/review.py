@@ -22,10 +22,7 @@ from evaluation.benchmarks.core.audit import (
 )
 from evaluation.benchmarks.core.trace import PHYSICAL_WINDOW_EVENTS
 from evaluation.benchmarks.core.report_io import atomic_write_text
-from src.agent.planning.model_inputs import (
-    build_model_user_content,
-    select_model_image_inputs,
-)
+from src.agent.context.request_assembler import RequestAssembler
 
 
 @dataclass(frozen=True)
@@ -214,6 +211,7 @@ class BenchmarkReviewRenderer:
                       f'<h1>{_e(case.case_id)}</h1><p class="instruction">{_e(case.instruction)}</p>'
                       + _compact_outcome(case)
                       + _review_alerts(case, case_dir)
+                      + _uncommitted_results_review(case.audit, case_dir)
                       + ''.join(_section_html(s, case_dir) for s in case.sections if s.primary or s.kind == "trajectory_ned")
                       + _initial_plan_review(case.audit)
                       + _phase_decision_review(case.audit, case.frame_assets, case_dir, planner_input_assets)
@@ -240,6 +238,7 @@ class BenchmarkReviewRenderer:
                 '<p class="muted">Protocol: '
                 f"<code>{_e(case.protocol_variant)}</code></p>"
                 + _compact_outcome(case)
+                + _uncommitted_results_review(case.audit, case_dir)
                 + _initial_plan_review(case.audit)
                 + _phase_decision_review(case.audit, case.frame_assets, case_dir, planner_input_assets)
                 + '<details class="advanced-audit"><summary>Advanced audit · 完整记录与实际请求</summary>'
@@ -278,6 +277,50 @@ class BenchmarkReviewRenderer:
                 "</details>"
             ),
         )
+
+
+def _uncommitted_results_review(audit, case_dir):
+    """Show received-but-uncommitted facts without repairing task history."""
+    import hashlib
+    import shutil
+
+    receipts = audit.uncommitted_tool_completions()
+    if not receipts:
+        return ""
+    cards = []
+    run_dir = Path(audit.run_dir).resolve()
+    for receipt in receipts:
+        images = []
+        data = _dict(_dict(receipt.get("result")).get("data"))
+        media = data.get("_flyagent_model_inputs", [])
+        for item in media if isinstance(media, list) else []:
+            if not isinstance(item, dict) or item.get("type") != "image":
+                continue
+            source = item.get("path") or item.get("artifact_ref")
+            if not source:
+                continue
+            path = Path(str(source))
+            path = (path if path.is_absolute() else run_dir / path).resolve()
+            # Capability artifacts belong to this run. Do not export arbitrary
+            # paths from a corrupt or externally supplied completion record.
+            if not path.is_relative_to(run_dir) or not path.is_file():
+                continue
+            if path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
+                continue
+            digest = hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+            target = case_dir / "review_assets" / "completions" / (digest + path.suffix.lower())
+            if len(str(target.resolve())) > 240:
+                raise ValueError("Completion review asset path exceeds 240 characters")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if not target.exists():
+                shutil.copyfile(path, target)
+            images.append({"path": str(target), "label": item.get("label", "Tool evidence")})
+        cards.append(_json_details(receipt, "Completed result / not committed")
+                     + _image_group(images, case_dir))
+    return ('<section class="completion-results"><h2>Interrupted batch · 无最终评分</h2>'
+            '<p>Results below were saved before ordered submission. They are not '
+            'canonical task evidence or a final navigation score.</p>'
+            + ''.join(cards) + '</section>')
 
 
 def _review_alerts(case: BenchmarkCaseReview, case_dir: Path) -> str:
@@ -327,7 +370,7 @@ def _compact_outcome(case: BenchmarkCaseReview) -> str:
 
 def _initial_plan_review(audit: BenchmarkAuditLog) -> str:
     """Only the pre-execution event is authoritative for the initial full plan."""
-    if any(r.get("loop_schema") == "unified_tool_loop_v1" for r in getattr(audit, "planner_debug", ())):
+    if any(r.get("loop_schema") == "unified_tool_loop_v2" for r in getattr(audit, "planner_debug", ())):
         return ('<section><h2>Optional task plan</h2><p>No fixed Phase plan is required. '
                 'Each decision shows the plan available at that time; updates are tool results, '
                 'not proof of task completion.</p></section>')
@@ -363,7 +406,7 @@ def _phase_decision_review(audit, frame_assets, case_dir, input_assets) -> str:
     ungrouped = []
     ids = [r.get("decision_id") for r in audit.planner_debug]
     for record in audit.planner_debug:
-        unified = record.get("loop_schema") == "unified_tool_loop_v1"
+        unified = record.get("loop_schema") == "unified_tool_loop_v2"
         if (not unified and not record.get("phase_key")) or not record.get("decision_id") or ids.count(record.get("decision_id")) != 1:
             ungrouped.append(record)
             continue
@@ -427,7 +470,7 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
         if isinstance(index, int) and 0 <= index < len(stages):
             return f"{index}: {stages[index]}"
         return str(index) if strategy else "尚未初始化"
-    unified = record.get("loop_schema") == "unified_tool_loop_v1"
+    unified = record.get("loop_schema") == "unified_tool_loop_v2"
     if unified:
         plan = _dict(context.get("task_plan"))
         parts.append('<p>Plan revision at checkpoint: ' + _e(plan.get("revision", "No plan created")) + '</p>')
@@ -1416,68 +1459,11 @@ def _materialize_planner_input_assets(
                 model_rounds,
             )
             continue
-        context = _dict(record.get("planner_context"))
-        image_mode, attempt = _successful_image_request(record)
-        if not context:
-            assets_by_record[record_key] = [
-                {"unavailable_reason": "planner_context_not_saved"}
-            ]
-            continue
-        try:
-            images = select_model_image_inputs(
-                context,
-                image_mode=image_mode,
-            )
-        except ValueError as exc:
-            assets_by_record[record_key] = [
-                {"unavailable_reason": f"image_selection_error:{exc}"}
-            ]
-            continue
-        if not images:
-            assets_by_record[record_key] = [
-                {"unavailable_reason": "no_valid_model_images"}
-            ]
-            continue
-
-        assets: list[dict[str, Any]] = []
-        for order, image in enumerate(images, start=1):
-            payload = _decode_model_image_data_url(image.get("data"))
-            input_id = str(image.get("input_id") or f"image_{order}")
-            if payload is None:
-                assets.append(
-                    {
-                        "order": order,
-                        "input_id": input_id,
-                        "role": image.get("role"),
-                        "usage": image.get("usage"),
-                        "image_mode": image_mode,
-                        "attempt": attempt,
-                        "unavailable_reason": "invalid_model_image_data_url",
-                    }
-                )
-                continue
-            bytes_value, suffix = payload
-            safe_input_id = _safe_asset_name(input_id)
-            target = destination / (
-                f"window_{int(record.get('window_index') or 0):03d}_"
-                f"{order:02d}_{safe_input_id}{suffix}"
-            )
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(bytes_value)
-            assets.append(
-                {
-                    "path": str(target),
-                    "order": order,
-                    "input_id": input_id,
-                    "role": image.get("role"),
-                    "usage": image.get("usage"),
-                    "observation_id": image.get("observation_id"),
-                    "frame_id": image.get("frame_id"),
-                    "image_mode": image_mode,
-                    "attempt": attempt,
-                }
-            )
-        assets_by_record[record_key] = assets
+        # V2 review never regenerates media from a checkpoint. Exact provider
+        # occurrences come only from the captured request-media audit above.
+        assets_by_record[record_key] = [
+            {"unavailable_reason": "provider_request_media_not_captured"}
+        ]
     return assets_by_record
 
 
@@ -2514,7 +2500,9 @@ def _model_facing_context_text(context: dict[str, Any]) -> str:
     if not context:
         return "missing planner context"
     try:
-        user_content = build_model_user_content(context)
+        user_content = RequestAssembler().checkpoint_content(
+            context, model_inputs=[], timeline_role="CURRENT"
+        )
     except Exception as exc:
         # Review generation must remain available for partial or legacy debug
         # records even when they no longer satisfy the live model-input

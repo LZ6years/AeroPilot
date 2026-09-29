@@ -55,23 +55,22 @@ from src.env_client import (
 )
 from src.memory.context.registry import ContextModuleRegistry
 from src.memory.context.modules.image import DefaultImageContextModule
-from src.memory.context.schemas import TaskContextInput
+from src.memory.context.builder import ModelContextBuilder
+from src.memory.context.contracts import TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryRecordReader
-from src.perception.context_builder import ObservationContextBuilder
-from src.plugins import PluginRegistry
 from src.runtime.configs import load_map_config
-from src.runtime.configs.action_config import load_uav_action_config
-from src.runtime.configs.model_config import load_model_config
-from src.runtime.configs.safety_config import load_uav_safety_config
+from src.agent.config import load_model_config
 from src.runtime.configs.stabilization_config import (
     UavStabilizationConfig,
 )
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
+from src.runtime.factory import RuntimeFactory
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.sim_server.execution import SimulationExecutionMode
 from src.sim_server.server import SimulationServer
+from src.uav.config import load_uav_action_config, load_uav_safety_config
 
 
 @dataclass(frozen=True)
@@ -114,7 +113,8 @@ class AerialVlnBenchmarkRunner:
         self._loaded_model_config: Any | None = None
         self.action_config = _action_config(config)
         self.safety_config = _safety_config(config)
-        self.plugin_registry = PluginRegistry.from_config()
+        self.runtime_factory = RuntimeFactory()
+        self.plugin_registry = self.runtime_factory.plugin_registry
         self._stmr_session = stmr_session
         self._stmr_warmed = False
         self._stmr_warmup_error: dict[str, str] | None = None
@@ -783,9 +783,7 @@ class AerialVlnBenchmarkRunner:
     ) -> TaskRuntime:
         model_config = self._model_config()
         active_planner = planner or ModelActionPlanner(model_config)
-        context_builder, stmr_module = self._planner_context_builder(
-            active_planner
-        )
+        context_builder, stmr_module = self._planner_context_builder(run_dir)
         if stmr_module is not None:
             self._stmr_modules[str(run_dir)] = stmr_module
         server_mode = SimulationExecutionMode.parse(self.config.execution_mode)
@@ -798,7 +796,7 @@ class AerialVlnBenchmarkRunner:
             action_config=self.action_config,
             save_artifacts=self.config.save_artifacts,
         )
-        return TaskRuntime(
+        return self.runtime_factory.create_task_runtime(
             SimulatorEnvClient(
                 server, observation_profile=self.observation_profile
             ),
@@ -806,16 +804,12 @@ class AerialVlnBenchmarkRunner:
             planner=active_planner,
             safety=SafetySupervisor(self.safety_config),
             shutdown_policy=self.config.shutdown_policy,
-            action_config=self.action_config,
             stabilization_config=UavStabilizationConfig(
                 initialization_min_settle_sec=(
                     self.config.initialization_min_settle_sec
                 )
             ),
             runtime_loop_guard_windows=self.config.runtime_loop_guard_windows,
-            enable_action_planner_debug=(
-                self.config.enable_action_planner_debug
-            ),
             context_builder=context_builder,
             model_config=model_config,
             read_only_execution_config=self.read_only_execution_config,
@@ -823,19 +817,16 @@ class AerialVlnBenchmarkRunner:
 
     def _planner_context_builder(
         self,
-        planner: Any,
+        run_dir: Path,
     ) -> tuple[
-        ObservationContextBuilder | None,
+        ModelContextBuilder | None,
         StmrMapContextModule | None,
     ]:
         """Install STMR only when it is allowed to affect model context."""
 
         if self.config.stmr_mode != "planner":
             return None, None
-        default_registry = ContextModuleRegistry.default(
-            plugin_registry=self.plugin_registry,
-
-        )
+        default_registry = self.runtime_factory.context_registry(run_dir)
         modules = dict(default_registry.modules)
         image_module = DefaultImageContextModule()
         stmr_module = StmrMapContextModule(
@@ -852,12 +843,17 @@ class AerialVlnBenchmarkRunner:
             modules,
             disabled=default_registry.disabled,
             module_order=module_order,
+            history_policies=default_registry.history_policies,
         )
         return (
-            ObservationContextBuilder(
+            ModelContextBuilder(
                 safety_config=self.safety_config,
                 registry=registry,
-                plugin_registry=self.plugin_registry,
+                knowledge_catalog=[
+                    {"name": skill.name, "description": skill.description}
+                    for skill in self.plugin_registry.skill_catalog.skills
+                    if skill.capability is None
+                ],
             ),
             stmr_module,
         )
@@ -870,7 +866,7 @@ class AerialVlnBenchmarkRunner:
     ) -> tuple[StmrMapContextModule, dict[str, str] | None]:
         """Build report-only STMR after Runtime logging has closed.
 
-        Keeping shadow outside ContextComposer guarantees that neither task
+        Keeping shadow outside model-context assembly guarantees that neither task
         parsing nor Planner requests change while the spatial map is evaluated.
         """
 
@@ -1264,7 +1260,7 @@ def _task_plan_diagnostics(
     latest_state = _read_json_object(run_dir / "state" / "latest_state.json")
     plan = latest_state.get("task_plan")
     return {
-        "loop_schema": "unified_tool_loop_v1",
+        "loop_schema": "unified_tool_loop_v2",
         "plan_created": isinstance(plan, dict),
         "task_plan": plan,
         "stopped_reason": outcome.get("stopped_reason"),

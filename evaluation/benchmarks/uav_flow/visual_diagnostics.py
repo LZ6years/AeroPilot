@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ModelConfig
 
 
 SCHEMA_VERSION = "uav_flow_visual_diagnostics_v1"

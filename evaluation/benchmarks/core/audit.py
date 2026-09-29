@@ -17,6 +17,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from src.memory.context.contracts import (
+    INSTRUCTION_ENVELOPE_SCHEMA,
+    STATE_CHECKPOINT_SCHEMA,
+    TRANSCRIPT_SCHEMA,
+)
+from src.runtime.context.checkpoints import UnsupportedRunSchema
+
 from .trace import PHYSICAL_WINDOW_EVENTS
 
 
@@ -27,6 +34,7 @@ _AUDIT_FILES = (
     "memory/frames.jsonl",
     "memory/agent_messages.jsonl",
     "memory/agent_transcript.jsonl",
+    "memory/tool_completions.jsonl",
     "events.jsonl",
     "debug/debug_events.jsonl",
 )
@@ -119,6 +127,18 @@ class BenchmarkAuditLog:
     # Appended after existing optional fields to preserve positional-call
     # compatibility for external BenchmarkAuditLog constructors.
     agent_transcript: tuple[dict[str, Any], ...] = ()
+    tool_completions: tuple[dict[str, Any], ...] = ()
+
+    def uncommitted_tool_completions(self):
+        """Receipts are audit facts, never reconstructed canonical evidence.
+
+        Runtime rejects reused call IDs within an instruction, so the canonical
+        instruction/call identity also uniquely locates the receipt's decision.
+        """
+        committed = {(item.get("instruction_id"), item.get("payload", {}).get("tool_call_id"))
+                     for item in self.agent_transcript if item.get("kind") == "tool_result"}
+        return tuple(item for item in self.tool_completions
+                     if (item.get("instruction_id"), item.get("tool_call_id")) not in committed)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -148,6 +168,7 @@ class BenchmarkAuditLog:
                 dict(item) for item in self.agent_transcript
             ],
             "diagnostics": [dict(item) for item in self.diagnostics],
+            "tool_completions": [dict(item) for item in self.tool_completions],
         }
 
 
@@ -179,6 +200,7 @@ class BenchmarkAuditReader:
             )
             for relative in _AUDIT_FILES
         }
+        _require_v2_transcript(records["memory/agent_transcript.jsonl"])
         observations = records["memory/observations.jsonl"]
         start_index = _ref_line(cursor.task_initial_observation_ref)
         if start_index is not None:
@@ -302,6 +324,11 @@ class BenchmarkAuditReader:
             debug_events=tuple(debug_events),
             planner_debug=tuple(planner_debug),
             agent_transcript=tuple(transcript),
+            tool_completions=tuple(
+                item for item in records["memory/tool_completions.jsonl"]
+                if (item.get("instruction_id") in instruction_ids if instruction_ids
+                    else _in_time_window(item, cursor.started_at, cursor.ended_at))
+            ),
             observation_anchors={
                 key: dict(value)
                 for key, value in cursor.observation_anchors.items()
@@ -502,7 +529,7 @@ def _tool_loop_debug_records(
                 raise ValueError("debug_ref_outside_run_dir")
             payload = json.loads(path.read_text(encoding="utf-8"))
             if (not isinstance(payload, dict)
-                    or payload.get("loop_schema") != "unified_tool_loop_v1"
+                    or payload.get("loop_schema") != "unified_tool_loop_v2"
                     or not link.get("decision_id")
                     or payload.get("decision_id") != link.get("decision_id")
                     or (link.get("instruction_id") is not None
@@ -925,9 +952,8 @@ def _active_instruction_transcript(
     observation, so a plain timestamp slice would drop the user instruction.
     The first transcript record at or after the observation boundary identifies
     the active ``instruction_id``; all bounded records with that ID are kept.
-    Legacy records without IDs fall back to the last user-instruction boundary.
-    The cursor's line limits have already excluded anything appended after
-    freeze, independently of its timestamp.
+    V2 records always have instruction IDs. The cursor's line limits have
+    already excluded anything appended after freeze.
     """
 
     bounded = [item for item in records if _timestamp(item) <= ended_at]
@@ -953,13 +979,28 @@ def _active_instruction_transcript(
             if str(item.get("instruction_id") or "") == instruction_id
         ]
 
-    boundary = 0
-    for index, item in enumerate(bounded):
-        if item.get("kind") != "user_instruction":
-            continue
-        if started_at is None or _timestamp(item) <= started_at:
-            boundary = index
-    return bounded[boundary:]
+    raise UnsupportedRunSchema("agent_transcript_v2 requires instruction_id")
+
+
+def _require_v2_transcript(records: list[dict[str, Any]]) -> None:
+    for record in records:
+        if record.get("schema_version") != TRANSCRIPT_SCHEMA:
+            raise UnsupportedRunSchema(
+                "memory/agent_transcript.jsonl is not agent_transcript_v2"
+            )
+        kind = record.get("kind")
+        payload = record.get("payload")
+        required_payload_schema = {
+            "instruction_envelope": INSTRUCTION_ENVELOPE_SCHEMA,
+            "state_checkpoint": STATE_CHECKPOINT_SCHEMA,
+        }.get(kind)
+        if required_payload_schema is not None and (
+            not isinstance(payload, dict)
+            or payload.get("schema_version") != required_payload_schema
+        ):
+            raise UnsupportedRunSchema(
+                f"{kind} payload is not {required_payload_schema}"
+            )
 
 
 def _in_time_window(

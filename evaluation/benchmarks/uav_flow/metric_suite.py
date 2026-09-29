@@ -17,7 +17,7 @@ from evaluation.benchmarks.uav_flow.trajectory import (
     UavFlowCoordinateAdapter,
     export_trajectory,
 )
-from src.runtime.configs.action_config import UavActionConfig
+from src.uav.config import UavActionConfig
 from src.uav import body_velocity_to_world_delta, move_body_velocity_from_args
 
 TURN_TRACKING_TOLERANCE_DEG = 1.0

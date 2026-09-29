@@ -45,15 +45,20 @@ from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.env_client import ObservationProfile, SimulatorEnvClient, load_observation_profile
 from src.runtime.configs import load_map_config
-from src.runtime.configs.action_config import UavActionConfig, load_uav_action_config
-from src.runtime.configs.model_config import load_model_config
-from src.runtime.configs.safety_config import UavSafetyConfig, load_uav_safety_config
+from src.agent.config import load_model_config
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
+from src.runtime.factory import RuntimeFactory
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.sim_server.execution import SimulationExecutionMode
 from src.sim_server.server import SimulationServer
+from src.uav.config import (
+    UavActionConfig,
+    UavSafetyConfig,
+    load_uav_action_config,
+    load_uav_safety_config,
+)
 
 
 @dataclass(frozen=True)
@@ -86,6 +91,7 @@ class TravelUavBenchmarkRunner:
         read_only_execution_config=None,
     ) -> None:
         self.config = config
+        self.runtime_factory = RuntimeFactory()
         self.read_only_execution_config = read_only_execution_config
         self._simulation_server_factory = simulation_server_factory or SimulationServer
         self.map_packages, self.port_policy = load_map_config(config.map_config_path)
@@ -452,18 +458,16 @@ class TravelUavBenchmarkRunner:
             action_config=self.action_config,
             save_artifacts=self.config.save_artifacts,
         )
-        return TaskRuntime(
+        return self.runtime_factory.create_task_runtime(
             SimulatorEnvClient(server, observation_profile=self.observation_profile),
             recorder,
             planner=planner,
             safety=SafetySupervisor(self.safety_config),
             shutdown_policy=self.config.shutdown_policy,
-            action_config=self.action_config,
             stabilization_config=UavStabilizationConfig(
                 initialization_min_settle_sec=self.config.initialization_min_settle_sec
             ),
             runtime_loop_guard_windows=self.config.runtime_loop_guard_windows,
-            enable_action_planner_debug=self.config.enable_action_planner_debug,
             model_config=model_config,
             read_only_execution_config=self.read_only_execution_config,
         )
