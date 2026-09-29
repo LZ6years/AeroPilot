@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 import time
 from typing import Any
 
@@ -22,7 +23,7 @@ from src.runtime.control.executor import execute_builtin_control
 from src.runtime.control.read_only_executor import ReadJob, ReadOnlyBatchExecutor
 from src.runtime.task.outcomes import TurnOutcome
 from src.runtime.task.physical_window import PhysicalWindowExecutor
-from src.runtime.task.session import InstructionSession
+from src.runtime.task.session import TaskSession
 from src.tools.registry import ToolRegistry
 
 
@@ -30,10 +31,24 @@ class TurnExecutor:
     """Validate and execute runtime-control, read-only, or physical turns."""
 
     def __init__(
-        self, owner: Any, physical_windows: PhysicalWindowExecutor
+        self,
+        tools: Any,
+        safety: Any,
+        physical_windows: PhysicalWindowExecutor,
+        evidence: Any,
+        journal: Any,
+        recorder: Any,
+        read_only_execution_config: Any,
+        tool_telemetry: Any,
     ) -> None:
-        self.owner = owner
+        self.tools = tools
+        self.safety = safety
         self.physical_windows = physical_windows
+        self.evidence = evidence
+        self.journal = journal
+        self.recorder = recorder
+        self.read_only_execution_config = read_only_execution_config
+        self.tool_telemetry = tool_telemetry
 
     @staticmethod
     def allowed_tools(scene: SceneInstance, registry: ToolRegistry) -> set[str]:
@@ -61,23 +76,19 @@ class TurnExecutor:
 
     def execute(
         self,
-        session: InstructionSession,
+        session: TaskSession,
         turn: AssistantTurn,
         *,
         allowed_tools: set[str],
         decision_id: str,
         history_boundary: int,
     ) -> TurnOutcome:
-        """Execute one persisted AssistantTurn and update instruction state."""
-
-        runtime = self.owner
         state = session.state
-        registry = runtime.tools.registry
         ids = [call.tool_call_id for call in turn.tool_calls]
         try:
             effect = validate_native_turn(
                 turn,
-                registry,
+                self.tools.registry,
                 allowed_names=allowed_tools,
                 latest_observation=state.latest_observation,
                 prior_call_ids=session.seen_call_ids,
@@ -88,7 +99,7 @@ class TurnExecutor:
             for record in self.rejected_tool_results(
                 turn.tool_calls, str(exc), rejection=exc.diagnostic
             ):
-                runtime.agent_transcript.append_tool_result(
+                session.transcript.append_tool_result(
                     ToolResult(
                         record["tool_call_id"],
                         record["tool_name"],
@@ -98,7 +109,7 @@ class TurnExecutor:
                         requested_args=record["requested_args"],
                     )
                 )
-            runtime.agent_transcript.append_protocol_feedback(
+            session.transcript.append_protocol_feedback(
                 str(exc) + ". No call in this turn executed."
             )
             state.record_nonphysical_round()
@@ -116,33 +127,32 @@ class TurnExecutor:
 
     def _execute_runtime_control(
         self,
-        session: InstructionSession,
+        session: TaskSession,
         turn: AssistantTurn,
         decision_id: str,
         history_boundary: int,
     ) -> TurnOutcome:
-        runtime = self.owner
         state = session.state
         state.record_nonphysical_round()
-        history_before_turn = runtime.agent_transcript.snapshot_before(
-            history_boundary
-        )
         result = execute_builtin_control(
-            turn.tool_calls[0], state, runtime.tools.registry, history_before_turn
+            turn.tool_calls[0],
+            state,
+            self.tools.registry,
+            session.transcript.snapshot_before(history_boundary),
         )
-        runtime.agent_transcript.append_tool_result(result)
-        runtime.journal.write_turn(
+        session.transcript.append_tool_result(result)
+        self.journal.write_turn(
             "task_control_recorded",
             {"decision_id": decision_id, "tool_result": result.to_dict()},
         )
         if result.status == "rejected":
-            runtime.agent_transcript.append_protocol_feedback(result.message)
+            session.transcript.append_protocol_feedback(result.message)
             session.consecutive_rejections += 1
         else:
             session.consecutive_rejections = 0
             if turn.tool_calls[0].tool_name == "runtime.update_plan":
-                runtime.checkpoints.publish(
-                    state, runtime._memory_for_state(state), "plan_updated"
+                session.checkpoints.publish(
+                    state, session.memory, "plan_updated"
                 )
         return TurnOutcome(
             kind="runtime_control",
@@ -157,16 +167,13 @@ class TurnExecutor:
 
     def _execute_read_only(
         self,
-        session: InstructionSession,
+        session: TaskSession,
         turn: AssistantTurn,
         decision_id: str,
     ) -> TurnOutcome:
-        runtime = self.owner
         state = session.state
         state.record_nonphysical_round()
-        observation_id = str(
-            state.latest_observation.get("observation_id") or ""
-        )
+        observation_id = str(state.latest_observation.get("observation_id") or "")
         for call in turn.tool_calls:
             session.executed_read_signatures.add(
                 read_call_signature(observation_id, call.tool_name, call.args)
@@ -175,14 +182,13 @@ class TurnExecutor:
         results = self._execute_native_read_calls(
             session, turn.public_intent, turn.tool_calls, decision_id
         )
-        if runtime.tools.knowledge_service is not None:
-            state.loaded_knowledge = runtime.tools.knowledge_service.loaded_index()
+        state.loaded_knowledge = session.knowledge_service.loaded_index()
         knowledge_changed = state.loaded_knowledge != loaded_before
         if knowledge_changed:
-            runtime.checkpoints.publish(
-                state, runtime._memory_for_state(state), "knowledge_loaded"
+            session.checkpoints.publish(
+                state, session.memory, "knowledge_loaded"
             )
-        runtime.journal.write_turn(
+        self.journal.write_turn(
             "read_only_turn_recorded",
             {"decision_id": decision_id, "tool_results": results},
         )
@@ -197,11 +203,10 @@ class TurnExecutor:
 
     def _execute_physical(
         self,
-        session: InstructionSession,
+        session: TaskSession,
         turn: AssistantTurn,
         decision_id: str,
     ) -> TurnOutcome:
-        runtime = self.owner
         state = session.state
         steps = [
             PlannedStep.tool_step(
@@ -209,15 +214,13 @@ class TurnExecutor:
             )
             for call in turn.tool_calls
         ]
-        safety = runtime.safety.review_steps(
-            steps, state, registry=runtime.tools.registry
+        safety = self.safety.review_steps(
+            steps, state, registry=self.tools.registry
         )
         before = copy.deepcopy(state.latest_observation)
         state.begin_physical_window()
         outcome = self.physical_windows.execute(
-            session.scene,
-            session.agent_id,
-            state,
+            session,
             steps=safety.steps,
             interventions=safety.interventions,
             native_meta={"physical_calls": turn.tool_calls},
@@ -229,26 +232,20 @@ class TurnExecutor:
         state.finish_physical_window(
             outcome.observation_after, outcome.measurements
         )
-        runtime._maybe_recharge_visual_search_budget(
-            state, outcome.measurements
-        )
-        runtime.journal.write_window(
+        self._maybe_recharge_visual_search_budget(session, outcome.measurements)
+        self.journal.write_window(
             self.physical_windows.event(
                 decision_id=decision_id,
                 window_index=state.physical_window_count,
                 before=before,
                 after=outcome.observation_after,
                 status=outcome.status,
-                ordered_steps=[
-                    item["tracking"] for item in outcome.executed_steps
-                ],
+                ordered_steps=[item["tracking"] for item in outcome.executed_steps],
                 measurements=outcome.measurements,
-            ),
+            )
         )
-        runtime.checkpoints.publish(
-            state,
-            runtime._memory_for_state(state),
-            "physical_window_completed",
+        session.checkpoints.publish(
+            state, session.memory, "physical_window_completed"
         )
         session.consecutive_rejections = 0
         return TurnOutcome(
@@ -278,11 +275,7 @@ class TurnExecutor:
                     "rejection": {
                         **diagnosis,
                         "role": (
-                            (
-                                "source"
-                                if call.tool_call_id == source
-                                else "affected"
-                            )
+                            ("source" if call.tool_call_id == source else "affected")
                             if source
                             else "turn_member"
                         ),
@@ -296,46 +289,44 @@ class TurnExecutor:
 
     def _execute_native_read_calls(
         self,
-        session: InstructionSession,
+        session: TaskSession,
         public_intent: str,
         calls: list[AgentToolCall],
         decision_id: str,
     ) -> list[dict[str, Any]]:
-        runtime = self.owner
-        jobs = []
+        jobs: list[ReadJob] = []
         for call in calls:
             args = copy.deepcopy(call.args)
             context = {
                 "latest_observation": copy.deepcopy(
                     session.state.latest_observation
                 ),
-                "run_dir": str(runtime.recorder.run_dir),
+                "run_dir": str(self.recorder.run_dir),
                 "public_intent": public_intent,
                 "tool_call_id": call.tool_call_id,
             }
 
-            def invoke(
-                tool=call.tool_name, args=args, context=context
-            ):
-                return runtime.tools.call(
+            def invoke(tool=call.tool_name, args=args, context=context):
+                return self.tools.call(
                     session.scene.scene_instance_id,
                     session.agent_id,
                     tool,
                     args,
                     runtime_context=context,
+                    knowledge_service=session.knowledge_service,
                 )
 
             jobs.append(
                 ReadJob(
                     call.tool_call_id,
                     call.tool_name,
-                    runtime.tools.read_execution_hints(call.tool_name, args),
+                    self.tools.read_execution_hints(call.tool_name, args),
                     invoke,
                 )
             )
         executor = ReadOnlyBatchExecutor(
-            runtime.read_only_execution_config,
-            runtime.tool_telemetry.read_event_sink(decision_id),
+            self.read_only_execution_config,
+            self.tool_telemetry.read_event_sink(decision_id),
         )
         recorded_results: list[dict[str, Any]] = []
         ready: dict[int, Any] = {}
@@ -344,11 +335,11 @@ class TurnExecutor:
         def completed(index: int, result: Any) -> None:
             began = time.perf_counter()
             call = calls[index]
-            runtime.tool_telemetry.read_result_event(
+            self.tool_telemetry.read_result_event(
                 "read_result_received", decision_id, call.tool_call_id
             )
-            runtime.memory_writer.write_tool_completion(
-                instruction_id=runtime.agent_transcript.instruction_id,
+            self.evidence.write_tool_completion(
+                session,
                 decision_id=decision_id,
                 call_index=index,
                 tool_call_id=call.tool_call_id,
@@ -356,7 +347,7 @@ class TurnExecutor:
                 args=call.args,
                 result=result.to_dict(),
             )
-            runtime.tool_telemetry.read_result_event(
+            self.tool_telemetry.read_result_event(
                 "read_result_persisted",
                 decision_id,
                 call.tool_call_id,
@@ -369,11 +360,11 @@ class TurnExecutor:
                 next_call = calls[next_index]
                 commit_started = time.perf_counter()
                 saved = self._commit_native_read_result(
-                    session.state, next_call, ready[next_index]
+                    session, next_call, ready[next_index]
                 )
                 recorded_results.append(saved)
                 del ready[next_index]
-                runtime.tool_telemetry.read_result_event(
+                self.tool_telemetry.read_result_event(
                     "read_result_committed",
                     decision_id,
                     next_call.tool_call_id,
@@ -387,9 +378,8 @@ class TurnExecutor:
         return recorded_results
 
     def _commit_native_read_result(
-        self, state: Any, call: AgentToolCall, result: Any
+        self, session: TaskSession, call: AgentToolCall, result: Any
     ) -> dict[str, Any]:
-        runtime = self.owner
         result_data = dict(result.data)
         capability_artifact_refs = _pop_string_list(
             result_data, SKILL_ARTIFACT_REFS_KEY
@@ -399,8 +389,8 @@ class TurnExecutor:
         )
         data = result.to_dict()
         data["data"] = result_data
-        write_result = runtime._record_action(
-            state, call.tool_name, call.args, data
+        write_result = self.evidence.record_action(
+            session, call.tool_name, call.args, data
         )
         transcript_result = ToolResult(
             tool_call_id=call.tool_call_id,
@@ -421,8 +411,39 @@ class TurnExecutor:
             executed_args=dict(call.args),
             model_inputs=capability_model_inputs,
         )
-        runtime.agent_transcript.append_tool_result(transcript_result)
+        session.transcript.append_tool_result(transcript_result)
         return transcript_result.to_dict()
+
+    def _maybe_recharge_visual_search_budget(
+        self, session: TaskSession, measurements: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        try:
+            planar_m = abs(
+                float(measurements.get("planar_displacement_m", 0.0) or 0.0)
+            )
+            vertical_m = abs(
+                float(measurements.get("vertical_delta_m", 0.0) or 0.0)
+            )
+        except (TypeError, ValueError):
+            return None
+        translation_3d_m = math.hypot(planar_m, vertical_m)
+        threshold_m = float(
+            self.safety.safety_config.yaw_scan_recharge_distance_m
+        )
+        if translation_3d_m < threshold_m:
+            return None
+        recharge = session.state.recharge_yaw_scan()
+        payload = {
+            "phase_key": None,
+            "window_index": session.state.physical_window_count,
+            "planar_displacement_m": round(planar_m, 6),
+            "vertical_displacement_m": round(vertical_m, 6),
+            "translation_3d_m": round(translation_3d_m, 6),
+            "recharge_distance_m": threshold_m,
+            **recharge,
+        }
+        self.journal.event("visual_search_budget_recharged", payload)
+        return payload
 
 
 def _pop_string_list(payload: dict[str, Any], key: str) -> list[str]:

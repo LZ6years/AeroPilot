@@ -216,7 +216,6 @@ def main() -> None:
                     run_dir,
                     instruction,
                     state.to_dict(),
-                    agent_messages=runtime.latest_turn_agent_messages(),
                 )
             except Exception as exc:
                 # Continuous sessions should try to leave the UAV in a safe
@@ -236,7 +235,6 @@ def main() -> None:
                     instruction,
                     last_state,
                     exc,
-                    agent_messages=runtime.latest_turn_agent_messages(),
                 )
                 if args.stop_on_error:
                     raise
@@ -386,8 +384,6 @@ def build_state_summary(
     run_dir: Path,
     instruction: str,
     state: dict[str, Any],
-    *,
-    agent_messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build one compact per-instruction summary from runtime artifacts.
 
@@ -405,7 +401,6 @@ def build_state_summary(
     debug_events = load_events(run_dir / "debug" / "debug_events.jsonl")
     segment_events = latest_instruction_events(events + debug_events)
     observations = observations_from_events(segment_events) or ([latest_observation] if latest_observation else [])
-    messages = list(agent_messages) if agent_messages is not None else agent_messages_from_events(segment_events)
     return {
         "instruction": instruction,
         "run_dir": str(run_dir),
@@ -420,7 +415,7 @@ def build_state_summary(
         "phase_execution_summary": progress,
         "observation_summary": observation_summary(observations),
         "artifact_inventory": artifact_inventory_from_observations(observations),
-        "agent_messages": messages,
+        "agent_transcript_ref": "memory/agent_transcript.jsonl",
         "shutdown_events": [],
     }
 
@@ -430,16 +425,9 @@ def build_error_summary(
     instruction: str,
     last_state,
     exc: Exception,
-    *,
-    agent_messages: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Return a summary shape compatible with successful instructions."""
 
-    messages = (
-        list(agent_messages)
-        if agent_messages is not None
-        else agent_messages_from_events(latest_instruction_events(load_events(run_dir / "events.jsonl")))
-    )
     return {
         "instruction": instruction,
         "run_dir": str(run_dir),
@@ -453,7 +441,7 @@ def build_error_summary(
         "observation_summary": {"has_pose": False, "has_rgb": False, "has_depth": False, "sources": []},
         "phase_execution_summary": {},
         "artifact_inventory": {"rgb": [], "depth": [], "other": [], "counts": {"rgb": 0, "depth": 0, "other": 0}},
-        "agent_messages": messages,
+        "agent_transcript_ref": "memory/agent_transcript.jsonl",
         "shutdown_events": [],
         "error_type": type(exc).__name__,
         "error": str(exc),
@@ -477,7 +465,7 @@ def compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "action_count": len(summary.get("tools", [])),
         "tools": summarize_tools(summary.get("tools", [])),
         "action_window": summarize_action_window(latest_action_window(summary.get("action_windows", []))),
-        "agent_messages": summarize_agent_messages(summary.get("agent_messages", [])),
+        "agent_transcript_ref": summary.get("agent_transcript_ref", "memory/agent_transcript.jsonl"),
         "pose_delta": summary["pose_delta"],
         "phase_progress": summarize_phase_progress(summary.get("phase_execution_summary", {})),
         "observation_summary": summary.get("observation_summary", {}),
@@ -498,23 +486,6 @@ def compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
         compact["error_type"] = summary["error_type"]
         compact["error"] = summary["error"]
     return compact
-
-
-def summarize_agent_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Keep terminal output focused on user-readable model replies."""
-
-    return [
-        {
-            "type": item.get("type"),
-            "content": item.get("content"),
-            "confidence": item.get("confidence"),
-            "requires_user_reply": item.get("requires_user_reply"),
-            "source": item.get("source"),
-            "phase": item.get("phase"),
-        }
-        for item in messages
-        if isinstance(item, dict) and item.get("content")
-    ]
 
 
 def summarize_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -702,20 +673,6 @@ def action_windows_from_events(events: list[dict[str, Any]]) -> list[dict[str, A
         if isinstance(window, dict) and window:
             windows.append(window)
     return _dedupe_action_windows(windows)
-
-
-def agent_messages_from_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Extract model-generated user replies from compact runtime events."""
-
-    messages: list[dict[str, Any]] = []
-    for event in events:
-        if event.get("event") != "agent_message":
-            continue
-        payload = event.get("payload", {}) if isinstance(event.get("payload", {}), dict) else {}
-        message = payload.get("message", {}) if isinstance(payload.get("message", {}), dict) else {}
-        if message:
-            messages.append({"source": payload.get("source"), "phase": payload.get("phase"), **message})
-    return messages
 
 
 def _dedupe_action_windows(windows: list[dict[str, Any]]) -> list[dict[str, Any]]:

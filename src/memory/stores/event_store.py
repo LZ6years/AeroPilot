@@ -157,24 +157,6 @@ class MemoryEventWriter:
                 "timestamp": timestamp or _timestamp(),
             },
         )
-    def write_agent_message(
-        self,
-        source: str,
-        phase: str | None,
-        message: dict[str, Any],
-    ) -> dict[str, Any]:
-        """Append one user-facing AgentMessage record to run memory."""
-
-        return self._append(
-            "agent_messages.jsonl",
-            "msg",
-            {
-                "source": source,
-                "phase": phase,
-                "message": dict(message),
-            },
-        )
-
     def write_tool_completion(self, *, instruction_id, decision_id, call_index,
                               tool_call_id, tool_name, args, result):
         """Save a received result independently of ordered mission submission.

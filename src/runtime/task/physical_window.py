@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any
 
 from src.agent.planning.schemas import PlannedStep
 from src.agent.transcript import ToolResult
 from src.env_client import ActionResult, SceneInstance
 from src.env_client.errors import SceneRecoveryRequired
 from src.runtime.task.outcomes import PhysicalWindowOutcome
+from src.runtime.task.session import TaskSession
 from src.uav import pose_measurements
 
 
@@ -16,22 +17,31 @@ PHYSICAL_TRACE_SCHEMA_VERSION = "physical_window_v2"
 
 
 class PhysicalWindowExecutor:
-    """Execute one Safety-reviewed physical window and capture its evidence."""
+    """Execute one Safety-reviewed physical transaction and capture evidence."""
 
     def __init__(
         self,
-        owner: Any,
-        pose_from_observation: Callable[[dict[str, Any]], dict[str, Any]],
+        tools: Any,
+        tool_telemetry: Any,
+        stabilizer: Any,
+        evidence: Any,
+        journal: Any,
+        recorder: Any,
     ) -> None:
-        self.owner = owner
-        self.pose_from_observation = pose_from_observation
+        self.tools = tools
+        self.tool_telemetry = tool_telemetry
+        self.stabilizer = stabilizer
+        self.evidence = evidence
+        self.journal = journal
+        self.recorder = recorder
 
+    @staticmethod
     def measurements(
-        self, before: dict[str, Any], after: dict[str, Any]
+        before: dict[str, Any], after: dict[str, Any]
     ) -> dict[str, Any]:
         return pose_measurements(
-            self.pose_from_observation(before),
-            self.pose_from_observation(after),
+            _pose_from_observation(before),
+            _pose_from_observation(after),
         )
 
     @staticmethod
@@ -75,9 +85,7 @@ class PhysicalWindowExecutor:
 
     def execute(
         self,
-        scene: SceneInstance,
-        agent_id: str,
-        state: Any,
+        session: TaskSession,
         *,
         steps: list[PlannedStep],
         interventions: list[dict[str, Any]],
@@ -87,9 +95,10 @@ class PhysicalWindowExecutor:
         physical_window_index: int,
         window_index: int,
     ) -> PhysicalWindowOutcome:
-        """Execute a prevalidated batch and make one automatic observation."""
+        """Execute a 1–3 call physical batch and take one after-observation."""
 
-        runtime = self.owner
+        scene = session.scene
+        state = session.state
         if not 1 <= len(steps) <= 3:
             raise ValueError("physical batch requires 1–3 steps")
         submitted_calls = native_meta.get("physical_calls", [])
@@ -98,30 +107,20 @@ class PhysicalWindowExecutor:
         for step in steps:
             if step.kind != "tool" or not step.tool:
                 raise ValueError("physical batches accept only tool steps")
-            if runtime.tools.registry.get(step.tool).runtime.effect != "physical":
+            if self.tools.registry.get(step.tool).runtime.effect != "physical":
                 raise ValueError("non-physical step in a physical batch")
-            runtime._validate_step_capability(scene, step.tool)
+            self._validate_step_capability(scene, step.tool)
 
-        runtime._mark_before_last_action_window(state, observation_before)
+        self.evidence.mark_before_last_action_window(session, observation_before)
         executed_steps: list[dict[str, Any]] = []
-        native_physical_calls = list(native_meta.get("physical_calls", []))
-        interrupted_call_index: int | None = None
+        native_calls = list(native_meta.get("physical_calls", []))
+        interrupted_index: int | None = None
         interruption_status: str | None = None
         batch_error: Exception | None = None
         for index, step in enumerate(steps):
             payload = {"step_index": index, "step": step.to_dict()}
-            if step.kind != "tool" or not step.tool:
-                raise ValueError(
-                    "runtime action plan requires tool steps; observation is automatic"
-                )
-            native_call = (
-                native_physical_calls[index]
-                if index < len(native_physical_calls)
-                else None
-            )
-            requested_tool = (
-                native_call.tool_name if native_call is not None else step.tool
-            )
+            native_call = native_calls[index] if index < len(native_calls) else None
+            requested_tool = native_call.tool_name if native_call else step.tool
             relevant_interventions = [
                 dict(item)
                 for item in interventions
@@ -129,25 +128,23 @@ class PhysicalWindowExecutor:
                 and ("step_index" not in item or item["step_index"] == index)
             ]
             try:
-                result = runtime.tool_telemetry.call_step(
+                result = self.tool_telemetry.call_step(
                     scene_instance_id=scene.scene_instance_id,
-                    agent_id=agent_id,
+                    agent_id=session.agent_id,
                     phase=None,
                     window_index=window_index,
                     step_index=index,
                     tool=step.tool,
                     args=step.args,
-                    pose_before=runtime._pose_from_observation(
-                        state.latest_observation
-                    ),
+                    pose_before=_pose_from_observation(state.latest_observation),
                     runtime_context={
                         "latest_observation": dict(state.latest_observation),
                         "observation_before": dict(observation_before),
-                        "run_dir": str(runtime.recorder.run_dir),
+                        "run_dir": str(self.recorder.run_dir),
                     },
                 )
             except Exception as exc:
-                if not native_physical_calls:
+                if not native_calls:
                     raise
                 result = ActionResult(
                     ok=False,
@@ -155,25 +152,23 @@ class PhysicalWindowExecutor:
                     message=f"{type(exc).__name__}: {exc}",
                     data={"error_type": type(exc).__name__, "error": str(exc)},
                 )
-            data = result.to_dict()
+            result_data = result.to_dict()
             result_status = result.outcome
-            write_result = runtime._record_action(state, step.tool, step.args, data)
+            write_result = self.evidence.record_action(
+                session, step.tool, step.args, result_data
+            )
             action_ref = write_result.get("action_ref") or {}
             pose_ref = write_result.get("pose_ref") or {}
-            step_tracking = {
+            tracking = {
                 "step_index": index,
-                "tool_call_id": (
-                    native_call.tool_call_id if native_call is not None else None
-                ),
+                "tool_call_id": native_call.tool_call_id if native_call else None,
                 "requested_tool": requested_tool,
                 "tool": step.tool,
-                "effect": runtime.tools.registry.get(step.tool).runtime.effect,
+                "effect": self.tools.registry.get(step.tool).runtime.effect,
                 "status": result_status,
                 "action_ref": action_ref.get("ref"),
                 "result_pose_ref": pose_ref.get("ref"),
-                "requested_args": dict(
-                    native_call.args if native_call is not None else step.args
-                ),
+                "requested_args": dict(native_call.args if native_call else step.args),
                 "executed_args": dict(step.args),
                 "safety_interventions": relevant_interventions,
             }
@@ -184,12 +179,12 @@ class PhysicalWindowExecutor:
                     status=result_status,
                     message=result.message,
                     data=dict(result.data),
-                    result_ref=write_result["action_ref"].get("ref"),
+                    result_ref=action_ref.get("ref"),
                     requested_args=dict(native_call.args),
                     executed_args=dict(step.args),
                     safety_interventions=relevant_interventions,
                 )
-                runtime.agent_transcript.append_tool_result(transcript_result)
+                session.transcript.append_tool_result(transcript_result)
                 self._append_native_round_tool_result(native_meta, transcript_result)
             if result_status == "error":
                 if result.execution_state.get("requires_scene_reset"):
@@ -197,25 +192,25 @@ class PhysicalWindowExecutor:
                 executed_steps.append(
                     {
                         **payload,
-                        "tracking": step_tracking,
-                        "result": data,
+                        "tracking": tracking,
+                        "result": result_data,
                         "stabilization": {
                             "status": "skipped",
                             "reason": "tool execution failed",
                         },
                     }
                 )
-                if not native_physical_calls:
+                if not native_calls:
                     raise batch_error or RuntimeError(
                         f"Action failed: {step.tool}: {result.message}"
                     )
-                interrupted_call_index = index
+                interrupted_index = index
                 interruption_status = "error"
                 break
             try:
-                stabilization = runtime.stabilizer.wait_after_step(
+                stabilization = self.stabilizer.wait_after_step(
                     scene.scene_instance_id,
-                    agent_id,
+                    session.agent_id,
                     None,
                     step,
                     capabilities=scene.capabilities,
@@ -225,7 +220,7 @@ class PhysicalWindowExecutor:
                 )
             except Exception as exc:
                 batch_error = exc
-                interrupted_call_index = index
+                interrupted_index = index
                 interruption_status = "error"
                 stabilization = {
                     "status": "error",
@@ -235,39 +230,39 @@ class PhysicalWindowExecutor:
             executed_steps.append(
                 {
                     **payload,
-                    "tracking": step_tracking,
-                    "result": data,
+                    "tracking": tracking,
+                    "result": result_data,
                     "stabilization": stabilization,
                 }
             )
-            runtime._event(
+            self.journal.event(
                 "tool_step_completed",
                 {
                     "decision_id": decision_id,
                     "physical_window_index": physical_window_index,
                     "step_index": index,
                     "tool": step.tool,
-                    "ok": data.get("ok"),
-                    "stabilization": runtime._stabilization_summary(stabilization),
+                    "ok": result_data.get("ok"),
+                    "stabilization": _stabilization_summary(stabilization),
                 },
             )
-            runtime._write_state(state)
+            self.evidence.write_state(session)
             if batch_error is not None:
                 break
             if result_status == "collision":
-                interrupted_call_index = index
+                interrupted_index = index
                 interruption_status = "collision"
                 break
 
-        if interrupted_call_index is not None:
+        if interrupted_index is not None:
             skipped_message = (
                 "skipped because an earlier physical call collided"
                 if interruption_status == "collision"
                 else "skipped because an earlier physical call or stabilization failed"
             )
             for skipped_index, call in enumerate(
-                native_physical_calls[interrupted_call_index + 1 :],
-                start=interrupted_call_index + 1,
+                native_calls[interrupted_index + 1 :],
+                start=interrupted_index + 1,
             ):
                 transcript_result = ToolResult(
                     tool_call_id=call.tool_call_id,
@@ -276,11 +271,9 @@ class PhysicalWindowExecutor:
                     message=skipped_message,
                     requested_args=dict(call.args),
                 )
-                runtime.agent_transcript.append_tool_result(transcript_result)
+                session.transcript.append_tool_result(transcript_result)
                 self._append_native_round_tool_result(native_meta, transcript_result)
-                skipped_step = (
-                    steps[skipped_index] if skipped_index < len(steps) else None
-                )
+                skipped_step = steps[skipped_index] if skipped_index < len(steps) else None
                 if skipped_step is not None:
                     executed_steps.append(
                         {
@@ -291,7 +284,7 @@ class PhysicalWindowExecutor:
                                 "tool_call_id": call.tool_call_id,
                                 "requested_tool": call.tool_name,
                                 "tool": skipped_step.tool,
-                                "effect": runtime.tools.registry.get(
+                                "effect": self.tools.registry.get(
                                     skipped_step.tool
                                 ).runtime.effect,
                                 "status": "skipped",
@@ -317,7 +310,7 @@ class PhysicalWindowExecutor:
                 and not isinstance(batch_error, SceneRecoveryRequired)
             ):
                 try:
-                    runtime._try_hover(scene, agent_id, state)
+                    self._try_hover(session)
                 except SceneRecoveryRequired as exc:
                     batch_error = exc
 
@@ -325,19 +318,17 @@ class PhysicalWindowExecutor:
         observation_error: Exception | None = None
         try:
             if not isinstance(batch_error, SceneRecoveryRequired):
-                observation_after = runtime._apply_automatic_observation_policy(
-                    scene, agent_id, state
-                )
+                observation_after = self._automatic_observation(session)
         except Exception as exc:
             observation_error = exc
             if batch_error is None:
                 batch_error = exc
                 try:
-                    runtime._try_hover(scene, agent_id, state)
+                    self._try_hover(session)
                 except SceneRecoveryRequired as recovery:
                     batch_error = recovery
         if batch_error is not None:
-            runtime.journal.write_window(
+            self.journal.write_window(
                 self.event(
                     decision_id=decision_id,
                     window_index=physical_window_index,
@@ -346,23 +337,83 @@ class PhysicalWindowExecutor:
                     status="error",
                     ordered_steps=[item["tracking"] for item in executed_steps],
                     error=batch_error,
-                    stabilization=[
-                        item["stabilization"] for item in executed_steps
-                    ],
+                    stabilization=[item["stabilization"] for item in executed_steps],
                     observation_error=observation_error,
-                ),
+                )
             )
             raise batch_error
 
-        window_measurements = self.measurements(
-            observation_before, observation_after
-        )
         return PhysicalWindowOutcome(
             executed_steps=tuple(executed_steps),
-            status=(interruption_status or "ok"),
-            interrupted_call_index=interrupted_call_index,
+            status=interruption_status or "ok",
+            interrupted_call_index=interrupted_index,
             observation_after=observation_after,
-            measurements=window_measurements,
+            measurements=self.measurements(observation_before, observation_after),
+        )
+
+    def _automatic_observation(self, session: TaskSession) -> dict[str, Any]:
+        modalities = list(session.state.observation_modalities)
+        source = "automatic_physical_window"
+        self.journal.debug_event(
+            "automatic_observation_policy_applied",
+            {
+                "mode": "automatic",
+                "modalities": modalities,
+                "sample_timing": "after_each_physical_window",
+            },
+        )
+        observation = self.evidence.record_observation(session, modalities, source)
+        self.journal.debug_event("automatic_observation_updated", observation)
+        self.journal.event(
+            "observation_updated",
+            self.evidence.observation_summary(observation, source),
+        )
+        self.evidence.write_state(session)
+        return observation
+
+    def _try_hover(self, session: TaskSession) -> None:
+        scene = session.scene
+        if scene.capabilities and not scene.capabilities.supports("hover"):
+            self.journal.debug_event(
+                "safety_hover_skipped", {"reason": "backend_capability"}
+            )
+            return
+        try:
+            result = self.tools.call(
+                scene.scene_instance_id, session.agent_id, "uav.hover", {}
+            )
+            self.evidence.record_action(session, "uav.hover", {}, result.to_dict())
+            self.journal.debug_event("safety_hover_completed", result.to_dict())
+            if result.execution_state.get("requires_scene_reset"):
+                raise SceneRecoveryRequired(result.message)
+        except SceneRecoveryRequired:
+            raise
+        except Exception as exc:
+            self.journal.debug_event(
+                "safety_hover_failed",
+                {"error_type": type(exc).__name__, "error": str(exc)},
+            )
+
+    def _validate_step_capability(
+        self, scene: SceneInstance, tool_name: str
+    ) -> None:
+        spec = self.tools.registry.get(tool_name)
+        action = spec.metadata.get("backend_action")
+        if not isinstance(action, str) or not action or scene.capabilities is None:
+            return
+        if scene.capabilities.supports(action):
+            return
+        payload = {
+            "tool": tool_name,
+            "action": action,
+            "protocol": scene.capabilities.protocol,
+            "control_mode": scene.capabilities.control_mode,
+            "supported_actions": list(scene.capabilities.supported_actions),
+        }
+        self.journal.debug_event("runtime_action_capability_rejected", payload)
+        raise RuntimeError(
+            f"{scene.capabilities.protocol}/{scene.capabilities.control_mode} "
+            f"does not support {action}"
         )
 
     @staticmethod
@@ -382,3 +433,19 @@ class PhysicalWindowExecutor:
         results = outcome.setdefault("tool_results", [])
         if isinstance(results, list):
             results.append(result.to_dict())
+
+
+def _pose_from_observation(observation: dict[str, Any]) -> dict[str, Any]:
+    pose = observation.get("pose") if isinstance(observation, dict) else None
+    return dict(pose) if isinstance(pose, dict) else {}
+
+
+def _stabilization_summary(stabilization: dict | None) -> dict[str, Any]:
+    data = stabilization if isinstance(stabilization, dict) else {}
+    return {
+        "status": data.get("status"),
+        "elapsed_sec": data.get("elapsed_sec"),
+        "last_velocity_norm_mps": data.get("last_velocity_norm_mps"),
+        "threshold": data.get("threshold"),
+        "reason": data.get("reason"),
+    }

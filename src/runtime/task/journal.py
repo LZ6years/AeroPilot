@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 from collections.abc import Callable
 from typing import Any
+
+from src.llm.audit import redact_provider_value
 
 
 PUBLIC_RUNTIME_EVENTS = frozenset(
@@ -129,3 +132,82 @@ class RuntimeJournal:
                 elif data is not None:
                     item["unavailable_reason"] = "recorder_cannot_persist_media"
         return persisted
+
+    def capture_provider_exchange(
+        self,
+        planner: Any,
+        session: Any,
+        decision_id: str,
+        *,
+        turn: Any | None = None,
+        error_type: str | None = None,
+    ) -> None:
+        """Persist the exact provider exchange and its canonical Runtime turn."""
+
+        record = self._provider_round_snapshot(
+            planner,
+            session.decision_index,
+            canonical_turn=turn,
+        )
+        record["decision_id"] = decision_id
+        if error_type:
+            record["error_type"] = error_type
+        record = self.persist_provider_exchange_media([record])[0]
+        instruction_id = session.transcript.instruction_id
+        namespace = hashlib.sha256(
+            str(instruction_id).encode("utf-8")
+        ).hexdigest()[:16]
+        debug_ref = f"debug/tool_loop/{namespace}/{decision_id}.json"
+        checkpoint = session.transcript.latest_checkpoint()
+        self.recorder.write_json(
+            debug_ref,
+            {
+                "loop_schema": "unified_tool_loop_v2",
+                "instruction_id": instruction_id,
+                "decision_id": decision_id,
+                "decision_index": session.decision_index,
+                "checkpoint_observation_id": session.transcript.latest_observation_id(),
+                "model_context": redact_provider_value(
+                    checkpoint.to_dict() if checkpoint is not None else {}
+                ),
+                "model_rounds": [record],
+            },
+        )
+        self.write_turn(
+            "model_turn_recorded",
+            {
+                "decision_id": decision_id,
+                "debug_ref": debug_ref,
+                "instruction_id": instruction_id,
+                "loop_schema": "unified_tool_loop_v2",
+            },
+        )
+
+    @staticmethod
+    def _provider_round_snapshot(
+        planner: Any,
+        round_index: int,
+        *,
+        canonical_turn: Any | None = None,
+    ) -> dict[str, Any]:
+        exchange = getattr(planner, "last_exchange", None)
+        exchange = copy.deepcopy(exchange) if isinstance(exchange, dict) else {}
+        record: dict[str, Any] = {
+            "round_index": round_index,
+            "request": exchange.get("request"),
+            "response": exchange.get("response"),
+        }
+        projection = exchange.get("history_projection")
+        if isinstance(projection, dict):
+            record["history_projection"] = projection
+        transport = exchange.get("transport")
+        if isinstance(transport, dict):
+            record["transport"] = transport
+        media = exchange.get("media")
+        if isinstance(media, list):
+            record["request_media"] = media
+        if canonical_turn is not None:
+            record["canonical_turn"] = canonical_turn.to_dict()
+        elif not exchange:
+            record["capture_status"] = "provider_exchange_unavailable"
+        return record

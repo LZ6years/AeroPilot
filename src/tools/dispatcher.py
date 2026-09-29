@@ -30,15 +30,11 @@ class ToolDispatcher:
         env_client: EnvClient,
         registry: ToolRegistry,
         capability_dispatcher: Any | None = None,
-        knowledge_service: Any | None = None,
     ) -> None:
         # Keep the environment client and available tool registry.
         self.env_client = env_client
         self.registry = registry
         self.skill_capabilities = capability_dispatcher
-        # The task owner creates a new service for each instruction. Never
-        # construct an implicit shared delivery cache in the dispatcher.
-        self.knowledge_service = knowledge_service
 
     def call(
         self,
@@ -47,14 +43,16 @@ class ToolDispatcher:
         tool_name: str,
         args: dict,
         runtime_context: dict | None = None,
+        *,
+        knowledge_service: Any | None = None,
     ) -> ActionResult:
         # Validate and route a primitive tool action to EnvClient.
         spec = self.registry.get(tool_name)
         if spec.kind == "knowledge":
             self._validate_input_schema(spec.input_schema, args)
-            if self.knowledge_service is None:
+            if knowledge_service is None:
                 raise ValueError("knowledge service is not bound to an instruction")
-            data = self.knowledge_service.load(**args)
+            data = knowledge_service.load(**args)
             return ActionResult(
                 ok=True, action=tool_name,
                 message="Knowledge guidance loaded; this is not environmental evidence.",

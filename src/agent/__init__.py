@@ -6,7 +6,6 @@ from importlib import import_module
 # Exports resolve lazily so pure helpers do not create cross-layer cycles.
 _EXPORTS = {
     "MissionState": "mission_state",
-    "AgentMessage": "messages",
     "ModelActionPlanner": "planning.model_action_planner",
     "TaskPlan": "planning.task_plan",
     "TaskPlanStep": "planning.task_plan",

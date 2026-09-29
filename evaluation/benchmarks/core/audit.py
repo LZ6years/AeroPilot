@@ -32,7 +32,6 @@ _AUDIT_FILES = (
     "memory/poses.jsonl",
     "memory/observations.jsonl",
     "memory/frames.jsonl",
-    "memory/agent_messages.jsonl",
     "memory/agent_transcript.jsonl",
     "memory/tool_completions.jsonl",
     "events.jsonl",
@@ -116,7 +115,6 @@ class BenchmarkAuditLog:
     frames: tuple[dict[str, Any], ...]
     poses: tuple[dict[str, Any], ...]
     actions: tuple[dict[str, Any], ...]
-    agent_messages: tuple[dict[str, Any], ...]
     events: tuple[dict[str, Any], ...]
     debug_events: tuple[dict[str, Any], ...]
     planner_debug: tuple[dict[str, Any], ...]
@@ -156,9 +154,6 @@ class BenchmarkAuditLog:
             "frames": [dict(item) for item in self.frames],
             "poses": [dict(item) for item in self.poses],
             "actions": [dict(item) for item in self.actions],
-            "agent_messages": [
-                dict(item) for item in self.agent_messages
-            ],
             "events": [dict(item) for item in self.events],
             "debug_events": [dict(item) for item in self.debug_events],
             "planner_debug": [
@@ -262,11 +257,6 @@ class BenchmarkAuditReader:
             if _in_time_window(item, cursor.started_at, cursor.ended_at)
             and str(item.get("tool") or "") not in _NON_PLANNER_TOOLS
         ]
-        messages = _timestamp_slice(
-            records["memory/agent_messages.jsonl"],
-            cursor.started_at,
-            cursor.ended_at,
-        )
         transcript = _active_instruction_transcript(
             records["memory/agent_transcript.jsonl"],
             cursor.started_at,
@@ -319,7 +309,6 @@ class BenchmarkAuditReader:
             frames=tuple(frames),
             poses=tuple(poses),
             actions=tuple(actions),
-            agent_messages=tuple(messages),
             events=tuple(events),
             debug_events=tuple(debug_events),
             planner_debug=tuple(planner_debug),

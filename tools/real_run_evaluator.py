@@ -114,7 +114,6 @@ def evaluate_run(run_dir: Path, suite: dict[str, Any], task_id: str | None = Non
         "basic": evaluate_basic(latest_state, latest_checkpoint, phase_contexts, demo_summary),
         "actions": evaluate_actions(action_sequence),
         "action_windows": evaluate_action_windows(phase_contexts, all_events),
-        "agent_messages": evaluate_agent_messages(all_events, demo_summary),
         "artifacts": evaluate_artifacts(artifact_inventory, expected, suite),
         "phases": evaluate_phases(phase_contexts, expected, suite),
         "motion": evaluate_motion(phase_contexts, expected, suite),
@@ -393,42 +392,6 @@ def evaluate_action_windows(phase_contexts: list[dict[str, Any]], events: list[d
     }
 
 
-def evaluate_agent_messages(events: list[dict[str, Any]], demo_summary: dict[str, Any]) -> dict[str, Any]:
-    messages = extract_agent_messages(events, demo_summary)
-    counts = {
-        "progress_count": sum(1 for item in messages if item.get("type") == "progress"),
-        "final_count": sum(1 for item in messages if item.get("type") == "final"),
-        "question_count": sum(1 for item in messages if item.get("type") == "question"),
-        "warning_count": sum(1 for item in messages if item.get("type") == "warning"),
-    }
-    return {
-        "passed": counts["progress_count"] > 0 and counts["final_count"] > 0,
-        "total": len(messages),
-        **counts,
-        "messages": messages,
-    }
-
-
-def extract_agent_messages(events: list[dict[str, Any]], demo_summary: dict[str, Any]) -> list[dict[str, Any]]:
-    messages: list[dict[str, Any]] = []
-    for event in events:
-        if event.get("event") != "agent_message":
-            continue
-        payload = event.get("payload", {}) if isinstance(event.get("payload", {}), dict) else {}
-        message = payload.get("message", {}) if isinstance(payload.get("message", {}), dict) else {}
-        if message:
-            messages.append({"source": payload.get("source"), "phase": payload.get("phase"), **message})
-    if messages:
-        return messages
-    for item in demo_summary.get("instructions", []) if isinstance(demo_summary.get("instructions", []), list) else []:
-        if not isinstance(item, dict):
-            continue
-        for message in item.get("agent_messages", []) if isinstance(item.get("agent_messages", []), list) else []:
-            if isinstance(message, dict):
-                messages.append(dict(message))
-    return messages
-
-
 def extract_action_windows(phase_contexts: list[dict[str, Any]], events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     windows = []
     for context in phase_contexts:
@@ -613,12 +576,10 @@ def evaluate_batch_instructions(
             bool(completed)
             and actions["passed"]
             and action_windows["passed"]
-            and evaluate_agent_messages(segment_events, {})["passed"]
             and artifacts["passed"]
             and phases["passed"]
             and motion["passed"]
         )
-        agent_messages = evaluate_agent_messages(segment_events, {})
         results.append(
             {
                 "index": index,
@@ -635,14 +596,6 @@ def evaluate_batch_instructions(
                     "total": action_windows["total"],
                     "invalid_scopes": len(action_windows["invalid_scopes"]),
                     "observation_mismatches": len(action_windows["observation_mismatches"]),
-                },
-                "agent_messages": {
-                    "total": agent_messages["total"],
-                    "progress_count": agent_messages["progress_count"],
-                    "final_count": agent_messages["final_count"],
-                    "question_count": agent_messages["question_count"],
-                    "warning_count": agent_messages["warning_count"],
-                    "passed": agent_messages["passed"],
                 },
                 "artifacts": {
                     "counts": artifacts["counts"],
@@ -681,7 +634,6 @@ def continuous_instruction_results(events: list[dict[str, Any]]) -> list[dict[st
             "rgb_observations": 0,
             "depth_observations": 0,
             "observed_phases": [],
-            "agent_messages": {"total": 0, "progress": 0, "final": 0, "question": 0, "warning": 0},
         }
         for event in segment.get("events", []):
             name = event.get("event")
@@ -705,12 +657,6 @@ def continuous_instruction_results(events: list[dict[str, Any]]) -> list[dict[st
             elif name == "phase_transition_applied":
                 if payload.get("decision") == "complete_task":
                     current["completed"] = True
-            elif name == "agent_message":
-                message = payload.get("message", {}) if isinstance(payload.get("message", {}), dict) else {}
-                message_type = str(message.get("type", ""))
-                current["agent_messages"]["total"] += 1
-                if message_type in {"progress", "final", "question", "warning"}:
-                    current["agent_messages"][message_type] += 1
         results.append(current)
     for item in results:
         total = int(item.get("action_total", 0) or 0)
@@ -826,7 +772,7 @@ def build_artifact_inventory(observations: list[dict[str, Any]], run_dir: Path) 
 
 
 def overall_status(metrics: dict[str, Any]) -> dict[str, Any]:
-    sections = ["basic", "actions", "action_windows", "agent_messages", "artifacts", "phases", "motion", "continuous"]
+    sections = ["basic", "actions", "action_windows", "artifacts", "phases", "motion", "continuous"]
     if metrics.get("batch", {}).get("is_batch"):
         sections.append("batch")
     failed = [section for section in sections if metrics.get(section, {}).get("passed") is False]
@@ -862,14 +808,6 @@ def build_markdown_report(metrics: dict[str, Any]) -> str:
         f"- invalid scopes: `{len(metrics['action_windows']['invalid_scopes'])}`",
         f"- observation mismatches: `{len(metrics['action_windows']['observation_mismatches'])}`",
         f"- missing descriptions: `{len(metrics['action_windows']['missing_descriptions'])}`",
-        "",
-        "## Agent Messages",
-        "",
-        f"- total: `{metrics['agent_messages']['total']}`",
-        f"- progress: `{metrics['agent_messages']['progress_count']}`",
-        f"- final: `{metrics['agent_messages']['final_count']}`",
-        f"- question: `{metrics['agent_messages']['question_count']}`",
-        f"- warning: `{metrics['agent_messages']['warning_count']}`",
         "",
         "## Phases",
         "",
@@ -947,13 +885,6 @@ def compact_result(result: dict[str, Any]) -> dict[str, Any]:
         "actions": {"total": metrics["actions"]["total"], "success_rate": metrics["actions"]["success_rate"]},
         "artifacts": metrics["artifacts"]["counts"],
         "duplicate_artifact_paths": len(metrics["artifacts"].get("duplicate_paths", [])),
-        "agent_messages": {
-            "total": metrics["agent_messages"]["total"],
-            "progress": metrics["agent_messages"]["progress_count"],
-            "final": metrics["agent_messages"]["final_count"],
-            "question": metrics["agent_messages"]["question_count"],
-            "warning": metrics["agent_messages"]["warning_count"],
-        },
         "batch": {
             "is_batch": metrics.get("batch", {}).get("is_batch", False),
             "instruction_count": metrics.get("batch", {}).get("instruction_count", 0),

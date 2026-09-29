@@ -13,7 +13,7 @@ import sys
 import unicodedata
 from typing import Any
 
-from src.runtime.task.interactive_session import compact_turn_summary
+from src.runtime.runners.interactive_session import compact_turn_summary
 
 
 ANSI_BLUE = "\033[34m"
@@ -43,13 +43,6 @@ def clear_screen() -> None:
 
 def print_summary(summary: dict[str, Any], *, include_messages: bool = False) -> None:
     compact = compact_turn_summary(summary)
-    messages = compact.get("agent_messages", []) if include_messages else []
-    if include_messages and messages:
-        print(color_text("FlyAgent messages:", ANSI_DIM))
-        for message in messages:
-            content = str(message.get("content", "")).strip()
-            if content:
-                print(f"- [{message.get('type', 'progress')}] {content}")
     if include_messages:
         print_json(compact)
         return
@@ -80,7 +73,6 @@ class CliNarrativePanel:
     def __init__(self) -> None:
         self.phase_names: list[str] = []
         self.current_phase: str | None = None
-        self.final_message: str | None = None
         self._status_visible = False
         self._last_status = ""
 
@@ -89,9 +81,6 @@ class CliNarrativePanel:
         payload = event.get("payload", {}) if isinstance(event.get("payload", {}), dict) else {}
         if kind == "instruction_started":
             self._start_instruction(payload)
-            return
-        if kind == "agent_message":
-            self._handle_agent_message(event)
             return
         if kind == "phase_plan_ready":
             self.current_phase = str(payload.get("phase") or self.current_phase or "")
@@ -130,23 +119,17 @@ class CliNarrativePanel:
         """Clear temporary status and print only the final answer plus run path."""
 
         self._clear_status()
-        final = self.final_message or self._final_message_from_summary(summary)
-        if final:
-            print(color_text(f"FlyAgent: {final}", ANSI_GREEN))
-        else:
-            completed = _ZH["completed"] if summary.get("completed") else _ZH["not_completed"]
-            color = ANSI_GREEN if summary.get("completed") else ANSI_YELLOW
-            print(color_text(f'FlyAgent: {_ZH["turn_task"]}{completed}{_ZH["period"]}', color))
+        completed = _ZH["completed"] if summary.get("completed") else _ZH["not_completed"]
+        color = ANSI_GREEN if summary.get("completed") else ANSI_YELLOW
+        print(color_text(f'FlyAgent: {_ZH["turn_task"]}{completed}{_ZH["period"]}', color))
         run_dir = summary.get("run_dir")
         if run_dir:
             print(color_text(f'{_ZH["run_record"]}{run_dir}', ANSI_DIM))
-        self.final_message = None
         self.current_phase = None
         self.phase_names = []
 
     def _start_instruction(self, payload: dict[str, Any]) -> None:
         self._clear_status()
-        self.final_message = None
         self.phase_names = [str(name) for name in payload.get("phase_names", []) if name]
         self.current_phase = self.phase_names[0] if self.phase_names else None
         if not self.phase_names:
@@ -156,24 +139,6 @@ class CliNarrativePanel:
         for index, name in enumerate(self.phase_names, start=1):
             print(f"  {index}. {self._humanize_phase(name)}")
         self._set_status(f'{_ZH["prepare"]} 1/{total}{_ZH["colon"]}{self._humanize_phase(self.phase_names[0])}')
-
-    def _handle_agent_message(self, event: dict[str, Any]) -> None:
-        message = event.get("message", {}) if isinstance(event.get("message", {}), dict) else {}
-        content = str(message.get("content", "")).strip()
-        if not content:
-            return
-        message_type = str(message.get("type", "progress"))
-        if message_type == "final":
-            self.final_message = content
-            self._set_status(_ZH["complete整理"])
-            return
-        if message_type == "warning":
-            self._set_status(f'{_ZH["warning"]}{content}')
-            return
-        if message_type == "question":
-            self._set_status(f'{_ZH["question"]}{content}')
-            return
-        self._set_status(content)
 
     def _set_status(self, text: str) -> None:
         clean = " ".join(str(text).split())
@@ -254,13 +219,6 @@ class CliNarrativePanel:
         if not reason:
             return _ZH["continue_fill"]
         return reason[:80] + ("..." if len(reason) > 80 else "")
-
-    @staticmethod
-    def _final_message_from_summary(summary: dict[str, Any]) -> str:
-        for message in reversed(summary.get("agent_messages", []) or []):
-            if message.get("type") == "final" and message.get("content"):
-                return str(message["content"])
-        return ""
 
     @staticmethod
     def _humanize_phase(name: str) -> str:

@@ -252,15 +252,6 @@ class BenchmarkReviewRenderer:
                     ("id", "timestamp", "tool", "args", "result"),
                 )
                 + "</section>"
-                "<section><h2>Agent Messages</h2>"
-                + _record_table(
-                    case.audit.agent_messages,
-                    ("timestamp", "source", "phase", "message"),
-                    empty_message=(
-                        "No agent messages were emitted for this episode."
-                    ),
-                )
-                + "</section>"
                 "<section><h2>Decision / Window Details</h2>"
                 f"{_planner_review(case.audit, case_dir, planner_input_assets)}</section>"
                 "<section><h2>Runtime Applied Phase State</h2>"
@@ -2574,7 +2565,6 @@ def _compact_plan(plan: dict[str, Any]) -> dict[str, Any]:
         return {}
     return {
         "action_window": plan.get("action_window"),
-        "agent_messages": plan.get("agent_messages"),
         "steps": plan.get("steps"),
     }
 

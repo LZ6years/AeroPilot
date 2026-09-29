@@ -20,7 +20,7 @@ from src.memory.context.contracts import (
 from src.memory.context.documents import ContextDocuments
 from src.memory.context.registry import ContextModuleRegistry
 from src.memory.flight_memory import FlightMemory
-from src.memory.stores import MapMemoryStore, RunMemoryStore
+from src.memory.stores import MapMemoryStore
 from src.uav.config import UavSafetyConfig
 
 
@@ -43,7 +43,7 @@ class ModelContextBuilder:
         knowledge_catalog: list[dict[str, Any]] | None = None,
         map_memory: MapMemoryStore | None = None,
         map_memory_path: str | Path = DEFAULT_MAP_MEMORY_PATH,
-        run_memory: RunMemoryStore | None = None,
+        run_memory: Any = None,
     ) -> None:
         self.safety_config = safety_config or UavSafetyConfig()
         self.registry = registry
@@ -54,7 +54,10 @@ class ModelContextBuilder:
             if map_memory is not None
             else MapMemoryStore.from_file(map_memory_path)
         )
-        self.run_memory = run_memory or RunMemoryStore()
+        # Kept as an optional source field until third-party ContextModules no
+        # longer accept MemorySourceBundle.run_memory. Core Runtime has no run
+        # memory store and never creates an implicit placeholder instance.
+        self.run_memory = run_memory
 
     def semantic_evidence_capabilities(self) -> list[str]:
         return self.registry.semantic_evidence_capabilities()

@@ -22,6 +22,7 @@ class AsyncRunLogger:
         self.system_log_path = self.run_dir / "debug" / "system.log"
         self._queue: queue.Queue[Callable[[], None] | None] = queue.Queue()
         self._closed = False
+        self._state_lock = threading.Lock()
         self._thread = threading.Thread(target=self._worker, name="flyagent-run-logger", daemon=True)
         self._thread.start()
 
@@ -71,11 +72,17 @@ class AsyncRunLogger:
 
     def close(self) -> None:
         # Flush all queued writes and stop the background writer.
-        if self._closed:
-            return
-        self._closed = True
-        self._queue.put(None)
-        self._thread.join(timeout=10)
+        # Checking ``_closed`` and inserting the sentinel must be atomic with
+        # enqueue. Otherwise a producer can pass the check, lose the race to
+        # close(), and append a write *after* the sentinel; the worker then
+        # exits and a completed run is missing audit artifacts.
+        with self._state_lock:
+            if not self._closed:
+                self._closed = True
+                self._queue.put(None)
+        self._thread.join(timeout=30)
+        if self._thread.is_alive():
+            raise RuntimeError("AsyncRunLogger did not flush within 30 seconds")
 
     def _log(self, level: str, message: str, fields: dict[str, Any]) -> None:
         # Format one system log line with optional JSON fields.
@@ -90,9 +97,10 @@ class AsyncRunLogger:
 
     def _enqueue(self, job: Callable[[], None]) -> None:
         # Add a write job unless the logger has already been closed.
-        if self._closed:
-            raise RuntimeError("AsyncRunLogger is already closed")
-        self._queue.put(job)
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError("AsyncRunLogger is already closed")
+            self._queue.put(job)
 
     def _worker(self) -> None:
         # Drain queued write jobs until the sentinel is received.

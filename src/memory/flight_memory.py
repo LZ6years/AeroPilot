@@ -11,7 +11,6 @@ MAX_RECENT_OBSERVATION_REFS = 50
 MAX_RECENT_ACTION_REFS = 50
 MAX_RECENT_POSE_REFS = 50
 MAX_RECENT_FRAME_REFS = 100
-MAX_RECENT_AGENT_MESSAGE_REFS = 50
 
 
 @dataclass
@@ -27,10 +26,8 @@ class FlightMemory:
     recent_action_refs: list[dict[str, Any]] = field(default_factory=list)
     recent_pose_refs: list[dict[str, Any]] = field(default_factory=list)
     recent_frame_refs: list[dict[str, Any]] = field(default_factory=list)
-    recent_agent_message_refs: list[dict[str, Any]] = field(default_factory=list)
     observation_anchors: dict[str, dict[str, Any]] = field(default_factory=dict)
     reset_epoch: int = 0
-    rolling_summary: dict[str, Any] = field(default_factory=dict)
     memory_reader: Any = field(default=None, repr=False, compare=False)
 
     def update_instruction_ref(self, ref: dict[str, Any], instruction: str) -> None:
@@ -58,10 +55,6 @@ class FlightMemory:
         for ref in refs or []:
             self.recent_frame_refs.append(dict(ref))
         self.recent_frame_refs = self.recent_frame_refs[-MAX_RECENT_FRAME_REFS:]
-
-    def append_agent_message_ref(self, ref: dict[str, Any]) -> None:
-        self.recent_agent_message_refs.append(dict(ref))
-        self.recent_agent_message_refs = self.recent_agent_message_refs[-MAX_RECENT_AGENT_MESSAGE_REFS:]
 
     def set_observation_anchor(self, name: str, ref: dict[str, Any] | None, *, overwrite: bool = True) -> None:
         """Record a stable observation role for the active instruction.
@@ -95,7 +88,6 @@ class FlightMemory:
         self.recent_action_refs = []
         self.recent_pose_refs = []
         self.recent_frame_refs = []
-        self.rolling_summary = {"reset_reason": "pose_reset", "reset_epoch": self.reset_epoch}
 
     @property
     def latest_pose(self) -> dict[str, Any]:
@@ -118,8 +110,6 @@ class FlightMemory:
             "recent_action_refs": [dict(item) for item in self.recent_action_refs],
             "recent_pose_refs": [dict(item) for item in self.recent_pose_refs],
             "recent_frame_refs": [dict(item) for item in self.recent_frame_refs],
-            "recent_agent_message_refs": [dict(item) for item in self.recent_agent_message_refs],
             "observation_anchors": {key: dict(value) for key, value in self.observation_anchors.items()},
             "reset_epoch": self.reset_epoch,
-            "rolling_summary": dict(self.rolling_summary),
         }

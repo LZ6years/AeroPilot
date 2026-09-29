@@ -3,7 +3,7 @@
 The stabilizer is a runtime control policy, not a model-visible action. It may
 send a zero-velocity brake command and poll pose through ToolDispatcher, but
 those polling observations are deliberately kept out of FlightMemory so the
-model only sees the final automatic observation for a phase window.
+model only sees the final automatic observation for a physical window.
 """
 
 from __future__ import annotations

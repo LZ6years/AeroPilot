@@ -998,7 +998,6 @@ def _audit_summary(
             if item.modality == "rgb" and item.display_path
         ),
         "action_count": len(audit.actions),
-        "agent_message_count": len(audit.agent_messages),
     }
 
 

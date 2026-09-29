@@ -24,7 +24,7 @@ from src.agent.config import load_model_config
 from src.uav.config import load_uav_safety_config
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
-from src.runtime.task.interactive_session import InteractiveTaskSession, compact_turn_summary
+from src.runtime.runners.interactive_session import InteractiveTaskSession, compact_turn_summary
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.runtime.factory import RuntimeFactory
 from src.sim_server.server import SimulationServer

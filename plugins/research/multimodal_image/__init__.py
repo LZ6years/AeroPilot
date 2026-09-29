@@ -1,1 +1,0 @@
-"""Multimodal image research plugin."""

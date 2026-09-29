@@ -29,7 +29,6 @@ __all__ = [
     "pose_from_observation",
     "pose_measurements",
     "pose_value",
-    "UNREALCV_VERTICAL_SIGN",
     "velocity_norm_mps",
     "yaw_deg",
 ]

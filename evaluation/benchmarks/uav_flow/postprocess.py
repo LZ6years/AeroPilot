@@ -308,7 +308,6 @@ def _audit_from_payload(payload: dict[str, Any]) -> BenchmarkAuditLog:
         frames=tuple(_dict_items(payload.get("frames"))),
         poses=tuple(_dict_items(payload.get("poses"))),
         actions=tuple(_dict_items(payload.get("actions"))),
-        agent_messages=tuple(_dict_items(payload.get("agent_messages"))),
         events=tuple(_dict_items(payload.get("events"))),
         debug_events=tuple(_dict_items(payload.get("debug_events"))),
         planner_debug=tuple(_dict_items(payload.get("planner_debug"))),

@@ -2,12 +2,18 @@
 
 from importlib import import_module
 
-__all__ = ["SmokeRuntime", "InteractiveTaskSession", "TaskRuntime"]
+__all__ = [
+    "SmokeRuntime",
+    "InteractiveTaskSession",
+    "TaskRuntime",
+    "TaskRuntimeBusyError",
+]
 
 _EXPORTS = {
     "SmokeRuntime": "src.runtime.runners.smoke_runtime",
-    "InteractiveTaskSession": "src.runtime.task.interactive_session",
+    "InteractiveTaskSession": "src.runtime.runners.interactive_session",
     "TaskRuntime": "src.runtime.runners.task_runtime",
+    "TaskRuntimeBusyError": "src.runtime.runners.task_runtime",
 }
 
 

@@ -3,7 +3,7 @@
 The middleware is intentionally observational: it emits started/completed/failed
 debug events and returns or raises exactly what the wrapped tool call does. It
 does not update MissionState, write memory records, enforce safety, or retry
-actions; TaskRuntime owns those behaviors.
+actions; the task execution and evidence services own those behaviors.
 """
 
 from __future__ import annotations

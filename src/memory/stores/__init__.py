@@ -2,6 +2,5 @@
 
 from src.memory.stores.event_store import MemoryEventWriter, MemoryRecordReader
 from src.memory.stores.map_memory_store import MapMemoryStore
-from src.memory.stores.run_memory_store import RunMemoryStore
 
-__all__ = ["MapMemoryStore", "MemoryEventWriter", "MemoryRecordReader", "RunMemoryStore"]
+__all__ = ["MapMemoryStore", "MemoryEventWriter", "MemoryRecordReader"]
