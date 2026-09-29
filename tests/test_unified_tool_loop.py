@@ -6,6 +6,9 @@ implementation; it does not emulate their ordering or ToolResult construction.
 """
 
 import copy
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from types import SimpleNamespace
 
 import pytest
@@ -25,13 +28,14 @@ from src.plugins.skills.knowledge_service import KnowledgeService
 from src.agent.config import ModelConfig
 from src.runtime.context import ContextCheckpointService
 from src.runtime.task import RuntimeJournal
-from src.runtime.task.loop import InstructionLoop, TaskLoopGuard
+from src.runtime.task.evidence import FlightEvidenceRecorder
+from src.runtime.task.loop import TaskLoop
 from src.runtime.task.physical_window import PhysicalWindowExecutor
-from src.runtime.task.session import InstructionSession
+from src.runtime.task.session import TaskSession
 from src.runtime.task.turn_executor import TurnExecutor
 from src.runtime.control.actions.task_plan import apply_plan_update
 from src.runtime.middleware import ToolTelemetryMiddleware
-from src.runtime.runners.task_runtime import TaskRuntime
+from src.runtime.runners.task_runtime import TaskRuntime, TaskRuntimeBusyError
 from src.runtime.factory import RuntimeFactory
 from src.tools.builtins import builtin_tools
 from src.tools.dispatcher import ToolDispatcher
@@ -52,6 +56,14 @@ class Recorder:
 
     def write_json(self, path, value):
         self.artifacts[path] = copy.deepcopy(value)
+
+
+def persisted_transcript(path):
+    transcript_path = path / "memory" / "agent_transcript.jsonl"
+    return [
+        json.loads(line)
+        for line in transcript_path.read_text(encoding="utf-8").splitlines()
+    ]
 
 
 class Backend:
@@ -99,8 +111,12 @@ class ScriptedPlanner:
         self.contexts = []
         self.histories = []
         self.decision_indices = []
+        self.transcripts = []
 
     def plan_turn(self, transcript, registry, **kwargs):
+        self.transcript = transcript
+        if not self.transcripts or self.transcripts[-1] is not transcript:
+            self.transcripts.append(transcript)
         self.decision_indices.append(kwargs.get("decision_index"))
         checkpoint = transcript.latest_checkpoint()
         self.contexts.append(
@@ -169,7 +185,7 @@ def test_public_constructor_raw_instruction_and_terminal_lifecycle(tmp_path):
     assert runtime.planner.contexts[0]["envelope"]["protocol_context"] == "Do not land."
     events = [name for name, _ in runtime.recorder.events]
     assert events.index("physical_window_recorded") < events.index("task_terminal") < events.index("scene_stopped")
-    terminal = [e for e in runtime.agent_transcript.items if e.kind == "task_terminal"]
+    terminal = [e for e in runtime.planner.transcript.items if e.kind == "task_terminal"]
     assert len(terminal) == 1
 
 
@@ -187,7 +203,7 @@ def test_public_runtime_loads_knowledge_then_optional_plan_then_batch(tmp_path):
     assert state.loaded_knowledge[0]["name"] == "guide"
     assert state.task_plan.steps[0].status == "in_progress"
     assert backend.pose["x"] == 4
-    results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
+    results = [e.payload for e in runtime.planner.transcript.items if e.kind == "tool_result"]
     assert [r.tool_call_id for r in results] == ["read", "plan", "m1", "m2", "done"]
     assert all(r.status == "ok" for r in results)
 
@@ -214,7 +230,7 @@ def test_failure_audit_cannot_replace_provider_error_or_skip_cleanup(tmp_path):
     def fail_provider(*args, **kwargs):
         def fail_write(*args, **kwargs):
             raise OSError("audit disk failure")
-        runtime._write_state = fail_write
+        runtime._evidence.write_state = fail_write
         raise failure
     runtime.planner.plan_turn = fail_provider
     with pytest.raises(RuntimeError, match="primary provider failure") as captured:
@@ -234,13 +250,30 @@ def test_reused_scene_shutdown_error_survives_stop_error(tmp_path):
     def fail_stop(scene):
         backend.stops.append(scene)
         raise OSError("stop failed")
-    runtime._run_shutdown = fail_shutdown
+    runtime._scenes._shutdown = fail_shutdown
     backend.stop_scene = fail_stop
     with pytest.raises(RuntimeError, match="shutdown failed") as captured:
         runtime.finish_reused_scene("map", state)
     assert captured.value is failure
     assert backend.stops == ["scene"]
     assert failure.cleanup_errors[0]["stage"] == "scene_stop"
+
+
+def test_runtime_shutdown_policy_override_reaches_scene_lifecycle(tmp_path):
+    runtime, backend = public_runtime(tmp_path, [[done(observation="obs_0001")]])
+    state = runtime.run_task(
+        "map",
+        "Observe",
+        scene_policy="reuse_running",
+        stop_scene_on_finish=False,
+    )
+
+    runtime.shutdown_policy = "land"
+    runtime.finish_reused_scene("map", state)
+
+    assert runtime._scenes.shutdown_policy == "land"
+    assert backend.actions[-2:] == [("hover", {}), ("land", {})]
+    assert backend.stops == ["scene"]
 
 
 def test_public_runtime_preserves_provider_error_when_scene_cleanup_also_fails(tmp_path):
@@ -258,7 +291,11 @@ def test_public_runtime_preserves_provider_error_when_scene_cleanup_also_fails(t
     assert captured.value is failure
     assert failure.cleanup_errors[0]["stage"] == "scene_stop"
     assert backend.stops == ["scene"]
-    terminal = [e.payload for e in runtime.agent_transcript.items if e.kind == "task_terminal"]
+    terminal = [
+        item["payload"]
+        for item in persisted_transcript(tmp_path)
+        if item["kind"] == "task_terminal"
+    ]
     assert len(terminal) == 1 and not terminal[0]["completed"]
     assert terminal[0]["stop_source"] != "runtime.report_blocked"
 
@@ -269,18 +306,93 @@ def test_public_runtime_reused_scene_starts_fresh_instruction_state(tmp_path):
         [done(observation="obs_0001")],
         [done(observation="obs_0003")],
     ])
+    created_services = []
+    original_factory = runtime.knowledge_service_factory
+
+    def create_knowledge_service():
+        service = original_factory()
+        created_services.append(service)
+        return service
+
+    runtime.knowledge_service_factory = create_knowledge_service
     first = runtime.run_task("map", "First instruction", scene_policy="reuse_running", stop_scene_on_finish=False)
-    second = runtime.run_task("map", "Second instruction", scene_policy="reuse_running")
+    first_memory = next(iter(runtime._scenes.active_flight_memories.values()))
+    second = runtime.run_task(
+        "map",
+        "Second instruction",
+        scene_policy="reuse_running",
+        stop_scene_on_finish=False,
+    )
     assert runtime.planner.decision_indices == [1, 2, 1]
     assert first.task_plan is not None and second.task_plan is None
     assert first.completed and second.completed
     assert second.loaded_knowledge == [] and second.physical_window_count == 0
-    assert backend.starts == 1 and backend.stops == ["scene"]
-    assert runtime.agent_transcript.items[0].kind == "instruction_envelope"
+    assert backend.starts == 1 and backend.stops == []
+    assert len(runtime.planner.transcripts) == 2
+    assert runtime.planner.transcripts[0] is not runtime.planner.transcripts[1]
+    assert len(created_services) == 2
+    assert created_services[0] is not created_services[1]
+    assert runtime.planner.contexts[0]["checkpoint"]["checkpoint_id"] == "checkpoint_0001"
+    assert runtime.planner.contexts[2]["checkpoint"]["checkpoint_id"] == "checkpoint_0001"
+    assert first_memory is runtime._scenes.active_flight_memories[
+        ("map", "default", "uav_1")
+    ]
+    assert runtime.planner.transcript.items[0].kind == "instruction_envelope"
     instruction_events = [
-        event for event in runtime.agent_transcript.items if event.kind == "user_instruction"
+        event for event in runtime.planner.transcript.items if event.kind == "user_instruction"
     ]
     assert instruction_events[0].payload["instruction"] == "Second instruction"
+    runtime.finish_reused_scene("map", second)
+    assert backend.stops == ["scene"]
+
+
+def test_task_runtime_has_no_task_scoped_mutable_state(tmp_path):
+    runtime, _ = public_runtime(tmp_path, [[done(observation="obs_0001")]])
+    for name in (
+        "agent_transcript",
+        "checkpoints",
+        "_decision_index",
+        "_state_flight_memories",
+        "_current_turn_agent_messages",
+    ):
+        assert not hasattr(runtime, name)
+
+
+def test_runtime_scene_operations_fail_fast_during_task_and_lock_releases(tmp_path):
+    runtime, backend = public_runtime(tmp_path, [[done(observation="obs_0001")]])
+    entered = threading.Event()
+    release = threading.Event()
+    original = runtime.planner.plan_turn
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    runtime.planner.plan_turn = blocked
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(
+            runtime.run_task,
+            "map",
+            "Observe",
+            "uav_1",
+            "reuse_running",
+            False,
+        )
+        assert entered.wait(5)
+        with pytest.raises(TaskRuntimeBusyError):
+            runtime.run_task("map", "Second")
+        with pytest.raises(TaskRuntimeBusyError):
+            runtime.ensure_reused_scene("map")
+        with pytest.raises(TaskRuntimeBusyError):
+            runtime.safe_hover_reused_scene("map")
+        with pytest.raises(TaskRuntimeBusyError):
+            runtime.finish_reused_scene("map", None)
+        release.set()
+        state = future.result(timeout=5)
+
+    runtime.finish_reused_scene("map", state)
+    assert backend.stops == ["scene"]
 
 
 def harness(tmp_path, batches):
@@ -294,68 +406,107 @@ def harness(tmp_path, batches):
     for spec in builtin_tools():
         registry.register(spec)
     backend = Backend()
-    runtime = TaskRuntime.__new__(TaskRuntime)
     from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
-    runtime.read_only_execution_config = ReadOnlyExecutionConfig()
-    runtime.recorder = Recorder(tmp_path)
+    read_config = ReadOnlyExecutionConfig()
+    recorder = Recorder(tmp_path)
     from src.plugins.skills.dispatcher import SkillCapabilityDispatcher
-    runtime.tools = ToolDispatcher(
+    tools = ToolDispatcher(
         backend,
         registry,
         SkillCapabilityDispatcher(plugins),
-        KnowledgeService(plugins.skill_catalog),
     )
-    runtime.safety = SafetySupervisor()
-    runtime.tool_telemetry = ToolTelemetryMiddleware(runtime.tools, runtime._debug_event)
-    runtime.stabilizer = SimpleNamespace(wait_after_step=lambda *a, **k: {"status": "ok"})
-    runtime.model_config = ModelConfig()
-    runtime.loop_guard = TaskLoopGuard(
-        runtime.model_config.max_consecutive_protocol_rejections
+    safety = SafetySupervisor()
+    stabilizer = SimpleNamespace(
+        wait_after_step=lambda *a, **k: {"status": "ok"}
     )
-    runtime.physical_windows = PhysicalWindowExecutor(
-        runtime, runtime._pose_from_observation
-    )
-    runtime.turn_executor = TurnExecutor(runtime, runtime.physical_windows)
-    runtime.instruction_loop = InstructionLoop(
-        runtime, runtime.loop_guard, runtime.turn_executor
-    )
-    runtime.planner = ScriptedPlanner(batches)
-    runtime.context_builder = ModelContextBuilder(
+    model_config = ModelConfig()
+    planner = ScriptedPlanner(batches)
+    context_builder = ModelContextBuilder(
         registry=ContextModuleRegistry.default(plugin_warnings=plugins.warnings),
         knowledge_catalog=[
             {"name": item.name, "description": item.description}
             for item in plugins.skill_catalog.skills
         ],
     )
-    runtime.memory_writer = MemoryEventWriter(tmp_path)
-    runtime.agent_transcript = AgentTranscript(runtime.memory_writer)
+    memory_writer = MemoryEventWriter(tmp_path)
+    transcript = AgentTranscript(memory_writer)
     memory = FlightMemory("run", "map", "scene", "uav", active_instruction="Go to the endpoint",
                           active_instruction_id="inst_1", memory_reader=MemoryRecordReader(tmp_path))
     state = MissionState("run", "Go to the endpoint", protocol_context="Episode-specific guidance.")
-    runtime.checkpoints = ContextCheckpointService(
-        runtime.context_builder, runtime.agent_transcript, runtime.recorder
+    checkpoints = ContextCheckpointService(
+        context_builder, transcript, recorder
     )
-    runtime.checkpoints.begin_instruction(state, memory)
-    runtime._state_flight_memories = {"run": memory}
-    runtime._decision_index = 0
-    runtime.journal = RuntimeJournal(runtime.recorder)
+    checkpoints.begin_instruction(state, memory)
+    journal = RuntimeJournal(recorder)
+    telemetry = ToolTelemetryMiddleware(tools, journal.debug_event)
+    evidence = FlightEvidenceRecorder(recorder, tools, memory_writer, journal)
+    physical_windows = PhysicalWindowExecutor(
+        tools, telemetry, stabilizer, evidence, journal, recorder
+    )
+    turn_executor = TurnExecutor(
+        tools,
+        safety,
+        physical_windows,
+        evidence,
+        journal,
+        recorder,
+        read_config,
+        telemetry,
+    )
+    task_loop = TaskLoop(
+        planner,
+        registry,
+        turn_executor,
+        journal,
+        evidence,
+        max_consecutive_protocol_rejections=(
+            model_config.max_consecutive_protocol_rejections
+        ),
+    )
     scene = SimpleNamespace(scene_instance_id="scene", capabilities=None)
-    runtime._record_observation(scene, "uav", state, ["pose"], "instruction_start")
-    runtime.checkpoints.publish(state, memory, "instruction_start")
+    session = TaskSession(
+        scene=scene,
+        agent_id="uav",
+        state=state,
+        memory=memory,
+        transcript=transcript,
+        checkpoints=checkpoints,
+        knowledge_service=KnowledgeService(plugins.skill_catalog),
+    )
+    evidence.record_observation(session, ["pose"], "instruction_start")
+    checkpoints.publish(state, memory, "instruction_start")
+    runtime = SimpleNamespace(
+        recorder=recorder,
+        tools=tools,
+        safety=safety,
+        stabilizer=stabilizer,
+        model_config=model_config,
+        planner=planner,
+        context_builder=context_builder,
+        memory_writer=memory_writer,
+        agent_transcript=transcript,
+        checkpoints=checkpoints,
+        journal=journal,
+        tool_telemetry=telemetry,
+        evidence=evidence,
+        physical_windows=physical_windows,
+        turn_executor=turn_executor,
+        task_loop=task_loop,
+        session=session,
+        memory=memory,
+        read_only_execution_config=read_config,
+        _decision_index=1,
+    )
+    runtime._record_action = (
+        lambda _state, tool, args, result: evidence.record_action(
+            session, tool, args, result
+        )
+    )
     return runtime, state, scene, backend
 
 
 def run_loop(runtime, state, scene):
-    memory = runtime._memory_for_state(state)
-    runtime.instruction_loop.run(
-        InstructionSession(
-            scene=scene,
-            agent_id="uav",
-            state=state,
-            memory=memory,
-            transcript=runtime.agent_transcript,
-        )
-    )
+    runtime.task_loop.run(runtime.session)
 
 
 def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
@@ -371,7 +522,7 @@ def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
     assert state.latest_pose["x"] == 4
     assert state.task_plan.steps[0].status == "in_progress"  # task terminal is independent
     assert state.loaded_knowledge[0]["name"] == "guide"
-    results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
+    results = [e.payload for e in runtime.planner.transcript.items if e.kind == "tool_result"]
     assert [r.tool_call_id for r in results] == ["knowledge", "plan", "m1", "m2", "done"]
     assert all(r.status == "ok" for r in results)
     windows = [payload for name, payload in runtime.recorder.events if name == "physical_window_recorded"]
@@ -401,6 +552,7 @@ def test_mixed_turn_rejected_before_any_action_then_corrected(tmp_path, workers)
     ])
     from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
     runtime.read_only_execution_config = ReadOnlyExecutionConfig(workers)
+    runtime.turn_executor.read_only_execution_config = runtime.read_only_execution_config
     run_loop(runtime, state, scene)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert [r.status for r in results] == ["rejected", "rejected", "ok", "ok"]
@@ -489,7 +641,7 @@ def test_scene_recovery_stops_public_runtime_and_pairs_calls(tmp_path, reuse_sce
     with pytest.raises(SceneRecoveryRequired):
         runtime.run_task("map", "Move", scene_policy="reuse_running" if reuse_scene else "isolated",
                          stop_scene_on_finish=not reuse_scene)
-    results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
+    results = [e.payload for e in runtime.planner.transcript.items if e.kind == "tool_result"]
     assert [(r.tool_call_id, r.status) for r in results] == [("fatal", "error"), ("cancelled", "skipped")]
     assert "action_diagnostics" not in results[0].data
     assert len(runtime.planner.contexts) == 1
@@ -504,7 +656,7 @@ def test_scene_recovery_stops_public_runtime_and_pairs_calls(tmp_path, reuse_sce
         runtime.finish_reused_scene("map", state)
         assert len(backend.actions) == count and len(runtime.planner.contexts) == 1
     assert backend.stops == ["scene"]
-    assert any(e.kind == "task_terminal" for e in runtime.agent_transcript.items)
+    assert any(e.kind == "task_terminal" for e in runtime.planner.transcript.items)
 
 
 def test_instruction_motion_and_plan_updates_preserve_origins_and_last_window():
@@ -542,7 +694,7 @@ def test_context_never_selects_knowledge_or_exposes_unloaded_body(tmp_path):
         {"name": "guide", "description": "Navigation guidance"}
     ]
     assert context["checkpoint"]["loaded_knowledge"] == []
-    assert "phase_start" not in runtime._memory_for_state(state).observation_anchors
+    assert "phase_start" not in runtime.memory.observation_anchors
 
 
 def test_reused_call_id_is_provider_rejection_not_duplicate_canonical_result(tmp_path):
@@ -571,6 +723,7 @@ def test_safety_modification_is_associated_with_its_own_batch_step(tmp_path):
         [done()],
     ])
     runtime.safety = SafetySupervisor(UavSafetyConfig(max_linear_velocity_mps=0.5))
+    runtime.turn_executor.safety = runtime.safety
     run_loop(runtime, state, scene)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert results[0].requested_args["vx"] == 1 and results[0].executed_args["vx"] == 0.5
@@ -637,7 +790,9 @@ def test_after_camera_failure_preserves_action_results_without_fake_observation(
 
 def test_capture_context_does_not_duplicate_image_binary(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [])
-    runtime._capture_instruction_exchange("decision_0001")
+    runtime.journal.capture_provider_exchange(
+        runtime.planner, runtime.session, "decision_0001"
+    )
     ref = runtime.recorder.events[-1][1]["debug_ref"]
     artifact = runtime.recorder.artifacts[ref]
     checkpoint = runtime.agent_transcript.latest_checkpoint()
@@ -649,7 +804,9 @@ def test_capture_context_does_not_duplicate_image_binary(tmp_path):
 
 def test_instruction_captures_do_not_overwrite_previous_decisions(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [])
-    runtime._capture_instruction_exchange("decision_0001")
+    runtime.journal.capture_provider_exchange(
+        runtime.planner, runtime.session, "decision_0001"
+    )
     first_ref = runtime.recorder.events[-1][1]["debug_ref"]
     first_snapshot = copy.deepcopy(runtime.recorder.artifacts[first_ref])
     from src.memory.context.contracts import InstructionEnvelope
@@ -666,7 +823,9 @@ def test_instruction_captures_do_not_overwrite_previous_decisions(tmp_path):
             static_module_guidance=(),
         ),
     )
-    runtime._capture_instruction_exchange("decision_0001")
+    runtime.journal.capture_provider_exchange(
+        runtime.planner, runtime.session, "decision_0001"
+    )
     second_ref = runtime.recorder.events[-1][1]["debug_ref"]
     assert first_ref != second_ref and ".." not in second_ref
     assert runtime.recorder.artifacts[first_ref] == first_snapshot
@@ -686,7 +845,7 @@ def test_acquisition_audit_failure_rolls_back_and_preserves_original(tmp_path, c
     def fail_record(scene):
         raise original
 
-    runtime._record_scene_contract = fail_record
+    runtime._scenes._record_contract = fail_record
     if cleanup_fails:
         def fail_stop(scene_id):
             backend.stops.append(scene_id)
@@ -706,7 +865,7 @@ def test_existing_reused_scene_is_not_stopped_by_audit_failure(tmp_path):
     runtime.ensure_reused_scene("map")
     def fail_record(scene):
         raise OSError("storage offline")
-    runtime._record_scene_contract = fail_record
+    runtime._scenes._record_contract = fail_record
     with pytest.raises(OSError):
         runtime.ensure_reused_scene("map")
     assert backend.stops == []

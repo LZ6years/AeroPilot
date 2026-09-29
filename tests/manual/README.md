@@ -51,7 +51,6 @@ Every run must use a new `runs/experiments/<probe>/<timestamp>/` directory. Do n
 | `model_admission_probe.py` | flyagent | `runs/experiments/model_admission_probe/<timestamp>/` | Explicit manual/diagnostic workflow |
 | `model_multimodal_smoke.py` | flyagent | `runs/experiments/model_multimodal_smoke/<timestamp>/` | Explicit manual/diagnostic workflow |
 | `model_native_tool_loop_smoke.py` | flyagent | `runs/experiments/model_native_tool_loop_smoke/<timestamp>/` | Explicit manual/diagnostic workflow |
-| `model_visual_description_probe.py` | flyagent | `runs/experiments/model_visual_description_probe/<timestamp>/` | Explicit manual/diagnostic workflow |
 | `native_tool_loop_real_audit.py` | flyagent | `runs/experiments/native_tool_loop_real_audit/<timestamp>/` | Explicit manual/diagnostic workflow |
 | `native_tool_transcript_probe.py` | flyagent | `runs/experiments/native_tool_transcript_probe/<timestamp>/` | Explicit manual/diagnostic workflow |
 | `navigation_decision_probe.py` | flyagent | `runs/experiments/navigation_decision_probe/<timestamp>/` | Explicit manual/diagnostic workflow |
@@ -90,4 +89,3 @@ Every run must use a new `runs/experiments/<probe>/<timestamp>/` directory. Do n
 - `image_context_probe.py` and its note were removed with the V1 RGB encoding cache.
 - `context_build_probe.py` was replaced by `context_assembly_probe.py` and the product tests in `tests/test_model_context_v2.py`.
 - Product-contract checks belong in `tests/`; profiler, GPU, simulator, and network assertions belong in `tests/diagnostics/`.
-

@@ -111,14 +111,23 @@ def test_knowledge_dispatch_never_calls_environment_or_capability(tmp_path):
     dispatcher.registry = registry
     dispatcher.env_client = NoExternalCalls()
     dispatcher.skill_capabilities = NoExternalCalls()
-    dispatcher.knowledge_service = KnowledgeService(catalog(tmp_path))
-    result = dispatcher.call("scene", "uav", "knowledge.load", {"name": "navigation"})
+    knowledge = KnowledgeService(catalog(tmp_path))
+    result = dispatcher.call(
+        "scene", "uav", "knowledge.load", {"name": "navigation"},
+        knowledge_service=knowledge,
+    )
     assert result.ok and result.data["body_included"]
     assert "not environmental evidence" in result.message
-    again = dispatcher.call("scene", "uav", "knowledge.load", {"name": "navigation"})
+    again = dispatcher.call(
+        "scene", "uav", "knowledge.load", {"name": "navigation"},
+        knowledge_service=knowledge,
+    )
     assert again.ok and "body" not in again.data
     with pytest.raises(ValueError):
-        dispatcher.call("scene", "uav", "knowledge.load", {"name": "navigation", "extra": 1})
-    dispatcher.knowledge_service = None
+        dispatcher.call(
+            "scene", "uav", "knowledge.load",
+            {"name": "navigation", "extra": 1},
+            knowledge_service=knowledge,
+        )
     with pytest.raises(ValueError, match="not bound"):
         dispatcher.call("scene", "uav", "knowledge.load", {"name": "navigation"})

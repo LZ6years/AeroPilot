@@ -48,7 +48,6 @@ def test_eval_summary_is_text_only(tmp_path):
         "audit_summary": {
             "rgb_count": 2,
             "action_count": 1,
-            "agent_message_count": 1,
         },
         "ndtw": {
             "status": "ok",

@@ -200,12 +200,16 @@ def child(directory, number, workers, *, kind="comparison"):
         from tests.manual.sam_coordinate_probe import validate_coordinates
         validate_coordinates(directory)
     dispatcher = ToolDispatcher(NoEnvironment(), default_registry())
+    knowledge_service = None
     calls = copy.deepcopy(item["calls"])
     if any("include_distance" in call.get("args", {}) for call in calls):
         raise ValueError("Historical optional-distance input cannot execute against the measurement-only interface; preserve this experiment and prepare new calls.")
     if kind == "mixed":
+        from src.plugins import PluginRegistry
         from src.plugins.skills.knowledge_service import KnowledgeService
-        dispatcher.knowledge_service = KnowledgeService(dispatcher.plugin_registry.skill_catalog)
+        knowledge_service = KnowledgeService(
+            PluginRegistry.from_config().skill_catalog
+        )
         name = manifest["mixed_knowledge_name"]
         calls += [{"tool_call_id": f"constructed_knowledge_{i}", "tool_name": "knowledge.load", "args": {"name": name}} for i in (1, 2)]
     config = ReadOnlyExecutionConfig(workers, 2, {VISION: 2})
@@ -224,7 +228,10 @@ def child(directory, number, workers, *, kind="comparison"):
                            "run_dir": str(output), "tool_call_id": call["tool_call_id"]}
                 jobs.append(ReadJob(call["tool_call_id"], call["tool_name"],
                     dispatcher.read_execution_hints(call["tool_name"], args),
-                    lambda c=call, a=args, ctx=context: dispatcher.call("offline", "uav0", c["tool_name"], a, ctx)))
+                    lambda c=call, a=args, ctx=context: dispatcher.call(
+                        "offline", "uav0", c["tool_name"], a, ctx,
+                        knowledge_service=knowledge_service,
+                    )))
             def event(name, payload):
                 profile.emit({"event": name, "decision": repeat + 1, **payload})
             profiled = repeat + 1 in manifest.get("cuda_trace_repeats", [])

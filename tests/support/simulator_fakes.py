@@ -11,7 +11,7 @@ from src.sim_server.backends.airsim_backend import AirSimBackend
 from src.sim_server.backends.base import BackendProbe
 from src.sim_server.server import SimulationServer
 from src.sim_server.execution import SimulationExecutionMode
-from tests.fake_uav import FakeUavPrimitiveAdapter
+from tests.support.fake_uav import FakeUavPrimitiveAdapter
 from src.sim_server.backends.registry import BackendRegistry
 from src.sim_server.backends.unrealcv_backend import UnrealCvBackend
 

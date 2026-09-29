@@ -9,7 +9,7 @@ import pytest
 from evaluation.benchmarks.travel_uav.adapter import TravelUavScenarioPayload
 from evaluation.benchmarks.travel_uav.scenario import TravelUavScenarioController
 from src.env_client import SceneInstance
-from tests.travel_uav_test_support import case
+from tests.support.travel_uav import case
 
 
 class Vector:

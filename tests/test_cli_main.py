@@ -29,14 +29,7 @@ class FakeCliSession:
         self.last_summary = {
             "instruction": "向前飞行5米",
             "completed": True,
-            "agent_messages": [
-                {
-                    "type": "progress",
-                    "content": "我准备向前移动并保持安全悬停。",
-                    "confidence": "medium",
-                    "requires_user_reply": False,
-                }
-            ],
+            "agent_transcript_ref": "memory/agent_transcript.jsonl",
         }
         self.shutdown_calls: list[str | None] = []
         self.hover_calls = 0
@@ -103,15 +96,14 @@ def test_help_command_describes_clear_command(tmp_path, capsys):
     assert "向前飞行5米" in out
 
 
-def test_summary_command_prints_agent_messages(tmp_path, capsys):
+def test_summary_command_prints_transcript_reference(tmp_path, capsys):
     session = FakeCliSession(tmp_path)
 
     should_continue = handle_slash_command("/summary", session)  # type: ignore[arg-type]
 
     out = capsys.readouterr().out
     assert should_continue is True
-    assert "我准备向前移动并保持安全悬停。" in out
-    assert '"agent_messages"' in out
+    assert '"agent_transcript_ref": "memory/agent_transcript.jsonl"' in out
 
 
 def test_default_summary_is_compact_after_live_messages(tmp_path, capsys):
@@ -120,8 +112,7 @@ def test_default_summary_is_compact_after_live_messages(tmp_path, capsys):
     print_summary(session.last_summary)
 
     out = capsys.readouterr().out
-    assert "我准备向前移动并保持安全悬停。" not in out
-    assert '"agent_messages"' not in out
+    assert '"agent_transcript_ref"' not in out
     assert '"completed": true' in out
 
 
@@ -131,23 +122,9 @@ def test_cli_narrative_panel_prints_steps_status_and_final(capsys):
     summary = {
         "completed": True,
         "run_dir": "runs/interactive_cli_test",
-        "agent_messages": [{"type": "final", "content": "任务已完成。"}],
     }
 
     panel({"kind": "instruction_started", "payload": {"phase_names": ["move_forward", "rotate_right"]}})
-    panel(
-        {
-            "kind": "agent_message",
-            "source": "action_planner",
-            "phase": "move_forward",
-            "message": {
-                "type": "progress",
-                "content": "我准备向前飞行。",
-                "confidence": "medium",
-                "requires_user_reply": False,
-            },
-        }
-    )
     panel(
         {
             "kind": "tool_step_completed",
@@ -170,26 +147,14 @@ def test_cli_narrative_panel_prints_steps_status_and_final(capsys):
         }
     )
     panel({"kind": "phase_transition_applied", "payload": {"phase": "move_forward", "decision": "complete_task"}})
-    panel(
-        {
-            "kind": "agent_message",
-            "message": {
-                "type": "final",
-                "content": "任务已完成。",
-                "confidence": "high",
-                "requires_user_reply": False,
-            },
-        }
-    )
     panel.finish_turn(summary)
 
     out = capsys.readouterr().out
     assert "任务步骤：" in out
     assert "1. 向前飞行" in out
-    assert "状态：我准备向前飞行。" in out
     assert "状态：动作完成 1/2：向前飞行；已完成移动，已稳定。" in out
     assert "状态：观察完成：已更新图像、深度、位姿。" in out
-    assert "FlyAgent: 任务已完成。" in out
+    assert "FlyAgent: 本轮任务已完成。" in out
     assert "运行记录：runs/interactive_cli_test" in out
 
 

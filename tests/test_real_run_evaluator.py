@@ -96,30 +96,6 @@ def phase_applied_complete() -> dict:
     return {"event": "phase_transition_applied", "payload": {"decision": "complete_task"}}
 
 
-def agent_message_event(message_type: str, content: str = "测试消息") -> dict:
-    return {
-        "event": "agent_message",
-        "payload": {
-            "source": "phase_judge" if message_type == "final" else "action_planner",
-            "phase": "test_phase",
-            "message": {
-                "type": message_type,
-                "content": content,
-                "evidence_refs": [],
-                "confidence": "medium",
-                "requires_user_reply": False,
-            },
-        },
-    }
-
-
-def agent_message_pair() -> list[dict]:
-    return [
-        agent_message_event("progress", "我正在执行当前阶段。"),
-        agent_message_event("final", "任务完成，我已悬停。"),
-    ]
-
-
 def write_completed_run_boilerplate(run_dir: Path) -> None:
     write_json(run_dir / "latest_state.json", {"completed": True, "connected": True, "airborne": True})
     write_json(
@@ -142,7 +118,6 @@ def test_evaluator_extracts_compound_task_metrics_and_artifacts(tmp_path):
         step_event("move_forward_again", "uav.move_body", {"direction": "forward", "duration": 1.0}),
         observation_event(*artifacts[2]),
         phase_window_event("move_forward_again", {"forward_displacement_m": 2.0}),
-        *agent_message_pair(),
         phase_applied_complete(),
     ]
     write_events(run_dir / "events.jsonl", events)
@@ -177,7 +152,6 @@ def test_evaluator_uses_phase_aliases_and_sequential_fallback(tmp_path):
             step_event("rotate_right_and_stabilize", "uav.turn_relative", {"yaw_deg": 30.0}),
             observation_event(*artifacts[2]),
             phase_window_event("rotate_right_and_stabilize", {"yaw_delta_deg": 30.0}, {"turn_relative_yaw_deg_success_sum": 30.0}),
-            *agent_message_pair(),
             phase_applied_complete(),
         ],
     )
@@ -236,7 +210,6 @@ def test_evaluator_writes_metrics_report_and_csv(tmp_path):
             step_event("move_forward_again", "uav.move_body", {"direction": "forward", "duration": 1.5}),
             observation_event(*artifacts[2]),
             phase_window_event("move_forward_again", {"forward_displacement_m": 3.0}),
-            *agent_message_pair(),
             phase_applied_complete(),
         ],
     )
@@ -261,13 +234,11 @@ def test_continuous_evaluator_reports_each_instruction(tmp_path):
             step_event("move_forward", "uav.move_body", {"direction": "forward", "duration": 2.5}),
             observation_event(*artifacts[0]),
             phase_window_event("move_forward", {"forward_displacement_m": 5.0}),
-            *agent_message_pair(),
             phase_applied_complete(),
             task_event(FORWARD_LEFT_FORWARD),
             step_event("rotate_left", "uav.turn_relative", {"yaw_deg": -30.0}),
             observation_event(*artifacts[1]),
             phase_window_event("rotate_left", {"yaw_delta_deg": -30.0}),
-            *agent_message_pair(),
             phase_applied_complete(),
         ],
     )
@@ -297,13 +268,11 @@ def test_batch_single_run_is_evaluated_per_instruction(tmp_path):
             step_event("move_forward", "uav.move_body", {"direction": "forward", "duration": 2.5}),
             observation_event(*artifacts[0]),
             phase_window_event("move_forward", {"forward_displacement_m": 5.0}),
-            *agent_message_pair(),
             phase_applied_complete(),
             task_event(FORWARD_LEFT_FORWARD),
             step_event("move_forward", "uav.move_body", {"direction": "forward", "duration": 1.5}),
             observation_event(*artifacts[1]),
             phase_window_event("move_forward", {"forward_displacement_m": 3.0}),
-            *agent_message_pair(),
             phase_applied_complete(),
         ],
     )
@@ -327,7 +296,6 @@ def test_evaluator_flags_duplicate_artifact_paths(tmp_path):
             task_event(FORWARD_TURN_FORWARD),
             observation_event(*artifacts[0]),
             observation_event(*artifacts[0]),
-            *agent_message_pair(),
             phase_applied_complete(),
         ],
     )

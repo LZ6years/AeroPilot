@@ -7,7 +7,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from tests.benchmark_fakes import UavFlowBenchmarkRunner
+from tests.support.benchmark_fakes import UavFlowBenchmarkRunner
 from src.agent.transcript import AgentToolCall, AssistantTurn
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
@@ -81,7 +81,6 @@ def test_runner_dry_writes_core_audit_truth_artifact_and_summary(tmp_path, monke
     assert result["audit_summary"] == {
         "rgb_count": 0,
         "action_count": 0,
-        "agent_message_count": 0,
     }
     assert result["visual_diagnostics"]["truth_leak_check"]["status"] == "passed"
     assert result["review_html"].endswith("review.html")

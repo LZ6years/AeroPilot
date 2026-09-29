@@ -140,8 +140,8 @@ def test_runtime_only_copies_validated_control_prefix(tmp_path, monkeypatch, ter
         return result
     original_control = module.execute_builtin_control
     def control(tool_call, state, registry, history):
-        assert history == tuple(runtime.agent_transcript.items[:-1])
-        assert runtime.agent_transcript.items[-1].kind == "assistant_turn"
+        assert history == tuple(runtime.planner.transcript.items[:-1])
+        assert runtime.planner.transcript.items[-1].kind == "assistant_turn"
         controls.append(tool_call.tool_call_id)
         return original_control(tool_call, state, registry, history)
     monkeypatch.setattr(AgentTranscript, "snapshot", snapshot)
@@ -151,7 +151,11 @@ def test_runtime_only_copies_validated_control_prefix(tmp_path, monkeypatch, ter
     assert controls == ["plan", "terminal"]
     assert len(snapshots) == 5 and len(prefixes) == 2
     assert all(boundary == length - 1 for boundary, length, _ in prefixes)
-    results = [e.payload.tool_call_id for e in runtime.agent_transcript.items if e.kind == "tool_result"]
+    results = [
+        e.payload.tool_call_id
+        for e in runtime.planner.transcript.items
+        if e.kind == "tool_result"
+    ]
     assert results == ["mixed", "mixed_plan", "read", "plan", "move", "terminal"]
     assert backend.stops == ["scene"]
 

@@ -7,7 +7,7 @@ from src.env_client.schemas import MapPackage
 from src.sim_server.server import SimulationServer
 from src.tools.dispatcher import ToolDispatcher
 from src.tools.registry import default_registry
-from tests.simulator_fakes import in_memory_backend_registry
+from tests.support.simulator_fakes import in_memory_backend_registry
 
 
 def test_tool_dispatcher_routes_uav_actions_through_env_client(tmp_path):

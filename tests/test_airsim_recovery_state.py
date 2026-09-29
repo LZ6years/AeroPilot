@@ -123,7 +123,7 @@ def test_real_adapter_path_saves_five_rpc_without_losing_observation(monkeypatch
     from src.env_client.simulator_client import SimulatorEnvClient
     from src.tools.dispatcher import ToolDispatcher
     from src.tools.registry import default_registry
-    from tests.airsim_fakes import FakeAirSim, FakeAirSimClient, FakeImageResponse
+    from tests.support.airsim_fakes import FakeAirSim, FakeAirSimClient, FakeImageResponse
     counts = []
     for reuse in (False, True):
         adapter = AirSimUavAdapter(control_strategy="paused_multirotor")

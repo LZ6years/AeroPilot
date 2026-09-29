@@ -3,7 +3,7 @@
 import pytest
 
 from evaluation.benchmarks.travel_uav.selection import select_travel_uav_cases
-from tests.travel_uav_test_support import case
+from tests.support.travel_uav import case
 
 
 def test_selection_keeps_split_and_easy_hard_boundary():

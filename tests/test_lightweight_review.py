@@ -27,7 +27,7 @@ def test_comparison_plots_handle_missing_and_single_point(tmp_path):
 def test_default_review_omits_large_events_but_detail_preserves_them(tmp_path):
     audit = BenchmarkAuditLog(run_dir=str(tmp_path), started_at=None, ended_at=None,
         task_initial_observation_ref=None, observations=(), frames=(), poses=(), actions=(),
-        agent_messages=(), events=({'event': 'private_debug', 'payload': 'UNIQUE_RAW_DEBUG' * 1000},),
+        events=({'event': 'private_debug', 'payload': 'UNIQUE_RAW_DEBUG' * 1000},),
         debug_events=(), planner_debug=())
     case = BenchmarkCaseReview('case1', 'Test', 'v1', '<script>instruction</script>', {}, {}, audit, ())
     compact = BenchmarkReviewRenderer().write_case(tmp_path, case)

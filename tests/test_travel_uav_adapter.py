@@ -2,7 +2,7 @@
 
 from evaluation.benchmarks.travel_uav.adapter import TravelUavCaseAdapter
 from src.env_client import ObservationProfile
-from tests.travel_uav_test_support import case
+from tests.support.travel_uav import case
 
 
 def test_adapter_converts_ned_and_xyzw_without_leaking_truth():

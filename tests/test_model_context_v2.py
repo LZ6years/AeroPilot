@@ -247,7 +247,7 @@ def test_v2_artifacts_are_binary_free_and_v1_is_rejected(tmp_path):
 
 
 def test_real_runtime_interactive_single_window_builds_three_checkpoints(tmp_path):
-    from src.runtime.task.interactive_session import InteractiveTaskSession
+    from src.runtime.runners.interactive_session import InteractiveTaskSession
     from tests.support.runtime import done, move, public_runtime
 
     runtime, _ = public_runtime(
@@ -283,7 +283,7 @@ def test_runtime_factory_hydrates_workspace_relative_capture_path(
     from src.plugins import PluginRegistry
     from src.runtime.configs.stabilization_config import UavStabilizationConfig
     from src.runtime.factory import RuntimeFactory
-    from src.runtime.logging.record_writer import RecordWriter
+    from src.runtime.logging.async_run_logger import AsyncRunLogger
     from tests.support.planner import StubPlanner, response_with_calls
 
     monkeypatch.chdir(tmp_path)
@@ -344,15 +344,17 @@ def test_runtime_factory_hydrates_workspace_relative_capture_path(
             )
         )
     )
+    recorder = AsyncRunLogger(run_dir)
     runtime = RuntimeFactory(plugin_registry=PluginRegistry()).create_task_runtime(
         ImageBackend(),
-        RecordWriter(run_dir),
+        recorder,
         planner=planner,
         shutdown_policy="none",
         stabilization_config=UavStabilizationConfig(enabled=False),
     )
 
     state = runtime.run_task("map", "Inspect the current RGB image.")
+    recorder.close()
 
     projection = planner.last_exchange["history_projection"]
     assert state.completed is True

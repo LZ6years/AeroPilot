@@ -8,7 +8,6 @@ from types import SimpleNamespace
 from demos.real_engine_instruction_demo import (
     action_sequence_from_events,
     action_windows_from_events,
-    agent_messages_from_events,
     artifact_inventory_from_observations,
     build_state_summary,
     compact_summary,
@@ -89,25 +88,14 @@ def test_real_engine_demo_summary_reports_pose_delta_and_artifacts(tmp_path):
         },
     }
 
-    messages = [
-        {
-            "source": "phase_judge",
-            "phase": "move_forward",
-            "type": "final",
-            "content": "已完成向前飞行。",
-            "evidence_refs": [],
-            "confidence": "high",
-            "requires_user_reply": False,
-        }
-    ]
-    summary = build_state_summary(tmp_path, "向前飞行5米，然后悬停", state, agent_messages=messages)
+    summary = build_state_summary(tmp_path, "向前飞行5米，然后悬停", state)
 
     assert summary["pose_delta"] == {"dx": None, "dy": None, "dz": None, "dyaw_deg": None}
     assert summary["observation_summary"]["has_pose"] is True
     assert summary["observation_summary"]["has_rgb"] is True
     assert summary["observation_summary"]["has_depth"] is True
     assert summary["phase_execution_summary"]["phase"] == "move_forward"
-    assert summary["agent_messages"] == messages
+    assert summary["agent_transcript_ref"] == "memory/agent_transcript.jsonl"
     assert summary["artifact_inventory"]["counts"] == {"rgb": 1, "depth": 1, "other": 0}
     assert summary["artifact_inventory"]["rgb"][0]["exists"] is True
 
@@ -315,27 +303,3 @@ def test_real_engine_demo_action_windows_read_phase_events():
             "expected_effect": "forward displacement increases",
         }
     ]
-
-
-def test_real_engine_demo_agent_messages_read_events():
-    events = [
-        {
-            "event": "agent_message",
-            "payload": {
-                "source": "action_planner",
-                "phase": "move_forward",
-                "message": {
-                    "type": "progress",
-                    "content": "我准备向前移动。",
-                    "evidence_refs": [],
-                    "confidence": "medium",
-                    "requires_user_reply": False,
-                },
-            },
-        }
-    ]
-
-    messages = agent_messages_from_events(events)
-
-    assert messages[0]["source"] == "action_planner"
-    assert messages[0]["content"] == "我准备向前移动。"

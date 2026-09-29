@@ -6,7 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from tests.benchmark_fakes import TravelUavBenchmarkRunner
+from tests.support.benchmark_fakes import TravelUavBenchmarkRunner
 from src.agent.transcript import AgentToolCall, AssistantTurn
 
 from evaluation.benchmarks.travel_uav.config import TravelUavEvalConfig
@@ -14,7 +14,7 @@ from evaluation.benchmarks.travel_uav.protocol import TRAVEL_UAV_PARSER_PROTOCOL
 from evaluation.benchmarks.travel_uav.runner import (
     _infrastructure_error,
 )
-from tests.travel_uav_test_support import case, write_index, write_map_config
+from tests.support.travel_uav import case, write_index, write_map_config
 
 
 class CompletePlanner:

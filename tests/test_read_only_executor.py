@@ -180,18 +180,21 @@ def test_runtime_results_and_observations_remain_ordered_and_isolated(tmp_path):
     from src.tools.schemas import ToolSpec, ToolRuntimePolicy
     runtime, state, scene, _ = harness(tmp_path, [])
     runtime.read_only_execution_config = ReadOnlyExecutionConfig(4)
+    runtime.turn_executor.read_only_execution_config = runtime.read_only_execution_config
     runtime.tools.registry.register(ToolSpec("test.read", "test_read", "skill_capability", "read", (),
         ToolRuntimePolicy("read_only", "immediate", "parallel_safe", True)))
     barrier = threading.Barrier(2)
     caller = threading.get_ident()
     written = []
-    original_record = runtime._record_action
+    original_record = runtime.evidence.record_action
     def record(*a, **k):
         assert threading.get_ident() == caller
         written.append(a[2]["id"])
         return original_record(*a, **k)
-    runtime._record_action = record
-    def dispatch(scene_id, agent, name, args, runtime_context):
+    runtime.evidence.record_action = record
+    def dispatch(
+        scene_id, agent, name, args, runtime_context, *, knowledge_service=None
+    ):
         runtime_context["latest_observation"]["nested"]["changed"] = args["id"]
         barrier.wait(timeout=3)
         assert runtime_context["latest_observation"]["nested"]["changed"] == args["id"]

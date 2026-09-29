@@ -10,7 +10,7 @@ from tests.support.environment import (
     TRAVEL_REMOTE_SNAPSHOT as _REMOTE_SNAPSHOT,
     inspect_travel_remote_readiness as inspect_remote_readiness,
 )
-from tests.travel_uav_test_support import case, write_index
+from tests.support.travel_uav import case, write_index
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

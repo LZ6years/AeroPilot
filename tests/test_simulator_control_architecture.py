@@ -23,7 +23,7 @@ from src.sim_server.execution import SimulationExecutionMode
 from src.sim_server.remote.ssh import SshTarget
 from src.sim_server.remote.tunnel import SshTunnel
 from src.sim_server.server import SimulationServer
-from tests.simulator_fakes import in_memory_backend_registry
+from tests.support.simulator_fakes import in_memory_backend_registry
 
 
 def _template(tmp_path):

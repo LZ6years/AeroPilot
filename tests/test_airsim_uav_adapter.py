@@ -13,7 +13,7 @@ from PIL import Image
 from src.adapters.airsim.uav import AirSimUavAdapter
 
 
-from tests.airsim_fakes import FakeAirSim, FakeAirSimClient, FakeImageResponse
+from tests.support.airsim_fakes import FakeAirSim, FakeAirSimClient, FakeImageResponse
 
 
 def test_pose_kinematic_set_pose_calls_airsim_sim_set_vehicle_pose(monkeypatch):

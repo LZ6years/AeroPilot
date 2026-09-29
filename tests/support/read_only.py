@@ -1,6 +1,7 @@
 """Read-only execution job/result fixtures."""
 
 import ast
+import copy
 import hashlib
 import subprocess
 
@@ -51,6 +52,7 @@ def baseline_method():
     )
     namespace = dict(vars(module))
     namespace.update(
+        copy=copy,
         AgentToolCall=AgentToolCall,
         ToolResult=ToolResult,
         ReadJob=ReadJob,

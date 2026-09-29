@@ -4,7 +4,7 @@ from evaluation.benchmarks.aerial_vln.runner import AerialVlnBenchmarkRunner as 
 from evaluation.benchmarks.uav_flow.runner import UavFlowBenchmarkRunner as _Flow
 from evaluation.benchmarks.travel_uav.runner import TravelUavBenchmarkRunner as _Travel
 from evaluation.benchmarks.core import NoopScenarioController
-from tests.simulator_fakes import fake_simulation_server, FakeUavFlowScenario
+from tests.support.simulator_fakes import fake_simulation_server, FakeUavFlowScenario
 
 
 class AerialVlnBenchmarkRunner(_Aerial):

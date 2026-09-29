@@ -6,7 +6,7 @@ from src.env_client.observation_profile import ObservationProfile
 from src.env_client.schemas import MapPackage, Observation
 from src.env_client.simulator_client import SimulatorEnvClient
 from src.sim_server.server import SimulationServer
-from tests.simulator_fakes import in_memory_backend_registry
+from tests.support.simulator_fakes import in_memory_backend_registry
 
 
 def test_local_env_client_delegates_through_server(tmp_path):

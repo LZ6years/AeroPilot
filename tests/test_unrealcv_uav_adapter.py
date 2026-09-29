@@ -10,7 +10,7 @@ import pytest
 from src.adapters.unrealcv.uav import UnrealCvUavAdapter
 from src.adapters.unrealcv.client import probe_unrealcv_endpoint
 from src.adapters.uav_primitives import PrimitiveResult
-from tests.fake_uav import FakeUavPrimitiveAdapter
+from tests.support.fake_uav import FakeUavPrimitiveAdapter
 from src.sim_server.backends.unrealcv_backend import UnrealCvBackend
 from tests.test_unrealcv_control_and_capture import FakeUnrealCvClient, _package
 

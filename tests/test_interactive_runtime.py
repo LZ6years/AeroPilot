@@ -6,9 +6,8 @@ from pathlib import Path
 
 from src.env_client import ObservationProfile
 from src.runtime.configs import TaskExecutionOptions
-from src.runtime.task.interactive_session import (
+from src.runtime.runners.interactive_session import (
     InteractiveTaskSession,
-    agent_messages_for_summary,
     build_turn_summary,
     compact_turn_summary,
 )
@@ -68,17 +67,6 @@ class FakeRuntime:
         self.hover_calls = []
         self.finish_calls = []
         self.ensure_calls = []
-        self.messages = [
-            {
-                "source": "phase_judge",
-                "phase": "move_forward",
-                "type": "final",
-                "content": "已完成本轮指令。",
-                "evidence_refs": [],
-                "confidence": "high",
-                "requires_user_reply": False,
-            }
-        ]
 
     def run_task(self, *args, **kwargs):
         self.run_calls.append((args, kwargs))
@@ -94,10 +82,6 @@ class FakeRuntime:
         self.ensure_calls.append(args)
         return FakeScene()
 
-    def latest_turn_agent_messages(self):
-        return [dict(item) for item in self.messages]
-
-
 def test_build_turn_summary_reports_pose_delta_and_artifact_counts(tmp_path):
     summary = build_turn_summary(tmp_path, "向前飞行5米", FakeState().to_dict())
 
@@ -106,62 +90,7 @@ def test_build_turn_summary_reports_pose_delta_and_artifact_counts(tmp_path):
     assert summary["observation_summary"]["has_rgb"] is True
     assert summary["artifact_inventory"]["counts"] == {"rgb": 1, "depth": 0, "other": 0}
     assert compact_turn_summary(summary)["artifact_counts"]["rgb"] == 1
-
-
-def test_build_turn_summary_prefers_in_memory_agent_messages(tmp_path):
-    messages = [
-        {
-            "source": "phase_judge",
-            "phase": "move_forward",
-            "type": "final",
-            "content": "已完成本轮指令。",
-            "evidence_refs": [],
-            "confidence": "high",
-            "requires_user_reply": False,
-        }
-    ]
-
-    summary = build_turn_summary(tmp_path, "向前飞行5米", FakeState().to_dict(), agent_messages=messages)
-
-    assert summary["agent_messages"] == messages
-
-
-def test_build_turn_summary_compacts_agent_messages_to_latest_reply(tmp_path):
-    messages = [
-        {
-            "source": "action_planner",
-            "phase": "phase_a",
-            "type": "progress",
-            "content": "working on phase a",
-            "evidence_refs": [],
-            "confidence": "medium",
-            "requires_user_reply": False,
-        },
-        {
-            "source": "phase_judge",
-            "phase": "phase_b",
-            "type": "final",
-            "content": "task complete",
-            "evidence_refs": [],
-            "confidence": "high",
-            "requires_user_reply": False,
-        },
-    ]
-
-    summary = build_turn_summary(tmp_path, "two phase task", FakeState().to_dict(), agent_messages=messages)
-
-    assert summary["agent_messages"] == [messages[-1]]
-    assert summary["agent_message_count"] == 2
-    assert summary["agent_message_history_ref"] == "memory/agent_messages.jsonl"
-
-
-def test_agent_messages_for_summary_uses_latest_non_final_when_no_final():
-    messages = [
-        {"type": "progress", "content": "old"},
-        {"type": "warning", "content": "latest"},
-    ]
-
-    assert agent_messages_for_summary(messages) == [messages[-1]]
+    assert summary["agent_transcript_ref"] == "memory/agent_transcript.jsonl"
 
 
 def test_interactive_session_reuses_scene_for_natural_language_turn(tmp_path):
@@ -174,7 +103,7 @@ def test_interactive_session_reuses_scene_for_natural_language_turn(tmp_path):
     summary = session.submit_instruction("向前飞行5米")
 
     assert summary["completed"] is True
-    assert summary["agent_messages"][0]["content"] == "已完成本轮指令。"
+    assert summary["agent_transcript_ref"] == "memory/agent_transcript.jsonl"
     assert runtime.run_calls[0][0][:2] == ("m1", "向前飞行5米")
     assert runtime.run_calls[0][1]["scene_policy"] == "reuse_running"
     assert runtime.run_calls[0][1]["stop_scene_on_finish"] is False

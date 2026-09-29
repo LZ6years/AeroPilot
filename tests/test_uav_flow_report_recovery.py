@@ -255,7 +255,6 @@ def _audit_payload(case_id: str, *, display_path: Path) -> dict:
         "frames": [],
         "poses": [],
         "actions": [],
-        "agent_messages": [],
         # Historical audits omit agent_transcript. Offline recovery must keep
         # accepting that additive-schema predecessor.
         "events": [],
@@ -294,7 +293,6 @@ def _case_review(case_id: str) -> BenchmarkCaseReview:
             frames=(),
             poses=(),
             actions=(),
-            agent_messages=(),
             events=(),
             debug_events=(),
             planner_debug=(),

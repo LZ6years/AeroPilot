@@ -428,7 +428,7 @@ def test_metric_failure_happens_after_scene_cleanup(tmp_path):
     }
 
 
-def test_audit_cursor_bounds_frames_actions_messages_and_shutdown(tmp_path):
+def test_audit_cursor_bounds_frames_actions_transcript_and_shutdown(tmp_path):
     write_audit_fixture(tmp_path)
     cursor = EpisodeAuditCursor.freeze(tmp_path)
     append_jsonl(
@@ -467,7 +467,6 @@ def test_audit_cursor_bounds_frames_actions_messages_and_shutdown(tmp_path):
         "uav.turn_relative"
     ]
     assert [item["id"] for item in audit.frames] == ["frame_0001"]
-    assert [item["id"] for item in audit.agent_messages] == ["msg_0001"]
     assert [item["kind"] for item in audit.agent_transcript] == [
         "user_instruction",
         "state_checkpoint",
@@ -523,7 +522,6 @@ def test_frame_asset_resolver_supports_artifact_path_path_and_base64(
         ),
         poses=(),
         actions=(),
-        agent_messages=(),
         events=(),
         debug_events=(),
         planner_debug=(),
@@ -559,7 +557,6 @@ def test_core_review_writes_portable_case_index_and_audit(tmp_path):
                 "result": {"ok": True},
             },
         ),
-        agent_messages=(),
         events=(),
         debug_events=(),
         planner_debug=(),
@@ -637,7 +634,7 @@ def test_core_review_writes_portable_case_index_and_audit(tmp_path):
     assert '"agent_transcript": []' in audit_text
     assert "portable review" in case_html
     assert "uav.hover" in case_html
-    assert "No agent messages were emitted for this episode." in case_html
+    assert "No agent tool transcript was recorded for this episode." in case_html
     assert "No audit diagnostics were recorded." in case_html
 
     BenchmarkReviewRenderer(detailed_audit=True).write(
@@ -996,7 +993,6 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
         frames=(),
         poses=(),
         actions=(),
-        agent_messages=(),
         events=(),
         debug_events=(),
         planner_debug=(),
@@ -1081,7 +1077,6 @@ def test_core_review_reports_unclosed_duplicate_and_orphan_tool_records(
         frames=(),
         poses=(),
         actions=(),
-        agent_messages=(),
         events=(),
         debug_events=(),
         planner_debug=(),
@@ -1164,7 +1159,6 @@ def test_core_review_labels_fallback_intent_and_provider_rejection(tmp_path):
         frames=(),
         poses=(),
         actions=(),
-        agent_messages=(),
         events=(),
         debug_events=(),
         planner_debug=(),
@@ -2199,15 +2193,6 @@ def write_audit_fixture(run_dir: Path) -> None:
             "tool": "uav.hover",
             "args": {},
             "result": {"ok": True},
-        },
-    )
-    append_jsonl(
-        memory / "agent_messages.jsonl",
-        {
-            "id": "msg_0001",
-            "timestamp": "2026-01-01T00:00:03+00:00",
-            "source": "planner",
-            "message": {"content": "turning"},
         },
     )
     append_jsonl(

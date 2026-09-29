@@ -26,7 +26,7 @@ def fixture_batch(tmp_path):
     audit = BenchmarkAuditLog(run_dir=str(root), started_at=None, ended_at=None,
         task_initial_observation_ref=None, observations=(),
         frames=({'id': 'frame_1', 'modality': 'rgb', 'metadata': {'artifact_path': str(image)}},),
-        poses=(), actions=(), agent_messages=(), events=({'event': 'preserved_detail'},),
+        poses=(), actions=(), events=({'event': 'preserved_detail'},),
         debug_events=(), planner_debug=())
     write_json(source / 'audit.json', asdict(audit))
     write_json(source / 'case_result.json', {'episode_id': 'original_long_id', 'status': 'ok', 'metrics': {'success': True}})

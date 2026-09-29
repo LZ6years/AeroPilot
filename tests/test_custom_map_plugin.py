@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 from PIL import Image
 
 from plugins.research.custom_map.context_modules.custom_map import PluginContextModule
@@ -20,7 +21,7 @@ from plugins.research.custom_map.context_modules.custom_map.projection_geometry 
 from plugins.research.custom_map.context_modules.custom_map.records import read_custom_map_records
 from plugins.research.custom_map.context_modules.custom_map.schemas import PosePoint
 from plugins.research.custom_map.context_modules.custom_map.trajectory import build_trajectory
-from src.memory.context.registry import ContextModuleRegistry
+from src.memory.context.registry import ContextModuleConfigError, ContextModuleRegistry
 from src.memory.context.contracts import MemorySourceBundle, TaskContextInput
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
@@ -184,7 +185,7 @@ def _write_unknown_depth_mask_observation(
 def test_plugin_discovery_supports_package_style_context_modules():
     result = PluginDiscovery(
         roots=["plugins/research"],
-        enabled=["research.custom_map", "research.multimodal_image"],
+        enabled=["research.custom_map"],
     ).discover()
 
     by_plugin_slot = {(item.plugin_id, item.slot): item for item in result.contributions.context_modules}
@@ -192,7 +193,13 @@ def test_plugin_discovery_supports_package_style_context_modules():
     custom_map = by_plugin_slot[("research.custom_map", "custom_map")]
     assert custom_map.module_path == "plugins.research.custom_map.context_modules.custom_map"
     assert custom_map.source_path.name == "__init__.py"
-    assert ("research.multimodal_image", "image") in by_plugin_slot
+
+
+def test_removed_multimodal_image_provider_is_not_implicitly_restored():
+    with pytest.raises(ContextModuleConfigError, match="research.multimodal_image"):
+        ContextModuleRegistry.from_dict(
+            {"context_modules": {"image": "research.multimodal_image"}}
+        )
 
 
 def test_custom_map_builds_fragment_image_matrix_and_path_summary(tmp_path):

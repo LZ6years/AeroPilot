@@ -7,7 +7,7 @@ initial-placement and preflight backend integration checks with real logging.
 import json
 import pytest
 from src.adapters.uav_primitives import PrimitiveResult
-from tests.fake_uav import FakeUavPrimitiveAdapter
+from tests.support.fake_uav import FakeUavPrimitiveAdapter
 from src.env_client.simulator_client import SimulatorEnvClient
 from src.env_client.schemas import MapPackage, SceneCapabilities
 from src.runtime.configs.task_execution_options import InitialPose, TaskExecutionOptions
@@ -15,10 +15,10 @@ from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.runtime.factory import RuntimeFactory
 from src.plugins import PluginRegistry
-from tests.simulator_fakes import FakeAirSimBackend as AirSimBackend
+from tests.support.simulator_fakes import FakeAirSimBackend as AirSimBackend
 from src.sim_server.backends.registry import BackendRegistry
 from src.sim_server.server import SimulationServer
-from tests.simulator_fakes import in_memory_backend_registry
+from tests.support.simulator_fakes import in_memory_backend_registry
 from tests.support.benchmark import CompleteProbePlanner
 
 LAMP_TASK = "Observe the lamp"

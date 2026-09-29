@@ -14,7 +14,7 @@ from src.sim_server.backends.airsim_backend import AirSimBackend
 from src.sim_server.backends.registry import BackendContext, BackendRegistry
 from src.sim_server.process_manager import ProcessManager, windows_path_to_wsl
 from src.sim_server.server import SimulationServer
-from tests.simulator_fakes import in_memory_backend_registry
+from tests.support.simulator_fakes import in_memory_backend_registry
 
 
 _PRODUCTION_REGISTRY_DEFAULTS = BackendRegistry.defaults.__func__

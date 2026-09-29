@@ -7,7 +7,7 @@ import hashlib
 from pathlib import Path
 
 import pytest
-from tests.benchmark_fakes import AerialVlnBenchmarkRunner
+from tests.support.benchmark_fakes import AerialVlnBenchmarkRunner
 from src.agent.transcript import AgentToolCall, AssistantTurn
 from PIL import Image
 
@@ -263,7 +263,7 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
             planner=FakePlanner(),
         )
         assert (
-            runtime.stabilizer.config.initialization_min_settle_sec
+            runtime._stabilizer.config.initialization_min_settle_sec
             == 0.25
         )
     finally:

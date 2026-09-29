@@ -18,7 +18,7 @@ from src.memory.context.contracts import (
 from src.memory.context.media_refs import image_media_ref
 from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
 from src.runtime.control.read_only_executor import ReadOnlyBatchExecutor
-from src.runtime.task.session import InstructionSession
+from src.runtime.task.session import TaskSession
 from src.tools.schemas import ReadExecutionHints
 from tests.support.read_only import baseline_method, job, ok
 from tests.support.runtime import call, harness
@@ -36,16 +36,11 @@ def records(root, name):
 def setup_runtime(path, workers=1):
     runtime, state, scene, _ = harness(path, [])
     runtime.read_only_execution_config = ReadOnlyExecutionConfig(workers)
+    runtime.turn_executor.read_only_execution_config = runtime.read_only_execution_config
     runtime.tools.read_execution_hints = lambda *a: ReadExecutionHints()
     calls = [call('a', 'knowledge.load', knowledge_id='a'),
              call('b', 'knowledge.load', knowledge_id='b')]
     runtime.agent_transcript.append_assistant(AssistantTurn('test_turn', 'read', calls))
-    runtime._commit_native_read_result = types.MethodType(
-        lambda _self, state, call, result: runtime.turn_executor._commit_native_read_result(
-            state, call, result
-        ),
-        runtime,
-    )
     return runtime, state, scene, calls
 
 
@@ -68,12 +63,14 @@ def run(runtime, state, scene, calls):
     legacy = getattr(runtime, '_execute_native_read_calls', None)
     if callable(legacy):
         return legacy(scene, 'uav', state, 'read', calls)
-    session = InstructionSession(
+    session = TaskSession(
         scene=scene,
         agent_id='uav',
         state=state,
-        memory=runtime._memory_for_state(state),
+        memory=runtime.memory,
         transcript=runtime.agent_transcript,
+        checkpoints=runtime.checkpoints,
+        knowledge_service=runtime.session.knowledge_service,
     )
     return runtime.turn_executor._execute_native_read_calls(
         session, 'read', calls, 'decision_0001'
@@ -246,7 +243,7 @@ def test_save_failure_ends_public_loop_without_next_model_request(tmp_path):
     failure = OSError('receipt disk error')
     def fail(**kwargs):
         raise failure
-    runtime.memory_writer.write_tool_completion = fail
+    runtime._memory_writer.write_tool_completion = fail
     with pytest.raises(OSError) as caught:
         runtime.run_task('map', 'Read guidance')
     assert caught.value is failure

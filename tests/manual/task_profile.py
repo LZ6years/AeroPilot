@@ -144,9 +144,11 @@ def install_profile(profile):
     from src.runtime.control.read_only_executor import ReadOnlyBatchExecutor
     from src.perception.inference_resources import inference_observer
     from src.memory.context.builder import ModelContextBuilder
-    from src.runtime.task.loop import InstructionLoop
+    from src.runtime.task.loop import TaskLoop
+    from src.runtime.task.evidence import FlightEvidenceRecorder
+    from src.runtime.task.journal import RuntimeJournal
     from src.runtime.task.physical_window import PhysicalWindowExecutor
-    from src.runtime.task.scene_session import SceneSessionService
+    from src.runtime.task.scene_lifecycle import SceneLifecycleService
     from src.runtime.task.turn_executor import TurnExecutor
     from src.runtime.task import turn_executor
     from evaluation.benchmarks.travel_uav.scenario import TravelUavScenarioController
@@ -170,18 +172,16 @@ def install_profile(profile):
                      before=lambda a, k: profile.decision.set(k.get("decision_index")))
         profile.wrap(stack, DefaultModelClient, "request", "model.request")
         profile.wrap(stack, ModelContextBuilder, "build_checkpoint", "runtime.context")
-        profile.wrap(stack, SceneSessionService, "acquire", "scene.acquire")
+        profile.wrap(stack, SceneLifecycleService, "acquire", "scene.acquire")
         profile.wrap(stack, TravelUavScenarioController, "prepare_episode", "scene.target_setup")
-        for method, label in (
-            ("run_task", "runtime.task"),
-            ("_prepare_scene_for_task", "scene.prepare"),
-            ("_apply_initial_pose", "scene.initial_pose"),
-            ("_record_observation", "runtime.observation"),
-            ("_capture_instruction_exchange", "audit.exchange"),
-            ("_write_state", "audit.state"), ("_run_shutdown", "scene.shutdown"),
-        ):
-            profile.wrap(stack, task_runtime.TaskRuntime, method, label)
-        profile.wrap(stack, InstructionLoop, "run", "runtime.decisions")
+        profile.wrap(stack, task_runtime.TaskRuntime, "run_task", "runtime.task")
+        profile.wrap(stack, SceneLifecycleService, "prepare", "scene.prepare")
+        profile.wrap(stack, SceneLifecycleService, "_apply_initial_pose", "scene.initial_pose")
+        profile.wrap(stack, SceneLifecycleService, "_shutdown", "scene.shutdown")
+        profile.wrap(stack, FlightEvidenceRecorder, "record_observation", "runtime.observation")
+        profile.wrap(stack, FlightEvidenceRecorder, "write_state", "audit.state")
+        profile.wrap(stack, RuntimeJournal, "capture_provider_exchange", "audit.exchange")
+        profile.wrap(stack, TaskLoop, "run", "runtime.decisions")
         profile.wrap(
             stack,
             PhysicalWindowExecutor,

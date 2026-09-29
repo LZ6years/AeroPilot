@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 
@@ -39,3 +40,40 @@ def test_async_run_logger_records_worker_write_errors(tmp_path):
 
     assert events[0]["event"] == "artifact_failed"
     assert "error_type" in events[0]["payload"]
+
+
+def test_async_run_logger_close_serializes_with_enqueue(tmp_path):
+    logger = AsyncRunLogger(tmp_path)
+    entered = threading.Event()
+    release = threading.Event()
+    original_put = logger._queue.put
+
+    def blocking_put(item):
+        if item is not None and not entered.is_set():
+            entered.set()
+            assert release.wait(5)
+        original_put(item)
+
+    logger._queue.put = blocking_put
+    write_error = []
+
+    def write():
+        try:
+            logger.save_text("notes/accepted.txt", "accepted before close")
+        except Exception as exc:  # pragma: no cover - assertion reports detail
+            write_error.append(exc)
+
+    producer = threading.Thread(target=write)
+    producer.start()
+    assert entered.wait(5)
+    closer = threading.Thread(target=logger.close)
+    closer.start()
+    release.set()
+    producer.join(5)
+    closer.join(5)
+
+    assert not write_error
+    assert not producer.is_alive() and not closer.is_alive()
+    assert (tmp_path / "notes" / "accepted.txt").read_text(encoding="utf-8") == (
+        "accepted before close"
+    )

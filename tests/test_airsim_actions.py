@@ -5,7 +5,7 @@ import pytest
 from src.adapters.airsim.actions import PausedMultirotorActionExecutor
 from src.adapters.airsim.control import PausedMultirotorControlStrategy
 from src.uav.frames import normalize_yaw_deg, position_distance_m
-from tests.airsim_fakes import FakeAirSim, FakeAirSimClient
+from tests.support.airsim_fakes import FakeAirSim, FakeAirSimClient
 
 
 @pytest.mark.parametrize("error,result,kind", [
