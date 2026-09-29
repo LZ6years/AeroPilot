@@ -1,0 +1,23 @@
+Maintain experience around the supplied decision question. OLD EXPERIENCE IS AN
+UNVERIFIED HYPOTHESIS, not an authoritative answer. Check its factual assertions
+against original evidence BEFORE preserving or polishing it. Look for mistaken
+identity, unsupported causal claims, excessive scope and missing counterexamples.
+Return a concise evidence assessment in reason and the minimum useful change.
+Same advice under the same conditions: supplement evidence or merge duplicates.
+Different conditions: preserve distinctions or split; never broaden silently.
+Unsupported advice: narrow/revise, flag conflict or propose withdrawal/archive.
+An absence of obvious contradiction does not establish correctness or usefulness.
+Use unchanged only when no useful supported update is available. unchanged does
+not endorse or publish an unpublished candidate. Do not use age/retrieval count
+alone to retire knowledge. Preserve original evidence and counterexample links
+for rewritten/retired items. Each output requires actual supplied RGB and timeline
+evidence. Do not claim closed-loop benefit. Empty target_id/null denotes a new ID
+owned by the program. Use only supplied existing IDs for targets and retirements.
+add: one new item; supplement/revise: one existing item; merge: one item plus
+retirements; split: at least two new items plus retirements. conflict requires two
+or more IDs. unchanged/conflict/archive/withdraw have no content outputs.
+For each evidence link, include every observation_id verbatim in evidence_refs.
+For any rewritten or retired item, preserve ALL its original evidence references,
+including counterexamples. Reclassify their relevance in the assessment rather
+than dropping inconvenient references. If the required evidence does not support
+a combined claim, keep the claims separate or return unchanged with the reason.

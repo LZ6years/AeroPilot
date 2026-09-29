@@ -1,0 +1,2 @@
+# Offline V2 strict structured-output validation; no flight runtime dependency.
+jsonschema>=4.23,<5

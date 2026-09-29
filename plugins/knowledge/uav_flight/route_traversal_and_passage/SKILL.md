@@ -14,12 +14,8 @@ terminal position.
 
 ## Evidence Model
 
-Combine meaningful translation with visual change. A cue that began ahead may
-move sideways, behind, outside the blocking path, or out of view. Once its route
-relation is established, consistent translation remains evidence while it is
-not visible. Cue absence alone is ambiguous: it neither proves completion nor
-requires renewed search. The requested side describes the UAV route relative to
-the cue, not a final image side. Yaw can inspect a route or change image bearing,
+Combine meaningful translation with visual change. Cue absence alone is ambiguous: it neither proves completion nor
+requires renewed search. Yaw can inspect a route or change image bearing,
 but cannot place the UAV on a physical side or prove traversal.
 
 ## Decision Procedure
@@ -30,8 +26,7 @@ Once usable, prefer bounded translation through or past it over repeated
 centering. Compare the first useful route view with the latest view and
 accumulated translation. Reacquire only if that evidence is insufficient or
 contradictory.
-An absent upcoming landmark is not a lost route. Continue along coherent road
-and free-space cues; reconsider at conflict or a boundary.
+An absent upcoming landmark alone does not invalidate a coherent route.
 
 Request [route examples](references/route_progress_examples.md) for complex
 side passages or disappearing cues.
@@ -41,7 +36,11 @@ side passages or disappearing cues.
 Seeing a route node is not reaching it or entering its continuation. A building
 or hidden road alone does not prove an end. Compare road edges, lateral exits and
 successive views. At the instructed node, turn toward the supported continuation;
-unspecified turns have no fixed angle. Contradictory views require reassessment.
+unspecified turns have no fixed angle. After turning or passing, compare the
+observed continuation with the required route relation. Conflicting evidence may
+reflect position, heading, occlusion or a wrong route interpretation; reassess
+before assuming which explanation is correct. Surface depth can help scale an
+approach but does not independently establish a junction, road end or route.
 
 Passage completion requires a terminal route relation. Meaningful translation
 with a cue moving sideways, rearward or beyond the blocking route supports it.

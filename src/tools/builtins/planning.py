@@ -14,15 +14,15 @@ def planning_tool() -> ToolSpec:
                      "or provide environmental completion evidence."),
         runtime=ToolRuntimePolicy("runtime_control", "immediate", "single", True),
         parameters=(
-            ToolParameter("explanation", "string", "Why this plan or evidence-based revision is needed.",
+            ToolParameter("explanation", "string", "Brief basis for the plan or change in progress or approach, using relevant observations and actual execution feedback.",
                           True, {"minLength": 1}),
             ToolParameter("steps", "array", "Ordered task steps with persistent identities.", True, {
                 "items": {"type": "object", "additionalProperties": False,
                           "required": ["id", "description", "status"],
                           "properties": {
                               "id": {"type": "string", "minLength": 1, "description": "Stable step identifier."},
-                              "description": {"type": "string", "minLength": 1, "description": "Required outcome, preserving order and triggering conditions. Keep unseen facts unconfirmed; specify motion parameters only when instructed or supported by evidence."},
-                              "status": {"type": "string", "description": "Progress supported by observed results, not merely issued actions. Revise earlier completion when contradicted by evidence.",
+                              "description": {"type": "string", "minLength": 1, "description": "User-required outcome with its order and conditions. An explicit action may be a step without an invented landmark. Keep unseen facts unconfirmed; specify motion parameters only when instructed or supported by evidence."},
+                              "status": {"type": "string", "description": "Match evidence to the requirement: actual motion for explicit actions, applicable observations for environmental relations, both for mixed requirements. Issuing a call alone is insufficient. Revise completion contradicted by later evidence.",
                                          "enum": ["pending", "in_progress", "completed", "cancelled"]}}}}),
         ),
     )

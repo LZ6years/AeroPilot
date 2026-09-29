@@ -1,4 +1,8 @@
-"""Offline flight experience experiments; deliberately not a registered capability."""
+"""Independent offline evidence/experience services.
+
+The optional read-only capability lives under plugins/capabilities and is disabled
+by default. This package does not register tools or import Agent/Runtime types.
+"""
 
 from .evidence import EvidenceBundle, read_run
 from .experiment import ExperimentSettings, run_experiment

@@ -22,7 +22,8 @@ Execution results and rejection feedback return through the same chronological l
 For tasks with multiple ordered subgoals, landmark-dependent actions, or progress
 that must be tracked across observations, call runtime.update_plan before the first
 physical action. Record required outcomes and their order, not a speculative sequence
-of movement parameters through unseen areas. Keep unobserved landmarks unconfirmed.
+of movement parameters through unseen areas. An explicitly requested action can be
+a step; do not invent a landmark requirement for it. Keep unobserved landmarks unconfirmed.
 Simple, clear single-step tasks may act directly. Preserve triggering conditions in
 each outcome. A search heading does not guarantee a visible target. Preserve explicit
 angles, but do not translate unspecified left/right turns into fixed angles.
@@ -31,14 +32,18 @@ Advance the plan when observations establish a subgoal, and revise it when new
 evidence changes the route or approach. Preserve remaining user requirements and
 stable step identities. Do not rewrite an unchanged plan or follow an outdated plan
 against current evidence. Distinguish seeing a possible milestone, reaching it and
-achieving its required relation. Issuing an action is not proof of its outcome.
+achieving its required relation. Match progress evidence to the requirement:
+measured execution can establish an explicit motion requirement; environmental
+conditions need applicable observations. A mixed requirement needs both.
+Action execution, stage outcome and whole-task completion are distinct judgments.
 If later evidence contradicts an earlier completion, correct that step's status.
 Past events may be supported by historical observations and subsequent measured
 actions; present-state requirements need evidence applicable to the present state.
 Do not reacquire every passed landmark merely because it leaves the current view.
 
-Select knowledge.load when a catalog entry can improve the current judgment or
-method, including checking a familiar approach. Choose entries autonomously from
+When uncertain about a method or decision criterion, consider knowledge.load
+before committing to that decision, including checking a familiar approach.
+Choose entries autonomously from
 their applicability and boundaries; there is no mandatory task-to-entry sequence.
 Use the returned guidance to choose the next step; reuse already loaded guidance.
 Distinguish uncertainty about how to search, pass, approach, orbit or change altitude

@@ -1,0 +1,14 @@
+Independently decide whether this proposed experience or maintenance change is
+supported AND useful enough for publication. Earlier reflection is untrusted.
+Inspect original evidence and the before/after conditions. Explicitly assess:
+evidence_support, condition_boundaries, counterexamples, decision_value.
+approve only if all four are adequate. Positive wording, plausibility, absence
+of contradiction and model self-reported success are insufficient. Statements
+about successful identity or a beneficial action need observable support.
+revise if a specific bounded content change could fix the problem; list concrete
+revision_requests. defer if evidence is missing or ambiguous; state what is needed.
+discard if false, unhelpful, or not salvageable from these records. Do not rewrite
+the proposed text in this call. Scope-limited lessons from failures can be useful.
+For unchanged approve means no update is warranted, not that old candidates become
+published. Program checks provenance and versions separately. No flight benefit
+is established by your approval. Keep each assessment brief and evidence-specific.

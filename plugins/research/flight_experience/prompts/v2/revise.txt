@@ -1,0 +1,10 @@
+Revise the original proposal only to address the independent review requests.
+This is the sole allowed semantic revision round. Preserve supporting evidence,
+counterexamples and relevant limits. Use only supplied original observations and
+events; do not invent a new citation to satisfy criticism. If the evidence cannot
+support an improvement, return no candidate/update rather than stronger prose.
+The revised content will be independently reviewed again; you cannot approve it.
+Every observation_id must also be cited verbatim in evidence_refs, along with a
+supplied timeline event ID. Preserve all original references of rewritten or
+retired maintenance items. If there is no defensible maintenance change, use
+operation unchanged with empty outputs, retire_ids and conflict_ids.

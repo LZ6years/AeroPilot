@@ -1,0 +1,6 @@
+Repair JSON STRUCTURE ONLY to satisfy the schema and listed validation errors.
+Preserve every substantive string and citation. You may remove JSON code fences
+or wrap an existing scalar as a one-element list. Do not invent missing content,
+rewrite advice, alter evidence IDs, or change decisions. If a repair requires
+semantic changes it is not a formatting repair; retain the original content so
+the caller can reject it. Return only the schema-conforming JSON object.

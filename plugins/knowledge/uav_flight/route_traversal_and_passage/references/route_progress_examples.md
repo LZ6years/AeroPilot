@@ -33,6 +33,10 @@ successive road-edge views and any lateral continuation to distinguish a true
 terminal node from occlusion or an ordinary intersection. Seeing the node is not
 arrival. After entering the instructed continuation, conflicting route evidence
 calls for reassessment rather than treating an executed turn as proof of success.
+A visible surface's depth can guide a bounded approach to that surface; it is not
+automatically the distance to the turn location. Check the lateral continuation
+and the UAV's relation to it. A blocked view after turning can have several causes;
+choose an observation that distinguishes them before changing the route hypothesis.
 
 Along a confirmed straight segment, compare actual prior translation and visual
 change to choose meaningful progress before the next observation. Approaching a

@@ -1,83 +1,79 @@
-# 独立历史经验实验
+# 飞行经验生成与维护 V2
 
-读取已有记录，检验经验总结和审核是否有用。它没有注册 capability，没有飞行工具，
-不会更新正式知识或影响下一次飞行。模块只导入通用 `src.llm`；手动入口负责加载
-现有模型连接配置。这里的“采纳”只表示进入实验产物，仍待人工审核。
+独立读取落盘记录，生成条件化经验、审核并维护 SQLite 经验库。没有 Core/Runtime 钩子，
+没有飞行写入工具；可选 `skill.flight_experience.search` 插件默认禁用。
+
+## 内容与职责
+
+- `evidence.py`：白名单适配原始指令、动作请求、实际反馈、工具结果和原图。隐藏目标、轨迹、
+  评测答案及绝对位置不进入模型输入。来源文件、观察 ID 与原图 SHA256 可追溯。
+- `prompts/v2`、`contracts.py`：版本化边界、选片、生成、维护、审核、修订与格式修复提示，
+  以及严格 JSON Schema。`prompts/v1` 仅用于明确标记的固定上下文对照。
+- `calls.py`：独立模型请求、完整审计与按输入内容寻址的阶段检查点。格式不合格最多修复一次，
+  修复必须与保留原字符串/引用的结构归一化完全一致；缺字段或新增含义不属于格式修复。
+- `generation.py`：每片段最多 3 条经验，独立审核选片，最多一次语义修订并重新审核。
+- `maintenance.py`：租约 worker、相关旧经验、变更提案、独立审核及原子发布。
+- `store.py`、`publication.py`：不可变版本、来源隔离、检索、事务迁移和新生成经验发布。
 
 ```mermaid
 flowchart LR
-    A[只读历史记录] --> B[独立适配与证据索引]
-    B --> C[复盘选帧与原图读取]
-    C --> D[候选经验]
-    B --> E[独立审核选帧与原图读取]
-    D --> E
-    E --> F[引用校验与采纳/修订/暂存/丢弃]
-    F --> G[隔离实验目录与人工报告]
+    A[历史证据与原图] --> B[Reflection 生成或优化]
+    B --> C[结构与引用校验]
+    C --> D[独立审核]
+    D -->|approve| E[来源及版本检查]
+    E --> F[自动发布到原用途范围]
+    D -->|revise 最多一次| B
+    D -->|defer 或 discard| G[保留记录 不发布]
+    H[只读 search] --> F
 ```
 
-## 输入与边界
+经验增加 `decision_question`；适用条件、观察依据、建议、局限及来源引用仍保留。
+旧条目不回填虚构问题，仍能读取和检索。数据库版本 1→2 为事务内增量迁移，不改写旧正文。
+审核 approve 表示可以发布；revise 提供修改意见而不改正文；defer/discard 不发布。
+第二次审核仍要求 revise 时转为 defer。unchanged 只结束维护，不发布原来未发布的候选。
 
-- `read_run(run_dir)` 读取 `memory/agent_transcript.jsonl`、`observations.jsonl` 和
-  `frames.jsonl`，也支持这些文件直接位于输入目录。多任务记录必须指定 `instruction_id`。
-- 旧格式只有 `actions.jsonl` 时，需要调用方提供原始指令并确认目录只含一次任务。
-  旧格式没有可靠的任务划分与 checkpoint 对齐，这一限制会写入证据索引。
-- 按字段白名单提取原指令、意图、请求参数、执行参数、工具结果、干预原因和实际自运动。
-  绝对位置、任意 Context/debug 字段、隐藏目标、参考轨迹及评测结果不进入模型输入。
-  扩展日志格式时在适配器内增加明确映射，不能直接转发整个原始对象。
-- RGB 以 observation ID 寻址，保留原始字节和 SHA256。支持日志内嵌图片及运行目录内
-  的本地图片；路径越界、损坏、缺失或关联不唯一会标记为不可用。
-- 原始文件的散列和行引用在 `evidence_index.json` 中。输出不能位于原运行目录内，
-  不能覆盖既有输出，也不能是原运行目录的祖先。
+## 调用和异步边界
 
-## 模型调用和审核
+经验入口默认采用独立 180 秒超时、最多一次超时重试，主飞行配置不变。reflection/reviewer
+可分别指定模型，默认继承当前模型连接。严格 JSON Schema 与图片输入需先通过实际连接探测；
+不支持时明确失败，不降级模式或更换模型。
 
-一次有效实验通常调用四次：复盘选帧、带图复盘、审核选帧、带图审核。审核使用独立
-上下文，可复用同一模型，也可单独指定模型；同模型的独立调用不等于独立知识来源。
-审核可选择反证帧，引用候选所需的原图必须进入其输入。每次最多输入 `max_images`
-张原图，候选数由 `max_candidates` 限制。选帧只接收紧凑时序索引，意图摘要明确标记
-截断；复盘读取所选时刻及相邻 checkpoint 窗口的完整记录，审核额外读取候选引用的
-原始事件。未提供完整内容的索引条目不能作为采纳依据。完整索引仍保存在本地。
-旧 action-only 日志缺少 checkpoint 对齐，因此保留完整动作文本并明确记录限制。
-极长的记录仍可能超过提供商限制；实验不会把截断的意图摘要当作原始完整证据。
+每次最多 8 张原图。维护先召回 10 条，再加入目标及最多 2 条相关经验；明确不一致的决策标签
+排除，旧记录使用文本检索。词汇相关只用于召回，是否应合并由原始证据和独立审核决定。
+引用事件、必要前后窗口和反例不静默截断；独立审核还可选择其他原始反证帧。
 
-候选字段为 `id / applicability / observed_evidence / recommendation / limitations /
-evidence_refs / observation_ids`。必须引用真实时序事件及本轮实际提供的原图。
-审核返回 `adopt / revise / defer / discard` 和理由；修订后的引用重新校验。伪造引用、
-缺图及未看到的图无法靠模型的“采纳”绕过校验。接口错误或无法解析的审核会使本次
-实验失败，采纳结果清空，并保留失败报告。
+worker 使用 120 秒租约并心跳续租。搜索只读已发布快照，不等待模型。失败不改旧发布版本；
+来源或基础版本变化阻止提交。相同经验集合、版本、证据、模型设置、提示与 Schema 的任务
+可复用已完成的处理；调用检查点只在请求和模型身份完全一致时复用。审核超时可单独恢复，
+不重做成功的 reflection。需要重试时手动 enqueue，避免无限模型重试。
 
-这些结构校验只能核对来源，不能证明建议正确。人工仍需检查颜色、空间关系、
-模型是否复述原来的误判、适用范围是否过大、是否提供了新的决策价值。
+V2 独立审核通过后自动发布，不要求人工确认。旧 `awaiting_human` 提案不追溯自动发布，
+需重新维护。原有人工查看、撤回和归档入口保留。模型批准不证明建议正确，也不证明飞行收益。
 
-## 操作
+## 来源隔离与检索
+
+离线实验导入始终为 experiment，不可改标签进入 production。普通导入不相信 accepted 字段；
+V2 新生成流程经过独立审核、引用校验及来源复核后单独发布。原图在文件中，数据库保存关联。
+导入、worker、发布前和 audit 核对来源；search 不扫描全部原日志，因此历史记录应保持只读。
+
+搜索使用 FTS5，NFKC、小写英文词与中文相邻双字切分。默认最多 3 条、上限 5 条、6,000 字符
+完整卡片预算；未知条件显式返回，无匹配就为空。不保证语义、跨语言或同义词召回。
+经验不能作为当前目标身份、距离或任务完成证据。
+
+## 操作与产物
+
+依赖安装：
 
 ```powershell
-python tests/manual/flight_experience_probe.py inspect --source <原运行目录> --output <新检查目录>
-python tests/manual/flight_experience_probe.py run --source <原运行目录> --output <新实验目录> --max-images 8 --max-candidates 6
-python tests/manual/flight_experience_probe.py run --source <原运行目录> --output <另一新目录> --observations obs_0033 obs_0036 obs_0037
+& 'F:\conda_env\flyagent\python.exe' -m pip install -r plugins/research/flight_experience/requirements.txt
 ```
 
-默认读取 `.env` 中的现有连接，分别指定 `--reflection-model`、`--review-model`
-可覆盖模型名；连接仍使用同一提供商。`--env` 可选择独立实验配置文件。不要为实验
-修改正式飞行配置。`--reflection-input-price` 等四个价格参数单位为美元/百万 token，
-只计算输入/输出 token 的估算费用；未提供价格或 usage 时费用记为未知，不记为零。
+生成入口 `tests/manual/flight_experience_probe.py` 保留 inspect/run；支持 `--database`、
+`--checkpoints`、`--timeout` 和分别指定模型。不传 database 时在实验目录旁建立独立 SQLite。
+输出目录必须全新且在源运行之外。审核图像与完整来源均留在调用审计中。
 
-对明确要检查的片段，可从 `inspect` 输出中选择 `--observations`，跳过模型选帧。
-两个独立读者都会收到这些原图及对应时序片段，通常只需复盘和审核两次调用。
-产物明确记录人工指定的观察范围；这不是模型自主选帧实验，也不能推断未查看部分。
+维护入口 `tests/manual/flight_experience_library.py` 提供 init/import/enqueue/worker/search/
+jobs/proposals/show/audit/withdraw/archive。旧 publish 子命令仅用于历史人工待审提案。
+初始化命令会事务迁移旧库；旧实验产物保持只读。
 
-产物包含：
-
-| 文件 | 用途 |
-|---|---|
-| `evidence_index.json` | 时序、图像可用性、原文件 SHA256 和来源行 |
-| `experiment.json`、`media/` | 调用输入、实际 provider 请求、公开回答、原图、耗时和 usage |
-| `catalog.json`、`experience.md` | 仅供实验查看的采纳经验与四项 description |
-| `report.html` | 候选、审核、失败或暂存理由与原图 |
-| `human_review.json` | 人工填写纠正数量、说明和跨场景验证记录；初始为 pending |
-
-不同场景应使用独立输出目录。不能把同一次飞行中的多个片段当成跨场景验证；
-不能把模型自报完成当成评测成功；不能把经验看起来合理写成闭环收益。
-
-未来只有在离线验证有价值后，才考虑通过 capability、handler 与现有插件发现机制
-接入只读经验。经验始终是历史指导，不能充当当前任务完成证据。本轮不实现该接口。
+操作与 V2 实验步骤见 `tests/manual/flight_experience_v2.md`。历史 V1 操作说明和实验报告只描述当时版本。

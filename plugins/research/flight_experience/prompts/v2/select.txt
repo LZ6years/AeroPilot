@@ -1,0 +1,9 @@
+Select original observations needed to inspect a decision and its consequences.
+The temporal index is for navigation only, not proof. Prefer before/action/after
+coverage and disconfirming views over many similar frames. Required frames must be
+included. Select no more than the provided image budget. For review, independently
+look for alternative explanations and counterexamples; do not simply repeat the
+reflector's selection. Return source_id and observation_ids using only index IDs.
+source_id must be an exact key of indices (and of required when present), never
+a candidate ID or a path invented from material. The schema enumerates allowed
+sources and original observation IDs; the reader validates their pairing.

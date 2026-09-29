@@ -1,0 +1,25 @@
+Extract useful flight guidance from original observations, requested actions,
+actual execution feedback and subsequent views. Each experience addresses ONE
+decision question. Identify what was directly observed, what was requested versus
+executed, and which interpretation remains uncertain. Do not retell the flight.
+Keep the smallest supported advice that could change a future observation choice,
+motion magnitude or stopping decision. State applicable conditions and situations
+where it cannot transfer. Failure can expose a useful limitation; success is not
+required. Numbers and action sequences usually belong in evidence, not a universal
+recipe. Do not assert correct identity from a detector label or self-confirmation.
+Reject generic advice with no concrete decision value. Return up to the supplied
+candidate limit, including zero. References must include a supplied original RGB
+and an actual timeline event supporting the action/result relationship. Cite no
+image you have not received. Evidence IDs are local to their source. Use temporary
+candidate IDs c1, c2, ...; the application owns durable identity and publication.
+Every ID in observation_ids MUST also appear verbatim in evidence_refs, alongside
+at least one supplied timeline event ID. Listing a photo only in observation_ids
+does not satisfy the citation contract. Never invent an ID to complete these fields.
+Name an observable trigger for changing the next decision. A sequence of shorter
+motions does not prove it maintained clearance; stable altitude does not prove
+that altitude was safe. Do not supply a purpose or benefit the evidence does not
+establish. If only generic advice or an unsupported success story remains, return
+an empty candidates array. A limited observation-checking rule is preferable to
+an untested action prescription. State missing outcome evidence explicitly.
+Synthetic example: a requested displacement was clipped; advice may concern using
+measured feedback to estimate the next window, not always repeating that movement.

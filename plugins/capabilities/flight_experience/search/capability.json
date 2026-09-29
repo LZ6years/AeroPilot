@@ -1,0 +1,30 @@
+{
+  "call_name": "skill.flight_experience.search",
+  "wire_name": "skill_flight_experience_search",
+  "description": "适用需求：历史经验可能帮助当前飞行决策时自主检索；解决问题：寻找与当前问题及观察条件相关的指导；内容范围：少量已发布经验的适用条件、建议、局限、版本和来源引用，无匹配时返回空结果；能力边界：词汇相关不代表适用，经验不能证明当前目标身份、距离或任务完成，不返回历史图片，不执行动作或更新经验。",
+  "input_schema": {
+    "type": "object",
+    "required": ["query"],
+    "additionalProperties": false,
+    "properties": {
+      "query": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "Current decision problem and observed conditions; historical guidance is not current evidence."},
+      "filters": {
+        "type": "object", "additionalProperties": false,
+        "properties": {
+          "decision": {"type": "string", "minLength": 1},
+          "action": {"type": "string", "minLength": 1},
+          "observation": {"type": "string", "minLength": 1},
+          "anomaly": {"type": "string", "minLength": 1},
+          "platform": {"type": "string", "minLength": 1},
+          "control": {"type": "string", "minLength": 1},
+          "sensor": {"type": "string", "minLength": 1}
+        }
+      },
+      "limit": {"type": "integer", "minimum": 1, "maximum": 5, "description": "Maximum complete experience cards, default 3."}
+    }
+  },
+  "runtime": {"effect": "read_only", "result_timing": "immediate", "batching": "parallel_safe", "model_exposed": true},
+  "settings": {"database_path": "", "scope": "production", "character_budget": 6000},
+  "handler": "scripts/handler.py",
+  "mock": false
+}
