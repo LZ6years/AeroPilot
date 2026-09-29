@@ -14,11 +14,18 @@ import numpy as np
 from PIL import Image
 
 from evaluation.benchmarks.uav_flow.metric_suite import _backend_action_tracking
+from src.plugins import PluginRegistry
 from src.uav.config import load_uav_action_config
 from src.sim_server.remote.control import RemoteSceneControl
 from src.tools.registry import default_registry
 from src.uav.frames import pose_value, yaw_deg
 from tests.manual.native_tool_loop_real_audit import _audit_transcript, _audit_physical_trace
+
+
+def _audit_registry():
+    """Build the same plugin-aware tool surface used by RuntimeFactory."""
+
+    return default_registry(PluginRegistry.from_config())
 
 
 def audit_case(case_dir: Path, result: dict, package, *, output_path: Path | None = None) -> dict:
@@ -43,7 +50,7 @@ def audit_case(case_dir: Path, result: dict, package, *, output_path: Path | Non
             action_config=load_uav_action_config(), completed=result.get("completed", False))
         combined = {**result, "trace": trace, "backend_action_tracking": tracking}
         violations = []
-        registry = default_registry()
+        registry = _audit_registry()
         coverage = _audit_transcript(audit["agent_transcript"], audit, combined,
                                     case_dir, registry, violations, case_dir.name)
         _audit_physical_trace(combined, audit["agent_transcript"], audit,
