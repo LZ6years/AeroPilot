@@ -21,6 +21,32 @@ def backend_receipt():
     return backend, scene, result.execution_state["post_action_state_token"]
 
 
+def test_collision_result_receives_one_use_post_action_state():
+    backend = AirSimBackend()
+    backend._dispatch = lambda *_: PrimitiveResult(
+        False,
+        "collision",
+        {"collision": {"kind": "blocked", "object_name": "wall"}},
+        execution_state={
+            "outcome": "collision",
+            "verified_paused_pose": {
+                "position": {"x": 1, "y": 2, "z": 3},
+                "velocity": {"x": 0, "y": 0, "z": 0},
+            },
+        },
+    )
+    scene = SimpleNamespace(scene_instance_id="generation-1")
+
+    result = backend.execute_action(scene, "uav", "move_body", {})
+
+    assert not result.ok and result.outcome == "collision"
+    token = result.execution_state["post_action_state_token"]
+    assert backend.consume_post_action_state("generation-1", "uav", token)[
+        "position"
+    ] == {"x": 1, "y": 2, "z": 3}
+    assert backend.consume_post_action_state("generation-1", "uav", token) is None
+
+
 @pytest.mark.parametrize("invalidate", ["write", "reset", "stop", "scene", "agent", "used"])
 def test_receipt_cannot_survive_control_boundaries(invalidate):
     backend, scene, token = backend_receipt()

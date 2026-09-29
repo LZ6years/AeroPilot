@@ -478,6 +478,15 @@ class ActionResult:
     data: dict[str, Any] = field(default_factory=dict)
     execution_state: dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def outcome(self) -> Literal["ok", "collision", "error"]:
+        """Return the runtime outcome without exposing control metadata to tools."""
+
+        declared = self.execution_state.get("outcome")
+        if declared == "collision":
+            return "collision"
+        return "ok" if self.ok else "error"
+
     def to_dict(self) -> dict[str, Any]:
         # Convert the action result into JSON-serializable data.
         return asdict(self)

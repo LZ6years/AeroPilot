@@ -187,7 +187,11 @@ class AirSimBackend:
         if measurements is not None:
             execution["performance"] = measurements
         pose = execution.pop("verified_paused_pose", None)
-        if result.ok and pose and not execution.get("requires_scene_reset"):
+        if (
+            (result.ok or execution.get("outcome") == "collision")
+            and pose
+            and not execution.get("requires_scene_reset")
+        ):
             token = uuid4().hex
             self._post_action_state = (scene.scene_instance_id, agent_id, token, deepcopy(pose))
             execution["post_action_state_token"] = token

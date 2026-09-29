@@ -136,6 +136,9 @@ def test_tool_user_is_generic_and_task_prompt_preserves_evidence_roles():
             assert name not in prompt
     assert "runtime.update_plan" in prompt and "knowledge.load" in prompt
     assert "CURRENT" in prompt and "HISTORY" in prompt
+    assert "status `collision`" in prompt
+    assert "recoverable environment outcome" in prompt
+    assert "replan" in prompt
     assert "required" in tool_user and "result_timing" in tool_user
     assert "one to three ordered physical" in tool_user
     for retired in ("commit_phase_turn", "phase_strategy", "completion_assessment", "done_when"):

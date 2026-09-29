@@ -191,6 +191,66 @@ def test_trace_reader_falls_back_to_observation_pose(tmp_path):
     assert trace.samples[-1].pose["yaw_deg"] == 15.0
 
 
+def test_collision_trace_keeps_actual_pose_without_control_error(tmp_path):
+    from evaluation.benchmarks.uav_flow.metric_suite import (
+        _backend_action_tracking,
+    )
+    from src.uav.config import UavActionConfig
+
+    write_trace_fixture(tmp_path, window_event="physical_window_recorded")
+    events_path = tmp_path / "events.jsonl"
+    events = [
+        json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()
+    ]
+    window = events[-1]["payload"]
+    window["status"] = "collision"
+    window["ordered_steps"][0]["status"] = "collision"
+    events_path.write_text(
+        "\n".join(json.dumps(item) for item in events) + "\n",
+        encoding="utf-8",
+    )
+
+    trace = EpisodeTraceReader().read(TraceCursor.freeze(tmp_path))
+    tracking = _backend_action_tracking(
+        trace,
+        action_config=UavActionConfig(),
+        completed=False,
+    )
+
+    assert trace.trace_integrity == "ok"
+    assert trace.collision_call_count == trace.collision_window_count == 1
+    assert trace.motion_call_count == 1
+    assert trace.samples[-1].pose["x"] == 1.0
+    assert tracking["collision_call_count"] == 1
+    assert tracking["collision_window_count"] == 1
+    assert tracking["failed_window_count"] == 0
+    assert tracking["failed_or_skipped_step_count"] == 0
+    row = tracking["windows"][0]
+    assert row["comparison_status"] == "collision_not_scored"
+    assert row["observed_delta_m"] == {"dx": 1.0, "dy": 0.0, "dz": 0.0}
+    assert row["position_tracking_error_m"] is None
+    assert row["yaw_tracking_error_deg"] is None
+
+
+def test_review_uses_collision_label_instead_of_failed():
+    from evaluation.benchmarks.core.review import _execution_cell
+
+    rendered = _execution_cell(
+        {
+            "tracking": {"status": "collision"},
+            "result": {
+                "ok": False,
+                "message": "Collision detected",
+                "execution_state": {"outcome": "collision"},
+            },
+        }
+    )
+
+    assert "collision-label" in rendered
+    assert "collision" in rendered
+    assert "failed" not in rendered
+
+
 @pytest.mark.parametrize("event_name", ["physical_window_recorded", "phase_window_recorded"])
 def test_physical_window_event_names_share_explicit_trace_and_action_refs(tmp_path, event_name):
     """A phase-free window retains the same trajectory and frozen action join."""

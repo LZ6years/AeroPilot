@@ -530,6 +530,12 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
             }.get(diagnosis.get("code"))
             if explanation:
                 parts.append(f'<p class="transcript-feedback">{_e(explanation)}</p>')
+            elif result.get("status") == "collision":
+                parts.append(
+                    '<p class="collision-feedback"><strong>Collision:</strong> '
+                    + _e(str(result.get("message") or "")[:240])
+                    + "</p>"
+                )
             elif result.get("status") in {"error", "rejected"}:
                 parts.append(f'<p class="transcript-feedback">{_e(str(result.get("message") or "")[:240])}</p>')
             if result.get("safety_interventions"):
@@ -2369,7 +2375,11 @@ def _execution_cell(executed: dict[str, Any] | None) -> str:
     actual_step = _dict(executed.get("step"))
     result = _dict(executed.get("result"))
     ok = result.get("ok")
-    if result.get("status") == "skipped":
+    execution_state = _dict(result.get("execution_state"))
+    tracking = _dict(executed.get("tracking"))
+    if execution_state.get("outcome") == "collision" or tracking.get("status") == "collision":
+        status = "collision"
+    elif result.get("status") == "skipped":
         status = "skipped"
     elif ok is True:
         status = "success"
@@ -2380,7 +2390,8 @@ def _execution_cell(executed: dict[str, Any] | None) -> str:
     values = []
     if actual_step:
         values.append(_step_cell(actual_step) + "<br>")
-    values.append(f"<strong>{_e(status)}</strong>")
+    status_class = "collision-label" if status == "collision" else ""
+    values.append(f'<strong class="{status_class}">{_e(status)}</strong>')
     if result.get("message"):
         values.append(f"<br>{_e(result['message'])}")
     stabilization = _dict(executed.get("stabilization"))
@@ -2889,6 +2900,10 @@ details.planner-window { border: 1px solid #d9e2ec; border-radius: 8px;
 .transcript-state-checkpoint { border-left-color: #7c3aed; }
 .transcript-task-terminal { border-left-color: #b91c1c; background: #fff7f7; }
 .transcript-intent, .transcript-feedback { font-size: 15px; }
+.collision-feedback { font-size: 15px; border-left: 4px solid #d97706;
+  background: #fffbeb; color: #92400e; padding: 8px 10px; }
+.collision-label { display: inline-block; border-radius: 999px; padding: 2px 8px;
+  background: #fef3c7; color: #92400e; }
 .transcript-diagnostics { border: 1px solid #d97706; border-radius: 8px;
   background: #fffbeb; color: #92400e; margin-bottom: 12px; padding: 12px; }
 .transcript-diagnostics ul { margin-bottom: 0; }

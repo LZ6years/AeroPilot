@@ -21,7 +21,8 @@ class PhysicalWindowOutcome:
     """Evidence produced by one completed physical action window."""
 
     executed_steps: tuple[dict[str, Any], ...]
-    failed_call_index: int | None
+    status: Literal["ok", "collision", "error"]
+    interrupted_call_index: int | None
     observation_after: dict[str, Any]
     measurements: dict[str, Any]
 

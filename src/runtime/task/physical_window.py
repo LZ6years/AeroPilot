@@ -105,7 +105,8 @@ class PhysicalWindowExecutor:
         runtime._mark_before_last_action_window(state, observation_before)
         executed_steps: list[dict[str, Any]] = []
         native_physical_calls = list(native_meta.get("physical_calls", []))
-        failed_native_index: int | None = None
+        interrupted_call_index: int | None = None
+        interruption_status: str | None = None
         batch_error: Exception | None = None
         for index, step in enumerate(steps):
             payload = {"step_index": index, "step": step.to_dict()}
@@ -155,6 +156,7 @@ class PhysicalWindowExecutor:
                     data={"error_type": type(exc).__name__, "error": str(exc)},
                 )
             data = result.to_dict()
+            result_status = result.outcome
             write_result = runtime._record_action(state, step.tool, step.args, data)
             action_ref = write_result.get("action_ref") or {}
             pose_ref = write_result.get("pose_ref") or {}
@@ -166,7 +168,7 @@ class PhysicalWindowExecutor:
                 "requested_tool": requested_tool,
                 "tool": step.tool,
                 "effect": runtime.tools.registry.get(step.tool).runtime.effect,
-                "status": "ok" if result.ok else "error",
+                "status": result_status,
                 "action_ref": action_ref.get("ref"),
                 "result_pose_ref": pose_ref.get("ref"),
                 "requested_args": dict(
@@ -179,7 +181,7 @@ class PhysicalWindowExecutor:
                 transcript_result = ToolResult(
                     tool_call_id=native_call.tool_call_id,
                     tool_name=requested_tool,
-                    status="ok" if result.ok else "error",
+                    status=result_status,
                     message=result.message,
                     data=dict(result.data),
                     result_ref=write_result["action_ref"].get("ref"),
@@ -189,7 +191,7 @@ class PhysicalWindowExecutor:
                 )
                 runtime.agent_transcript.append_tool_result(transcript_result)
                 self._append_native_round_tool_result(native_meta, transcript_result)
-            if not result.ok:
+            if result_status == "error":
                 if result.execution_state.get("requires_scene_reset"):
                     batch_error = SceneRecoveryRequired(result.message)
                 executed_steps.append(
@@ -207,7 +209,8 @@ class PhysicalWindowExecutor:
                     raise batch_error or RuntimeError(
                         f"Action failed: {step.tool}: {result.message}"
                     )
-                failed_native_index = index
+                interrupted_call_index = index
+                interruption_status = "error"
                 break
             try:
                 stabilization = runtime.stabilizer.wait_after_step(
@@ -222,7 +225,8 @@ class PhysicalWindowExecutor:
                 )
             except Exception as exc:
                 batch_error = exc
-                failed_native_index = index
+                interrupted_call_index = index
+                interruption_status = "error"
                 stabilization = {
                     "status": "error",
                     "error_type": type(exc).__name__,
@@ -250,20 +254,26 @@ class PhysicalWindowExecutor:
             runtime._write_state(state)
             if batch_error is not None:
                 break
+            if result_status == "collision":
+                interrupted_call_index = index
+                interruption_status = "collision"
+                break
 
-        if failed_native_index is not None:
+        if interrupted_call_index is not None:
+            skipped_message = (
+                "skipped because an earlier physical call collided"
+                if interruption_status == "collision"
+                else "skipped because an earlier physical call or stabilization failed"
+            )
             for skipped_index, call in enumerate(
-                native_physical_calls[failed_native_index + 1 :],
-                start=failed_native_index + 1,
+                native_physical_calls[interrupted_call_index + 1 :],
+                start=interrupted_call_index + 1,
             ):
                 transcript_result = ToolResult(
                     tool_call_id=call.tool_call_id,
                     tool_name=call.tool_name,
                     status="skipped",
-                    message=(
-                        "skipped because an earlier physical call or "
-                        "stabilization failed"
-                    ),
+                    message=skipped_message,
                     requested_args=dict(call.args),
                 )
                 runtime.agent_transcript.append_tool_result(transcript_result)
@@ -294,10 +304,7 @@ class PhysicalWindowExecutor:
                             "result": {
                                 "ok": False,
                                 "status": "skipped",
-                                "message": (
-                                    "skipped because an earlier physical call or "
-                                    "stabilization failed"
-                                ),
+                                "message": skipped_message,
                             },
                             "stabilization": {
                                 "status": "skipped",
@@ -305,7 +312,10 @@ class PhysicalWindowExecutor:
                             },
                         }
                     )
-            if not isinstance(batch_error, SceneRecoveryRequired):
+            if (
+                interruption_status != "collision"
+                and not isinstance(batch_error, SceneRecoveryRequired)
+            ):
                 try:
                     runtime._try_hover(scene, agent_id, state)
                 except SceneRecoveryRequired as exc:
@@ -349,7 +359,8 @@ class PhysicalWindowExecutor:
         )
         return PhysicalWindowOutcome(
             executed_steps=tuple(executed_steps),
-            failed_call_index=failed_native_index,
+            status=(interruption_status or "ok"),
+            interrupted_call_index=interrupted_call_index,
             observation_after=observation_after,
             measurements=window_measurements,
         )

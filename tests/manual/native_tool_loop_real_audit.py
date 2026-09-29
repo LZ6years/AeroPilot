@@ -844,10 +844,14 @@ def _audit_physical_trace(
     after_ids: set[str] = set()
     step_count = 0
     motion_count = 0
+    collision_count = 0
+    collision_window_count = 0
     for window in windows:
         if not isinstance(window, dict):
             trace_violation("physical_window_invalid", "physical window must be an object")
             continue
+        if window.get("status") == "collision":
+            collision_window_count += 1
         before_id = window.get("observation_before_id")
         after_id = window.get("observation_after_id")
         if not isinstance(before_id, str) or not isinstance(after_id, str):
@@ -907,10 +911,12 @@ def _audit_physical_trace(
                 )
             tool = str(step.get("tool") or "")
             if (
-                step.get("status") == "ok"
+                step.get("status") in {"ok", "collision"}
                 and tool in {"uav.move_body", "uav.turn_relative"}
             ):
                 motion_count += 1
+            if step.get("status") == "collision":
+                collision_count += 1
             call_id = step.get("tool_call_id")
             if not isinstance(call_id, str) or not call_id:
                 trace_violation(
@@ -924,7 +930,7 @@ def _audit_physical_trace(
                 )
             else:
                 trace_steps[call_id] = step
-            if step.get("status") in {"ok", "error"} and not step.get("action_ref"):
+            if step.get("status") in {"ok", "collision", "error"} and not step.get("action_ref"):
                 trace_violation(
                     "physical_step_action_ref_missing",
                     f"executed step {call_id!r} lacks action_ref",
@@ -944,6 +950,16 @@ def _audit_physical_trace(
         trace_violation(
             "motion_call_count_mismatch",
             f"declared={trace.get('motion_call_count')!r}, actual={motion_count}",
+        )
+    if trace.get("collision_call_count", 0) != collision_count:
+        trace_violation(
+            "collision_call_count_mismatch",
+            f"declared={trace.get('collision_call_count')!r}, actual={collision_count}",
+        )
+    if trace.get("collision_window_count", 0) != collision_window_count:
+        trace_violation(
+            "collision_window_count_mismatch",
+            f"declared={trace.get('collision_window_count')!r}, actual={collision_window_count}",
         )
 
     transcript_steps: dict[str, tuple[dict[str, Any], dict[str, Any]]] = {}
@@ -975,7 +991,7 @@ def _audit_physical_trace(
             if (
                 spec.runtime.effect == "physical"
                 and result is not None
-                and result.get("status") in {"ok", "error", "skipped"}
+                and result.get("status") in {"ok", "collision", "error", "skipped"}
             ):
                 transcript_steps[call_id] = (call, result)
     if set(trace_steps) != set(transcript_steps):

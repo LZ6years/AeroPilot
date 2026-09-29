@@ -263,10 +263,108 @@ def test_paused_multirotor_move_no_effect_reports_collision(monkeypatch):
     result = adapter.move_body(2.0, 0.5, 0.0, 1.5)
 
     assert not result.ok
-    assert result.data["failure_kind"] == "collision_blocked"
+    assert result.execution_state["outcome"] == "collision"
+    assert result.execution_state["requires_scene_reset"] is False
+    assert result.data["collision"] == {
+        "kind": "blocked",
+        "object_name": "Building_42",
+    }
+    assert "failure_kind" not in result.data
     diagnostics = result.data["action_diagnostics"]
     assert diagnostics["tracking"]["observed_translation_m"] == pytest.approx(0.0)
     assert diagnostics["after"]["collision"]["object_name"] == "Building_42"
+    client.action_effect_scale = 1.0
+    assert adapter.move_body(1.0, 0.0, 0.0, 1.0).ok
+
+
+@pytest.mark.parametrize("timestamps", [True, False])
+def test_paused_multirotor_new_collision_displacement_is_recoverable(
+    monkeypatch, timestamps
+):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    client.action_effect_scale = 7.0
+    client.rotateToYawAsync = (
+        lambda yaw, timeout_sec, margin, vehicle_name:
+        client.moveByVelocityBodyFrameAsync(0.0, 0.0, 1.0, 1.0, vehicle_name)
+    )
+    before_collision = SimpleNamespace(has_collided=False, object_name="")
+    after_collision = SimpleNamespace(
+        has_collided=True,
+        object_name="SM_NYCB_1-9",
+    )
+    if timestamps:
+        before_collision.time_stamp = 10
+        after_collision.time_stamp = 11
+    collisions = iter([before_collision, after_collision])
+    client.simGetCollisionInfo = lambda vehicle_name: next(collisions)
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.turn_relative(90.0)
+
+    assert not result.ok
+    assert result.execution_state["outcome"] == "collision"
+    assert result.execution_state["requires_scene_reset"] is False
+    assert result.execution_state["verified_paused_pose"]
+    assert result.data["collision"] == {
+        "kind": "displacement",
+        "object_name": "SM_NYCB_1-9",
+    }
+
+
+def test_paused_multirotor_stale_collision_cannot_hide_discontinuity(monkeypatch):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    client.action_effect_scale = 7.0
+    client.rotateToYawAsync = (
+        lambda yaw, timeout_sec, margin, vehicle_name:
+        client.moveByVelocityBodyFrameAsync(0.0, 0.0, 1.0, 1.0, vehicle_name)
+    )
+    client.collision.has_collided = True
+    client.collision.object_name = "old_contact"
+    client.collision.time_stamp = 10
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.turn_relative(90.0)
+
+    assert not result.ok
+    assert result.execution_state["outcome"] == "error"
+    assert result.execution_state["requires_scene_reset"] is True
+    assert result.data["failure_kind"] == "motion_discontinuity"
+
+
+def test_paused_multirotor_success_with_new_contact_remains_ok(monkeypatch):
+    adapter = AirSimUavAdapter(
+        mode="Multirotor",
+        control_strategy="paused_multirotor",
+    )
+    client = FakeAirSimClient()
+    collisions = iter(
+        [
+            SimpleNamespace(has_collided=False, object_name="", time_stamp=10),
+            SimpleNamespace(
+                has_collided=True,
+                object_name="light_contact",
+                time_stamp=11,
+            ),
+        ]
+    )
+    client.simGetCollisionInfo = lambda vehicle_name: next(collisions)
+    adapter._client = client
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+
+    result = adapter.move_body(1.0, 0.0, 0.0, 1.0)
+
+    assert result.ok
+    assert result.execution_state["outcome"] == "ok"
 
 
 def test_paused_multirotor_negligible_partial_motion_is_rejected(monkeypatch):

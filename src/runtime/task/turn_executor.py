@@ -238,11 +238,7 @@ class TurnExecutor:
                 window_index=state.physical_window_count,
                 before=before,
                 after=outcome.observation_after,
-                status=(
-                    "error"
-                    if outcome.failed_call_index is not None
-                    else "ok"
-                ),
+                status=outcome.status,
                 ordered_steps=[
                     item["tracking"] for item in outcome.executed_steps
                 ],

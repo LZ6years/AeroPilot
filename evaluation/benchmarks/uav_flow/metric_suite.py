@@ -178,6 +178,7 @@ def _backend_action_tracking(
             "observed_yaw_delta_deg": None,
             "yaw_tracking_error_deg": None,
             "within_tolerance": None,
+            "comparison_status": "pending",
             "unavailable_reason": window.unavailable_reason,
             "ordered_steps": [],
         }
@@ -206,11 +207,44 @@ def _backend_action_tracking(
             }
             for step in window.ordered_steps
         ]
+        collision_step = next(
+            (
+                step
+                for step in window.ordered_steps
+                if step.status == "collision"
+            ),
+            None,
+        )
         expected_pose = dict(before) if before is not None else None
         if row["unavailable_reason"] is None and expected_pose is None:
             row["unavailable_reason"] = "pre_window_observation_unavailable"
         if row["unavailable_reason"] is None and after is None:
             row["unavailable_reason"] = "post_window_observation_unavailable"
+        if (
+            row["unavailable_reason"] is None
+            and collision_step is not None
+            and before is not None
+            and after is not None
+        ):
+            observed_delta = _observed_position_delta(before, after)
+            before_yaw = _finite_float(before.get("yaw_deg"))
+            observed_yaw = _finite_float(after.get("yaw_deg"))
+            if observed_delta is None:
+                row["unavailable_reason"] = "observation_position_unavailable"
+            elif before_yaw is None or observed_yaw is None:
+                row["unavailable_reason"] = "observation_yaw_unavailable"
+            else:
+                row.update(
+                    {
+                        "observed_delta_m": observed_delta,
+                        "observed_yaw_delta_deg": _normalize_yaw(
+                            observed_yaw - before_yaw
+                        ),
+                        "comparison_status": "collision_not_scored",
+                    }
+                )
+            rows.append(row)
+            continue
         if row["unavailable_reason"] is None:
             for step in window.ordered_steps:
                 if step.status != "ok":
@@ -283,6 +317,7 @@ def _backend_action_tracking(
                             position_error <= TRANSLATION_TRACKING_TOLERANCE_M
                             and abs(yaw_error) <= TURN_TRACKING_TOLERANCE_DEG
                         ),
+                        "comparison_status": "compared",
                     }
                 )
         rows.append(row)
@@ -313,11 +348,13 @@ def _backend_action_tracking(
         "physical_call_count": trace.physical_call_count,
         "motion_call_count": trace.motion_call_count,
         "physical_window_count": trace.physical_window_count,
+        "collision_call_count": trace.collision_call_count,
+        "collision_window_count": trace.collision_window_count,
         "failed_window_count": sum(
-            window.status != "ok" for window in trace.physical_windows
+            window.status == "error" for window in trace.physical_windows
         ),
         "failed_or_skipped_step_count": sum(
-            step.status != "ok"
+            step.status in {"error", "skipped"}
             for window in trace.physical_windows
             for step in window.ordered_steps
         ),
@@ -342,8 +379,12 @@ def _backend_action_tracking(
             max(yaw_errors) if yaw_errors else None
         ),
         "all_observed_within_tolerance": (
-            all(row["within_tolerance"] is True for row in rows)
-            if rows
+            all(
+                row["within_tolerance"] is True
+                for row in rows
+                if row["comparison_status"] == "compared"
+            )
+            if any(row["comparison_status"] == "compared" for row in rows)
             else None
         ),
         "windows": rows,

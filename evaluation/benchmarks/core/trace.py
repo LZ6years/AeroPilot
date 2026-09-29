@@ -126,6 +126,8 @@ class EpisodeTrace:
     physical_call_count: int = 0
     physical_window_count: int = 0
     motion_call_count: int = 0
+    collision_call_count: int = 0
+    collision_window_count: int = 0
     trace_schema_version: str | None = None
     trace_integrity: str = "unsupported_legacy_trace_schema"
     trace_issues: tuple[str, ...] = ()
@@ -163,6 +165,8 @@ class EpisodeTrace:
             "physical_call_count": self.physical_call_count,
             "physical_window_count": self.physical_window_count,
             "motion_call_count": self.motion_call_count,
+            "collision_call_count": self.collision_call_count,
+            "collision_window_count": self.collision_window_count,
             "physical_windows": [
                 window.to_dict() for window in self.physical_windows
             ],
@@ -264,7 +268,7 @@ class EpisodeTraceReader:
             issues.extend(window_issues)
             physical_call_count += len(window.ordered_steps)
             motion_call_count += sum(
-                step.status == "ok" and step.tool in _MOTION_TOOLS
+                step.status in {"ok", "collision"} and step.tool in _MOTION_TOOLS
                 for step in window.ordered_steps
             )
 
@@ -323,13 +327,13 @@ def _read_physical_window(
         if not tool or effect != "physical":
             issues.append("non_physical_step_in_window")
         status = str(item.get("status") or "")
-        if status not in {"ok", "error", "skipped"}:
+        if status not in {"ok", "collision", "error", "skipped"}:
             issues.append("physical_step_status_invalid")
         action_ref = _optional_string(item.get("action_ref"))
         pose_ref = _optional_string(item.get("result_pose_ref"))
         action = _record_from_ref(action_ref, actions)
         acknowledged_pose_record = _record_from_ref(pose_ref, poses)
-        if status in {"ok", "error"} and action is None:
+        if status in {"ok", "collision", "error"} and action is None:
             issues.append("physical_step_action_ref_unavailable")
         if action is not None and str(action.get("tool") or "") != tool:
             issues.append("physical_step_action_tool_mismatch")
@@ -371,15 +375,15 @@ def _read_physical_window(
         steps.append(step)
         trajectory_candidates.append((step, acknowledged_pose_record))
 
-    successful = [
+    executed = [
         (step, pose_record)
         for step, pose_record in trajectory_candidates
-        if step.status == "ok"
+        if step.status in {"ok", "collision"}
     ]
     window_samples: list[EpisodeTraceSample] = []
-    for success_index, (step, pose_record) in enumerate(successful):
+    for executed_index, (step, pose_record) in enumerate(executed):
         source = "action_result"
-        if pose_record is None and success_index == len(successful) - 1:
+        if pose_record is None and executed_index == len(executed) - 1:
             pose_record = after_pose_record
             source = "window_observation_fallback"
         if pose_record is None:
@@ -413,12 +417,15 @@ def _read_physical_window(
         issues.append("physical_window_index_invalid")
         window_index = 0
         unavailable_reason = unavailable_reason or "window_index_unavailable"
+    window_status = str(payload.get("status") or "unknown")
+    if window_status not in {"ok", "collision", "error"}:
+        issues.append("physical_window_status_invalid")
     window = EpisodePhysicalWindow(
         decision_id=str(payload.get("decision_id") or ""),
         phase=_optional_string(payload.get("phase")),
         phase_key=_optional_string(payload.get("phase_key")),
         window_index=window_index,
-        status=str(payload.get("status") or "unknown"),
+        status=window_status,
         observation_before_id=before_id,
         observation_after_id=after_id,
         observation_before_pose=(
@@ -464,6 +471,14 @@ def _finish_trace(
         physical_call_count=physical_call_count,
         physical_window_count=len(windows),
         motion_call_count=motion_call_count,
+        collision_call_count=sum(
+            step.status == "collision"
+            for window in windows
+            for step in window.ordered_steps
+        ),
+        collision_window_count=sum(
+            window.status == "collision" for window in windows
+        ),
         trace_schema_version=schema,
         trace_integrity=integrity,
         trace_issues=issues,

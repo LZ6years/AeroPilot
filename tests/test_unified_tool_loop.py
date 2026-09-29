@@ -60,11 +60,25 @@ class Backend:
         self.actions = []
         self.observations = 0
         self.fail_move = False
+        self.collide_move = False
 
     def execute_action(self, scene, agent, action, args):
         self.actions.append((action, dict(args)))
         if action == "move_body" and self.fail_move:
             return ActionResult(False, action, "motion failed")
+        if action == "move_body" and self.collide_move:
+            self.collide_move = False
+            self.pose["z"] -= 1.0
+            return ActionResult(
+                False,
+                action,
+                "Collision detected; the current physical window stopped for reassessment.",
+                {
+                    "pose": dict(self.pose),
+                    "collision": {"kind": "blocked", "object_name": "wall"},
+                },
+                {"outcome": "collision"},
+            )
         if action == "turn_relative":
             self.pose["yaw_deg"] += args["yaw_deg"]
         if action == "move_body":
@@ -416,6 +430,48 @@ def test_failed_first_physical_call_closes_remaining_as_skipped(tmp_path):
     assert [r.status for r in results] == ["error", "skipped", "ok"]
     assert backend.observations == 2 and state.stopped and not state.completed
     assert [action for action, _ in backend.actions] == ["move_body", "hover"]
+
+
+def test_collision_interrupts_window_observes_and_returns_to_planner(tmp_path):
+    runtime, state, scene, backend = harness(
+        tmp_path,
+        [[move("collision"), move("skipped")], [done()]],
+    )
+    backend.collide_move = True
+
+    run_loop(runtime, state, scene)
+
+    results = [
+        event.payload
+        for event in runtime.agent_transcript.items
+        if event.kind == "tool_result"
+    ]
+    assert [result.status for result in results] == ["collision", "skipped", "ok"]
+    assert results[0].data["collision"]["kind"] == "blocked"
+    assert backend.observations == 2
+    assert [action for action, _ in backend.actions] == ["move_body"]
+    windows = [
+        payload
+        for name, payload in runtime.recorder.events
+        if name == "physical_window_recorded"
+    ]
+    assert len(windows) == 1 and windows[0]["status"] == "collision"
+    assert [step["status"] for step in windows[0]["ordered_steps"]] == [
+        "collision",
+        "skipped",
+    ]
+    checkpoint_reasons = [
+        event.payload.reason
+        for event in runtime.agent_transcript.items
+        if event.kind == "state_checkpoint"
+    ]
+    assert checkpoint_reasons == [
+        "instruction_start",
+        "physical_window_completed",
+    ]
+    second_turn_kinds = [event.kind for event in runtime.planner.histories[1]]
+    assert "task_terminal" not in second_turn_kinds
+    assert state.completed and state.physical_window_count == 1
 
 
 @pytest.mark.parametrize("reuse_scene", [False, True])

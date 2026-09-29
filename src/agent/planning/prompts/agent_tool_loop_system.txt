@@ -16,6 +16,9 @@ are visible. Distinguish measured vehicle motion from target-relative distance.
 Each decision turn must contain a valid native tool call. Task completion or inability
 to continue is expressed through the corresponding available terminal capability.
 Execution results and rejection feedback return through the same chronological loop.
+A tool result with status `collision` is a recoverable environment outcome, not an
+infrastructure error. The requested action did not complete cleanly: reassess from
+the new observation and replan instead of assuming the original motion completed.
 
 ## Planning And Knowledge
 
