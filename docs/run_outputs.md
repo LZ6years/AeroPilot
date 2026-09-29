@@ -1,94 +1,27 @@
-# Run 输出目录约定
+# Run outputs
 
-> Update: Runtime loop guard stops are now recorded as abnormal `stopped/incomplete` outcomes instead of fake phase advances. Check `state/latest_state.json` for `stopped`, `stopped_reason`, and `stop_source`; check `events.jsonl` for `runtime_loop_guard_reached`. UAV-Flow reports also include reference-vs-actual trajectory plots.
-
-本文档定义 `runs/<run_id>/` 的落盘结构。目标是把系统状态、上下文记忆、原始大文件、调试材料和 demo/eval 输出分开，避免同一份 RGB/depth、state 或事件在多个目录重复保存。
-
-开发脚本放置规则见 [development_conventions.md](development_conventions.md)：底层诊断和真实引擎探针优先放 `tests/manual/`，`demos/` 只放用户可体验的完整流程。
-
-## 目录结构
+正式 run 使用 Context V2：
 
 ```text
-runs/<run_id>/
+<run>/
+  contexts/instruction_envelope.json
+  contexts/latest_checkpoint.json
+  debug/context_checkpoints/<checkpoint_id>.json
+  debug/tool_loop/<instruction>/<decision>.json
+  memory/agent_transcript.jsonl
+  memory/observations.jsonl
+  memory/actions.jsonl
+  artifacts/model_media/<observation_id>/<sha>.png
+  state/latest_state.json
+  state/flight_memory.json
   events.jsonl
-  state/
-    latest_state.json
-    latest_agent_message.json
-    final_answer.json
-    flight_memory.json
-    semantic_plan.json
-    scene_instance.json
-  memory/
-    instructions.jsonl
-    actions.jsonl
-    agent_messages.jsonl
-    observations.jsonl
-    poses.jsonl
-    frames.jsonl
-  artifacts/
-    rgb/
-    depth/
-  contexts/
-    latest_context.json
-    latest_action_planner_model_context.json
-  debug/
-    debug_events.jsonl
-    system.log
-    latest_observation.json
-    phase_windows/*.json
-    phase_transition/*.json
-  config/
-  demo/
-  eval/
-  scenes/
 ```
 
-## 主要文件
+Transcript 与 checkpoint 禁止内嵌 base64。Provider 请求中的临时媒体仅在请求组装
+期间存在；需要审计的媒体按 SHA 写入 artifact。
 
-| 路径 | 类型 | 用途 |
-| --- | --- | --- |
-| `events.jsonl` | 简版事件流 | 给用户和 CLI/TUI 展示关键流程：指令开始、阶段规划、工具完成、观察更新、阶段推进。 |
-| `state/latest_state.json` | 当前状态快照 | 当前 runtime 控制状态，只保存最新状态和当前 phase 进度。 |
-| `state/latest_agent_message.json` | 最新回复快照 | 最近一条用户可见 `AgentMessage`，供 CLI/TUI/复盘直接读取。 |
-| `state/final_answer.json` | 最终回复快照 | 最近一条 `type="final"` 的 `AgentMessage`，表示当前 run 最近一次最终答复。 |
-| `state/flight_memory.json` | 记忆 manifest | 保存 `memory/*.jsonl` 的 refs，供 context modules 查历史。 |
-| `interactive/latest_summary.json` | CLI 轮次摘要 | 覆盖写入最近一轮 CLI 摘要；其中 `agent_messages` 只保留用于展示的最新/最终回复，完整回复历史看 `memory/agent_messages.jsonl`。 |
-| `state/semantic_plan.json` | 语义解析结果 | 当前或最近一条自然语言指令解析出的阶段计划。 |
-| `state/scene_instance.json` | 场景信息 | 当前 UE/AirSim scene 的实例信息。 |
-| `memory/*.jsonl` | 上下文历史 | append-only 结构化历史。ContextModule 从这里读取，不保存 RGB/depth 大文件。 |
-| `memory/agent_messages.jsonl` | 回复历史 | append-only 用户可见回复历史，`state/flight_memory.json` 只保存对应 refs。 |
-| `artifacts/rgb` / `artifacts/depth` | 原始感知文件 | 真实 RGB/depth 文件唯一保存位置。 |
-| `contexts/latest_context.json` | 模型动作输入 | `ModelActionPlanner` 使用的最终 PlannerContext。 |
-| `contexts/latest_action_planner_model_context.json` | 阶段判断输入 | 执行动作和自动观察后，给 coupled phase decision 的上下文。 |
-| `debug/debug_events.jsonl` | 详细事件流 | 给开发者排查模型输出、安全拦截、稳定等待、repair、coupled phase decision 细节。 |
-| `debug/latest_observation.json` | 最新原始 observation | 仅用于开发查看，不作为 context module 的历史来源。 |
-| `debug/phase_windows/*.json` | 阶段窗口详情 | 每个 phase window 的完整执行记录。 |
-| `debug/action_planner/*.json` | 阶段判断详情 | 每次 coupled phase decision 的完整输入。 |
+`runs/experiments/` 属于诊断/实验输出，不是产品 run schema。脚本应使用新的时间戳
+目录，保存 manifest、环境诊断和必要结果。已删除的 `tests/manual_outputs/` 不再是
+合法输出位置。
 
-## 已删除的旧输出
-
-新 run 不再生成以下路径：
-
-- `mission_state.json`
-- 根目录 `latest_state.json`
-- 根目录 `flight_memory.json`
-- 根目录 `semantic_plan.json`
-- 根目录 `scene_instance.json`
-- `observations/latest_observation.json`
-- `memory/artifacts/`
-
-读取旧 run 的工具可以保留兼容 fallback，但新代码不应该继续写这些路径。
-
-## Event 分层
-
-`events.jsonl` 是简版事件流，面向用户和后续 TUI。它只记录大阶段摘要，不放完整 observation、完整模型 payload 或完整 coupled phase decision context。
-
-`debug/debug_events.jsonl` 是开发流。模型原始 plan、validated plan、SafetySupervisor intervention、repair 尝试、稳定等待轮询和 shutdown 细节都写在这里。
-
-完整大对象优先写到 `debug/phase_windows/*.json` 或 `debug/action_planner/*.json`，event 里只保留 `debug_ref` / `context_ref` 和摘要字段。
-
-## Context 与 Memory 的关系
-
-`memory/*.jsonl` 是结构化历史来源。`state/flight_memory.json` 只保存 refs，不复制历史正文。`contexts/latest_context.json` 是给模型的整理结果，允许包含历史摘要，但不直接暴露完整 raw jsonl。
-
-RGB/depth 文件只保存在 `artifacts/`。`memory/frames.jsonl` 只保存 frame metadata 和 artifact path。
+V1 artifact 不被 V2 reader 兼容或静默解析。

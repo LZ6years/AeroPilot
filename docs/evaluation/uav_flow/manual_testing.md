@@ -185,18 +185,18 @@ Planner 图片按 observation 时间排列，每张只发送一次：旧图为 `
 `CURRENT`。每张有合法 Depth 时使用融合图，否则回退 raw RGB。融合颜色足以支持明显的
 定性远近时，不应调用精确感知工具。
 
-需要确认目标存在、身份或方位，但不需要米制距离时，调用
-`skill.visual_grounding.locate(include_distance=false)`。只有接近明确阈值、动作幅度依赖
-米数、用户要求准确距离，或准备提交定量完成证据时，才设置 `include_distance=true`。
-插件先由开放词汇 detector 生成候选；需要距离时再用 segmentation mask 内部的稳健中位数
+需要当前 RGB 中已见候选的表面距离时，调用
+`skill.visual_grounding.locate(observation_id, query)`；不再提供纯检测输入开关。
+身份、方位和路线关系由模型结合观察判断，不规定接近前或结束前必须调用。
+插件先由开放词汇 detector 生成候选，再用 segmentation mask 内部的稳健中位数
 测距，SAM 不可用时回退到收缩后的 detector box。模型不再自己画 ROI，深度跨越多个表面
 时返回 unavailable，而不是输出看似精确的数值。
 
 ToolResult 随附候选 ID、框和可选 mask 标注图。模型必须结合指令与图像确认候选语义，
 不能把 detector 置信度当作目标身份真值。距离表示相机到候选可见表面的约值，不是目标
-几何中心、水平距离或 UAV-Flow 真值。一次 observation 最多调用两次，允许修正一次 query；
-相同参数不会重复执行。只有 `include_distance=true` 的成功调用会触发定量 completion 的
-current-observation freshness 约束。
+几何中心、水平距离或 UAV-Flow 真值。一次 observation 最多调用两次；
+相同参数不会重复执行。定量判断需要有效且几何含义匹配的证据，但历史测距不触发
+结束前强制重测。旧日志中的 include_distance 与 not_requested 保留原样。
 
 离线验证 capability 时可直接使用保存的 RGB 与匹配 Depth，不启动 UE 或 Provider：
 
@@ -210,7 +210,6 @@ python tests/manual/visual_grounding_capability_probe.py `
   --rgb <rgb.png> `
   --depth <depth.npy> `
   --query "the person to approach" `
-  --include-distance `
   --grounding-model F:/hf_models/grounding-dino-tiny `
   --segmentation-model F:/hf_models/sam-vit-base `
   --output-dir <probe-output>

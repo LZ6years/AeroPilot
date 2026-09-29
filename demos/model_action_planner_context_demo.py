@@ -18,8 +18,9 @@ from src.agent.transcript import AgentTranscript
 from src.llm.audit import snapshot_request
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader, MapMemoryStore
-from src.perception.context_builder import ObservationContextBuilder
-from src.runtime.configs.model_config import load_model_config
+from src.agent.config import load_model_config
+from src.runtime.factory import RuntimeFactory
+from src.uav.config import UavSafetyConfig
 from src.tools.registry import default_registry
 
 
@@ -42,17 +43,22 @@ def redact_model_payload(payload, model_config):
 
 def run_demo(instruction, model_config, run_dir):
     state, memory, map_memory = build_demo_memory(run_dir, instruction)
-    context = ObservationContextBuilder(map_memory=map_memory).build(state, memory)
+    builder = RuntimeFactory().context_builder(run_dir, UavSafetyConfig())
+    builder.map_memory = map_memory
+    envelope = builder.build_instruction_envelope(state, memory)
+    checkpoint, _ = builder.build_checkpoint(
+        state, memory, checkpoint_id="checkpoint_000001", reason="instruction_start"
+    )
     transcript = AgentTranscript(MemoryEventWriter(run_dir))
-    transcript.start_instruction(instruction, memory.active_instruction_id)
-    transcript.append_state(context, None)
+    transcript.start_instruction(instruction, memory.active_instruction_id, envelope)
+    transcript.append_state(checkpoint)
     registry = default_registry()
     planner = ModelActionPlanner(model_config)
     turn = planner.plan_turn(transcript, registry)
     effect = validate_native_turn(turn, registry,
         allowed_names={spec.name for spec in registry.model_specs()}, latest_observation={})
     # Validation is not execution, and a plan is not evidence of task success.
-    result = {"mode": "model_request_only_no_execution", "context": context,
+    result = {"mode": "model_request_only_no_execution", "checkpoint": checkpoint.to_dict(),
               "assistant_turn": turn.to_dict(), "effect": effect,
               "exchange": planner.last_exchange}
     path = run_dir / "demo_request.json"

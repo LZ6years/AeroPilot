@@ -97,7 +97,7 @@ PausedMultirotorControlStrategy
 修改：
 
 - Runtime preflight/shutdown；
-- AgentRuntime smoke test；
+- SmokeRuntime smoke test；
 - Stabilizer optional hover；
 - Unsupported action 错误；
 - ComputerVision body-frame pose movement。

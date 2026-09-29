@@ -12,13 +12,19 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.agent.history_projection import HistoryProjector
+from src.agent.context.projection import HistoryProjector
 from src.agent.transcript import AgentTranscript, AssistantTurn
 from src.llm import DefaultModelClient, MessageBuilder, ModelRequest, ModelResponse, ProviderRequestError, ProviderSettings
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import encode_request, public_response_snapshot
 from src.memory.stores import MemoryEventWriter
-from src.runtime.configs.model_config import load_model_config
+from src.memory.context.contracts import (
+    ContextFragment,
+    InstructionEnvelope,
+    StateCheckpoint,
+    checkpoint_fingerprint,
+)
+from src.agent.config import load_model_config
 from src.tools.registry import ToolRegistry
 
 
@@ -55,9 +61,33 @@ def run_demo(output: Path, *, client: Any, settings: ProviderSettings, mode: str
     output = Path(output)
     output.mkdir(parents=True, exist_ok=False)
     transcript = AgentTranscript(MemoryEventWriter(output))
-    transcript.start_instruction("解释两轮请求如何使用当前状态和历史。", "demo_instruction")
+    envelope = InstructionEnvelope(
+        instruction_id="demo_instruction",
+        protocol_context="",
+        identity={},
+        user_preferences={},
+        knowledge_catalog=(),
+        static_module_guidance=(),
+    )
+    transcript.start_instruction(
+        "解释两轮请求如何使用当前状态和历史。", "demo_instruction", envelope
+    )
     for index in (1, 2):
-        transcript.append_state({"demo_state": {"round": index}}, f"obs_{index}")
+        fragment = ContextFragment("demo", {"round": index})
+        fingerprint = checkpoint_fingerprint(
+            f"obs_{index}", None, (), (fragment,)
+        )
+        transcript.append_state(
+            StateCheckpoint(
+                checkpoint_id=f"checkpoint_{index:06d}",
+                reason=("instruction_start" if index == 1 else "physical_window_completed"),
+                observation_id=f"obs_{index}",
+                task_plan=None,
+                loaded_knowledge=(),
+                fragments=(fragment,),
+                fingerprint=fingerprint,
+            )
+        )
         request, audit = build_request(transcript)
         safe_request, _ = snapshot_request(encode_request(settings, request))
         prefix = output / f"round_{index:02d}"

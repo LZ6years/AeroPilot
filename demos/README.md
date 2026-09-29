@@ -42,7 +42,7 @@ runs/plugin_system_demo_<timestamp>/
   02_discovered_skills.json
   03_selection_result.json
   04_loaded_skill_summaries.json
-  05_latest_context.json
+  05_latest_checkpoint.json
   06_research_image_context.json
 ```
 
@@ -88,8 +88,8 @@ python demos/memory_system_demo.py
 
 - `FlightMemory` 如何保存 refs。
 - `memory/*.jsonl` 如何保存结构化历史。
-- `contexts/latest_context.json` 里的五类 fragments 如何组成。
-- `instruction / image / pose / action / map` module 输出是否稳定。
+- `contexts/latest_checkpoint.json` 里的动态 fragments 如何组成。
+- `image / pose / motion / map / skills` module 输出是否稳定。
 
 重点输出：
 
@@ -99,7 +99,8 @@ runs/memory_system_demo_<timestamp>/
   memory/instructions.jsonl
   memory/observations.jsonl
   memory/poses.jsonl
-  contexts/latest_context.json
+  contexts/instruction_envelope.json
+  contexts/latest_checkpoint.json
 ```
 
 这些是静态教学记录，不表示真实动作、飞行轨迹或任务完成。
@@ -126,8 +127,8 @@ python demos/model_action_planner_context_demo.py --env-path .env
 
 适合看：
 
-- 发给模型的完整 `latest_context.json`。
-- `context_schema` 如何解释字段。
+- 发给模型的 V2 envelope、checkpoint 与按时间排列的 Transcript。
+- `schema_version`、fragment 与 audit 如何解释字段。
 - 状态上下文不含重复工具定义，工具参数只经 Provider `tools` 进入模型输入。
 - 模型输出的 action plan 是否通过 contract validation。
 - `ModelRepairPlanner` 是否触发。
@@ -140,7 +141,8 @@ runs/model_action_planner_demo_<timestamp>/
   state/semantic_plan.json
   state/latest_state.json
   state/flight_memory.json
-  contexts/latest_context.json
+  contexts/instruction_envelope.json
+  contexts/latest_checkpoint.json
   debug/model_payload.json
   debug/raw_model_response.json
   debug/raw_model_content.json
@@ -195,7 +197,7 @@ F:\conda_env\flyagent\python.exe demos/real_engine_instruction_demo.py --env-pat
 - action 是否执行成功。
 - 自动 observation 是否采集成功。
 - `latest_state.current_phase_progress` 是否合理。
-- `latest_context.phase_execution_summary` 是否与 state 同源。
+- `latest_checkpoint` 的动态状态是否与 state 同源。
 - coupled phase decision 是否判断阶段完成。
 - memory 是否随着多轮 instruction 增长。
 
@@ -211,8 +213,9 @@ runs/real_engine_basic_instruction_<timestamp>/
   memory/observations.jsonl
   memory/poses.jsonl
   memory/frames.jsonl
-  contexts/latest_context.json
-  contexts/latest_action_planner_model_context.json
+  contexts/instruction_envelope.json
+  contexts/latest_checkpoint.json
+  debug/context_checkpoints/*.json
   debug/debug_events.jsonl
   debug/action_planner/*.json
   artifacts/rgb/
@@ -223,7 +226,7 @@ runs/real_engine_basic_instruction_<timestamp>/
 如果跑完后要离线评估：
 
 ```powershell
-python tools/real_run_evaluator.py --run-dir runs/<run_id> --task-suite configs/eval/standard_tasks.json --write
+& 'F:\conda_env\flyagent\python.exe' tools/real_run_evaluator.py --run-dir runs/<run_id> --task-suite configs/eval/standard_tasks.json --write
 ```
 
 评估输出：
@@ -251,10 +254,12 @@ runs/<run_id>/eval/metrics.json
 第三层按问题继续读：
 
 ```text
-src/perception/context_builder.py
+src/memory/context/builder.py
+src/runtime/context/checkpoints.py
+src/agent/context/request_assembler.py
 ```
 
-看 `latest_context.json` 如何生成。
+看 V2 checkpoint 如何构建、去重、持久化并投影为 Provider 请求。
 
 ```text
 src/agent/planning/model_action_planner.py

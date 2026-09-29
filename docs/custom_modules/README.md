@@ -1,18 +1,15 @@
-# 自定义模块接入指南
+# 自定义模块接入
 
-这个目录面向使用者和后续开发者，说明如何在不修改核心 runtime 的情况下，把自己的外接能力接入 UAV-Agent。
+稳定入口有两类：
 
-当前推荐入口是 **callable skill**：
+- callable skill：放在 `plugins/capabilities/`，声明 `capability.json`、Provider schema
+  和 runtime effect；结果以原生 ToolResult 返回。
+- ContextModule：实现 `src.memory.context` 定义的模块契约，由配置选择，再由
+  RuntimeFactory 显式注入 `ContextModuleRegistry`。
 
-- 内置工具仍然是系统 tool，例如 `uav.turn_relative / uav.move_body / uav.hover`。
-- 自定义外接能力放在 `plugins/capabilities/` 下。
-- 如果某个 skill 目录里有 `capability.json`，runtime 会把它注册成 planner 可调用的 `skill.*` 能力。
-- `capability.json` 必须声明 provider `wire_name` 和完整 `runtime` 属性。
-- planner 只能调用已启用且实际出现在 provider `tools` 数组中的能力。
-- read-only 能力的结果会以原生 ToolResult 回到同一个 transcript，再由模型决定是否飞行。
+模块应直接返回最终 `model_content` 和有序 `model_inputs`，并通过 `FragmentAudit`
+返回来源、置信度、warning 和 artifact refs。模块不能发现插件、调用 Runtime、改变
+任务状态或自行编码 base64 媒体。
 
-先读：
-
-- [02_knowledge_skill_guidance.md](02_knowledge_skill_guidance.md)
-- [01_callable_skill_target_tracking.md](01_callable_skill_target_tracking.md)
-- [03_custom_context_image_module.md](03_custom_context_image_module.md)
+目录中的编号文件是较早的专题说明；若与本文、`context_v2.md` 或实际契约冲突，
+以当前契约为准。

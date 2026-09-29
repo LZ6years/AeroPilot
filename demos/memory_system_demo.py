@@ -1,7 +1,7 @@
-"""Inspect static FlightMemory records and context without simulating flight.
+"""Inspect static FlightMemory records and V2 context without simulating flight.
 
 Run: python demos/memory_system_demo.py --run-root runs
-Writes memory JSONL, flight_memory.json and latest_context.json. These are
+Writes memory JSONL, flight_memory.json and latest_checkpoint.json. These are
 educational fixtures, not benchmark trajectories or completed flight results.
 """
 
@@ -20,7 +20,8 @@ if str(REPO_ROOT) not in sys.path:
 from src.agent.mission_state import MissionState
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
-from src.perception.context_builder import ObservationContextBuilder
+from src.runtime.factory import RuntimeFactory
+from src.uav.config import UavSafetyConfig
 
 
 def build_parser():
@@ -45,8 +46,17 @@ def main():
         memory.append_pose_ref(refs["pose_ref"])
     state = MissionState("fixture", memory.active_instruction)
     state.record_observation(observation)
-    context = ObservationContextBuilder().build(state, memory)
-    for relative, payload in (("state/flight_memory.json", memory.to_dict()), ("contexts/latest_context.json", context)):
+    builder = RuntimeFactory().context_builder(run_dir, UavSafetyConfig())
+    envelope = builder.build_instruction_envelope(state, memory)
+    checkpoint, _ = builder.build_checkpoint(
+        state, memory, checkpoint_id="checkpoint_000001", reason="instruction_start"
+    )
+    artifacts = (
+        ("state/flight_memory.json", memory.to_dict()),
+        ("contexts/instruction_envelope.json", envelope.to_dict()),
+        ("contexts/latest_checkpoint.json", checkpoint.to_dict()),
+    )
+    for relative, payload in artifacts:
         path = run_dir / relative
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

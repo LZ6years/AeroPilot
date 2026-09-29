@@ -17,8 +17,8 @@ instructions; do not copy them into the UAV agent's model-facing memory/prompts.
 
 - `src/llm/` owns stateless model communication, wire adapters, HTTP retries
   and generic in-memory request audits. It must not import Agent, Runtime,
-  Context or plugins. ModelConfig converts only transport settings into
-  ProviderSettings; business loop limits and prompt paths stay upstream.
+  Context or plugins. `src/agent/config/` owns independent Provider, Planner
+  and ToolLoop settings; business loop limits and prompt paths stay upstream.
 - Model callers own prompt loading, message order, generation parameters and
   response semantics. MessageBuilder is optional ordered-copy tooling with
   caller-defined keys, not a recipe/profile registry. It never inserts prompts,
@@ -29,7 +29,7 @@ instructions; do not copy them into the UAV agent's model-facing memory/prompts.
   audit snapshots. The legacy Agent HTTP implementation has been removed;
   all production model callers use the shared client/injection contract.
 
-- `src/memory/context/modules/*.py` builds compact model-facing context from
+- `src/memory/context/modules/` builds compact model-facing context from
   runtime memory. It owns field names, compression, role labels, and the split
   between model-facing summaries and debug metadata. An enabled module may
   declare a short `semantic_evidence` capability list through
@@ -59,8 +59,8 @@ instructions; do not copy them into the UAV agent's model-facing memory/prompts.
   plugin JSON Schema is adapted at registration and examples are validated there.
   model_specs always intersects allowed names with runtime.model_exposed.
   Hover remains Runtime-only, including safety substitution and stabilization.
-  ContextBuilder emits state/evidence, never tool declarations. Provider tools
-  is the only declaration path; HistoryProjector removes legacy provider-only
+  `ModelContextBuilder` emits state/evidence, never tool declarations. Provider tools
+  is the only declaration path; `HistoryProjector` removes provider-only
   state fields without deleting historical calls/results or changing storage.
 - `memory/FLYAGENT.md` owns only the shared embodied Agent identity, general
   work cycle, direction consistency, and safety/reporting baseline. It must not
@@ -72,7 +72,8 @@ instructions; do not copy them into the UAV agent's model-facing memory/prompts.
   not depend on local context field names, debug schemas, benchmark cases, or
   project-private runtime details.
 - `src/runtime/*` coordinates execution, observations, instruction anchors, and debug
-  artifacts. Runtime should not silently encode semantic task fixes that belong
+  artifacts. `RuntimeFactory` is the only production composition root and injects
+  one shared plugin/context/tool registry graph. Runtime should not silently encode semantic task fixes that belong
   in context contracts, prompts, skills, validators, or future semantic update
   middleware.
 - `evaluation/*` measures behavior and renders review/debug reports. Evaluation
@@ -101,8 +102,10 @@ capability, do not make it in the shared runtime, prompts, or knowledge base.
 
 ## Model-Facing vs Human-Facing Data
 
-Model-facing state checkpoints should be current and decision useful:
-- original instruction, caller-owned protocol_context and optional task plan;
+An instruction-level `InstructionEnvelope` owns static model material exactly once:
+identity, user preferences, caller-owned protocol, knowledge catalog and module
+descriptions. Model-facing `StateCheckpoint` records should be dynamic and decision useful:
+- optional task plan and loaded-knowledge index;
 - one current original RGB observation image, preserving scene colors;
 - one compact motion summary containing only measured instruction-start-relative and
   last-window UAV self-motion;
@@ -118,16 +121,19 @@ Each selected observation image is sent once at its original checkpoint;
 earlier labels say `HISTORY`, and only the newest says `CURRENT`.
 Labels carry `observation_id`, `frame_id`, and scene dimensions outside the
 image pixels. Tool results pair to calls through
-`tool_call_id`. Tool availability, argument schemas, runtime effects, result
+`tool_call_id`. The original instruction is owned only by the `user_instruction`
+event. Tool availability, argument schemas, runtime effects, result
 timing, and batching come from `ToolSpec` plus the provider `tools` array, not
-from duplicate context fields or name-prefix inference. Version 1 performs no
+from duplicate context fields or name-prefix inference. V2 performs no
 application-level token budgeting, text summarization, or silent history truncation.
 The transcript does not replay phase-start or before-window images. Runtime may
 retain those observation IDs as audit/state anchors, while full image history
 comes from the chronological checkpoints and remains fully stored even when
 the request view omits images.
 
-`src/agent/history_projection.py` owns the request view, not durable events.
+`src/agent/context/projection.py` owns the request view, while
+`src/agent/context/request_assembler.py` owns final Provider ordering and
+single-request media hydration; neither owns durable events.
 Transcript snapshots are deep-copy isolated. Context modules may provide pure
 history-image selectors through the base interface: candidates contain only
 observation IDs, order and frame IDs. The Image module owns `recency_log`;
@@ -156,9 +162,8 @@ selected through `configs/plugins.json`; its ToolSpec and private detector,
 segmenter, depth, and threshold settings live in the capability's own JSON.
 Runtime and plugin discovery must not hardcode that plugin ID or its model.
 
-Visual grounding accepts the latest observation plus a natural-language query.
-Detection-only calls establish candidates without loading metric depth. Calls
-with distance enabled compute rounded robust camera-to-visible-surface depth
+Visual grounding measures an observed candidate using the latest observation
+and a natural-language query. Every call attempts rounded robust camera-to-visible-surface depth
 inside a detector/segmenter-derived candidate region. Candidate masks, raw
 medians, MAD/filter details, backend settings, and model paths remain durable
 audit data and are not replayed to the provider. Candidate tool evidence is not
@@ -198,7 +203,8 @@ benchmark artifacts from `plugins/knowledge/*/SKILL.md`. Phrase skill guidance
 as general UAV behavior, visual reasoning, movement, route, safety, or
 completion knowledge.
 
-There is one ToolRegistry for builtins, UAV tools and JSON-discovered capabilities.
+There is one ToolRegistry for builtins, UAV tools and injected capabilities.
+Plugin discovery and registry composition happen only in `RuntimeFactory`.
 TaskRuntime.run_task accepts raw instructions and optional protocol_context.
 No parser, automatic skill selector, fixed Phase, commit or semantic updater runs.
 MissionState owns one optional plan with stable IDs and revisions. Plans are not
@@ -209,7 +215,7 @@ returns full body and requested declared references incrementally as ToolResults
 Context contains only catalog/loading indexes. Loading does not execute text,
 register capabilities, or extend permissions. Invalid paths fail without mutation.
 
-HistoryProjector owns the request view, not durable history. Context modules
+`HistoryProjector` owns the request view, not durable history. Context modules
 build current state; Transcript retains full append-only intent/results. No
 transport, task semantics or history selection policy belongs in knowledge.
 
@@ -275,7 +281,8 @@ route correctness. No additional semantic judge is introduced.
 
 Visual grounding uses the capability JSON box threshold (currently 0.4). Empty
 candidates mean uncertain detection, not confirmed absence; empty evidence images
-are not emitted. Competing identity queries reuse the same observation quota.
+are not emitted. The input has no detection-only toggle; historical reports retain
+their original optional-distance calls. Identity and search remain visual reasoning.
 Route and vertical knowledge favor evidence-scaled progress, not fixed small
 steps or a fixed recovery-attempt limit. Safety limits are unchanged.
 

@@ -100,11 +100,11 @@ import shim. Evaluation-only judges remain outside this migration.
 From the repository root:
 
 ```powershell
-python -m pytest -q tests/test_llm.py tests/test_llm_callers.py tests/test_provider_http.py
-python -m pytest -q
+& 'F:\conda_env\flyagent\python.exe' -m pytest -q tests/test_llm.py tests/test_llm_callers.py tests/test_provider_http.py
+& 'F:\conda_env\flyagent\python.exe' -m pytest -q
 ```
 
 The first command tests tooling, dependency direction, wire equivalence and
-transport failures without a real provider. The existing
-tests/manual/history_image_sampling_probe.py also uses the shared snapshot
-utility for offline historical request previews; it never calls a model.
+transport failures without a real provider. V2 context assembly and lazy media
+hydration can be inspected with `tests/manual/context_assembly_probe.py`; it
+never calls a model and does not read V1 runs.

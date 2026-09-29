@@ -220,7 +220,8 @@ SR judge 的输出必须可追溯到证据：原始 instruction、目标信息�
 输出建议：
 
 - benchmark 汇总输出放在 `evaluation/benchmarks/uav_flow/outputs/`。
-- 临时手动诊断输出可以放在 `tests/manual_outputs/uav_flow_eval/`。
+- 临时手动诊断输出写入新的
+  `runs/experiments/uav_flow_eval/<timestamp>/` 目录。
 - UAV-Agent 原始 run artifacts 仍保留在 `runs/<run_id>/...`。
 - UAV-Flow 原始结果目录可作为对照来源，但第一版不依赖其 runner 输出。
 

@@ -39,15 +39,14 @@ from src.agent.planning.model_action_planner import ModelActionPlanner
 from src.agent.safety import SafetySupervisor
 from src.env_client import SimulatorEnvClient, load_observation_profile
 from src.runtime.configs import TaskExecutionOptions
-from src.runtime.configs.action_config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
-from src.runtime.configs.model_config import load_model_config
-from src.runtime.configs.safety_config import load_uav_safety_config
+from src.agent.config import load_model_config
+from src.runtime.factory import RuntimeFactory
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
-from src.runtime.runners.task_runtime import TaskRuntime
 from src.sim_server.server import SimulationServer
 from src.uav import pose_delta, pose_from_observation
+from src.uav.config import load_uav_action_config, load_uav_safety_config
 
 
 BASIC_INSTRUCTIONS = [
@@ -315,20 +314,19 @@ def instructions_from_task_suite(path: Path, group: str, task_id: str | None) ->
     return [instruction for instruction in instructions if instruction]
 
 
-def make_runtime(args: argparse.Namespace, client, recorder, model_config, action_config, safety_config) -> TaskRuntime:
+def make_runtime(args: argparse.Namespace, client, recorder, model_config, action_config, safety_config):
     """Construct the same runtime stack used by interactive operation.
 
     The demo injects concrete parser/planner/safety dependencies here so the
     rest of the file can stay focused on session orchestration and reporting.
     """
 
-    return TaskRuntime(
+    return RuntimeFactory().create_task_runtime(
         client,
         recorder,
         planner=ModelActionPlanner(model_config),
         safety=SafetySupervisor(safety_config),
         shutdown_policy=args.shutdown_policy,
-        action_config=action_config,
         model_config=model_config,
     )
 
@@ -486,8 +484,12 @@ def compact_summary(summary: dict[str, Any]) -> dict[str, Any]:
         "artifact_counts": summary.get("artifact_inventory", {}).get("counts", {}),
         "inspect_files": {
             "state": str(Path(summary["run_dir"]) / "state" / "latest_state.json"),
-            "planner_context": str(Path(summary["run_dir"]) / "contexts" / "latest_context.json"),
-            "planner_model_context": str(Path(summary["run_dir"]) / "contexts" / "latest_action_planner_model_context.json"),
+            "instruction_envelope": str(
+                Path(summary["run_dir"]) / "contexts" / "instruction_envelope.json"
+            ),
+            "planner_context": str(
+                Path(summary["run_dir"]) / "contexts" / "latest_checkpoint.json"
+            ),
             "demo_summary": str(Path(summary["run_dir"]) / "demo" / "summary.json"),
         },
         "shutdown_events": summary["shutdown_events"],

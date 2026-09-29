@@ -24,7 +24,7 @@ def build_parser():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--knowledge", help="Exact enabled knowledge catalog name")
     parser.add_argument("--reference", action="append", default=[])
-    parser.add_argument("--output-root", default="tests/manual_outputs")
+    parser.add_argument("--output-root", default="runs/experiments/plugin_system_demo")
     return parser
 
 
