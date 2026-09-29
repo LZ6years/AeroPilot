@@ -90,8 +90,12 @@ class FakeAirSimClient:
     def enableApiControl(self, enabled: bool, vehicle_name: str) -> None:
         self.connection_calls.append(("api", enabled, vehicle_name))
 
-    def armDisarm(self, armed: bool, vehicle_name: str) -> None:
+    def isApiControlEnabled(self, vehicle_name: str) -> bool:
+        return True
+
+    def armDisarm(self, armed: bool, vehicle_name: str) -> bool:
         self.connection_calls.append(("arm", armed, vehicle_name))
+        return True
 
     def reset(self) -> None:
         self.reset_calls += 1

@@ -156,6 +156,22 @@ def test_paused_multirotor_connect_arms_then_pauses(monkeypatch):
     assert client.pause_calls == [True]
 
 
+@pytest.mark.parametrize("failure", ["api", "arm"])
+def test_paused_multirotor_connect_rejects_failed_control_handshake(monkeypatch, failure):
+    client = FakeAirSimClient()
+    if failure == "api":
+        monkeypatch.setattr(client, "isApiControlEnabled", lambda name: False)
+    else:
+        monkeypatch.setattr(client, "armDisarm", lambda armed, name: False)
+    monkeypatch.setattr(FakeAirSim, "MultirotorClient", lambda **kwargs: client, raising=False)
+    adapter = AirSimUavAdapter(vehicle_name="Drone1", mode="Multirotor",
+                              control_strategy="paused_multirotor")
+    monkeypatch.setattr(adapter, "_airsim", lambda: FakeAirSim)
+    with pytest.raises(RuntimeError, match="API control|arming"):
+        adapter.connect()
+    assert adapter._client is None
+
+
 def test_paused_multirotor_action_failure_still_pauses(monkeypatch):
     adapter = AirSimUavAdapter(
         mode="Multirotor",

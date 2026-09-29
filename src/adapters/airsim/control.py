@@ -262,7 +262,10 @@ class PausedMultirotorControlStrategy(_AirSimStrategyBase):
         try:
             client.confirmConnection()
             client.enableApiControl(True, self.vehicle_name)
-            client.armDisarm(True, self.vehicle_name)
+            if not client.isApiControlEnabled(self.vehicle_name):
+                raise RuntimeError("AirSim API control was not enabled")
+            if not client.armDisarm(True, self.vehicle_name):
+                raise RuntimeError("AirSim arming was rejected")
             client.simPause(True)
         except Exception as exc:
             close_airsim_client(client, original_error=exc)
