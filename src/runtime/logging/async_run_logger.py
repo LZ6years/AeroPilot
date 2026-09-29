@@ -84,6 +84,25 @@ class AsyncRunLogger:
         if self._thread.is_alive():
             raise RuntimeError("AsyncRunLogger did not flush within 30 seconds")
 
+    def flush(self, timeout: float = 30.0) -> None:
+        """Wait until every write accepted before this call is durable.
+
+        The writer remains open so callers can freeze an audit boundary and
+        then record later lifecycle cleanup separately.  A queue barrier is
+        used instead of ``Queue.join()`` because other producers may continue
+        to enqueue work after the boundary this caller needs to observe.
+        """
+
+        completed = threading.Event()
+        with self._state_lock:
+            if self._closed:
+                raise RuntimeError("AsyncRunLogger is already closed")
+            self._queue.put(completed.set)
+        if not completed.wait(timeout):
+            raise RuntimeError(
+                f"AsyncRunLogger did not flush within {timeout:g} seconds"
+            )
+
     def _log(self, level: str, message: str, fields: dict[str, Any]) -> None:
         # Format one system log line with optional JSON fields.
         record = {

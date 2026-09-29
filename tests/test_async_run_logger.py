@@ -42,6 +42,34 @@ def test_async_run_logger_records_worker_write_errors(tmp_path):
     assert "error_type" in events[0]["payload"]
 
 
+def test_async_run_logger_flushes_prior_writes_without_closing(tmp_path):
+    logger = AsyncRunLogger(tmp_path)
+
+    logger.event("before_boundary", {"index": 1})
+    logger.flush()
+
+    first_snapshot = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [item["event"] for item in first_snapshot] == ["before_boundary"]
+
+    logger.event("after_boundary", {"index": 2})
+    logger.close()
+    final_snapshot = [
+        json.loads(line)
+        for line in (tmp_path / "events.jsonl")
+        .read_text(encoding="utf-8")
+        .splitlines()
+    ]
+    assert [item["event"] for item in final_snapshot] == [
+        "before_boundary",
+        "after_boundary",
+    ]
+
+
 def test_async_run_logger_close_serializes_with_enqueue(tmp_path):
     logger = AsyncRunLogger(tmp_path)
     entered = threading.Event()

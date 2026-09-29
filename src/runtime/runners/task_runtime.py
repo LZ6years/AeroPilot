@@ -176,16 +176,32 @@ class TaskRuntime:
         """Run one task through a fresh TaskSession and return MissionState."""
 
         with self._operation():
-            return self._run_task(
-                map_id,
-                instruction,
-                agent_id,
-                scene_policy,
-                stop_scene_on_finish,
-                scene_id,
-                execution_options,
-                protocol_context=protocol_context,
-            )
+            primary_error: Exception | None = None
+            try:
+                return self._run_task(
+                    map_id,
+                    instruction,
+                    agent_id,
+                    scene_policy,
+                    stop_scene_on_finish,
+                    scene_id,
+                    execution_options,
+                    protocol_context=protocol_context,
+                )
+            except Exception as exc:
+                primary_error = exc
+                raise
+            finally:
+                flush = getattr(self.recorder, "flush", None)
+                if callable(flush):
+                    try:
+                        flush()
+                    except Exception as flush_error:
+                        if primary_error is None:
+                            raise
+                        _attach_cleanup_error(
+                            primary_error, flush_error, "artifact_flush"
+                        )
 
     def _run_task(
         self,

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from dataclasses import replace
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from evaluation.benchmarks.uav_flow.config import UavFlowEvalConfig
 from evaluation.benchmarks.uav_flow.runner import (
     _is_recoverable_simulator_error,
 )
+from src.runtime.logging.async_run_logger import AsyncRunLogger
 
 
 def make_case() -> UavFlowCase:
@@ -491,7 +493,14 @@ def test_runner_warms_shared_stmr_session_once_before_cases():
 def test_runner_uses_independent_runtime_scene_session_per_case(tmp_path, monkeypatch):
     import evaluation.benchmarks.uav_flow.runner as runner_module
 
+    class SlowEventLogger(AsyncRunLogger):
+        def _append_jsonl(self, path, record):
+            if path == self.events_path:
+                threading.Event().wait(0.01)
+            super()._append_jsonl(path, record)
+
     monkeypatch.setattr(runner_module, "ModelActionPlanner", FakePlanner)
+    monkeypatch.setattr(runner_module, "AsyncRunLogger", SlowEventLogger)
     cases = [
         UavFlowCase(
             **{
