@@ -263,7 +263,7 @@
     <circle cx="1247" cy="614" r="4" fill="#ffffff"/>
     <circle cx="1260" cy="614" r="4" fill="#ffffff"/>
     <circle cx="1273" cy="614" r="4" fill="#ffffff"/>
-    <text x="1330" y="621" class="label">AgentMessage</text>
+    <text x="1330" y="621" class="label">AgentTranscript</text>
   </g>
 
   <!-- Outputs on right -->

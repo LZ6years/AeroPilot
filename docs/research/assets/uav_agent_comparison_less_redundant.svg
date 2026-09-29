@@ -155,7 +155,7 @@
   <circle cx="1344" cy="576" r="3.5" fill="#ffffff"/>
   <circle cx="1356" cy="576" r="3.5" fill="#ffffff"/>
   <circle cx="1368" cy="576" r="3.5" fill="#ffffff"/>
-  <text x="1465" y="582" text-anchor="middle" class="label">AgentMessage</text>
+  <text x="1465" y="582" text-anchor="middle" class="label">AgentTranscript</text>
 
   <!-- Right outcomes -->
   <line x1="1595" y1="318" x2="1630" y2="318" stroke="#2e7d32" stroke-width="3" stroke-dasharray="8 6" marker-end="url(#arrow-green)"/>

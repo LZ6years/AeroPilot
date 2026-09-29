@@ -71,7 +71,7 @@ UAV-VLN 可以理解为无人机版本的视觉语言导航。它要求无人机
 | 任务接口专属化 | 不同任务有不同输入、动作空间、环境接口和评估协议 | 用统一 UAV-Agent Runtime 承载任务执行，通过 task adapter 接入不同 benchmark |
 | 任务知识专属化 | 搜索策略、安全规则、位置描述和完成判断常写在具体任务流程中 | 用 Skill Knowledge 注入任务经验和飞行知识 |
 | 记忆上下文专属化 | 图像、位姿、轨迹、地图和历史观察常被加工成特定任务格式 | 用 Multimodal Memory 和 ContextModule 统一上下文表达 |
-| 交互机制专属化 | 对话、求助、提问和最终回答常绑定具体任务或模型 | 用 AgentMessage 和 HumanReplyLoop 统一过程回复、澄清提问和最终回答 |
+| 交互机制专属化 | 对话和工具结果常绑定具体任务或模型 | 用 AgentTranscript 统一保存 assistant/tool 对话和工具调用历史 |
 
 由此，本项目希望解决的核心问题是：
 
@@ -143,7 +143,7 @@ final: 找到了，售货机在右前方约 8 米处，这是对应图片。
    - Soft Skill Knowledge
    - Multimodal Memory
    - Safe Tool Execution
-   - AgentMessage: Progress / Question / Final
+   - AgentTranscript: assistant / tool / tool_calls
 
 对应的论文式表述为：
 
@@ -172,7 +172,7 @@ Unified UAV-Agent Core
 Evidence-based Report & Evaluation
 ```
 
-不同类型的 UAV-VLN 任务，例如 UAV-Flow、AerialVLN、TRAVEL / OpenUAV 和 InstanceNav，不再分别进入不同系统，而是统一进入 UAV-Agent Core。核心模块由任务知识、图像记忆和模型规划器组成。规划器一方面生成飞行动作，经安全校验后执行；另一方面生成 AgentMessage，用于过程汇报、澄清提问、风险提醒和最终回答。执行产生的新图像、位姿和轨迹会回流到记忆中，最终形成带图片、轨迹、日志和自然语言回答的证据化报告。
+不同类型的 UAV-VLN 任务，例如 UAV-Flow、AerialVLN、TRAVEL / OpenUAV 和 InstanceNav，不再分别进入不同系统，而是统一进入 UAV-Agent Core。核心模块由任务知识、图像记忆和模型规划器组成。规划器生成带原生 tool calls 的 assistant turn，经安全校验后执行；tool result 以 tool turn 回写 AgentTranscript。执行产生的新图像、位姿和轨迹会回流到记忆中，最终形成带图片、轨迹、日志和完整对话证据的报告。
 
 ## 8. 本项目可以强调的创新点
 
@@ -190,7 +190,7 @@ Evidence-based Report & Evaluation
 
 ### 8.4 人机通信闭环
 
-AgentMessage 机制让无人机不仅会行动，还会汇报、提问和给出最终答案。这一点适合区别于只输出轨迹或动作的传统 UAV-VLN 方法。
+AgentTranscript 让无人机的 assistant 决策、tool calls 和 tool results 可以按真实时序追溯。这一点适合区别于只输出轨迹或动作的传统 UAV-VLN 方法。
 
 ### 8.5 渐进式评估路线
 
@@ -210,7 +210,7 @@ AgentMessage 机制让无人机不仅会行动，还会汇报、提问和给出�
 
 当前实现可按以下顺序推进：
 
-1. 完善 AgentMessage：支持 progress、question、warning、final。
+1. 完善 AgentTranscript 与 Provider Request 的审计和回放能力，不引入第二套消息分类协议。
 2. 接入简单视觉信息：让模型能基于图片上下文规划和回答。
 3. 打通 question 阻塞与用户回复回流。
 4. 完成任务到观察、规划、执行、回复、最终答案的闭环。

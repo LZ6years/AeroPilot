@@ -46,7 +46,7 @@ UAV-Flow 论文中的 Flow task 关注短程、细粒度、语言引导 UAV 控�
 |---|---|
 | UAV-Flow 资源 | 提供 `test_jsons/*.json`、`classified_instr.json`、DowntownWest/UnrealCV 场景参考、`reference_path_preprocessed` 和 nDTW 口径 |
 | UAV-Agent eval runner | 读取 benchmark case，初始化 UnrealCV 场景，启动 UAV-Agent 原生闭环，保存轨迹和评估输入 |
-| UAV-Agent runtime | 使用自己的 observation、context、planner、tool action、phase transition、AgentMessage 和停止条件 |
+| UAV-Agent runtime | 使用自己的 observation、context、planner、tool action、状态转换、AgentTranscript 和停止条件 |
 | benchmark evaluator | 对齐 UAV-Agent 轨迹与 UAV-Flow reference path，计算 nDTW，生成 LLM-assisted SR 报告 |
 | UAV-Flow 原始 runner | 只作为参考实现和数据格式参考，不作为本项目控制 loop |
 
@@ -64,9 +64,9 @@ UAV-Flow 原始 `batch_run_act_all.py` 是“环境 loop + HTTP policy”模式�
 
 本项目不采用这个方向，原因是：
 
-- UAV-Agent 已经有自己的 `TaskRuntime` 闭环，包括 planner、contract validator、safety、automatic observation、phase transition judge 和 AgentMessage。
+- UAV-Agent 已经有自己的 `TaskRuntime` 闭环，包括 planner、contract validator、safety、automatic observation、状态转换，以及按 assistant/tool 顺序持久化的 AgentTranscript。
 - UAV-Agent planner 输出的是 `uav.move_body`、`uav.turn_relative`、`uav.hover` 等 tool action，不是 UAV-Flow 的 4 维 action token。
-- UAV-Agent 的停止条件应由 phase transition、window limit、safety 和 final AgentMessage 决定。
+- UAV-Agent 的停止条件应由运行时状态转换、window limit、safety 和任务完成状态决定。
 - 如果强行兼容 `/predict`，benchmark 协议会污染主架构，评估结果也难以解释。
 
 明确结论：
@@ -101,7 +101,7 @@ flowchart LR
 5. 采集 RGB 和 pose，转成 UAV-Agent observation。
 6. 默认 image module 将最近 RGB 作为 `model_inputs[type=image]` 传给 planner。
 7. UAV-Agent 按自己的 runtime loop 输出并执行 tool action。
-8. 保存 trajectory、run artifacts、planner context、动作和 AgentMessage。
+8. 保存 trajectory、run artifacts、Provider Request、动作和 AgentTranscript。
 9. 用 `reference_path_preprocessed` 计算 nDTW。
 10. 用 LLM-assisted SR judge 判断语义成功，并保留人工复核字段。
 
@@ -160,10 +160,10 @@ UAV-Flow 的 `image/proprio` 只作为数据来源参考，不作为本项目接
 
 停止条件使用 UAV-Agent 当前机制：
 
-- phase transition judge 输出 `complete_task`。
-- phase window limit 触发 loop guard。
+- `runtime.report_completed` 更新 MissionState 的任务完成状态。
+- physical window limit 触发 TaskLoop guard。
 - safety hover 或其他 safety intervention 中止继续推进。
-- final AgentMessage 记录最终结果。
+- AgentTranscript 记录真实 assistant/tool 对话历史；需要审计 Provider 输入时读取已捕获的 Provider Request。
 - runtime shutdown policy 负责收尾。
 
 UAV-Flow 的 near-zero action、progress、done 逻辑只作为论文和原始实现背景，不作为本项目停止条件。

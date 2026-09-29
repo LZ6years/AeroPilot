@@ -207,31 +207,19 @@ model_inputs = [
 - `metadata.mock` 正确标注
 - mock/missing frame 不要伪造成真实视觉证据
 
-## 7. 现有 multimodal image 插件参考
+## 7. 当前默认实现
 
-当前已有参考实现：
-
-```text
-plugins/research/multimodal_image/context_modules/image.py
-```
-
-它做了这些事：
-
-- 继承 `DefaultImageContextModule`
-- 读取 latest RGB metadata
-- 如果 RGB 可用且模型配置可用，调用视觉模型生成 caption
-- 把 caption 放进 `content.visual_description`
-- 把 planner 可读文本放进 `model_inputs`
-- 失败时保守 fallback，不阻塞 context build
-
-你可以照这个结构写自己的 image processor。
+当前正式图像链由 `src/memory/context/modules/image/` 提供。默认模块读取
+FlightMemory 中的 RGB frame 引用，生成 checkpoint 的 image model input；历史图片
+选择继续由同一个模块的 `select_history_images()` 实现。自定义模块应复用通用
+`ContextModule` 与 `ContextModuleContribution` 契约，不依赖已删除的研究 caption 插件。
 
 ## 8. 如何验证
 
 最小验证：
 
 ```powershell
-python -m pytest tests/test_context_builder.py::test_context_builder_runs_custom_multimodal_image_only_when_configured -q
+& 'F:\conda_env\flyagent\python.exe' -m pytest tests/test_context_builder.py tests/test_model_context_v2.py -q
 ```
 
 如果你新增了自己的插件，建议新增一个测试：

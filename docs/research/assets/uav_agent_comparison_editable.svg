@@ -147,7 +147,7 @@
     <rect x="1335" y="365" width="135" height="56" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
     <text x="1402" y="399" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#102a43">Safe Execution</text>
     <rect x="1258" y="445" width="150" height="56" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2"/>
-    <text x="1333" y="479" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#102a43">AgentMessage</text>
+    <text x="1333" y="479" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="700" fill="#102a43">AgentTranscript</text>
   </g>
 
   <!-- Shared loop -->

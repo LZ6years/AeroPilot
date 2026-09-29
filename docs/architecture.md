@@ -22,23 +22,27 @@ CLI / Evaluation / Interactive session
 flowchart LR
     CLI[CLI / Evaluation] --> F[RuntimeFactory]
     F --> R[TaskRuntime facade]
-    R --> S[SceneSessionService]
-    R --> L[InstructionLoop]
+    R --> S[SceneLifecycleService]
+    R --> TS[TaskSession]
+    R --> L[TaskLoop]
     L --> T[TurnExecutor]
     T --> P[PhysicalWindowExecutor]
     T --> RO[ReadOnlyBatchExecutor]
-    R --> J[RuntimeJournal]
-    R --> C[ContextCheckpointService]
+    L --> J[RuntimeJournal]
+    TS --> C[ContextCheckpointService]
+    S --> E[FlightEvidenceRecorder]
+    T --> E
     C --> B[ModelContextBuilder]
     L --> PL[ModelActionPlanner]
     PL --> HP[HistoryProjector]
     HP --> MA[RequestAssembler + MediaHydrator]
 ```
 
-`TaskRuntime.run_task()` 保留场景获取、preflight、循环委托、终态与 cleanup。
-instruction 级可变数据位于 `InstructionSession`；循环计数和 planner 时序属于
-`InstructionLoop`；回合验证与分支属于 `TurnExecutor`；物理批、稳定等待、自动
-观测和运动测量属于 `PhysicalWindowExecutor`。
+`TaskRuntime.run_task()` 只负责运行锁、TaskSession 创建、场景与循环委托、终态
+cleanup。task 级可变数据位于 `TaskSession`；循环计数和 planner 时序属于
+`TaskLoop`；回合验证与分支属于 `TurnExecutor`；物理事务、稳定等待、自动观测和
+运动测量属于 `PhysicalWindowExecutor`。`FlightEvidenceRecorder` 在同一调用内同步
+更新 MissionState、FlightMemory 引用和持久化记录。
 
 ## Context 所有权
 

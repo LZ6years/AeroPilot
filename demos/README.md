@@ -43,7 +43,6 @@ runs/plugin_system_demo_<timestamp>/
   03_selection_result.json
   04_loaded_skill_summaries.json
   05_latest_checkpoint.json
-  06_research_image_context.json
 ```
 
 先读 `plugin_system_walkthrough.md`。它会按代码链路解释：
@@ -53,7 +52,7 @@ runs/plugin_system_demo_<timestamp>/
 - selector 如何选择 skill
 - `SkillContentLoader` 如何展开正文
 - `DefaultSkillsContextModule` 如何生成 `skills` fragment
-- `ContextModuleRegistry` 如何加载 `research.multimodal_image`
+- `ContextModuleRegistry` 如何装配默认 Context Module 与启用的插件模块
 
 ---
 
@@ -178,27 +177,24 @@ F:\conda_env\flyagent\python.exe demos/real_engine_instruction_demo.py --env-pat
 - 读取模型配置和 UAV 配置。
 - 启动或连接真实 UE/AirSim。
 - 接收自然语言 instruction。
-- 用 `TaskParser` 解析 semantic plan。
-- 由 runtime 构建 `PlannerContext`。
-- 用 `ModelActionPlanner` 生成 action steps。
+- 由 runtime 创建单任务状态和 Context V2 checkpoint。
+- 用 `ModelActionPlanner` 生成原生 assistant/tool-call turn。
 - 用 `ToolContractValidator` 校验动作契约。
 - 用 `SafetySupervisor` 做最终安全审查。
 - 通过 `ToolDispatcher` 执行 UAV 动作。
 - 每个 motion step 后执行 stabilization。
-- 每个 phase window 后自动采集 RGB/depth/pose。
-- 执行后构造 phase transition context，让模型判断继续当前阶段、推进下一阶段或完成任务。
+- 每个 physical window 后自动采集 RGB/depth/pose。
+- assistant turn 和 tool result 按真实顺序写入 AgentTranscript，再进入下一轮规划。
 - 写出 run 目录和 demo summary。
 
 适合看：
 
 - 整个上层 pipeline 如何连接。
-- 当前任务被拆成哪些 phase。
-- 每个 phase 模型输出了什么 action。
+- 每一轮模型输出了哪些 tool calls。
 - action 是否执行成功。
 - 自动 observation 是否采集成功。
-- `latest_state.current_phase_progress` 是否合理。
 - `latest_checkpoint` 的动态状态是否与 state 同源。
-- coupled phase decision 是否判断阶段完成。
+- runtime-control 是否正确完成或停止任务。
 - memory 是否随着多轮 instruction 增长。
 
 重点输出：
@@ -206,7 +202,6 @@ F:\conda_env\flyagent\python.exe demos/real_engine_instruction_demo.py --env-pat
 ```text
 runs/real_engine_basic_instruction_<timestamp>/
   state/latest_state.json
-  state/semantic_plan.json
   state/flight_memory.json
   memory/instructions.jsonl
   memory/actions.jsonl
@@ -241,15 +236,15 @@ runs/<run_id>/eval/metrics.json
 第一层读 `demos/real_engine_instruction_demo.py`：
 
 - `main()`：读取配置、启动 server、创建 runtime、循环执行 instruction。
-- `make_runtime()`：把 `TaskParser`、`ModelActionPlanner`、`SafetySupervisor` 注入 `TaskRuntime`。
-- `build_state_summary()`：从 run 输出中提取 action、observation、phase progress 摘要。
+- `make_runtime()`：把 `ModelActionPlanner`、`SafetySupervisor` 和工具依赖注入 `TaskRuntime`。
+- `build_state_summary()`：从 run 输出中提取 action、observation 和 artifact 摘要。
 - `build_session_summary()`：生成本次 demo 的聚合 summary。
 
 第二层读 `src/runtime/runners/task_runtime.py`：
 
-- 这里是真正执行 phase window 的地方。
-- action 执行、stabilization、automatic observation、coupled phase decision 都在 runtime 里发生。
-- phase 是否完成不是 demo 文件里的固定规则，而是执行动作并采集 observation 后，由 runtime 构造判断上下文，再让模型输出 phase transition。
+- 这里是长期 Runtime facade；它创建单任务 session、准备 scene，并调用 task loop。
+- assistant turn 的分类、read-only 调度和 physical window 执行由 task 子模块协作完成。
+- 任务是否完成由 runtime-control tool call 更新 MissionState，不由 demo 文件推导。
 
 第三层按问题继续读：
 
@@ -284,12 +279,6 @@ src/runtime/control/stabilization.py
 ```
 
 看每个 motion step 后如何等待 UAV 稳定。
-
-```text
-src/agent/phase.py
-```
-
-看 phase transition 数据结构和完成标准 helper。
 
 ## 结论
 

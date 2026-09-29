@@ -1,5 +1,9 @@
 # 参考项目说明
 
+Status: Historical
+
+> 历史参考资料。下列本机路径和旧架构说明不属于当前 Runtime 或 Context V2 契约。
+
 ## 1. AirNavigation
 
 路径：
