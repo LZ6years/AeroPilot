@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from src.env_client.base import EnvClient
 from src.env_client.schemas import ActionResult, Observation
-from src.plugins import PluginRegistry
-from src.plugins.skills.dispatcher import SkillCapabilityDispatcher
-from src.plugins.skills.knowledge_service import KnowledgeService
-from src.tools.registry import ToolRegistry, default_registry
+from src.tools.registry import ToolRegistry
 from src.tools.schemas import ReadExecutionHints
 from src.tools.validation import validate_tool_args
 
@@ -29,15 +28,14 @@ class ToolDispatcher:
     def __init__(
         self,
         env_client: EnvClient,
-        registry: ToolRegistry | None = None,
-        plugin_registry: PluginRegistry | None = None,
-        knowledge_service: KnowledgeService | None = None,
+        registry: ToolRegistry,
+        capability_dispatcher: Any | None = None,
+        knowledge_service: Any | None = None,
     ) -> None:
         # Keep the environment client and available tool registry.
         self.env_client = env_client
-        self.plugin_registry = plugin_registry or PluginRegistry.from_config()
-        self.registry = registry or default_registry(self.plugin_registry)
-        self.skill_capabilities = SkillCapabilityDispatcher(self.plugin_registry)
+        self.registry = registry
+        self.skill_capabilities = capability_dispatcher
         # The task owner creates a new service for each instruction. Never
         # construct an implicit shared delivery cache in the dispatcher.
         self.knowledge_service = knowledge_service
@@ -64,6 +62,8 @@ class ToolDispatcher:
             )
         if spec.kind == "skill_capability":
             self._validate_input_schema(spec.input_schema, args)
+            if self.skill_capabilities is None:
+                raise ValueError("skill capability dispatcher is not configured")
             return self.skill_capabilities.call(scene_instance_id, agent_id, tool_name, args, runtime_context)
         if spec.kind != "uav_primitive":
             raise ValueError(f"Tool {tool_name} is not an action tool")

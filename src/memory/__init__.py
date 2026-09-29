@@ -1,17 +1,17 @@
-"""Runtime memory system for FlyAgent planner context composition."""
+"""Runtime evidence memory and Model Context V2 composition."""
 
-from src.memory.context.composer import ContextComposer
+from src.memory.context.builder import ModelContextBuilder
 from src.memory.flight_memory import FlightMemory
 from src.memory.context.registry import ContextModuleRegistry
-from src.memory.context.schemas import ContextFragment, TaskContextInput
+from src.memory.context.contracts import ContextFragment, TaskContextInput
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 
 __all__ = [
-    "ContextComposer",
     "ContextFragment",
     "ContextModuleRegistry",
     "FlightMemory",
     "MemoryEventWriter",
     "MemoryRecordReader",
+    "ModelContextBuilder",
     "TaskContextInput",
 ]

@@ -1,4 +1,4 @@
-"""Load UAV primitive safety limits."""
+"""Load shared UAV primitive safety limits."""
 
 from __future__ import annotations
 
@@ -14,9 +14,6 @@ class UavSafetyConfig:
     max_vertical_velocity_mps: float = 3.0
     max_move_duration_sec: float = 8.0
     max_yaw_scan_extent_deg: float = 480.0
-    # A real viewpoint change starts a new stationary visual-search segment.
-    # The threshold is deliberately larger than normal pose jitter and smaller
-    # than the project's nominal 2-4 metre translation primitives.
     yaw_scan_recharge_distance_m: float = 0.5
 
     @classmethod
@@ -51,9 +48,12 @@ class UavSafetyConfig:
         }
 
 
-def load_uav_safety_config(path: str | Path = "configs/uav_safety_config.json") -> UavSafetyConfig:
+def load_uav_safety_config(
+    path: str | Path = "configs/uav_safety_config.json",
+) -> UavSafetyConfig:
     config_path = Path(path)
     if not config_path.exists():
         return UavSafetyConfig()
-    data = json.loads(config_path.read_text(encoding="utf-8-sig"))
-    return UavSafetyConfig.from_dict(data)
+    return UavSafetyConfig.from_dict(
+        json.loads(config_path.read_text(encoding="utf-8-sig"))
+    )

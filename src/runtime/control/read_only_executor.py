@@ -51,20 +51,57 @@ class ReadOnlyBatchExecutor:
         self._event("read_call_completed" if result.ok else "read_call_failed", job)
         return result
 
-    def execute(self, jobs):
+    def execute(self, jobs, *, on_completed=None):
+        """Deliver each result on the caller thread, then return declaration order.
+
+        A callback failure stops submission and disables further callbacks: the
+        persistence consumer is no longer trustworthy. Tool failures, in contrast,
+        still allow successful in-flight work to be delivered during shutdown.
+        """
         jobs = list(jobs)
         self._event("read_batch_started", count=len(jobs), config=self.config.to_dict())
         pending = list(range(len(jobs)))
         results = [None] * len(jobs)
         running, held_keys, capability_counts = {}, set(), Counter()
         pool = None
+        callback_failed = False
+        primary_error = None
+
+        def deliver(index, result):
+            nonlocal callback_failed
+            results[index] = result
+            if on_completed is not None and not callback_failed:
+                try:
+                    on_completed(index, result)
+                except BaseException:
+                    callback_failed = True
+                    raise
+
+        def collect(completed):
+            # Harvest the whole ready set even if one Future raises. Sorting is
+            # deterministic for ties, not an assertion about completion time.
+            nonlocal primary_error
+            for future in sorted(completed, key=lambda value: running[value]):
+                index = running.pop(future)
+                hint = jobs[index].hints
+                if hint.serial_key:
+                    held_keys.remove(hint.serial_key)
+                if hint.category == "capability":
+                    capability_counts[hint.capability_key] -= 1
+                if future.cancelled():
+                    continue
+                try:
+                    deliver(index, future.result())
+                except BaseException as exc:
+                    if primary_error is None:
+                        primary_error = exc
         try:
             for job in jobs:
                 self._event("read_call_queued", job)
             if len(jobs) <= 1 or self.config.max_workers == 1:
                 while pending:
                     index = pending.pop(0)
-                    results[index] = self._invoke(jobs[index])
+                    deliver(index, self._invoke(jobs[index]))
                 return results
             pool = ThreadPoolExecutor(max_workers=self.config.max_workers, thread_name_prefix="flyagent-read")
             while pending or running:
@@ -101,15 +138,14 @@ class ReadOnlyBatchExecutor:
                 if not running:
                     raise RuntimeError("Read scheduler has pending jobs but no runnable work")
                 completed, _ = wait(running, return_when=FIRST_COMPLETED)
-                for future in completed:
-                    index = running.pop(future)
-                    hint = jobs[index].hints
-                    if hint.serial_key:
-                        held_keys.remove(hint.serial_key)
-                    if hint.category == "capability":
-                        capability_counts[hint.capability_key] -= 1
-                    results[index] = future.result()
+                collect(completed)
+                if primary_error is not None:
+                    raise primary_error
             return results
+        except BaseException as exc:
+            if primary_error is None:
+                primary_error = exc
+            raise
         finally:
             for index in pending:
                 self._event("read_call_cancelled", jobs[index], reason="batch_exit_before_submission")
@@ -119,5 +155,8 @@ class ReadOnlyBatchExecutor:
             if pool:
                 # Running Python/native work cannot be safely killed. No scene
                 # cleanup or next model turn may race unfinished read work.
+                while running:
+                    completed, _ = wait(running, return_when=FIRST_COMPLETED)
+                    collect(completed)
                 pool.shutdown(wait=True, cancel_futures=True)
             self._event("read_batch_finished", count=len(jobs), returned=sum(r is not None for r in results))

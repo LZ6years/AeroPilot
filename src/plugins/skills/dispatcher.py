@@ -18,8 +18,8 @@ from src.plugins.contracts.skill import (
 
 
 class SkillCapabilityDispatcher:
-    def __init__(self, plugin_registry: PluginRegistry | None = None) -> None:
-        self.plugin_registry = plugin_registry or PluginRegistry.from_config()
+    def __init__(self, plugin_registry: PluginRegistry) -> None:
+        self.plugin_registry = plugin_registry
 
     def call(
         self,

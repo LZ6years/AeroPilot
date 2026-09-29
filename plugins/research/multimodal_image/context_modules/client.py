@@ -18,8 +18,8 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
-from src.memory.context.schemas import TaskContextInput
-from src.runtime.configs.model_config import ModelConfig, load_model_config
+from src.memory.context.contracts import TaskContextInput
+from src.agent.config import ModelConfig, load_model_config
 
 from .constants import (
     DEFAULT_VISUAL_DESCRIPTION_MODEL,

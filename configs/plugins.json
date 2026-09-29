@@ -9,14 +9,13 @@
       "knowledge.uav_flight",
       "capabilities.visual_grounding"
     ],
-    "disabled": []
+    "disabled": ["capabilities.flight_experience"]
   },
   "context_modules": {
-    "instruction": "default",
     "skills": "default",
     "image": "default",
     "pose": "default",
-    "action": "default",
+    "motion": "default",
     "map": "default"
   },
   "context_options": {

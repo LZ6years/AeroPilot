@@ -3,39 +3,38 @@
 from __future__ import annotations
 
 from typing import Any
-import copy
-
 from src.memory.context.modules.base import ContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, TaskContextInput
-from src.plugins import PluginRegistry
+from src.memory.context.contracts import (
+    ContextFragment,
+    ContextModuleResult,
+    FragmentAudit,
+    MemorySourceBundle,
+    TaskContextInput,
+)
 
 class DefaultSkillsContextModule(ContextModule):
     """Only expose the enabled knowledge directory and instruction load index."""
     name = "skills"
     priority = 95
 
-    def __init__(self, *, plugin_registry: PluginRegistry | None = None) -> None:
-        self.plugin_registry = plugin_registry or PluginRegistry.from_config()
+    def __init__(self, *, warnings: list[str] | None = None) -> None:
+        self.warnings = tuple(warnings or ())
 
-    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
-        # The context offers a directory, never calls a model or loads a
-        # body. The instruction-scoped knowledge service owns delivery.
-        catalog = [{"name": skill.name, "description": skill.description}
-                   for skill in self.plugin_registry.skill_catalog.skills
-                   if skill.capability is None]
-        return ContextFragment(
-            name=self.name, enabled=True, source=self.__class__.__name__,
-            content={"knowledge_catalog": catalog,
-                     "loaded_knowledge": copy.deepcopy(stage_context.loaded_knowledge)},
-            confidence="high", budget=BudgetSpec(priority=self.priority),
-            warnings=list(self.plugin_registry.warnings),
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextModuleResult:
+        # Catalog entries are instruction-stable and live in InstructionEnvelope.
+        return ContextModuleResult(
+            ContextFragment(self.name, {}),
+            FragmentAudit(
+                name=self.name,
+                source=self.__class__.__name__,
+                confidence="high",
+                warnings=self.warnings,
+            ),
         )
 
     def describe_output(self) -> dict[str, Any]:
         return {
             "summary": "Enabled knowledge directory and loaded versions, not knowledge bodies.",
-            "content_fields": {
-                "knowledge_catalog": "Enabled knowledge names and descriptions, not loaded bodies.",
-                "loaded_knowledge": "Instruction-scoped names, versions and references already loaded.",
-            },
+            "model_fields": {},
+            "audit_fields": {},
         }

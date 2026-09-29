@@ -18,15 +18,15 @@ from src.cli.display import ANSI_BLUE, ANSI_DIM, CliNarrativePanel, clear_screen
 from src.env_client import load_observation_profile
 from src.env_client.simulator_client import SimulatorEnvClient
 from src.runtime.configs import TaskExecutionOptions
-from src.runtime.configs.action_config import load_uav_action_config
+from src.uav.config import load_uav_action_config
 from src.runtime.configs.map_config import load_map_config
-from src.runtime.configs.model_config import load_model_config
-from src.runtime.configs.safety_config import load_uav_safety_config
+from src.agent.config import load_model_config
+from src.uav.config import load_uav_safety_config
 from src.runtime.logging.async_run_logger import AsyncRunLogger
 from src.runtime.logging.run_store import RunStore
-from src.runtime.runners.agent_runtime import AgentRuntime
-from src.runtime.runners.interactive_runtime import InteractiveTaskSession, compact_turn_summary
+from src.runtime.task.interactive_session import InteractiveTaskSession, compact_turn_summary
 from src.runtime.runners.task_runtime import TaskRuntime
+from src.runtime.factory import RuntimeFactory
 from src.sim_server.server import SimulationServer
 
 
@@ -126,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
             show_display=not args.headless,
             save_artifacts=args.save_artifacts,
         )
-        runtime = AgentRuntime(
+        runtime = RuntimeFactory().create_smoke_runtime(
             SimulatorEnvClient(
                 server,
                 observation_profile=observation_profile,
@@ -212,7 +212,7 @@ def run_task(args: argparse.Namespace) -> None:
             action_config=action_config,
             save_artifacts=args.save_artifacts,
         )
-        runtime = TaskRuntime(
+        runtime = RuntimeFactory().create_task_runtime(
             SimulatorEnvClient(
                 server,
                 observation_profile=observation_profile,
@@ -221,7 +221,6 @@ def run_task(args: argparse.Namespace) -> None:
             planner=ModelActionPlanner(model_config),
             safety=SafetySupervisor(safety_config),
             shutdown_policy=args.shutdown_policy,
-            action_config=action_config,
             model_config=model_config,
         )
         state = runtime.run_task(
@@ -303,7 +302,7 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
             "interactive_cli": True,
         },
     )
-    runtime = TaskRuntime(
+    runtime = RuntimeFactory().create_task_runtime(
         SimulatorEnvClient(
             server,
             observation_profile=observation_profile,
@@ -312,7 +311,6 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
         planner=ModelActionPlanner(model_config),
         safety=SafetySupervisor(safety_config),
         shutdown_policy=args.shutdown_policy,
-        action_config=action_config,
         event_sink=live_printer,
         model_config=model_config,
     )
@@ -436,7 +434,7 @@ def handle_slash_command(command: str, session: InteractiveTaskSession) -> bool:
     if name == "/context":
         print_json(
             {
-                "latest_context": str(session.run_dir / "contexts" / "latest_context.json"),
+                "latest_checkpoint": str(session.run_dir / "contexts" / "latest_checkpoint.json"),
                 "latest_state": str(session.run_dir / "state" / "latest_state.json"),
                 "flight_memory": str(session.run_dir / "state" / "flight_memory.json"),
                 "semantic_plan": str(session.run_dir / "state" / "semantic_plan.json"),

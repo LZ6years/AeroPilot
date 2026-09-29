@@ -11,6 +11,14 @@ import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
+from src.memory.context.contracts import (
+    InstructionEnvelope,
+    MediaRef,
+    StateCheckpoint,
+    TRANSCRIPT_SCHEMA,
+    assert_binary_free,
+)
+
 if TYPE_CHECKING:
     from src.memory.stores.event_store import MemoryEventWriter
     from src.tools.registry import ToolRegistry
@@ -71,6 +79,16 @@ class ToolResult:
     safety_interventions: list[dict[str, Any]] = field(default_factory=list)
     model_inputs: list[dict[str, Any]] = field(default_factory=list)
 
+    def __post_init__(self) -> None:
+        assert_binary_free(self.model_inputs)
+        for item in self.model_inputs:
+            if item.get("type") != "image":
+                continue
+            raw_ref = item.get("media_ref")
+            if not isinstance(raw_ref, dict):
+                raise ValueError("V2 tool image inputs require media_ref")
+            MediaRef(**raw_ref)
+
     def to_dict(self) -> dict[str, Any]:
         data = {
             "tool_call_id": self.tool_call_id,
@@ -120,24 +138,29 @@ class AgentTranscript:
         self.items: list[TranscriptEvent] = []
         self.instruction_id: str | None = None
 
-    def start_instruction(self, instruction: str, instruction_id: str | None) -> None:
+    def start_instruction(
+        self,
+        instruction: str,
+        instruction_id: str | None,
+        envelope: InstructionEnvelope,
+    ) -> None:
         self.items = []
         self.instruction_id = instruction_id
+        if envelope.instruction_id != instruction_id:
+            raise ValueError("instruction envelope identity mismatch")
+        self._append("instruction_envelope", envelope)
         self._append("user_instruction", {"instruction": instruction})
 
-    def append_state(self, context: dict[str, Any], observation_id: str | None) -> None:
-        self._append(
-            "state_checkpoint",
-            {
-                "observation_id": observation_id,
-                "context": copy.deepcopy(context),
-            },
-        )
+    def append_state(self, checkpoint: StateCheckpoint) -> None:
+        """Append the exact immutable checkpoint published by Runtime."""
+
+        self._append("state_checkpoint", checkpoint)
 
     def append_assistant(self, turn: AssistantTurn) -> None:
         self._append("assistant_turn", turn)
 
     def append_tool_result(self, result: ToolResult) -> None:
+        assert_binary_free(result.to_dict())
         self._append("tool_result", result)
 
     def append_protocol_feedback(self, message: str) -> None:
@@ -153,18 +176,24 @@ class AgentTranscript:
 
         self._append("task_terminal", copy.deepcopy(payload))
 
-    def latest_context(self) -> dict[str, Any]:
+    def instruction_envelope(self) -> dict[str, Any]:
+        for item in self.items:
+            if item.kind == "instruction_envelope":
+                return _payload_dict(item.payload)
+        return {}
+
+    def latest_checkpoint(self) -> StateCheckpoint | None:
         for item in reversed(self.items):
             if item.kind == "state_checkpoint":
-                return copy.deepcopy(item.payload["context"])
-        return {}
+                return copy.deepcopy(item.payload)
+        return None
 
     def latest_observation_id(self) -> str | None:
         """Return the ID attached to the newest chronological state checkpoint."""
 
         for item in reversed(self.items):
             if item.kind == "state_checkpoint":
-                value = item.payload.get("observation_id")
+                value = getattr(item.payload, "observation_id", None)
                 return str(value) if value else None
         return None
 
@@ -182,7 +211,7 @@ class AgentTranscript:
         references: set[str] = set()
         for item in self.items[:limit]:
             if item.kind == "state_checkpoint":
-                observation_id = item.payload.get("observation_id")
+                observation_id = getattr(item.payload, "observation_id", None)
                 if observation_id:
                     references.add(str(observation_id))
             elif item.kind == "assistant_turn":
@@ -200,14 +229,25 @@ class AgentTranscript:
         """Return isolated events so request projections cannot mutate history."""
         return tuple(copy.deepcopy(self.items))
 
+    def snapshot_before(self, event_count: int) -> tuple[TranscriptEvent, ...]:
+        """Copy the prefix ending at an exclusive, previously recorded boundary.
+
+        Runtime can append and validate a turn before paying for the control
+        tool's pre-turn evidence view. Never include the submitted turn itself.
+        """
+        if type(event_count) is not int or not 0 <= event_count <= len(self.items):
+            raise ValueError("event_count must be an integer within the transcript")
+        return tuple(copy.deepcopy(self.items[:event_count]))
+
     def provider_messages(self, registry: "ToolRegistry") -> list[dict[str, Any]]:
-        """Compatibility entry: full history, using the shared projector."""
-        from src.agent.history_projection import HistoryProjector
+        """Project the complete V2 history through the shared projector."""
+        from src.agent.context.projection import HistoryProjector
 
         return HistoryProjector().project(self, registry).messages
 
     def to_dict(self) -> dict[str, Any]:
         return {
+            "schema_version": TRANSCRIPT_SCHEMA,
             "instruction_id": self.instruction_id,
             "items": [
                 {
@@ -219,11 +259,13 @@ class AgentTranscript:
         }
 
     def _append(self, kind: str, payload: Any) -> None:
+        assert_binary_free(_payload_dict(payload))
         self.items.append(TranscriptEvent(kind, payload))
         self.writer.write_transcript_event(
             instruction_id=self.instruction_id,
             kind=kind,
-            payload=_strip_binary(_payload_dict(payload)),
+            payload=_payload_dict(payload),
+            schema_version=TRANSCRIPT_SCHEMA,
         )
 
 
@@ -233,18 +275,3 @@ def _payload_dict(payload: Any) -> dict[str, Any]:
         value = to_dict()
         return dict(value) if isinstance(value, dict) else {"value": value}
     return dict(payload) if isinstance(payload, dict) else {"value": payload}
-
-
-def _strip_binary(value: Any) -> Any:
-    """Keep durable transcript records readable while in-memory history stays exact."""
-
-    if isinstance(value, dict):
-        return {
-            key: "[provider_media_rehydrated_from_artifact]"
-            if key == "data" and isinstance(item, str) and item.startswith("data:image/")
-            else _strip_binary(item)
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_strip_binary(item) for item in value]
-    return value

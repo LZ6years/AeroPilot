@@ -1,14 +1,28 @@
-"""Planner context composition and pluggable context modules."""
+"""Model Context V2 contracts, builder and pluggable modules."""
 
-from src.memory.context.composer import ContextComposer
+from src.memory.context.builder import ModelContextBuilder
 from src.memory.context.registry import ContextModuleConfigError, ContextModuleRegistry
-from src.memory.context.schemas import ContextFragment, MemorySourceBundle, TaskContextInput
+from src.memory.context.contracts import (
+    ContextFragment,
+    ContextModuleResult,
+    FragmentAudit,
+    InstructionEnvelope,
+    MediaRef,
+    MemorySourceBundle,
+    StateCheckpoint,
+    TaskContextInput,
+)
 
 __all__ = [
-    "ContextComposer",
     "ContextFragment",
     "ContextModuleConfigError",
     "ContextModuleRegistry",
+    "ContextModuleResult",
+    "FragmentAudit",
+    "InstructionEnvelope",
+    "MediaRef",
     "MemorySourceBundle",
+    "ModelContextBuilder",
+    "StateCheckpoint",
     "TaskContextInput",
 ]

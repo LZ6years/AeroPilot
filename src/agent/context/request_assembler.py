@@ -1,0 +1,144 @@
+"""Assemble final provider content from V2 contracts without semantic cleanup."""
+
+from __future__ import annotations
+
+import copy
+import json
+from typing import Any
+
+from src.agent.context.media import MediaHydrator
+
+
+class RequestAssembler:
+    """Convert already-owned model fields and selected media into messages."""
+
+    def __init__(self, media_hydrator: MediaHydrator | None = None) -> None:
+        self.media_hydrator = media_hydrator or MediaHydrator()
+
+    @staticmethod
+    def memory_system_messages(envelope: dict[str, Any]) -> list[dict[str, str]]:
+        messages: list[dict[str, str]] = []
+        for key, label in (
+            ("identity", "FlyAgent identity and operating rules"),
+            ("user_preferences", "User preferences"),
+        ):
+            value = envelope.get(key)
+            if isinstance(value, dict) and value:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": f"{label}:\n{json.dumps(value, ensure_ascii=False)}",
+                    }
+                )
+        return messages
+
+    @staticmethod
+    def instruction_context_message(
+        envelope: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        payload = {
+            "schema_version": envelope.get("schema_version"),
+            "protocol_context": envelope.get("protocol_context") or "",
+            "knowledge_catalog": copy.deepcopy(
+                envelope.get("knowledge_catalog") or []
+            ),
+            "static_module_guidance": copy.deepcopy(
+                envelope.get("static_module_guidance") or []
+            ),
+        }
+        if not any(
+            payload[key]
+            for key in (
+                "protocol_context",
+                "knowledge_catalog",
+                "static_module_guidance",
+            )
+        ):
+            return None
+        return {
+            "role": "user",
+            "content": "INSTRUCTION CONTEXT\n"
+            + json.dumps(payload, ensure_ascii=False),
+        }
+
+    def checkpoint_content(
+        self,
+        checkpoint: dict[str, Any],
+        *,
+        model_inputs: list[dict[str, Any]],
+        timeline_role: str,
+    ) -> str | list[dict[str, Any]]:
+        parts: list[dict[str, Any]] = []
+        for item in model_inputs:
+            input_type = item.get("type")
+            if input_type == "text":
+                text = item.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append({"type": "text", "text": text})
+                continue
+            if input_type != "image" or not isinstance(item.get("media_ref"), dict):
+                continue
+            ref = dict(item["media_ref"])
+            prepared = self.media_hydrator.hydrate(ref)
+            label = _media_label(ref, timeline_role)
+            if label:
+                parts.append({"type": "text", "text": label})
+            parts.append(
+                {
+                    "type": "image_url",
+                    "image_url": {"url": prepared.data_url},
+                }
+            )
+
+        text_payload = {
+            "schema_version": checkpoint.get("schema_version"),
+            "checkpoint_id": checkpoint.get("checkpoint_id"),
+            "reason": checkpoint.get("reason"),
+            "observation_id": checkpoint.get("observation_id"),
+            "task_plan": copy.deepcopy(checkpoint.get("task_plan")),
+            "loaded_knowledge": copy.deepcopy(
+                checkpoint.get("loaded_knowledge") or []
+            ),
+            "fragments": [
+                {
+                    "name": fragment.get("name"),
+                    "model_content": copy.deepcopy(
+                        fragment.get("model_content") or {}
+                    ),
+                }
+                for fragment in checkpoint.get("fragments", [])
+                if isinstance(fragment, dict)
+                and (fragment.get("model_content") or {})
+            ],
+        }
+        text = json.dumps(text_payload, ensure_ascii=False)
+        if not parts:
+            return text
+        return [*parts, {"type": "text", "text": text}]
+
+
+def _media_label(ref: dict[str, Any], timeline_role: str) -> str:
+    observation_id = str(ref.get("observation_id") or "unknown")
+    frame_id = str(ref.get("frame_id") or "unknown")
+    lines = [
+        f"{timeline_role} observation_id={observation_id} frame_id={frame_id}"
+    ]
+    width, height = ref.get("width"), ref.get("height")
+    if isinstance(width, int) and isinstance(height, int):
+        lines.append(f"scene_size={width}x{height}")
+        display_width = ref.get("display_width")
+        display_height = ref.get("display_height")
+        if isinstance(display_width, int) and isinstance(display_height, int):
+            lines.append(f"display_size={display_width}x{display_height}")
+        lines.append(f"scene_bounds_in_display_pixels=x:[0,{width}) y:[0,{height})")
+        if ref.get("color_bar_height", 0):
+            lines.append(
+                "The bottom color bar is not scene content and cannot establish "
+                "an exact decimal distance by itself."
+            )
+    usage = ref.get("usage")
+    if isinstance(usage, str) and usage.strip():
+        lines.append(usage.strip())
+    if timeline_role == "CURRENT":
+        lines.append("Only CURRENT establishes current visibility and the next action.")
+    return "\n".join(lines)

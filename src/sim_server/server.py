@@ -15,7 +15,7 @@ from src.env_client.schemas import (
     PortPolicy,
     SceneInstance,
 )
-from src.runtime.configs.action_config import UavActionConfig
+from src.uav.config import UavActionConfig
 
 from .airsim_settings import AirSimSettingsRenderer
 from .backends.base import SimulationBackend

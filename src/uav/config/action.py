@@ -1,4 +1,4 @@
-"""Load unified UAV primitive action scale settings."""
+"""Load shared UAV primitive action scales."""
 
 from __future__ import annotations
 
@@ -18,7 +18,6 @@ class UavActionConfig:
 
     @classmethod
     def from_dict(cls, data: dict) -> "UavActionConfig":
-        # Normalize JSON values into one fixed action scale profile.
         return cls(
             linear_velocity_mps=float(data.get("linear_velocity_mps", cls.linear_velocity_mps)),
             vertical_velocity_mps=float(data.get("vertical_velocity_mps", cls.vertical_velocity_mps)),
@@ -29,7 +28,6 @@ class UavActionConfig:
         )
 
     def to_dict(self) -> dict[str, float]:
-        # Return a JSON-safe view for logging and demo output.
         return {
             "linear_velocity_mps": self.linear_velocity_mps,
             "vertical_velocity_mps": self.vertical_velocity_mps,
@@ -40,10 +38,12 @@ class UavActionConfig:
         }
 
 
-def load_uav_action_config(path: str | Path = "configs/uav_action_config.json") -> UavActionConfig:
-    # Load the shared primitive action scale config, falling back to defaults if absent.
+def load_uav_action_config(
+    path: str | Path = "configs/uav_action_config.json",
+) -> UavActionConfig:
     config_path = Path(path)
     if not config_path.exists():
         return UavActionConfig()
-    data = json.loads(config_path.read_text(encoding="utf-8-sig"))
-    return UavActionConfig.from_dict(data)
+    return UavActionConfig.from_dict(
+        json.loads(config_path.read_text(encoding="utf-8-sig"))
+    )

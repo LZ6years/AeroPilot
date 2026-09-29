@@ -16,16 +16,13 @@ def handle(payload: dict) -> SkillCapabilityResult:
         observation=observation,
         observation_id=str(args.get("observation_id") or ""),
         query=str(args.get("query") or "").strip(),
-        include_distance=bool(args.get("include_distance")),
         run_dir=str(runtime_context.get("run_dir") or "") or None,
         tool_call_id=str(runtime_context.get("tool_call_id") or "") or None,
     )
     candidates = result["data"]["candidates"]
-    with_distance = bool(args.get("include_distance"))
     message = (
         f"Located {len(candidates)} candidate(s)"
-        + (f"; {sum(c.get('distance_status') == 'ok' and c.get('distance_m') is not None for c in candidates)} valid distance estimate(s). Check distance_status; execution success is not measurement validity."
-           if with_distance else "; distance not requested (not_requested).")
+        + f"; {sum(c.get('distance_status') == 'ok' and c.get('distance_m') is not None for c in candidates)} valid distance estimate(s). Check distance_status; execution success is not measurement validity."
     )
     if not candidates:
         message = ("No sufficiently confident detection candidates were returned. "

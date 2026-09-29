@@ -8,91 +8,98 @@ import time
 from collections.abc import Callable
 from typing import Any
 from src.agent.mission_state import MissionState
-from src.agent.planning.tool_contract_validator import NativeTurnValidationError, read_call_signature, validate_native_turn
-from src.agent.planning.model_action_planner import AgentProtocolError, ModelActionPlanner
-from src.agent.planning.schemas import PlannedStep
 from src.agent.safety import SafetySupervisor
-from src.agent.transcript import AgentToolCall, AgentTranscript, AssistantTurn, ToolResult
-from src.env_client import ActionResult, EnvClient, SceneInstance
+from src.agent.transcript import AgentTranscript, AssistantTurn
+from src.env_client import EnvClient, SceneInstance
 from src.env_client.errors import SceneRecoveryRequired
 from src.llm.audit import redact_provider_value
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
-from src.perception.context_builder import ObservationContextBuilder
+from src.memory.context.builder import ModelContextBuilder
 from src.perception.raw_observation import RawObservation
-from src.plugins import PluginRegistry
-from src.plugins.skills.knowledge_service import KnowledgeService
-from src.plugins.contracts.skill import SKILL_ARTIFACT_REFS_KEY, SKILL_MODEL_INPUTS_KEY
-from src.runtime.control.executor import execute_builtin_control
-from src.runtime.control.read_only_executor import ReadJob, ReadOnlyBatchExecutor
 from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
 from src.runtime.control.stabilization import UavStabilizer
-from src.runtime.configs.action_config import UavActionConfig
-from src.runtime.configs.model_config import ModelConfig
+from src.agent.config import ToolLoopConfig
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.configs.task_execution_options import InitialPose, TaskExecutionOptions
 from src.runtime.middleware import ToolTelemetryMiddleware
+from src.runtime.context import ContextCheckpointService
+from src.runtime.task import RuntimeJournal
+from src.runtime.task.loop import InstructionLoop, TaskLoopGuard
+from src.runtime.task.physical_window import (
+    PHYSICAL_TRACE_SCHEMA_VERSION,
+    PhysicalWindowExecutor,
+)
+from src.runtime.task.scene_session import SceneSessionService
+from src.runtime.task.session import InstructionSession
+from src.runtime.task.turn_executor import TurnExecutor
 from src.tools.dispatcher import ToolDispatcher
-from src.tools.registry import default_registry
-from src.uav import clean_pose_for_model, pose_measurements
-
-PHYSICAL_TRACE_SCHEMA_VERSION = "physical_window_v2"
+from src.uav import clean_pose_for_model
 
 class TaskRuntime:
     SHUTDOWN_POLICIES = {"hover", "land", "none"}
     SCENE_POLICIES = {"isolated", "reuse_running"}
 
     def __init__(
-        self, env_client: EnvClient, recorder, planner=None,
+        self, env_client: EnvClient, recorder, planner,
+        context_builder: ModelContextBuilder,
+        tool_dispatcher: ToolDispatcher,
+        knowledge_service_factory: Callable[[], Any],
         safety: SafetySupervisor | None = None, shutdown_policy: str = "hover",
-        action_config: UavActionConfig | None = None,
         stabilization_config: UavStabilizationConfig | None = None,
         event_sink: Callable[[dict[str, Any]], None] | None = None,
-        runtime_loop_guard_windows: int = 300, enable_action_planner_debug: bool = False,
-        context_builder: ObservationContextBuilder | None = None,
-        model_config: ModelConfig | None = None, plugin_registry: PluginRegistry | None = None,
+        runtime_loop_guard_windows: int = 300,
+        tool_loop_config: ToolLoopConfig | None = None,
         read_only_execution_config: ReadOnlyExecutionConfig | None = None,
     ) -> None:
         if shutdown_policy not in self.SHUTDOWN_POLICIES:
             raise ValueError(f"Unsupported shutdown policy: {shutdown_policy}")
         if isinstance(runtime_loop_guard_windows, bool) or not isinstance(runtime_loop_guard_windows, int) or runtime_loop_guard_windows < 1:
             raise ValueError("runtime_loop_guard_windows must be a positive integer")
-        if planner is None and model_config is None:
-            raise ValueError("TaskRuntime requires planner or explicit model_config")
         self.env_client, self.recorder = env_client, recorder
-        self.model_config = model_config or ModelConfig()
+        self.tool_loop_config = (
+            tool_loop_config
+            or getattr(planner, "tool_loop_config", None)
+            or ToolLoopConfig()
+        )
         self.read_only_execution_config = read_only_execution_config or ReadOnlyExecutionConfig()
-        self.planner = planner or ModelActionPlanner(self.model_config)
+        self.planner = planner
         self.safety = safety or SafetySupervisor()
         self.shutdown_policy = shutdown_policy
         self.runtime_loop_guard_windows = runtime_loop_guard_windows
-        self.enable_action_planner_debug = enable_action_planner_debug
-        self.plugin_registry = plugin_registry or PluginRegistry.from_config()
-        self.tools = ToolDispatcher(env_client, registry=default_registry(self.plugin_registry, self.safety.safety_config),
-                                    plugin_registry=self.plugin_registry)
+        self.tools = tool_dispatcher
+        self.knowledge_service_factory = knowledge_service_factory
         self.stabilizer = UavStabilizer(self.tools, recorder, stabilization_config)
-        self.event_sink = event_sink
-        self.context_builder = context_builder or ObservationContextBuilder(
-            safety_config=self.safety.safety_config,
-            plugin_registry=self.plugin_registry)
-        if isinstance(self.planner, ModelActionPlanner):
-            from src.agent.history_projection import HistoryProjector
-            registry = getattr(getattr(self.context_builder, "composer", None), "registry", None)
-            if registry is None or not callable(getattr(registry, "history_bindings", None)):
-                raise ValueError("Model context builder must expose history bindings")
-            self.planner.history_projector = HistoryProjector(registry.history_bindings())
-        self.tool_telemetry = ToolTelemetryMiddleware(self.tools, self._debug_event)
+        self.journal = RuntimeJournal(recorder, event_sink)
         self.memory_writer = MemoryEventWriter(recorder.run_dir)
         self.memory_reader = MemoryRecordReader(recorder.run_dir)
         self.agent_transcript = AgentTranscript(self.memory_writer)
-        self._preflight_scene_ids = set()
-        self._unusable_scene_ids = set()
-        self._active_reused_scenes = {}
+        self.context_builder = context_builder
+        self.checkpoints = ContextCheckpointService(
+            self.context_builder, self.agent_transcript, recorder
+        )
+        self.tool_telemetry = ToolTelemetryMiddleware(self.tools, self._debug_event)
+        self.loop_guard = TaskLoopGuard(
+            self.tool_loop_config.max_consecutive_protocol_rejections
+        )
+        self.physical_windows = PhysicalWindowExecutor(
+            self, self._pose_from_observation
+        )
+        self.turn_executor = TurnExecutor(self, self.physical_windows)
+        self.instruction_loop = InstructionLoop(
+            self, self.loop_guard, self.turn_executor
+        )
         self._active_flight_memories = {}
         self._state_flight_memories = {}
+        self.scene_sessions = SceneSessionService(
+            self.env_client,
+            record_contract=lambda scene: self._record_scene_contract(scene),
+            debug_event=self._debug_event,
+            on_forget=self._forget_scene_memory,
+        )
         self._current_turn_agent_messages = []
         self._decision_index = 0
-        self._persisted_provider_media = set()
+        self.journal.reset_instruction()
 
     def run_task(
         self, map_id: str, instruction: str, agent_id: str = "uav_1",
@@ -109,30 +116,42 @@ class TaskRuntime:
             protocol_context=protocol_context or "",
             observation_modalities=options.observation_modalities,
             max_physical_windows=self.runtime_loop_guard_windows,
-            max_nonphysical_rounds=self.model_config.max_tool_rounds)
+            max_nonphysical_rounds=self.tool_loop_config.max_rounds)
         self._decision_index = 0
         self._current_turn_agent_messages = []
-        self._persisted_provider_media = set()
-        self.tools.knowledge_service = KnowledgeService(self.plugin_registry.skill_catalog)
-        scene = self._resolve_scene(map_id, scene_policy, scene_id)
+        self.journal.reset_instruction()
+        projector = getattr(self.planner, "history_projector", None)
+        hydrator = getattr(getattr(projector, "assembler", None), "media_hydrator", None)
+        if hydrator is not None:
+            hydrator.clear()
+        self.tools.knowledge_service = self.knowledge_service_factory()
+        scene = self.scene_sessions.acquire(map_id, scene_policy, scene_id)
+        instruction_session: InstructionSession | None = None
         primary_error = None
         instruction_ready = False
         try:
-            state.connected = scene.scene_instance_id in self._preflight_scene_ids
+            state.connected = self.scene_sessions.is_preflighted(scene)
             state.airborne = bool(state.connected and scene.capabilities and scene.capabilities.requires_takeoff)
             memory = self._resolve_flight_memory(map_id, scene, agent_id, scene_policy, instruction, state)
             self._state_flight_memories[state.run_id] = memory
-            self.agent_transcript.start_instruction(instruction, memory.active_instruction_id)
+            instruction_session = InstructionSession(
+                scene=scene,
+                agent_id=agent_id,
+                state=state,
+                memory=memory,
+                transcript=self.agent_transcript,
+            )
+            self.checkpoints.begin_instruction(state, memory)
             self._event("instruction_started", {
                 "instruction": instruction, "instruction_id": memory.active_instruction_id,
                 "protocol_context": protocol_context,
-                "loop_schema": "unified_tool_loop_v1", "physical_trace_schema": PHYSICAL_TRACE_SCHEMA_VERSION})
+                "loop_schema": "unified_tool_loop_v2", "physical_trace_schema": PHYSICAL_TRACE_SCHEMA_VERSION})
             instruction_ready = True
-            if scene.scene_instance_id in self._unusable_scene_ids:
-                raise SceneRecoveryRequired("Scene must be recreated before another instruction")
+            self.scene_sessions.assert_session_usable(instruction_session)
             self._validate_execution_options(scene, options)
             self._prepare_scene_for_task(scene, agent_id, state, options)
-            self._execute_instruction_loop(scene, agent_id, state)
+            self.checkpoints.publish(state, memory, "instruction_start")
+            self.instruction_loop.run(instruction_session)
             # Terminal evidence precedes any optional land/scene cleanup. A
             # refresh is not a formal window and never changes motion accounting.
             self._finalize_instruction(scene, agent_id, state)
@@ -143,7 +162,12 @@ class TaskRuntime:
         except Exception as exc:
             primary_error = exc
             if isinstance(exc, SceneRecoveryRequired):
-                self._unusable_scene_ids.add(scene.scene_instance_id)
+                if instruction_session is not None:
+                    self.scene_sessions.mark_session_unusable(
+                        instruction_session
+                    )
+                else:
+                    self.scene_sessions.mark_unusable(scene)
             state.record_error(type(exc).__name__, str(exc))
             try:
                 self._write_state(state)
@@ -162,10 +186,10 @@ class TaskRuntime:
         finally:
             if stop_scene_on_finish:
                 try:
-                    self.env_client.stop_scene(scene.scene_instance_id)
-                    self._preflight_scene_ids.discard(scene.scene_instance_id)
-                    self._forget_scene(scene)
-                    self._debug_event("scene_stopped", scene.to_dict())
+                    if instruction_session is not None:
+                        self.scene_sessions.stop_session(instruction_session)
+                    else:
+                        self.scene_sessions.stop(scene)
                 except Exception as cleanup_error:
                     try:
                         self._event("scene_cleanup_failed", {"error_type": type(cleanup_error).__name__, "error": str(cleanup_error)})
@@ -174,6 +198,13 @@ class TaskRuntime:
                     if primary_error is None:
                         raise
                     _attach_cleanup_error(primary_error, cleanup_error, "scene_stop")
+            if hydrator is not None:
+                hydrator.clear()
+
+    def latest_turn_agent_messages(self) -> list[dict[str, Any]]:
+        """Return an isolated UI snapshot for InteractiveTaskSession."""
+
+        return copy.deepcopy(self._current_turn_agent_messages)
 
     def _finalize_instruction(self, scene, agent_id, state, *, scene_unusable=False) -> None:
         """Close the instruction with real final evidence; preserve cleanup errors."""
@@ -193,14 +224,15 @@ class TaskRuntime:
             try:
                 if not scene_unusable:
                     self._record_observation(scene, agent_id, state, list(state.observation_modalities), "task_terminal")
-                    context = self.context_builder.build(state, self._memory_for_state(state))
-                    self.agent_transcript.append_state(context, state.latest_observation.get("observation_id"))
+                    self.checkpoints.publish(
+                        state, self._memory_for_state(state), "task_terminal"
+                    )
             except Exception as exc:
                 failures.append(exc)
         terminal = {**self._state_summary(state),
                     "cleanup_errors": [{"error_type": type(e).__name__, "error": str(e)} for e in failures]}
         self.agent_transcript.append_task_terminal(terminal)
-        self._event("task_terminal", terminal)
+        self.journal.write_terminal(terminal)
         self._write_state(state)
         if failures:
             raise failures[0]
@@ -213,7 +245,7 @@ class TaskRuntime:
         scene_id: str | None = None,
     ) -> None:
         # Apply final shutdown policy and stop a reused scene owned by this runtime.
-        scene = self._active_reused_scenes.get(self._scene_key(map_id, scene_id))
+        scene = self.scene_sessions.reused(map_id, scene_id)
         if scene is None:
             self._debug_event("scene_stop_skipped", {"map_id": map_id, "scene_id": scene_id, "reason": "not_running"})
             return
@@ -226,10 +258,7 @@ class TaskRuntime:
             raise
         finally:
             try:
-                self.env_client.stop_scene(scene.scene_instance_id)
-                self._preflight_scene_ids.discard(scene.scene_instance_id)
-                self._forget_scene(scene)
-                self._debug_event("scene_stopped", scene.to_dict())
+                self.scene_sessions.stop(scene)
             except Exception as cleanup_error:
                 if primary_error is None:
                     raise
@@ -237,8 +266,8 @@ class TaskRuntime:
 
     def safe_hover_reused_scene(self, map_id: str, agent_id: str = "uav_1", scene_id: str | None = None) -> None:
         # Best-effort hover after an instruction failure in a reused scene.
-        scene = self._active_reused_scenes.get(self._scene_key(map_id, scene_id))
-        if scene is None or scene.scene_instance_id in self._unusable_scene_ids:
+        scene = self.scene_sessions.reused(map_id, scene_id)
+        if scene is None or self.scene_sessions.is_unusable(scene):
             self._debug_event("continuous_error_hover_skipped", {"reason": "not_running"})
             return
         if scene.capabilities and not scene.capabilities.supports("hover"):
@@ -264,43 +293,7 @@ class TaskRuntime:
         and initial observation still happen inside the first task instruction.
         """
 
-        return self._resolve_scene(map_id, "reuse_running", scene_id)
-
-    def _resolve_scene(self, map_id: str, scene_policy: str, scene_id: str | None) -> SceneInstance:
-        if scene_policy == "reuse_running":
-            key = self._scene_key(map_id, scene_id)
-            known_scene = self._active_reused_scenes.get(key)
-            scene = self.env_client.get_or_start_scene(map_id, scene_id)
-            self._active_reused_scenes[key] = scene
-            self._record_acquired_scene(
-                scene,
-                reused=known_scene is not None and known_scene.scene_instance_id == scene.scene_instance_id,
-            )
-            return scene
-
-        scene = self.env_client.start_scene(map_id, scene_id)
-        self._record_acquired_scene(scene, reused=False)
-        return scene
-
-    def _record_acquired_scene(self, scene: SceneInstance, *, reused: bool) -> None:
-        """Rollback acquisition if audit persistence fails before task startup.
-
-        An already reused scene stays owned by its existing caller. Preserve
-        the original persistence error even when rollback also fails.
-        """
-        try:
-            self._record_scene_contract(scene)
-            self._debug_event("scene_reused" if reused else "scene_started", scene.to_dict())
-        except Exception as original:
-            if not reused:
-                try:
-                    self.env_client.stop_scene(scene.scene_instance_id)
-                except Exception as cleanup_error:
-                    _attach_cleanup_error(original, cleanup_error, "scene_acquisition_rollback")
-                else:
-                    self._preflight_scene_ids.discard(scene.scene_instance_id)
-                    self._forget_scene(scene)
-            raise
+        return self.scene_sessions.acquire(map_id, "reuse_running", scene_id)
 
     def _record_scene_contract(self, scene: SceneInstance) -> None:
         """Persist deployment-neutral scene facts used by Runtime."""
@@ -379,7 +372,7 @@ class TaskRuntime:
         state: MissionState,
         options: TaskExecutionOptions,
     ) -> None:
-        first_scene_use = scene.scene_instance_id not in self._preflight_scene_ids
+        first_scene_use = not self.scene_sessions.is_preflighted(scene)
         if first_scene_use:
             self._run_preflight(scene, agent_id, state)
         if options.initial_pose is not None:
@@ -389,7 +382,7 @@ class TaskRuntime:
             # default pose. This prevents a visible/default-pose hover followed
             # by a large camera jump at the start of an evaluation episode.
             self._run_preflight_hover(scene, agent_id, state)
-            self._preflight_scene_ids.add(scene.scene_instance_id)
+            self.scene_sessions.mark_preflighted(scene)
 
         stabilization = None
         if first_scene_use or options.initial_pose is not None:
@@ -542,408 +535,6 @@ class TaskRuntime:
             },
         )
 
-    def _execute_physical_batch(
-        self,
-        scene: SceneInstance,
-        agent_id: str,
-        state: Any,
-        *,
-        steps: list[PlannedStep],
-        interventions: list[dict[str, Any]],
-        native_meta: dict[str, Any],
-        observation_before: dict[str, Any],
-        decision_id: str,
-        physical_window_index: int,
-        window_index: int,
-    ) -> tuple[list[dict[str, Any]], int | None, dict[str, Any], dict[str, Any]]:
-        """Execute one prevalidated Safety-reviewed batch, without planning.
-
-        The caller owns counters, terminal decisions and the window event.
-        This method owns action acknowledgements, failed/skipped ToolResults,
-        stabilization and the single after-observation. Shared telemetry receives
-        a null phase label solely for the versioned physical trace envelope.
-        """
-        if not 1 <= len(steps) <= 3:
-            raise ValueError("physical batch requires 1–3 steps")
-        submitted_calls = native_meta.get("physical_calls", [])
-        if submitted_calls and len(submitted_calls) != len(steps):
-            raise ValueError("physical calls and Safety-reviewed steps must match")
-        # Preflight every reviewed step before the first backend side effect;
-        # Safety may replace a turn with hover, so validate replacements too.
-        for step in steps:
-            if step.kind != "tool" or not step.tool:
-                raise ValueError("physical batches accept only tool steps")
-            if self.tools.registry.get(step.tool).runtime.effect != "physical":
-                raise ValueError("non-physical step in a physical batch")
-            self._validate_step_capability(scene, step.tool)
-        self._mark_before_last_action_window(state, observation_before)
-        executed_steps = []
-        native_physical_calls = list(native_meta.get("physical_calls", []))
-        failed_native_index: int | None = None
-        batch_error: Exception | None = None
-        for index, step in enumerate(steps):
-            payload = {"step_index": index, "step": step.to_dict()}
-            if step.kind != "tool" or not step.tool:
-                raise ValueError("runtime action plan requires tool steps; observation is automatic")
-            native_call = native_physical_calls[index] if index < len(native_physical_calls) else None
-            requested_tool = native_call.tool_name if native_call is not None else step.tool
-            relevant_interventions = [
-                dict(item)
-                for item in interventions
-                if item.get("tool") == requested_tool
-                and ("step_index" not in item or item["step_index"] == index)
-            ]
-            try:
-                result = self.tool_telemetry.call_step(
-                    scene_instance_id=scene.scene_instance_id,
-                    agent_id=agent_id,
-                    phase=None,
-                    window_index=window_index,
-                    step_index=index,
-                    tool=step.tool,
-                    args=step.args,
-                    pose_before=self._pose_from_observation(state.latest_observation),
-                    runtime_context={
-                        "latest_observation": dict(state.latest_observation),
-                        "observation_before": dict(observation_before),
-                        "run_dir": str(self.recorder.run_dir),
-                    },
-                )
-            except Exception as exc:
-                if not native_physical_calls:
-                    raise
-                from src.env_client import ActionResult
-
-                result = ActionResult(
-                    ok=False,
-                    action=step.tool,
-                    message=f"{type(exc).__name__}: {exc}",
-                    data={"error_type": type(exc).__name__, "error": str(exc)},
-                )
-            data = result.to_dict()
-            write_result = self._record_action(state, step.tool, step.args, data)
-            action_ref = write_result.get("action_ref") or {}
-            pose_ref = write_result.get("pose_ref") or {}
-            step_tracking = {
-                "step_index": index,
-                "tool_call_id": (
-                    native_call.tool_call_id if native_call is not None else None
-                ),
-                "requested_tool": requested_tool,
-                "tool": step.tool,
-                "effect": self.tools.registry.get(step.tool).runtime.effect,
-                "status": "ok" if result.ok else "error",
-                "action_ref": action_ref.get("ref"),
-                "result_pose_ref": pose_ref.get("ref"),
-                "requested_args": dict(
-                    native_call.args if native_call is not None else step.args
-                ),
-                "executed_args": dict(step.args),
-                "safety_interventions": relevant_interventions,
-            }
-            if native_call is not None:
-                transcript_result = ToolResult(
-                        tool_call_id=native_call.tool_call_id,
-                        tool_name=requested_tool,
-                        status="ok" if result.ok else "error",
-                        message=result.message,
-                        data=dict(result.data),
-                        result_ref=write_result["action_ref"].get("ref"),
-                        requested_args=dict(native_call.args),
-                        executed_args=dict(step.args),
-                        safety_interventions=relevant_interventions,
-                    )
-                self.agent_transcript.append_tool_result(transcript_result)
-                self._append_native_round_tool_result(native_meta, transcript_result)
-            if not result.ok:
-                if result.execution_state.get("requires_scene_reset"):
-                    batch_error = SceneRecoveryRequired(result.message)
-                executed_steps.append(
-                    {
-                        **payload,
-                        "tracking": step_tracking,
-                        "result": data,
-                        "stabilization": {
-                            "status": "skipped",
-                            "reason": "tool execution failed",
-                        },
-                    }
-                )
-                if not native_physical_calls:
-                    raise batch_error or RuntimeError(f"Action failed: {step.tool}: {result.message}")
-                failed_native_index = index
-                break
-            try:
-                stabilization = self.stabilizer.wait_after_step(
-                    scene.scene_instance_id,
-                    agent_id,
-                    None,
-                    step,
-                    capabilities=scene.capabilities,
-                    post_action_state=result.execution_state.get("post_action_state_token"),
-                )
-            except Exception as exc:
-                # The backend already acknowledged this action. Preserve that
-                # fact rather than rewriting its ToolResult as failed. Stop the
-                # batch, close unexecuted calls, and propagate the infrastructure
-                # error after capturing the best available final observation.
-                batch_error = exc
-                failed_native_index = index
-                stabilization = {"status": "error", "error_type": type(exc).__name__,
-                                 "error": str(exc)}
-            executed_steps.append(
-                {
-                    **payload,
-                    "tracking": step_tracking,
-                    "result": data,
-                    "stabilization": stabilization,
-                }
-            )
-            self._event(
-                "tool_step_completed",
-                {
-                    "decision_id": decision_id,
-                    "physical_window_index": physical_window_index,
-                    "step_index": index,
-                    "tool": step.tool,
-                    "ok": data.get("ok"),
-                    "stabilization": self._stabilization_summary(stabilization),
-                },
-            )
-            self._write_state(state)
-            if batch_error is not None:
-                break
-        if failed_native_index is not None:
-            for skipped_index, call in enumerate(
-                native_physical_calls[failed_native_index + 1 :],
-                start=failed_native_index + 1,
-            ):
-                transcript_result = ToolResult(
-                        tool_call_id=call.tool_call_id,
-                        tool_name=call.tool_name,
-                        status="skipped",
-                        message="skipped because an earlier physical call or stabilization failed",
-                        requested_args=dict(call.args),
-                    )
-                self.agent_transcript.append_tool_result(transcript_result)
-                self._append_native_round_tool_result(native_meta, transcript_result)
-                skipped_step = (
-                    steps[skipped_index]
-                    if skipped_index < len(steps)
-                    else None
-                )
-                if skipped_step is not None:
-                    executed_steps.append(
-                        {
-                            "step_index": skipped_index,
-                            "step": skipped_step.to_dict(),
-                            "tracking": {
-                                "step_index": skipped_index,
-                                "tool_call_id": call.tool_call_id,
-                                "requested_tool": call.tool_name,
-                                "tool": skipped_step.tool,
-                                "effect": self.tools.registry.get(
-                                    skipped_step.tool
-                                ).runtime.effect,
-                                "status": "skipped",
-                                "action_ref": None,
-                                "result_pose_ref": None,
-                                "requested_args": dict(call.args),
-                                "executed_args": None,
-                                "safety_interventions": [],
-                            },
-                            "result": {
-                                "ok": False,
-                                "status": "skipped",
-                                "message": "skipped because an earlier physical call or stabilization failed",
-                            },
-                            "stabilization": {
-                                "status": "skipped",
-                                "reason": "physical call was not executed",
-                            },
-                        }
-                    )
-            if not isinstance(batch_error, SceneRecoveryRequired):
-                try:
-                    self._try_hover(scene, agent_id, state)
-                except SceneRecoveryRequired as exc:
-                    batch_error = exc
-        observation_after: dict[str, Any] = {}
-        observation_error: Exception | None = None
-        try:
-            if not isinstance(batch_error, SceneRecoveryRequired):
-                observation_after = self._apply_automatic_observation_policy(scene, agent_id, state)
-        except Exception as exc:
-            observation_error = exc
-            if batch_error is None:
-                batch_error = exc
-                try:
-                    self._try_hover(scene, agent_id, state)
-                except SceneRecoveryRequired as recovery:
-                    batch_error = recovery
-        if batch_error is not None:
-            # The normal caller cannot publish a window after this method raises.
-            # Publish the actual partial evidence here; a missing after frame is
-            # explicitly unavailable, never replaced by the before observation.
-            self._event("physical_window_recorded", {
-                "schema_version": PHYSICAL_TRACE_SCHEMA_VERSION,
-                "decision_id": decision_id, "phase_key": None,
-                "window_index": physical_window_index,
-                "observation_before_id": observation_before.get("observation_id"),
-                "observation_after_id": observation_after.get("observation_id"),
-                "status": "error",
-                "ordered_steps": [item["tracking"] for item in executed_steps],
-                "error_type": type(batch_error).__name__, "error": str(batch_error),
-                "stabilization": [item["stabilization"] for item in executed_steps],
-                "observation_error": None if observation_error is None else {
-                    "error_type": type(observation_error).__name__, "error": str(observation_error)},
-            })
-            raise batch_error
-        window_measurements = pose_measurements(
-            self._pose_from_observation(observation_before),
-            self._pose_from_observation(observation_after),
-        )
-        return executed_steps, failed_native_index, observation_after, window_measurements
-
-    def _execute_instruction_loop(
-        self, scene: SceneInstance, agent_id: str, state: MissionState,
-    ) -> None:
-        """Run the phase-free tool protocol with caller-prepared scene/context.
-
-        Scene acquisition and final shutdown remain outside this method. Every
-        model round uses the same transcript; no parser, selector, phase commit
-        or synthetic one-phase plan is invoked. The caller must bind the new
-        ToolRegistry, instruction context and KnowledgeService before entry.
-        """
-        registry = self.tools.registry
-        allowed = {
-            spec.name for spec in registry.model_specs()
-            if spec.runtime.effect != "lifecycle"
-            and (not spec.metadata.get("backend_action") or scene.capabilities is None
-                 or scene.capabilities.supports(spec.metadata["backend_action"]))
-        }
-        seen_call_ids: set[str] = set()
-        executed_reads: set[tuple[str, str, str]] = set()
-        consecutive_rejections = 0
-        rejection_limit = self.model_config.max_consecutive_protocol_rejections
-        while not state.completed and not state.stopped:
-            context = self.context_builder.build(state, self._memory_for_state(state))
-            self.agent_transcript.append_state(context, state.latest_observation.get("observation_id"))
-            self._write_state(state)
-            if state.physical_window_count >= state.max_physical_windows:
-                state.mark_stopped("instruction_physical_window_limit", "runtime_loop_guard")
-                break
-            if state.nonphysical_round_count >= state.max_nonphysical_rounds:
-                state.mark_stopped("nonphysical_round_limit", "runtime_loop_guard")
-                break
-            if consecutive_rejections >= rejection_limit:
-                state.mark_stopped("consecutive_protocol_rejections", "runtime_loop_guard")
-                break
-            self._decision_index += 1
-            decision_id = f"decision_{self._decision_index:04d}"
-            try:
-                turn = self.planner.plan_turn(
-                    self.agent_transcript, registry, allowed_tool_names=allowed,
-                    decision_index=self._decision_index,
-                )
-            except AgentProtocolError as exc:
-                self._capture_instruction_exchange(decision_id, error_type=type(exc).__name__)
-                if exc.rejected_turn:
-                    self.agent_transcript.append_provider_rejection(exc.rejected_turn)
-                self.agent_transcript.append_protocol_feedback(str(exc))
-                state.record_nonphysical_round()
-                consecutive_rejections += 1
-                self._event("tool_turn_rejected", {"decision_id": decision_id, "error": str(exc)})
-                continue
-            except Exception as exc:
-                self._capture_instruction_exchange(decision_id, error_type=type(exc).__name__)
-                raise
-            self._capture_instruction_exchange(decision_id, turn=turn)
-            ids = [call.tool_call_id for call in turn.tool_calls]
-            # Invalid identities cannot be persisted as canonical calls: that
-            # would corrupt pairing even if rejected ToolResults were appended.
-            if len(set(ids)) != len(ids) or set(ids) & seen_call_ids or any(not item for item in ids):
-                self.agent_transcript.append_provider_rejection({
-                    "error": "tool call IDs must be instruction-wide unique",
-                    "content_present": bool(turn.public_intent),
-                    "content": turn.public_intent or None,
-                    "tool_calls": [call.to_dict() for call in turn.tool_calls],
-                })
-                self.agent_transcript.append_protocol_feedback("Use fresh non-empty tool_call_ids for every call.")
-                state.record_nonphysical_round()
-                consecutive_rejections += 1
-                continue
-            history_before_turn = self.agent_transcript.snapshot()
-            self.agent_transcript.append_assistant(turn)
-            try:
-                effect = validate_native_turn(
-                    turn, registry, allowed_names=allowed,
-                    latest_observation=state.latest_observation,
-                    prior_call_ids=seen_call_ids, executed_read_signatures=executed_reads,
-                )
-            except NativeTurnValidationError as exc:
-                seen_call_ids.update(ids)
-                for record in self._rejected_tool_results(turn.tool_calls, str(exc), rejection=exc.diagnostic):
-                    self.agent_transcript.append_tool_result(ToolResult(
-                        record["tool_call_id"], record["tool_name"], "rejected", str(exc),
-                        data=record["data"], requested_args=record["requested_args"],
-                    ))
-                self.agent_transcript.append_protocol_feedback(str(exc) + ". No call in this turn executed.")
-                state.record_nonphysical_round()
-                consecutive_rejections += 1
-                continue
-            seen_call_ids.update(ids)
-            if effect == "runtime_control":
-                state.record_nonphysical_round()
-                result = execute_builtin_control(turn.tool_calls[0], state, registry, history_before_turn)
-                self.agent_transcript.append_tool_result(result)
-                self._event("task_control_recorded", {
-                    "decision_id": decision_id, "tool_result": result.to_dict(),
-                })
-                if result.status == "rejected":
-                    self.agent_transcript.append_protocol_feedback(result.message)
-                    consecutive_rejections += 1
-                else:
-                    consecutive_rejections = 0
-                continue
-            if effect == "read_only":
-                state.record_nonphysical_round()
-                observation_id = str(state.latest_observation.get("observation_id") or "")
-                for call in turn.tool_calls:
-                    executed_reads.add(read_call_signature(observation_id, call.tool_name, call.args))
-                results = self._execute_native_read_calls(scene, agent_id, state, turn.public_intent, turn.tool_calls)
-                if self.tools.knowledge_service is not None:
-                    state.loaded_knowledge = self.tools.knowledge_service.loaded_index()
-                self._event("read_only_turn_recorded", {"decision_id": decision_id, "tool_results": results})
-                if all(result["status"] == "ok" for result in results):
-                    consecutive_rejections = 0
-                continue
-            steps = [PlannedStep.tool_step(call.tool_name, dict(call.args), turn.public_intent)
-                     for call in turn.tool_calls]
-            safety = self.safety.review_steps(steps, state, registry=registry)
-            before = copy.deepcopy(state.latest_observation)
-            state.begin_physical_window()
-            executed, failed, after, measurements = self._execute_physical_batch(
-                scene, agent_id, state, steps=safety.steps, interventions=safety.interventions,
-                native_meta={"physical_calls": turn.tool_calls}, observation_before=before,
-                decision_id=decision_id, physical_window_index=state.physical_window_count,
-                window_index=state.physical_window_count,
-            )
-            state.finish_physical_window(after, measurements)
-            self._maybe_recharge_visual_search_budget(state, measurements)
-            self._event("physical_window_recorded", {
-                "schema_version": PHYSICAL_TRACE_SCHEMA_VERSION,
-                "decision_id": decision_id, "phase_key": None,
-                "window_index": state.physical_window_count,
-                "observation_before_id": before.get("observation_id"),
-                "observation_after_id": after.get("observation_id"),
-                "status": "error" if failed is not None else "ok",
-                "ordered_steps": [item["tracking"] for item in executed],
-                "measurements": measurements,
-            })
-            consecutive_rejections = 0
-        self._write_state(state)
-
     def _capture_instruction_exchange(
         self, decision_id: str, *, turn: AssistantTurn | None = None, error_type: str | None = None,
     ) -> None:
@@ -960,11 +551,15 @@ class TaskRuntime:
         namespace = hashlib.sha256(str(instruction_id).encode("utf-8")).hexdigest()[:16]
         debug_ref = f"debug/tool_loop/{namespace}/{decision_id}.json"
         snapshot = {
-            "loop_schema": "unified_tool_loop_v1",
+            "loop_schema": "unified_tool_loop_v2",
             "instruction_id": instruction_id,
             "decision_id": decision_id, "decision_index": self._decision_index,
             "checkpoint_observation_id": self.agent_transcript.latest_observation_id(),
-            "model_context": redact_provider_value(self.agent_transcript.latest_context()),
+            "model_context": redact_provider_value(
+                self.agent_transcript.latest_checkpoint().to_dict()
+                if self.agent_transcript.latest_checkpoint() is not None
+                else {}
+            ),
             "model_rounds": [record],
         }
         self.recorder.write_json(debug_ref, snapshot)
@@ -973,7 +568,7 @@ class TaskRuntime:
         self._event("model_turn_recorded", {
             "decision_id": decision_id, "debug_ref": debug_ref,
             "instruction_id": instruction_id,
-            "loop_schema": "unified_tool_loop_v1",
+            "loop_schema": "unified_tool_loop_v2",
         })
 
     def _native_model_round_snapshot(
@@ -1005,118 +600,6 @@ class TaskRuntime:
         elif not exchange:
             record["capture_status"] = "provider_exchange_unavailable"
         return record
-
-    @staticmethod
-    def _rejected_tool_results(
-        calls: list[AgentToolCall],
-        reason: str,
-        *,
-        rejection: dict[str, Any] | None = None,
-    ) -> list[dict[str, Any]]:
-        """Describe Runtime-generated rejection results for decision review."""
-
-        diagnosis = dict(rejection or {"code": "invalid_turn_combination", "scope": "turn"})
-        source = diagnosis.get("source_tool_call_id")
-        return [
-            ToolResult(
-                tool_call_id=call.tool_call_id,
-                tool_name=call.tool_name,
-                status="rejected",
-                message=reason,
-                data={
-                    "rejection": {
-                        **diagnosis,
-                        "role": (
-                            ("source" if call.tool_call_id == source else "affected")
-                            if source else "turn_member"
-                        ),
-                        "executed": False,
-                    }
-                },
-                requested_args=dict(call.args),
-            ).to_dict()
-            for call in calls
-        ]
-
-    def _execute_native_read_calls(
-        self,
-        scene: SceneInstance,
-        agent_id: str,
-        state: MissionState,
-        public_intent: str,
-        calls: list[AgentToolCall],
-    ) -> list[dict[str, Any]]:
-        # Prevalidation belongs to the enclosing turn. Workers only dispatch
-        # isolated snapshots; all mission/memory/transcript writes stay below.
-        jobs = []
-        for call in calls:
-            args = copy.deepcopy(call.args)
-            context = {"latest_observation": copy.deepcopy(state.latest_observation),
-                       "run_dir": str(self.recorder.run_dir),
-                       "public_intent": public_intent, "tool_call_id": call.tool_call_id}
-            def invoke(tool=call.tool_name, args=args, context=context):
-                return self.tools.call(scene.scene_instance_id, agent_id, tool, args, runtime_context=context)
-            jobs.append(ReadJob(call.tool_call_id, call.tool_name,
-                                self.tools.read_execution_hints(call.tool_name, args), invoke))
-        executor = ReadOnlyBatchExecutor(self.read_only_execution_config,
-            self.tool_telemetry.read_event_sink(f"decision_{self._decision_index:04d}"))
-        results = executor.execute(jobs)
-        recorded_results: list[dict[str, Any]] = []
-        for call, result in zip(calls, results):
-            result_data = dict(result.data)
-            capability_artifact_refs = _pop_string_list(
-                result_data,
-                SKILL_ARTIFACT_REFS_KEY,
-            )
-            capability_model_inputs = _pop_dict_list(
-                result_data,
-                SKILL_MODEL_INPUTS_KEY,
-            )
-            data = result.to_dict()
-            data["data"] = result_data
-            write_result = self._record_action(state, call.tool_name, call.args, data)
-            transcript_result = ToolResult(
-                    tool_call_id=call.tool_call_id,
-                    tool_name=call.tool_name,
-                    status="ok" if result.ok else "error",
-                    message=result.message,
-                    data=result_data,
-                    artifact_refs=list(
-                        dict.fromkeys(
-                            [
-                                *capability_artifact_refs,
-                                *_result_artifact_refs(result_data),
-                            ]
-                        )
-                    ),
-                    result_ref=write_result["action_ref"].get("ref"),
-                    requested_args=dict(call.args),
-                    executed_args=dict(call.args),
-                    model_inputs=capability_model_inputs,
-                )
-            self.agent_transcript.append_tool_result(transcript_result)
-            recorded_results.append(transcript_result.to_dict())
-        return recorded_results
-
-    @staticmethod
-    def _append_native_round_tool_result(
-        native_meta: dict[str, Any], result: ToolResult
-    ) -> None:
-        """Attach post-acceptance ToolResults to the accepted model round."""
-
-        rounds = native_meta.get("model_rounds")
-        if not isinstance(rounds, list) or not rounds:
-            return
-        final_round = rounds[-1]
-        if not isinstance(final_round, dict):
-            return
-        outcome = final_round.get("runtime_outcome")
-        if not isinstance(outcome, dict):
-            outcome = {"status": "physical_batch_accepted", "feedback": None}
-            final_round["runtime_outcome"] = outcome
-        results = outcome.setdefault("tool_results", [])
-        if isinstance(results, list):
-            results.append(result.to_dict())
 
     def _maybe_recharge_visual_search_budget(
         self,
@@ -1255,7 +738,6 @@ class TaskRuntime:
                 overwrite=True,
             )
         self.recorder.write_json("debug/latest_observation.json", data)
-        self.recorder.write_json("contexts/latest_context.json", self.context_builder.build(state, self._memory_for_state(state)))
         return data
 
     def _mark_before_last_action_window(
@@ -1307,7 +789,7 @@ class TaskRuntime:
             self._debug_event("safety_hover_failed", {"error_type": type(exc).__name__, "error": str(exc)})
 
     def _run_shutdown(self, scene: SceneInstance, agent_id: str, state: MissionState) -> None:
-        if scene.scene_instance_id in self._unusable_scene_ids:
+        if self.scene_sessions.is_unusable(scene):
             self._debug_event("shutdown_skipped", {"reason": "scene_recovery_required"})
             return
         if self.shutdown_policy == "none" or not state.connected:
@@ -1355,34 +837,15 @@ class TaskRuntime:
         self._write_state(state)
 
     def _write_state(self, state: MissionState) -> None:
-        state_data = state.to_dict()
-        self.recorder.write_json("state/latest_state.json", state_data)
-        self.recorder.write_json("state/flight_memory.json", self._memory_for_state(state).to_dict())
-        self._debug_event("mission_state_updated", self._state_summary(state))
+        self.journal.write_state(
+            state, self._memory_for_state(state), self._state_summary(state)
+        )
 
     def _event(self, event: str, payload: dict) -> None:
-        self.recorder.event(event, payload)
-        if event in {
-            "instruction_started",
-            "model_turn_recorded",
-            "task_control_recorded",
-            "read_only_turn_recorded",
-            "physical_window_recorded",
-            "task_terminal",
-            "instruction_failed",
-            "scene_cleanup_failed",
-            "tool_step_completed",
-            "observation_updated",
-            "runtime_loop_guard_reached",
-        }:
-            self._emit_runtime_event({"kind": event, "payload": dict(payload)})
+        self.journal.event(event, payload)
 
     def _debug_event(self, event: str, payload: dict) -> None:
-        debug_event = getattr(self.recorder, "debug_event", None)
-        if callable(debug_event):
-            debug_event(event, payload)
-        else:
-            self.recorder.event(event, payload)
+        self.journal.debug_event(event, payload)
 
     def _emit_runtime_event(self, event: dict[str, Any]) -> None:
         """Push a live event to CLI/TUI consumers without changing run history.
@@ -1392,46 +855,13 @@ class TaskRuntime:
         recorder-backed public/debug events.
         """
 
-        if self.event_sink is None:
-            return
-        try:
-            self.event_sink(dict(event))
-        except Exception as exc:  # pragma: no cover - defensive UI boundary
-            self._debug_event(
-                "runtime_event_sink_failed",
-                {"error_type": type(exc).__name__, "error": str(exc), "event_kind": event.get("kind")},
-            )
+        self.journal.emit_live(event)
 
     def _persist_provider_exchange_media(
         self, model_rounds: list[dict[str, Any]]
     ) -> list[dict[str, Any]]:
         """Write request media once per digest and return base64-free rounds."""
-
-        persisted = copy.deepcopy(model_rounds)
-        save_bytes = getattr(self.recorder, "save_bytes", None)
-        for model_round in persisted:
-            media = model_round.get("request_media")
-            if not isinstance(media, list):
-                continue
-            for item in media:
-                if not isinstance(item, dict):
-                    continue
-                data = item.pop("data", None)
-                digest = str(item.get("sha256") or "").strip().lower()
-                suffix = str(item.get("suffix") or ".bin")
-                if (
-                    isinstance(data, bytes)
-                    and digest
-                    and callable(save_bytes)
-                ):
-                    relative = f"debug/provider_media/{digest}{suffix}"
-                    if digest not in self._persisted_provider_media:
-                        save_bytes(relative, data)
-                        self._persisted_provider_media.add(digest)
-                    item["asset_ref"] = relative
-                elif data is not None:
-                    item["unavailable_reason"] = "recorder_cannot_persist_media"
-        return persisted
+        return self.journal.persist_provider_exchange_media(model_rounds)
 
     @staticmethod
     def _stabilization_summary(stabilization: dict | None) -> dict:
@@ -1473,15 +903,7 @@ class TaskRuntime:
             "plan_revision": state.task_plan.revision if state.task_plan else None,
         }
 
-    @staticmethod
-    def _scene_key(map_id: str, scene_id: str | None) -> tuple[str, str | None]:
-        return (map_id, str(scene_id) if scene_id is not None else None)
-
-    def _forget_scene(self, scene: SceneInstance) -> None:
-        self._unusable_scene_ids.discard(scene.scene_instance_id)
-        for key, active_scene in list(self._active_reused_scenes.items()):
-            if active_scene.scene_instance_id == scene.scene_instance_id:
-                self._active_reused_scenes.pop(key, None)
+    def _forget_scene_memory(self, scene: SceneInstance) -> None:
         for key, memory in list(self._active_flight_memories.items()):
             if memory.scene_instance_id == scene.scene_instance_id:
                 self._active_flight_memories.pop(key, None)
@@ -1530,63 +952,6 @@ class TaskRuntime:
         memory.append_action_ref(write_result["action_ref"])
         memory.append_pose_ref(write_result.get("pose_ref"))
         return write_result
-
-
-def _result_artifact_refs(value: Any) -> list[str]:
-    """Collect explicit artifact references from a tool's structured result."""
-
-    refs: list[str] = []
-
-    def visit(item: Any) -> None:
-        if isinstance(item, dict):
-            artifact_ref = item.get("artifact_ref")
-            if isinstance(artifact_ref, str) and artifact_ref and artifact_ref not in refs:
-                refs.append(artifact_ref)
-            for child in item.values():
-                visit(child)
-        elif isinstance(item, list):
-            for child in item:
-                visit(child)
-
-    visit(value)
-    return refs
-
-
-def _pop_string_list(data: dict[str, Any], key: str) -> list[str]:
-    """Remove an internal skill envelope field and return safe string values."""
-
-    value = data.pop(key, [])
-    if not isinstance(value, (list, tuple)):
-        return []
-    return [item for item in value if isinstance(item, str) and item]
-
-
-def _pop_dict_list(data: dict[str, Any], key: str) -> list[dict[str, Any]]:
-    """Remove an internal skill envelope field and return copied objects."""
-
-    value = data.pop(key, [])
-    if not isinstance(value, (list, tuple)):
-        return []
-    return [dict(item) for item in value if isinstance(item, dict)]
-
-
-def _redact_model_input_context(value: Any) -> Any:
-    """Keep v2 planner context readable; exact images live in provider_media."""
-
-    if isinstance(value, dict):
-        return {
-            key: (
-                "[inline image omitted from planner context]"
-                if key == "data"
-                and isinstance(item, str)
-                and item.startswith("data:image/")
-                else _redact_model_input_context(item)
-            )
-            for key, item in value.items()
-        }
-    if isinstance(value, list):
-        return [_redact_model_input_context(item) for item in value]
-    return value
 
 
 def _attach_cleanup_error(primary: Exception, cleanup: Exception, stage: str) -> None:

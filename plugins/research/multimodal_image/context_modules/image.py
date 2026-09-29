@@ -6,8 +6,14 @@ from pathlib import Path
 from typing import Any
 
 from src.memory.context.modules.image import DefaultImageContextModule
-from src.memory.context.schemas import ContextFragment, MemorySourceBundle, TaskContextInput
-from src.runtime.configs.model_config import ModelConfig
+from src.memory.context.contracts import (
+    ContextFragment,
+    ContextModuleResult,
+    FragmentAudit,
+    MemorySourceBundle,
+    TaskContextInput,
+)
+from src.agent.config import ModelConfig
 
 from .client import (
     CaptionClient,
@@ -34,11 +40,11 @@ class PluginContextModule(DefaultImageContextModule):
         self._caption_client = caption_client or call_visual_caption_model
         self._env_path = Path(env_path)
 
-    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
-        fragment = super().build(sources, stage_context)
-        content = dict(fragment.content)
-        metadata = dict(fragment.metadata)
-        warnings = list(fragment.warnings)
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextModuleResult:
+        result = super().build(sources, stage_context)
+        content = dict(result.fragment.model_content)
+        metadata = dict(result.audit.metadata)
+        warnings = list(result.audit.warnings)
         latest_rgb = _latest_rgb(metadata)
         path = _usable_rgb_path(latest_rgb)
         model_inputs: list[dict[str, Any]] = []
@@ -71,7 +77,12 @@ class PluginContextModule(DefaultImageContextModule):
                     warnings.append(_caption_failure_warning(exc))
                     processing_status = "metadata_only_caption_failed"
 
-        visual_evidence = dict(content.get("visual_evidence", {}))
+        raw_visual_evidence = content.get("visual_evidence", {})
+        visual_evidence = (
+            dict(raw_visual_evidence)
+            if isinstance(raw_visual_evidence, dict)
+            else {"availability": str(raw_visual_evidence)}
+        )
         visual_evidence["interpretation_status"] = processing_status
         content["visual_evidence"] = visual_evidence
         content["visual_processing"] = _visual_processing(
@@ -81,21 +92,16 @@ class PluginContextModule(DefaultImageContextModule):
             caption_metrics,
         )
 
-        return ContextFragment(
-            name=fragment.name,
-            enabled=fragment.enabled,
-            source=self.__class__.__name__,
-            content=content,
-            model_inputs=model_inputs,
-            facts=list(fragment.facts),
-            inferences=list(fragment.inferences),
-            goals=list(fragment.goals),
-            risks=list(fragment.risks),
-            confidence="medium" if visual_description else fragment.confidence,
-            artifact_refs=list(fragment.artifact_refs),
-            budget=fragment.budget,
-            warnings=warnings,
-            metadata=metadata,
+        return ContextModuleResult(
+            ContextFragment(result.fragment.name, content, tuple(model_inputs)),
+            FragmentAudit(
+                name=result.audit.name,
+                source=self.__class__.__name__,
+                confidence="medium" if visual_description else result.audit.confidence,
+                artifact_refs=result.audit.artifact_refs,
+                warnings=tuple(warnings),
+                metadata=metadata,
+            ),
         )
 
     def describe_output(self) -> dict[str, Any]:
@@ -103,7 +109,7 @@ class PluginContextModule(DefaultImageContextModule):
         description["semantic_evidence"] = [
             "Current image-derived text: visual facts from the latest RGB when processing succeeds; not raw image evidence."
         ]
-        content_fields = dict(description.get("content_fields", {}))
+        content_fields = dict(description.get("model_fields", {}))
         content_fields["visual_processing"] = (
             "Custom image processing status. When this module is configured, it may call "
             "a multimodal model to convert the latest real RGB frame into phase-aware text."
@@ -112,7 +118,7 @@ class PluginContextModule(DefaultImageContextModule):
             "Phase-aware visual facts derived from the latest RGB frame. It must not contain "
             "navigation actions or observation recommendations."
         )
-        description["content_fields"] = content_fields
+        description["model_fields"] = content_fields
         description["model_inputs"] = (
             "Planner-facing text inputs prepared by this module, such as visual_caption JSON. "
             "Image data is not forwarded to the planner by this module."

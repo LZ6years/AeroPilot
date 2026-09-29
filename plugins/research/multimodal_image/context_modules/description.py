@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from src.memory.context.schemas import TaskContextInput
+from src.memory.context.contracts import TaskContextInput
 
 from .constants import (
     ALLOWED_POSITIONS,

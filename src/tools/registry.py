@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from src.plugins import PluginRegistry
-from src.runtime.configs.safety_config import UavSafetyConfig
+from src.uav.config import UavSafetyConfig
 from src.tools.schemas import ToolParameter, ToolRuntimePolicy, ToolSpec
 from src.tools.validation import validate_tool_args
 from src.uav.commands import MOVE_BODY_ARGUMENT_SEMANTICS
@@ -52,9 +51,14 @@ class ToolRegistry:
                       key=lambda spec: spec.name)
 
 
-def default_registry(plugin_registry: PluginRegistry | None = None,
+def default_registry(capability_source=None,
                      safety_config: UavSafetyConfig | None = None) -> ToolRegistry:
-    """Build tools without giving ContextBuilder tool-selection responsibility."""
+    """Build built-ins and explicitly injected capability specs.
+
+    Plugin discovery belongs to RuntimeFactory.  This module accepts a
+    duck-typed contribution source only so Tools never imports or discovers
+    plugins on its own.
+    """
     safety = safety_config or UavSafetyConfig()
     registry = ToolRegistry()
     lifecycle = ToolRuntimePolicy("lifecycle", "immediate", "single", False)
@@ -102,8 +106,11 @@ def default_registry(plugin_registry: PluginRegistry | None = None,
     for spec in builtin_tools():
         registry.register(spec)
 
-    plugins = plugin_registry or PluginRegistry.from_config()
-    for capability in plugins.skill_capability_catalog.capabilities:
+    catalog = getattr(capability_source, "skill_capability_catalog", None)
+    capabilities = getattr(catalog, "capabilities", ())
+    if catalog is None and capability_source is not None:
+        capabilities = capability_source
+    for capability in capabilities:
         metadata = {"mock": capability.mock}
         registry.register(ToolSpec.from_input_schema(
             name=capability.call_name, wire_name=capability.wire_name, kind="skill_capability",

@@ -15,14 +15,20 @@ from typing import TYPE_CHECKING, Any
 from src.llm import DefaultModelClient, MessageBuilder, ModelClient, ModelRequest
 from src.llm.audit import snapshot_request, redact_provider_value
 from src.llm.providers.openai_compatible import encode_request, public_response_snapshot
-from src.agent.history_projection import HistoryProjector
+from src.agent.context.projection import HistoryProjector
+from src.agent.config import (
+    ModelConfig,
+    PlannerConfig,
+    ProviderConfig,
+    ToolLoopConfig,
+    load_model_config,
+)
 from src.agent.transcript import (
     AgentToolCall,
     AgentTranscript,
     AssistantTurn,
     PublicIntentSource,
 )
-from src.runtime.configs.model_config import ModelConfig, load_model_config
 
 if TYPE_CHECKING:
     from src.tools.registry import ToolRegistry
@@ -62,19 +68,61 @@ class ModelActionPlanner:
         repair_planner: Any | None = None,
         history_projector: HistoryProjector | None = None,
         client: ModelClient | None = None,
+        provider_config: ProviderConfig | None = None,
+        planner_config: PlannerConfig | None = None,
+        tool_loop_config: ToolLoopConfig | None = None,
     ) -> None:
         if max_repair_attempts is not None or repair_planner is not None:
             raise ModelActionPlannerConfigError(
                 "The native tool loop repairs errors in transcript; separate repair planners are unsupported."
             )
-        self.model_config = model_config or load_model_config()
+        if model_config is not None and any(
+            item is not None
+            for item in (provider_config, planner_config, tool_loop_config)
+        ):
+            raise ModelActionPlannerConfigError(
+                "pass either ModelConfig or the independent planner configs"
+            )
+        aggregate = model_config
+        if aggregate is None and all(
+            item is None
+            for item in (provider_config, planner_config, tool_loop_config)
+        ):
+            aggregate = load_model_config()
+        if aggregate is not None:
+            provider_config = aggregate.provider_config()
+            planner_config = aggregate.planner_config()
+            tool_loop_config = aggregate.tool_loop_config()
+        self.provider_config = provider_config or ProviderConfig()
+        self.planner_config = planner_config or PlannerConfig()
+        self.tool_loop_config = tool_loop_config or ToolLoopConfig()
+        # Compatibility for standalone diagnostics; production composition
+        # passes the three narrow contracts above.
+        self.model_config = aggregate or ModelConfig(
+            provider=self.provider_config.provider,
+            model_name=self.provider_config.model_name,
+            api_key=self.provider_config.api_key,
+            base_url=self.provider_config.base_url,
+            thinking_mode=self.provider_config.thinking_mode,
+            timeout_sec=self.provider_config.timeout_sec,
+            provider_timeout_retries=self.provider_config.timeout_retries,
+            provider_connection_retries=self.provider_config.connection_retries,
+            max_tool_rounds=self.tool_loop_config.max_rounds,
+            max_consecutive_protocol_rejections=(
+                self.tool_loop_config.max_consecutive_protocol_rejections
+            ),
+            action_planner_prompt_path=self.planner_config.prompt_path,
+            task_progress_reminder_interval=(
+                self.planner_config.task_progress_reminder_interval
+            ),
+        )
         self.client = client if client is not None else DefaultModelClient(
-            self.model_config.to_provider_settings()
+            self.provider_config.to_provider_settings()
         )
         # Standalone callers default to full history. Runtime injects the
         # configured projector bound to its actual Context Module instances.
         self.history_projector = history_projector or HistoryProjector()
-        configured_prompt = prompt_path or self.model_config.action_planner_prompt_path or None
+        configured_prompt = prompt_path or self.planner_config.prompt_path or None
         self.system_prompt = self._load_system_prompt(configured_prompt)
         prompt_dir = Path(__file__).resolve().parent / "prompts"
         self.tool_user_prompt = (prompt_dir / "tool_user_system.txt").read_text(encoding="utf-8").strip()
@@ -104,41 +152,47 @@ class ModelActionPlanner:
         if decision_index is not None and (type(decision_index) is not int or decision_index < 1):
             raise ValueError("decision_index must be a positive integer or None")
 
-        if not self.model_config.api_key:
+        if not self.provider_config.api_key:
             raise ModelActionPlannerConfigError(
                 "Model action planner requires FLYAGENT_MODEL_API_KEY"
             )
-        if self.model_config.provider != "openai_compatible":
+        if self.provider_config.provider != "openai_compatible":
             raise ModelActionPlannerConfigError(
-                f"Unsupported model provider: {self.model_config.provider}"
+                f"Unsupported model provider: {self.provider_config.provider}"
             )
         specs = registry.model_specs(allowed_tool_names)
         if not specs:
             raise ModelActionPlannerConfigError(
                 "at least one model tool must be exposed in a mission turn"
             )
-        context = transcript.latest_context()
+        envelope = transcript.instruction_envelope()
         projection = self.history_projector.project(transcript, registry)
         builder = MessageBuilder()
-        builder.extend(_memory_system_messages(context), key="memory_documents")
+        builder.extend(
+            self.history_projector.assembler.memory_system_messages(envelope),
+            key="memory_documents",
+        )
         builder.add_system(self.system_prompt, key="planner_instruction")
         builder.add_system(self.tool_user_prompt, key="tool_user_instruction")
         builder.add_system(self.tool_case_studies, key="tool_case_studies")
         builder.extend(projection.messages, key="history")
-        interval = self.model_config.task_progress_reminder_interval
+        interval = self.planner_config.task_progress_reminder_interval
         # A transient request instruction, never a durable Transcript event.
         # Append after the complete history so tool call/result pairs stay intact.
         if (interval and decision_index is not None and decision_index > 1
                 and (decision_index - 1) % interval == 0):
             builder.add_system(self.task_progress_reminder, key="task_progress_reminder")
+        parameters = {"tool_choice": "auto", "temperature": 0}
+        if self.provider_config.thinking_mode:
+            parameters["thinking"] = {"type": self.provider_config.thinking_mode}
         request = ModelRequest(
             messages=builder.build(),
             tools=[spec.to_provider_tool() for spec in specs],
-            parameters={"tool_choice": "auto", "temperature": 0},
+            parameters=parameters,
         )
         # Preserve the existing subclass hook and failed-request audit, while
         # delegating wire-envelope construction to the provider adapter.
-        payload = encode_request(self.model_config.to_provider_settings(), request)
+        payload = encode_request(self.provider_config.to_provider_settings(), request)
         request_snapshot, media = snapshot_request(payload)
         annotate_request_media(payload, media)
         self.last_request = request_snapshot
@@ -326,20 +380,6 @@ def _provider_rejection_snapshot(
         "content": redact_provider_value(content) if isinstance(content, str) else None,
         "tool_calls": tool_calls,
     }
-
-
-def _memory_system_messages(context: dict[str, Any]) -> list[dict[str, str]]:
-    messages = []
-    for key, label in (("rules", "FlyAgent identity and operating rules"), ("user_preferences", "User preferences")):
-        value = context.get(key)
-        if isinstance(value, dict) and value:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"{label}:\n{json.dumps(value, ensure_ascii=False)}",
-                }
-            )
-    return messages
 
 
 def annotate_request_media(

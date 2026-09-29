@@ -11,12 +11,18 @@ from pathlib import Path
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, TaskContextInput
+from src.memory.context.contracts import (
+    ContextFragment,
+    ContextModuleResult,
+    FragmentAudit,
+    MemorySourceBundle,
+    TaskContextInput,
+)
+from src.memory.context.media_refs import image_media_ref
 
 from .grid_builder import DEFAULT_GRID_SIZE, DEFAULT_METERS_PER_CELL, build_grid_map
 from .html_report import render_custom_map_html
 from .mask_semantics import build_semantic_layer
-from .model_inputs import custom_map_model_input
 from .projection import build_projected_semantic_layer
 from .records import read_custom_map_records
 from .renderer import render_custom_map
@@ -30,7 +36,7 @@ class PluginContextModule(ContextModule):
     priority = 82
     max_items = 1
 
-    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextModuleResult:
         memory = sources.flight_memory
         records = read_custom_map_records(memory)
         trajectory = build_trajectory(records)
@@ -50,7 +56,22 @@ class PluginContextModule(ContextModule):
         output_dir = _output_dir(records.run_dir)
         rendered_path = render_custom_map(grid_map, output_dir)
         html_path = render_custom_map_html(grid_map, rendered_path, output_dir)
-        model_input = custom_map_model_input(rendered_path)
+        model_input = (
+            image_media_ref(
+                rendered_path,
+                run_dir=records.run_dir,
+                observation_id=str(
+                    sources.flight_memory.recent_observation_refs[-1].get("id")
+                    if sources.flight_memory.recent_observation_refs
+                    else "custom_map"
+                ),
+                frame_id="custom_map",
+                role="custom_map",
+                usage="Use as compressed spatial evidence for path, pose, and semantic map context.",
+            ).to_model_input()
+            if rendered_path.is_file()
+            else None
+        )
         warnings = [*records.warnings, *grid_map.warnings]
         risks = [] if trajectory.path else [{"type": "custom_map_pose_missing", "source": self.__class__.__name__}]
 
@@ -60,32 +81,21 @@ class PluginContextModule(ContextModule):
             "path_summary": grid_map.path_summary,
             "center_pose": grid_map.center_pose,
             "map_config": grid_map.map_config,
-            "rendered_map": {
-                "role": "custom_map",
-                "artifact_path": str(rendered_path),
-                "model_input_attached": model_input is not None,
-            },
-            "rendered_html": {
-                "artifact_path": str(html_path),
-                "role": "custom_map_debug_viewer",
-            },
-            "projection_debug": grid_map.projection_debug,
-            "path_cells": grid_map.path_cells,
-            "failed_cells": grid_map.failed_cells,
             "current_cell": grid_map.current_cell,
         }
-        return ContextFragment(
-            name=self.name,
-            enabled=True,
-            source=self.__class__.__name__,
-            content=content,
-            model_inputs=[model_input] if model_input else [],
-            risks=risks,
-            confidence="medium" if trajectory.path else "low",
-            artifact_refs=[str(rendered_path), str(html_path)],
-            budget=BudgetSpec(priority=self.priority, tokens_estimate=420, max_items=1),
-            warnings=sorted(set(warnings)),
-            metadata={
+        return ContextModuleResult(
+            ContextFragment(
+                name=self.name,
+                model_content=content,
+                model_inputs=(model_input,) if model_input else (),
+            ),
+            FragmentAudit(
+                name=self.name,
+                source=self.__class__.__name__,
+                confidence="medium" if trajectory.path else "low",
+                warnings=tuple(sorted(set(warnings + [item["type"] for item in risks]))),
+                artifact_refs=(str(rendered_path), str(html_path)),
+                metadata={
                 "record_counts": {
                     "actions": len(records.actions),
                     "poses": len(records.poses),
@@ -94,7 +104,11 @@ class PluginContextModule(ContextModule):
                 "output_dir": str(output_dir),
                 "semantic_status": semantic_layer.status,
                 "html_report": str(html_path),
-            },
+                "projection_debug": grid_map.projection_debug,
+                "path_cells": grid_map.path_cells,
+                "failed_cells": grid_map.failed_cells,
+                },
+            ),
         )
 
     def describe_output(self) -> dict[str, Any]:
@@ -103,18 +117,18 @@ class PluginContextModule(ContextModule):
             "semantic_evidence": [
                 "Local semantic map: UAV-centered semantic cells and trajectory; not current visual truth or verified free space."
             ],
-            "content_fields": {
+            "model_fields": {
                 "semantic_matrix": "Local grid centered on the UAV. -1 is visited path, 0 is free, -2 is unknown, positive values refer to semantic_legend ids.",
                 "semantic_legend": "Semantic id to label mapping. Unknown mask colors collapse to -2 unknown.",
                 "path_summary": "Compressed run history summary derived from action and pose memory.",
                 "center_pose": "Latest UAV pose used as the local map center.",
                 "map_config": "Grid size, meters per cell, orientation, and semantic projection status.",
-                "rendered_map": "Artifact path and planner input status for the generated map image.",
-                "rendered_html": "Human-facing standalone debug viewer artifact path.",
             },
             "model_inputs": "One rendered PNG image with role custom_map when artifact generation succeeds.",
-            "risk_fields": {
-                "custom_map_pose_missing": "No pose history was available, so the map cannot localize the UAV.",
+            "audit_fields": {
+                "projection_debug": "Human-only projection diagnostics.",
+                "path_cells": "Human-only rendered path cells.",
+                "failed_cells": "Human-only failed action cells.",
             },
         }
 

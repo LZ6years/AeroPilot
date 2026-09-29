@@ -4,12 +4,44 @@ from __future__ import annotations
 
 import json
 import asyncio
+import base64
+import hashlib
 from contextlib import contextmanager
 from contextvars import ContextVar
 from threading import get_ident
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def _completion_payload(value):
+    """Copy JSON result metadata without duplicating inline image data."""
+    if isinstance(value, dict):
+        return {key: _completion_payload(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_completion_payload(item) for item in value]
+    if isinstance(value, str) and value.startswith("data:image/"):
+        return "[provider_media_rehydrated_from_artifact]"
+    return value
+
+
+def _frame_sha256(frame: dict[str, Any]) -> str | None:
+    """Capture immutable media identity while the observation is persisted."""
+
+    for key in ("artifact_path", "path"):
+        raw_path = frame.get(key)
+        if isinstance(raw_path, str) and raw_path:
+            try:
+                return hashlib.sha256(Path(raw_path).read_bytes()).hexdigest()
+            except OSError:
+                continue
+    encoded = frame.get("base64")
+    if isinstance(encoded, str) and encoded:
+        try:
+            return hashlib.sha256(base64.b64decode(encoded, validate=True)).hexdigest()
+        except (ValueError, TypeError):
+            return None
+    return None
 
 
 class MemoryEventWriter:
@@ -110,6 +142,10 @@ class MemoryEventWriter:
         frame: dict[str, Any],
         timestamp: str | None = None,
     ) -> dict[str, Any]:
+        metadata = dict(frame)
+        digest = _frame_sha256(metadata)
+        if digest is not None:
+            metadata["sha256"] = digest
         return self._append(
             "frames.jsonl",
             "frame",
@@ -117,11 +153,10 @@ class MemoryEventWriter:
                 "observation_id": observation_id,
                 "modality": modality,
                 "path": frame.get("path"),
-                "metadata": dict(frame),
+                "metadata": metadata,
                 "timestamp": timestamp or _timestamp(),
             },
         )
-
     def write_agent_message(
         self,
         source: str,
@@ -140,11 +175,28 @@ class MemoryEventWriter:
             },
         )
 
+    def write_tool_completion(self, *, instruction_id, decision_id, call_index,
+                              tool_call_id, tool_name, args, result):
+        """Save a received result independently of ordered mission submission.
+
+        Audit-only receipts cannot establish terminal evidence. Media stays in
+        capability artifacts; inline image payloads are omitted from this log.
+        The caller owns synchronization, just as for all other writer methods.
+        """
+        return self._append("tool_completions.jsonl", "completion", {
+            "instruction_id": instruction_id, "decision_id": decision_id,
+            "call_index": call_index, "tool_call_id": tool_call_id,
+            "tool_name": tool_name, "args": _completion_payload(args),
+            "result": _completion_payload(result),
+        })
+
     def write_transcript_event(
         self,
         instruction_id: str | None,
         kind: str,
         payload: dict[str, Any],
+        *,
+        schema_version: str,
     ) -> dict[str, Any]:
         """Append one canonical model/tool/state exchange event."""
 
@@ -152,6 +204,7 @@ class MemoryEventWriter:
             "agent_transcript.jsonl",
             "turn",
             {
+                "schema_version": schema_version,
                 "instruction_id": instruction_id,
                 "kind": kind,
                 "payload": dict(payload),

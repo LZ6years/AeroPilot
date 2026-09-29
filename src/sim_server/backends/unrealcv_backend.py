@@ -9,7 +9,7 @@ from src.adapters.uav_primitives import PrimitiveResult, UavPrimitiveAdapter
 from src.adapters.unrealcv.uav import UnrealCvUavAdapter
 from src.adapters.unrealcv.client import probe_unrealcv_endpoint
 from src.env_client.schemas import ActionResult, MapPackage, Observation, SceneCapabilities, SceneInstance
-from src.runtime.configs.action_config import UavActionConfig
+from src.uav.config import UavActionConfig
 from src.uav import CANONICAL_VERTICAL_SIGN, move_body_velocity_from_args
 from .base import BackendProbe
 from .ground_clearance import enrich_pose_with_agl

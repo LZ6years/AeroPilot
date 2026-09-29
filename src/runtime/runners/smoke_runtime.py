@@ -1,4 +1,4 @@
-"""Provide the first minimal Agent Runtime shell."""
+"""Environment smoke runtime; never executes a model-driven task."""
 
 from __future__ import annotations
 
@@ -6,19 +6,20 @@ from src.env_client import EnvClient
 from src.tools.dispatcher import ToolDispatcher
 
 
-class AgentRuntime:
-    """Minimal runtime shell that uses EnvClient as its only environment path."""
+class SmokeRuntime:
+    """Exercise scene lifecycle and primitive I/O through the production tools."""
 
     def __init__(
         self,
         env_client: EnvClient,
         recorder,
+        tool_dispatcher: ToolDispatcher,
         observation_modalities: tuple[str, ...] = ("rgb", "depth", "pose"),
     ) -> None:
         # Wire runtime dependencies while keeping environment access behind EnvClient.
         self.env_client = env_client
         self.recorder = recorder
-        self.tools = ToolDispatcher(env_client)
+        self.tools = tool_dispatcher
         self.observation_modalities = tuple(observation_modalities)
 
     def run_smoke_test(self, map_id: str, agent_id: str = "uav_1") -> None:

@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 from PIL import Image, ImageDraw
+from src.memory.context.media_refs import image_media_ref
 from src.perception.frame_payload import frame_bytes, load_rgb_frame
 
 from plugins.capabilities.visual_grounding.locate.scripts.backends.grounding_dino import (
@@ -51,7 +52,6 @@ class VisualGroundingService:
         observation: dict[str, Any],
         observation_id: str,
         query: str,
-        include_distance: bool,
         run_dir: str | None,
         tool_call_id: str | None,
     ) -> dict[str, Any]:
@@ -86,7 +86,7 @@ class VisualGroundingService:
         depth: np.ndarray | None = None
         depth_frame: dict[str, Any] | None = None
         depth_error: str | None = None
-        if include_distance and candidates:
+        if candidates:
             if self.segmentation_backend is not None:
                 try:
                     masks = {
@@ -126,7 +126,7 @@ class VisualGroundingService:
                 "confidence": round(float(candidate.confidence), 3),
                 "box_normalized": normalized,
                 "distance_m": None,
-                "distance_status": "not_requested",
+                "distance_status": "metric_depth_unavailable",
             }
             audit_item: dict[str, Any] = {
                 "candidate_id": candidate_id,
@@ -134,20 +134,18 @@ class VisualGroundingService:
                 "confidence": float(candidate.confidence),
                 "box_pixels": list(box),
             }
-            if include_distance:
-                if depth is None:
-                    model_item["distance_status"] = "metric_depth_unavailable"
-                    audit_item["depth_error"] = depth_error
-                else:
-                    estimate = estimate_candidate_depth(
-                        depth,
-                        candidate,
-                        masks.get(index),
-                        self.settings,
-                    )
-                    model_item["distance_m"] = estimate.distance_m
-                    model_item["distance_status"] = estimate.status
-                    audit_item.update(estimate.audit)
+            if depth is None:
+                audit_item["depth_error"] = depth_error
+            else:
+                estimate = estimate_candidate_depth(
+                    depth,
+                    candidate,
+                    masks.get(index),
+                    self.settings,
+                )
+                model_item["distance_m"] = estimate.distance_m
+                model_item["distance_status"] = estimate.status
+                audit_item.update(estimate.audit)
             model_candidates.append(model_item)
             audit_candidates.append(audit_item)
 
@@ -163,7 +161,8 @@ class VisualGroundingService:
             "data": {
                 "observation_id": observation_id,
                 "query": query,
-                "include_distance": include_distance,
+                # Output-only compatibility for historical report readers.
+                "include_distance": True,
                 "candidates": model_candidates,
                 "audit_details": {
                     "box_threshold": self.settings.box_threshold,
@@ -262,21 +261,18 @@ def _write_candidate_evidence(
     output_path = output_dir / f"visual_grounding_{identity}.png"
     overlay.save(output_path, format="PNG")
     path = str(output_path)
+    model_input = image_media_ref(
+        output_path,
+        run_dir=run_dir,
+        observation_id=observation_id,
+        frame_id=f"visual_grounding_{identity}",
+        role="visual_grounding_candidates",
+        usage=(
+            "Candidate IDs, detector boxes, and available segmentation masks. "
+            "Confirm which candidate matches the instruction; detector confidence alone is not semantic proof."
+        ),
+    ).to_model_input()
     return (
         (path,),
-        (
-            {
-                "type": "image",
-                "role": "visual_grounding_candidates",
-                "observation_id": observation_id,
-                "tool_call_id": str(tool_call_id or ""),
-                "artifact_ref": path,
-                "path": path,
-                "mime_type": "image/png",
-                "usage": (
-                    "Candidate IDs, detector boxes, and available segmentation masks. "
-                    "Confirm which candidate matches the instruction; detector confidence alone is not semantic proof."
-                ),
-            },
-        ),
+        (model_input,),
     )

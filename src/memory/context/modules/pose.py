@@ -6,7 +6,13 @@ import math
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, TaskContextInput
+from src.memory.context.contracts import (
+    ContextFragment,
+    ContextModuleResult,
+    FragmentAudit,
+    MemorySourceBundle,
+    TaskContextInput,
+)
 from src.uav import clean_pose_for_model, pose_delta
 
 
@@ -15,7 +21,7 @@ class DefaultPoseContextModule(ContextModule):
     priority = 95
     max_items = 3
 
-    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextModuleResult:
         memory = sources.flight_memory
         reader = memory.memory_reader
         pose_records = reader.read_refs(memory.recent_pose_refs[-self.max_items :]) if reader else []
@@ -27,22 +33,22 @@ class DefaultPoseContextModule(ContextModule):
         latest_pose = poses[-1] if poses else {}
         recent_delta = pose_delta(poses[-2], poses[-1]) if len(poses) >= 2 else {}
         content = _model_pose_content(latest_pose)
-        return ContextFragment(
-            name=self.name,
-            enabled=True,
-            source=self.__class__.__name__,
-            content=content,
-            risks=[] if latest_pose else [{"type": "pose_missing", "source": self.__class__.__name__}],
-            confidence="high" if latest_pose else "low",
-            budget=BudgetSpec(priority=self.priority, tokens_estimate=45, max_items=self.max_items),
-            metadata={
+        return ContextModuleResult(
+            ContextFragment(name=self.name, model_content=content),
+            FragmentAudit(
+                name=self.name,
+                source=self.__class__.__name__,
+                confidence="high" if latest_pose else "low",
+                warnings=() if latest_pose else ("pose_missing",),
+                metadata={
                 "reset_epoch": memory.reset_epoch,
                 "pose_history_count": len(poses),
                 # Absolute world pose is essential for trace/debug work but is
                 # not target-relative evidence. Keep it out of model content.
                 "latest_pose": latest_pose,
                 "recent_pose_delta": recent_delta,
-            },
+                },
+            ),
         )
 
     def describe_output(self) -> dict[str, Any]:
@@ -51,17 +57,14 @@ class DefaultPoseContextModule(ContextModule):
             "semantic_evidence": [
                 "UAV ground clearance when calibrated; self-state, not target-relative geometry."
             ],
-            "content_fields": {
+            "model_fields": {
                 "agl_m": "Optional vertical clearance above the configured local landing reference, in meters.",
                 "field_semantics": "Compact meaning and evidence boundary for agl_m.",
             },
-            "metadata_fields": {
+            "audit_fields": {
                 "pose_history_count": "Number of recent pose refs considered before compacting the planner-facing pose context.",
                 "latest_pose": "Debug-only latest canonical world pose; never target-relative evidence.",
                 "recent_pose_delta": "Debug-only delta between the latest two canonical poses.",
-            },
-            "risk_fields": {
-                "pose_missing": "No recent pose is available; avoid precise movement decisions.",
             },
             "coordinate_note": "Raw coordinate-frame values remain in metadata and are not sent to the model.",
         }

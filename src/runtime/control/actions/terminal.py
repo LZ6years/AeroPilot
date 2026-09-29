@@ -36,7 +36,7 @@ def environmental_evidence_refs(
             refs.clear()
             calls.clear()
         elif event.kind == "state_checkpoint":
-            observation_id = event.payload.get("observation_id")
+            observation_id = getattr(event.payload, "observation_id", None)
             if isinstance(observation_id, str) and observation_id:
                 refs.add(observation_id)
         elif event.kind == "assistant_turn":

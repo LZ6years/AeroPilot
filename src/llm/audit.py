@@ -70,7 +70,9 @@ def snapshot_request(
             # schemas/arguments may legitimately contain an "analysis" field;
             # removing those would falsify the captured request.
             return {key: clean(item, (*path, key)) for key, item in value.items()
-                    if path or key.lower() not in _PRIVATE_FIELDS}
+                    if path or key.lower() not in _PRIVATE_FIELDS
+                    or (key == "thinking" and isinstance(item, dict)
+                        and set(item) == {"type"} and item["type"] in ("enabled", "disabled"))}
         return value
 
     snapshot = clean(payload)

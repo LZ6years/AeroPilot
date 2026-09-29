@@ -8,13 +8,19 @@ shared planner adapter places it before the trailing JSON context.
 
 from __future__ import annotations
 
-import base64
 from pathlib import Path
 from typing import Any
 
 from src.memory.context.modules.base import ContextModule
 from src.memory.context.modules.map import DefaultMapContextModule
-from src.memory.context.schemas import BudgetSpec, ContextFragment, MemorySourceBundle, TaskContextInput
+from src.memory.context.contracts import (
+    ContextFragment,
+    ContextModuleResult,
+    FragmentAudit,
+    MemorySourceBundle,
+    TaskContextInput,
+)
+from src.memory.context.media_refs import image_media_ref
 
 from ...online import StmrOnlineMapBuilder, StmrOnlineMapResult
 from ...perception import DEFAULT_UAV_PRIOR_NAME, MAX_LANDMARK_QUERIES, StmrPerceptionSession
@@ -58,7 +64,7 @@ class PluginContextModule(ContextModule):
             device=device,
         )
 
-    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextFragment:
+    def build(self, sources: MemorySourceBundle, stage_context: TaskContextInput) -> ContextModuleResult:
         baseline = self.default_map.build(sources, stage_context)
         try:
             result = self.online_builder.build(sources.flight_memory, stage_context)
@@ -72,7 +78,18 @@ class PluginContextModule(ContextModule):
 
         if self.mode == "shadow":
             return baseline
-        return _planner_fragment(baseline, result)
+        observation_id = "stmr"
+        if sources.flight_memory.recent_observation_refs:
+            observation_id = str(
+                sources.flight_memory.recent_observation_refs[-1].get("observation_id")
+                or observation_id
+            )
+        return _planner_fragment(
+            baseline,
+            result,
+            observation_id,
+            run_dir=getattr(sources.flight_memory.memory_reader, "run_dir", None),
+        )
 
     def describe_output(self) -> dict[str, Any]:
         return {
@@ -80,7 +97,7 @@ class PluginContextModule(ContextModule):
             "semantic_evidence": [
                 "STMR semantic history: accumulated semantics and UAV trajectory; not verified free space or exact target pose."
             ],
-            "content_fields": {
+            "model_fields": {
                 "recalled_map_memories": "Existing map-memory clues preserved from the default map provider.",
                 "recall_filter": "Existing map/scene recall filter.",
                 "stmr": "Compact current snapshot status, center pose, grid configuration, evidence counts, and semantic cell counts.",
@@ -88,7 +105,7 @@ class PluginContextModule(ContextModule):
                 "stmr.representation": "Always semantic_history_not_traversability; blank cells are not verified free space.",
             },
             "model_inputs": "At most one labelled STMR PNG, ordered after existing RGB inputs and before context JSON.",
-            "risk_fields": {
+            "audit_fields": {
                 "stmr_map_unavailable": "The online STMR update failed; only default recalled-map clues remain.",
                 "stmr_map_stale": "At least one newer observation failed, so the latest successful map may be stale.",
             },
@@ -100,79 +117,84 @@ class PluginContextModule(ContextModule):
         return self.online_builder.debug_summary()
 
 
-def _planner_fragment(baseline: ContextFragment, result: StmrOnlineMapResult) -> ContextFragment:
-    model_input = _stmr_model_input(result.png_path)
-    risks = list(baseline.risks)
+def _planner_fragment(
+    baseline: ContextModuleResult,
+    result: StmrOnlineMapResult,
+    observation_id: str,
+    *,
+    run_dir: str | Path | None,
+) -> ContextModuleResult:
+    model_input = _stmr_model_input(
+        result.png_path,
+        observation_id,
+        run_dir=run_dir,
+    )
+    warnings = list(baseline.audit.warnings)
     if result.stale:
-        risks.append({"type": "stmr_map_stale", "source": PluginContextModule.__name__})
-    artifact_refs = [*baseline.artifact_refs]
+        warnings.append("stmr_map_stale")
+    artifact_refs = [*baseline.audit.artifact_refs]
     for path in (result.png_path, result.json_path):
         if path is not None:
             artifact_refs.append(str(path))
-    return ContextFragment(
-        name="map",
-        enabled=True,
-        source=PluginContextModule.__name__,
-        content={**baseline.content, "stmr": result.context_content()},
-        model_inputs=[model_input] if model_input is not None else [],
-        facts=list(baseline.facts),
-        inferences=list(baseline.inferences),
-        goals=list(baseline.goals),
-        risks=risks,
-        confidence="medium" if result.status == "ready" and not result.stale else "low",
-        artifact_refs=artifact_refs,
-        budget=BudgetSpec(priority=PluginContextModule.priority, tokens_estimate=340, max_items=1),
-        warnings=sorted({*baseline.warnings, *result.warnings}),
-        metadata={
-            **baseline.metadata,
+    return ContextModuleResult(
+        ContextFragment(
+            name="map",
+            model_content={**baseline.fragment.model_content, "stmr": result.context_content()},
+            model_inputs=(model_input,) if model_input is not None else (),
+        ),
+        FragmentAudit(
+            name="map",
+            source=PluginContextModule.__name__,
+            confidence="medium" if result.status == "ready" and not result.stale else "low",
+            artifact_refs=tuple(artifact_refs),
+            warnings=tuple(sorted({*warnings, *result.warnings})),
+            metadata={
+            **baseline.audit.metadata,
             "stmr_mode": "planner",
             "stmr_png_attached": model_input is not None,
-        },
-    )
-
-
-def _fallback_fragment(baseline: ContextFragment, exc: Exception) -> ContextFragment:
-    return ContextFragment(
-        name="map",
-        enabled=True,
-        source=PluginContextModule.__name__,
-        content=dict(baseline.content),
-        model_inputs=[],
-        facts=list(baseline.facts),
-        inferences=list(baseline.inferences),
-        goals=list(baseline.goals),
-        risks=[
-            *baseline.risks,
-            {
-                "type": "stmr_map_unavailable",
-                "value": {"error_type": type(exc).__name__},
-                "source": PluginContextModule.__name__,
             },
-        ],
-        confidence="low",
-        artifact_refs=list(baseline.artifact_refs),
-        budget=BudgetSpec(priority=PluginContextModule.priority, tokens_estimate=240, max_items=1),
-        warnings=[*baseline.warnings, f"stmr_map_failed:{type(exc).__name__}"],
-        metadata={**baseline.metadata, "stmr_mode": "planner", "stmr_png_attached": False},
+        ),
     )
 
 
-def _stmr_model_input(path: Path | None) -> dict[str, Any] | None:
-    if path is None:
+def _fallback_fragment(baseline: ContextModuleResult, exc: Exception) -> ContextModuleResult:
+    return ContextModuleResult(
+        ContextFragment("map", dict(baseline.fragment.model_content)),
+        FragmentAudit(
+            name="map",
+            source=PluginContextModule.__name__,
+            confidence="low",
+            artifact_refs=baseline.audit.artifact_refs,
+            warnings=(*baseline.audit.warnings, f"stmr_map_failed:{type(exc).__name__}"),
+            metadata={
+                **baseline.audit.metadata,
+                "stmr_mode": "planner",
+                "stmr_png_attached": False,
+                "error_type": type(exc).__name__,
+            },
+        ),
+    )
+
+
+def _stmr_model_input(
+    path: Path | None,
+    observation_id: str,
+    *,
+    run_dir: str | Path | None,
+) -> dict[str, Any] | None:
+    if path is None or run_dir is None:
         return None
     try:
-        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-    except OSError:
+        return image_media_ref(
+            path,
+            run_dir=run_dir,
+            observation_id=observation_id,
+            frame_id="stmr_map",
+            role="stmr_semantic_map",
+            usage=STMR_MAP_USAGE,
+        ).to_model_input()
+    except (OSError, ValueError):
         return None
-    return {
-        "type": "image",
-        "input_id": STMR_MAP_INPUT_ID,
-        "role": "stmr_semantic_map",
-        "usage": STMR_MAP_USAGE,
-        "mime_type": "image/png",
-        "encoding": "data_url",
-        "data": f"data:image/png;base64,{encoded}",
-    }
 
 
 __all__ = ["PluginContextModule", "STMR_MAP_INPUT_ID", "STMR_MAP_USAGE"]

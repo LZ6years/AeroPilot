@@ -13,7 +13,7 @@ import sys
 import unicodedata
 from typing import Any
 
-from src.runtime.runners.interactive_runtime import compact_turn_summary
+from src.runtime.task.interactive_session import compact_turn_summary
 
 
 ANSI_BLUE = "\033[34m"

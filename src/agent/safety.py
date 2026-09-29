@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from src.agent.planning.schemas import PlannedStep
-from src.runtime.configs.safety_config import UavSafetyConfig
+from src.uav.config import UavSafetyConfig
 
 if TYPE_CHECKING:
     from src.tools.registry import ToolRegistry

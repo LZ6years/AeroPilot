@@ -343,3 +343,4 @@ def load_events(path: Path) -> list[dict[str, Any]]:
         if line.strip():
             events.append(json.loads(line))
     return events
+

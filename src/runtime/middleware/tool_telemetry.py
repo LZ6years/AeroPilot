@@ -37,6 +37,14 @@ class ToolTelemetryMiddleware:
                 self.debug_event(event, {"decision_id": decision_id, **payload})
         return emit
 
+    def read_result_event(self, event, decision_id, tool_call_id, **values):
+        """Measure receipt/commit separately from worker execution; audit only."""
+        import time
+        self.read_event_sink(decision_id)(event, {
+            "tool_call_id": tool_call_id, "monotonic_sec": time.perf_counter(),
+            "thread_id": threading.get_ident(), **values,
+        })
+
     def call_step(
         self,
         *,

@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from src.runtime.configs.action_config import UavActionConfig
+from src.uav.config import UavActionConfig
 from .base import SimulationBackend
 
 

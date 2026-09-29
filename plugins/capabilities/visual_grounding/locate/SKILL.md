@@ -1,45 +1,37 @@
 ---
 name: visual_grounding_locate
-description: Locate a natural-language visual target in the latest RGB observation and optionally estimate metric distance to each candidate.
+description: "Applicable needs: measuring an observed object surface; Decision questions: whether valid range supports the current decision; Contents: candidate locations, evidence images and distance validity; Limits: does not establish identity, route relations or completion."
 ---
 
-# Visual Grounding
+# Visible Surface Measurement
 
-First interpret the current image directly. Use `skill.visual_grounding.locate`
-only when decision-relevant localization or identity remains ambiguous, or a
-metric target-relative distance is genuinely decision-critical. Do not outsource
-general street/building layout or already clear visibility to detection. These
-are examples of reasoning boundaries, not forbidden object categories.
-Pass the exact CURRENT observation ID and a concise visual query. Use
-`include_distance=false` for unresolved localization. Use `include_distance=true`
-only near a metric threshold, when action
-magnitude depends on that threshold, when the user asks for a measured distance,
-or before supporting a quantitative completion claim.
+Use `skill.visual_grounding.locate(observation_id, query)` when distance to a
+candidate already observed in the current RGB can inform a decision. Supply the
+CURRENT observation ID and a concise category and observed appearance. Do not
+copy an unseen target or a hoped-for task relation into the query. Interpret the
+image and task relations directly; this capability does not perform general search.
 
-Two independent queries may be submitted in the same read-only turn, within
-the per-observation quota. Runtime may execute them sequentially and return
-both results before the next decision. A query that depends on another result
-must wait for it. Reuse existing results instead of repeating identical calls.
-For competing identities that change the decision, compare concise visual
-category queries against the same observation. Reuse an existing query and use
-the remaining quota for its alternative. Avoid filler such as "visible in the
-scene". Compare locations and annotated appearance, not just confidence scores.
-An empty candidate list means no sufficiently confident detection was returned;
-it does not prove absence. Do not lower thresholds or repeat a query to obtain
-a preferred answer.
+The service locates candidates and attempts metric depth for each. Inspect the
+associated annotated evidence to determine which candidate was measured. A label
+or confidence score does not confirm task identity. Multiple candidates remain
+separate; do not select a task target solely by confidence or available range.
 
-Candidates are detector evidence, not guaranteed task identity. Inspect the
-annotated tool-evidence image and keep the relation unknown when multiple
-candidates cannot be distinguished. `distance_m` is robust camera-to-visible-
-surface depth for that candidate, not target-center or horizontal distance.
+`distance_m` is robust camera-to-visible-surface depth, not horizontal distance,
+target-center distance or distance to a route node. A numeric claim requires a
+valid measurement with geometry appropriate to the claim. Neither approaching
+nor finishing a task imposes a mandatory measurement call.
 
-Describe the visible object category and observed appearance, not an unseen target
-or a hoped-for spatial relation. Avoid alternative identities and invented attributes.
-For example, use "brown-walled building" or "beige flat roof" only when supported
-by the image; interpret "below the UAV" separately.
+Two independent queries may share a read-only turn within the declared quota.
+Wait for results before dependent decisions and reuse applicable results.
 
-`not_requested` means detection-only, not failure. `inconsistent_depth_surfaces`
-means the candidate region has excessive depth dispersion, which can also arise
-from sloped or extended surfaces. It invalidates the scalar range, not the detection.
-An execution error supplies no negative scene evidence. Empty candidates weaken an
-unconfirmed visual hypothesis without proving absence.
+An empty candidate list leaves presence uncertain. `metric_depth_unavailable`
+means metric depth could not be used; `inconsistent_depth_surfaces` means the
+candidate region cannot support a reliable scalar depth, including extended or
+sloped surfaces. Other invalid-distance statuses retain their stated reason.
+Execution success does not imply measurement validity. A failed call supplies no
+negative scene evidence. Do not repeat or reword a query merely to obtain a
+preferred answer.
+
+Historical reports may contain `include_distance` inputs and `not_requested`
+results from the retired detection-only interface. These remain historical data;
+new calls accept only observation_id and query and always attempt measurement.

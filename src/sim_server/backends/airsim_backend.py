@@ -19,7 +19,7 @@ from src.env_client.schemas import (
     SceneCapabilities,
     SceneInstance,
 )
-from src.runtime.configs.action_config import UavActionConfig
+from src.uav.config import UavActionConfig
 from src.uav import CANONICAL_VERTICAL_SIGN, move_body_velocity_from_args
 
 
