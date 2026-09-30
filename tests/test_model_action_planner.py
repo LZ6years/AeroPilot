@@ -26,6 +26,8 @@ from src.memory.context.contracts import (
 )
 from src.memory.stores import MemoryEventWriter
 from src.agent.config import ModelConfig
+from src.agent.context.compression import HistoryCompressionConfig, HistoryProjectionState
+from src.agent.context.window_manager import ContextWindowManager
 from src.tools.registry import default_registry
 
 
@@ -112,6 +114,28 @@ def test_native_planner_sends_tools_and_parses_canonical_call(tmp_path):
         tool["function"]["name"] == "runtime_report_completed"
         for tool in payload["tools"]
     )
+
+
+def test_planner_records_provider_usage_in_task_local_projection_state(tmp_path):
+    response = response_with_calls(
+        ("call_1", "uav_turn_relative", {"yaw_deg": 10})
+    )
+    response["usage"] = {"prompt_tokens": 321}
+    planner = StubPlanner(response)
+    planner.context_window_manager = ContextWindowManager(
+        planner.history_projector,
+        HistoryCompressionConfig(),
+    )
+    state = HistoryProjectionState()
+
+    planner.plan_turn(
+        make_transcript(tmp_path),
+        default_registry(),
+        history_projection_state=state,
+    )
+
+    assert state.last_actual_prompt_tokens == 321
+    assert planner.last_exchange["history_projection"]["actual_input_tokens"] == 321
 
 
 def test_planner_boundary_does_not_require_commit_tool(tmp_path):

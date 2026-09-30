@@ -15,7 +15,12 @@ from typing import TYPE_CHECKING, Any
 from src.llm import DefaultModelClient, MessageBuilder, ModelClient, ModelRequest
 from src.llm.audit import snapshot_request, redact_provider_value
 from src.llm.providers.openai_compatible import encode_request, public_response_snapshot
+from src.agent.context.compression import (
+    HistoryCompactionCoordinator,
+    HistoryProjectionState,
+)
 from src.agent.context.projection import HistoryProjector
+from src.agent.context.window_manager import ContextWindowManager
 from src.agent.config import (
     ModelConfig,
     PlannerConfig,
@@ -67,6 +72,7 @@ class ModelActionPlanner:
         max_repair_attempts: int | None = None,
         repair_planner: Any | None = None,
         history_projector: HistoryProjector | None = None,
+        context_window_manager: ContextWindowManager | None = None,
         client: ModelClient | None = None,
         provider_config: ProviderConfig | None = None,
         planner_config: PlannerConfig | None = None,
@@ -122,6 +128,7 @@ class ModelActionPlanner:
         # Standalone callers default to full history. Runtime injects the
         # configured projector bound to its actual Context Module instances.
         self.history_projector = history_projector or HistoryProjector()
+        self.context_window_manager = context_window_manager
         configured_prompt = prompt_path or self.planner_config.prompt_path or None
         self.system_prompt = self._load_system_prompt(configured_prompt)
         prompt_dir = Path(__file__).resolve().parent / "prompts"
@@ -142,6 +149,8 @@ class ModelActionPlanner:
         *,
         allowed_tool_names: set[str] | None = None,
         decision_index: int | None = None,
+        history_projection_state: HistoryProjectionState | None = None,
+        history_compaction_coordinator: HistoryCompactionCoordinator | None = None,
     ) -> AssistantTurn:
         """Request one turn; Runtime supplies a one-based, instruction-local index.
 
@@ -166,28 +175,49 @@ class ModelActionPlanner:
                 "at least one model tool must be exposed in a mission turn"
             )
         envelope = transcript.instruction_envelope()
-        projection = self.history_projector.project(transcript, registry)
-        builder = MessageBuilder()
-        builder.extend(
+        prefix = MessageBuilder()
+        prefix.extend(
             self.history_projector.assembler.memory_system_messages(envelope),
             key="memory_documents",
         )
-        builder.add_system(self.system_prompt, key="planner_instruction")
-        builder.add_system(self.tool_user_prompt, key="tool_user_instruction")
-        builder.add_system(self.tool_case_studies, key="tool_case_studies")
-        builder.extend(projection.messages, key="history")
+        prefix.add_system(self.system_prompt, key="planner_instruction")
+        prefix.add_system(self.tool_user_prompt, key="tool_user_instruction")
+        prefix.add_system(self.tool_case_studies, key="tool_case_studies")
         interval = self.planner_config.task_progress_reminder_interval
+        reminder: dict[str, Any] | None = None
         # A transient request instruction, never a durable Transcript event.
         # Append after the complete history so tool call/result pairs stay intact.
         if (interval and decision_index is not None and decision_index > 1
                 and (decision_index - 1) % interval == 0):
-            builder.add_system(self.task_progress_reminder, key="task_progress_reminder")
+            reminder = {"role": "system", "content": self.task_progress_reminder}
         parameters = {"tool_choice": "auto", "temperature": 0}
         if self.provider_config.thinking_mode:
             parameters["thinking"] = {"type": self.provider_config.thinking_mode}
+        provider_tools = [spec.to_provider_tool() for spec in specs]
+        fixed_messages = prefix.build()
+        if reminder is not None:
+            fixed_messages = [*fixed_messages, reminder]
+        projection = (
+            self.context_window_manager.project(
+                transcript,
+                registry,
+                state=history_projection_state,
+                coordinator=history_compaction_coordinator,
+                fixed_messages=fixed_messages,
+                tools=provider_tools,
+                parameters=parameters,
+            )
+            if self.context_window_manager is not None
+            else self.history_projector.project(transcript, registry)
+        )
+        builder = MessageBuilder()
+        builder.extend(prefix.build(), key="fixed_prefix")
+        builder.extend(projection.messages, key="history")
+        if reminder is not None:
+            builder.extend([reminder], key="task_progress_reminder")
         request = ModelRequest(
             messages=builder.build(),
-            tools=[spec.to_provider_tool() for spec in specs],
+            tools=provider_tools,
             parameters=parameters,
         )
         # Preserve the existing subclass hook and failed-request audit, while
@@ -204,6 +234,16 @@ class ModelActionPlanner:
             "history_projection": projection.audit,
         }
         data = self._request(payload)
+        if self.context_window_manager is not None:
+            usage = data.get("usage") if isinstance(data, dict) else None
+            self.context_window_manager.observe_usage(
+                history_projection_state,
+                usage if isinstance(usage, dict) else None,
+            )
+            if isinstance(usage, dict):
+                actual = usage.get("prompt_tokens", usage.get("input_tokens"))
+                if type(actual) is int and actual > 0:
+                    projection.audit["actual_input_tokens"] = actual
         self.last_response = dict(data)
         self.last_exchange["response"] = public_response_snapshot(data)
         try:

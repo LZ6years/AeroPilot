@@ -111,21 +111,29 @@ descriptions. Model-facing `StateCheckpoint` records should be dynamic and decis
   last-window UAV self-motion;
 - knowledge catalog and loaded index, never duplicate knowledge bodies.
 
-The provider receives every checkpoint's state text together with the complete
-active-task assistant/tool transcript in chronological order. Observation images
-may be sampled by an explicit `context_history` policy in `configs/plugins.json`.
-The default experiment caps observation images at 20 and retains the latest 3
-consecutively, with log-spaced older frames including the first. Tool evidence
-images are additional; this is not a total image or token budget.
-Each selected observation image is sent once at its original checkpoint;
-earlier labels say `HISTORY`, and only the newest says `CURRENT`.
+The durable transcript retains every checkpoint and assistant/tool event in
+chronological order. Its provider request view may replace an oldest contiguous
+prefix of complete decision windows with one task-local compressed history
+section. The original instruction, exact loaded knowledge, latest checkpoint,
+and recent complete windows remain authoritative outside model-authored
+summary text. Compression never adds a durable Transcript event.
+
+`configs/context.json` owns one global request-media budget. Observation and
+tool-evidence images share the default maximum of 20, retain the latest 3 visual
+events consecutively, and use log-spaced older evidence including the first
+retained raw visual event.
+Each selected recent observation image remains at its original checkpoint;
+images from a compressed prefix are omitted from both the semantic compactor and
+the final history capsule. Earlier retained-tail labels say `HISTORY`, and only
+the newest says `CURRENT`.
 Labels carry `observation_id`, `frame_id`, and scene dimensions outside the
 image pixels. Tool results pair to calls through
 `tool_call_id`. The original instruction is owned only by the `user_instruction`
 event. Tool availability, argument schemas, runtime effects, result
 timing, and batching come from `ToolSpec` plus the provider `tools` array, not
-from duplicate context fields or name-prefix inference. V2 performs no
-application-level token budgeting, text summarization, or silent history truncation.
+from duplicate context fields or name-prefix inference. Request-view compaction
+uses an explicit soft token budget and always records its boundary and fallback
+status in projection audit; it never silently truncates durable history.
 The transcript does not replay phase-start or before-window images. Runtime may
 retain those observation IDs as audit/state anchors, while full image history
 comes from the chronological checkpoints and remains fully stored even when
@@ -134,11 +142,26 @@ the request view omits images.
 `src/agent/context/projection.py` owns the request view, while
 `src/agent/context/request_assembler.py` owns final Provider ordering and
 single-request media hydration; neither owns durable events.
+The task-local `HistoryProjectionState` owns the current compressed section and
+token calibration. A separate task-local coordinator may stage one background
+request, but only the planner thread validates and commits it. The stateless
+`HistoryCompactor` receives an image-free projector-prepared view and produces
+only semantic summary fields; it does not choose boundaries, select images,
+validate evidence, persist data, or modify Runtime state.
+The projector assigns request-local evidence aliases to citable prefix
+observations, ordinary calls/results, and rejected-turn ToolCall IDs. The
+Compactor sees only those aliases under a request-specific response schema;
+validation restores canonical references before a Capsule is committed. Alias
+identities never enter the Transcript or the committed Capsule.
+Its dedicated provider client disables hidden thinking for direct structured
+compression and uses the configured 300-second timeout without timeout retries;
+the ordinary Planner provider policy is unchanged.
 Transcript snapshots are deep-copy isolated. Context modules may provide pure
 history-image selectors through the base interface: candidates contain only
 observation IDs, order and frame IDs. The Image module owns `recency_log`;
 Registry validates JSON and binds the actual enabled instance; Runtime only
-injects these bindings into ModelActionPlanner and persists selection audit.
+injects these bindings into ModelActionPlanner as optional first-stage filters.
+The projector applies the final cross-source media budget and persists selection audit.
 Do not import agent/transcript types in module selectors, access files there,
 or let selectors mutate state or execute tools. Unknown configured modes fail
 initialization. Missing history configuration means `all`. Legacy

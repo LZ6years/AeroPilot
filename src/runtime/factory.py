@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
 from src.agent.planning.model_action_planner import ModelActionPlanner
+from src.agent.context.compression import (
+    HistoryCompressionConfig,
+    ModelHistoryCompactor,
+)
 from src.agent.context.media import MediaHydrator
 from src.agent.context.projection import HistoryProjector
 from src.agent.context.request_assembler import RequestAssembler
+from src.agent.context.window_manager import ContextWindowManager
 from src.agent.safety import SafetySupervisor
 from src.env_client import EnvClient
+from src.llm import DefaultModelClient
 from src.memory.context.builder import ModelContextBuilder
 from src.memory.context.registry import ContextModuleRegistry
 from src.plugins import PluginRegistry
@@ -39,10 +46,16 @@ class RuntimeFactory:
         self,
         plugins_config_path: str | Path = "configs/plugins.json",
         *,
+        context_config_path: str | Path = "configs/context.json",
         plugin_registry: PluginRegistry | None = None,
     ) -> None:
         self.plugins_config_path = Path(plugins_config_path)
         self.config = self._read_config(self.plugins_config_path)
+        self.context_config_path = Path(context_config_path)
+        context_data = self._read_config(self.context_config_path)
+        self.history_compression_config = HistoryCompressionConfig.from_mapping(
+            context_data.get("history_projection", {})
+        )
         self.plugin_registry = plugin_registry or PluginRegistry.discover(self.config)
 
     @staticmethod
@@ -51,7 +64,7 @@ class RuntimeFactory:
             return {}
         data = json.loads(path.read_text(encoding="utf-8-sig"))
         if not isinstance(data, dict):
-            raise ValueError("plugins config must be a JSON object")
+            raise ValueError(f"config {path} must be a JSON object")
         return data
 
     def context_registry(self, run_dir: str | Path) -> ContextModuleRegistry:
@@ -149,9 +162,44 @@ class RuntimeFactory:
             ),
         )
         if isinstance(planner, ModelActionPlanner):
-            planner.history_projector = HistoryProjector(
+            hydrator = MediaHydrator(base_dir=recorder.run_dir)
+            media_policy = {
+                "max_request_images": self.history_compression_config.max_request_images,
+                "keep_recent_visual_events": (
+                    self.history_compression_config.keep_recent_visual_events
+                ),
+                "pin_instruction_start": (
+                    self.history_compression_config.pin_instruction_start
+                ),
+                "pin_current": self.history_compression_config.pin_current,
+            }
+            projector = HistoryProjector(
                 builder.registry.history_bindings(),
-                assembler=RequestAssembler(MediaHydrator(base_dir=recorder.run_dir)),
+                assembler=RequestAssembler(hydrator),
+                media_policy=media_policy,
+            )
+            planner_settings = planner.provider_config.to_provider_settings()
+            compactor_settings = replace(
+                planner_settings,
+                timeout_sec=self.history_compression_config.compactor_timeout_sec,
+                provider_timeout_retries=(
+                    self.history_compression_config.compactor_timeout_retries
+                ),
+                provider_connection_retries=(
+                    self.history_compression_config.compactor_connection_retries
+                ),
+            )
+            compactor = ModelHistoryCompactor(
+                DefaultModelClient(compactor_settings),
+                summary_max_tokens=(
+                    self.history_compression_config.summary_max_tokens
+                ),
+            )
+            planner.history_projector = projector
+            planner.context_window_manager = ContextWindowManager(
+                projector,
+                self.history_compression_config,
+                compactor=compactor,
             )
         return TaskRuntime(
             env_client,

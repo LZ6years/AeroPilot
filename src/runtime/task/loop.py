@@ -48,6 +48,10 @@ class TaskLoop:
                     self.registry,
                     allowed_tool_names=allowed,
                     decision_index=session.decision_index,
+                    history_projection_state=session.history_projection_state,
+                    history_compaction_coordinator=(
+                        session.history_compaction_coordinator
+                    ),
                 )
             except AgentProtocolError as exc:
                 self.journal.capture_provider_exchange(
