@@ -229,6 +229,26 @@ class AgentTranscript:
         """Return isolated events so request projections cannot mutate history."""
         return tuple(copy.deepcopy(self.items))
 
+    @property
+    def event_count(self) -> int:
+        """Return the current append-only boundary without exposing the list."""
+
+        return len(self.items)
+
+    def snapshot_range(
+        self, start: int, end: int | None = None
+    ) -> tuple[TranscriptEvent, ...]:
+        """Copy one validated half-open range for bounded request projection."""
+
+        stop = len(self.items) if end is None else end
+        if (
+            type(start) is not int
+            or type(stop) is not int
+            or not 0 <= start <= stop <= len(self.items)
+        ):
+            raise ValueError("snapshot range must be within the transcript")
+        return tuple(copy.deepcopy(self.items[start:stop]))
+
     def snapshot_before(self, event_count: int) -> tuple[TranscriptEvent, ...]:
         """Copy the prefix ending at an exclusive, previously recorded boundary.
 

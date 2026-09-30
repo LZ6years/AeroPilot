@@ -1,12 +1,24 @@
-"""Project an immutable V2 transcript snapshot into provider messages."""
+"""Project immutable transcript events into bounded provider request history.
+
+The projector owns chronological boundaries, deterministic facts, evidence
+selection, and final message shape. Semantic compression is injected through
+the context-window manager and never changes the durable transcript.
+"""
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
+from src.agent.context.compression.contracts import (
+    CompressedHistorySection,
+    CompressionWindow,
+    EvidenceCatalogEntry,
+)
 from src.agent.context.request_assembler import RequestAssembler
 from src.agent.transcript import AgentTranscript, AssistantTurn, ToolResult, TranscriptEvent
 from src.memory.context.contracts import HISTORY_PROJECTION_SCHEMA, HistoryImageCandidate
@@ -22,6 +34,39 @@ class ProjectionResult:
     audit: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class ProjectionPlan:
+    """A projector-owned immutable plan for one possible compaction boundary."""
+
+    compactable_end_event_index: int | None
+    windows: tuple[CompressionWindow, ...]
+    evidence_catalog: tuple[EvidenceCatalogEntry, ...]
+    deterministic_facts: dict[str, Any]
+    exact_loaded_knowledge: tuple[dict[str, Any], ...]
+    current_state_hint: dict[str, Any]
+    instruction: str
+    source_digest: str | None
+
+
+@dataclass(frozen=True)
+class _DecisionWindow:
+    start: int
+    end: int
+    assistant_index: int
+    closed: bool
+
+
+@dataclass(frozen=True)
+class _VisualCandidate:
+    key: str
+    event_index: int
+    evidence_ref: str
+    observation_id: str
+    frame_id: str
+    media_ref: dict[str, Any]
+    source_kind: str
+    tool_call_id: str | None = None
+
 class HistoryProjector:
     """Select history identities first, then hydrate only selected media."""
 
@@ -30,6 +75,7 @@ class HistoryProjector:
         bindings: dict[str, tuple[ContextModule, dict[str, Any]]] | None = None,
         *,
         assembler: RequestAssembler | None = None,
+        media_policy: dict[str, Any] | None = None,
     ) -> None:
         self.bindings = {
             slot: (module, copy.deepcopy(config))
@@ -38,16 +84,88 @@ class HistoryProjector:
         for module, config in self.bindings.values():
             module.validate_history_policy(copy.deepcopy(config))
         self.assembler = assembler or RequestAssembler()
+        self.media_policy = copy.deepcopy(media_policy) if media_policy else None
 
     def project(
         self, transcript: AgentTranscript, registry: "ToolRegistry"
     ) -> ProjectionResult:
-        return self._project_owned_snapshot(transcript.snapshot(), registry)
+        return self._project_owned_snapshot(
+            transcript.snapshot(), registry, event_indices=None, section=None
+        )
 
     def project_snapshot(
         self, events: tuple[TranscriptEvent, ...], registry: "ToolRegistry"
     ) -> ProjectionResult:
-        return self._project_owned_snapshot(copy.deepcopy(events), registry)
+        return self._project_owned_snapshot(
+            copy.deepcopy(events), registry, event_indices=None, section=None
+        )
+
+    def project_compacted(
+        self,
+        prelude: tuple[TranscriptEvent, ...],
+        tail: tuple[TranscriptEvent, ...],
+        section: CompressedHistorySection,
+        registry: "ToolRegistry",
+    ) -> ProjectionResult:
+        """Render one capsule followed by an untouched chronological tail."""
+
+        items = tuple(copy.deepcopy((*prelude, *tail)))
+        indices = tuple(range(len(prelude))) + tuple(
+            range(section.through_event_index, section.through_event_index + len(tail))
+        )
+        return self._project_owned_snapshot(
+            items, registry, event_indices=indices, section=section
+        )
+
+    def analyze(
+        self,
+        events: tuple[TranscriptEvent, ...],
+        *,
+        base_event_index: int,
+        keep_recent_decision_windows: int,
+        all_events_for_evidence: tuple[TranscriptEvent, ...] | None = None,
+        max_compactable_windows: int | None = None,
+        registry: "ToolRegistry | None" = None,
+    ) -> ProjectionPlan:
+        """Choose the oldest complete prefix without invoking a model."""
+
+        owned = copy.deepcopy(events)
+        windows = _decision_windows(owned)
+        closed = [window for window in windows if window.closed]
+        if len(closed) <= keep_recent_decision_windows:
+            return _empty_plan(owned)
+        eligible = (
+            closed[:-keep_recent_decision_windows]
+            if keep_recent_decision_windows
+            else closed
+        )
+        if max_compactable_windows is not None:
+            if max_compactable_windows < 1:
+                return _empty_plan(owned)
+            eligible = eligible[:max_compactable_windows]
+        cut_local = eligible[-1].end
+        if cut_local <= 0:
+            return _empty_plan(owned)
+        semantic_windows = _compression_windows(
+            owned, eligible, cut_local, base_event_index, registry
+        )
+        full_events = copy.deepcopy(all_events_for_evidence or owned)
+        cut_global = base_event_index + cut_local
+        full_prefix = full_events[:cut_global] if all_events_for_evidence else owned[:cut_local]
+        serialized = [_event_dict(item) for item in full_prefix]
+        digest = hashlib.sha256(
+            json.dumps(serialized, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        return ProjectionPlan(
+            compactable_end_event_index=cut_global,
+            windows=semantic_windows,
+            evidence_catalog=_evidence_catalog(full_prefix),
+            deterministic_facts=_deterministic_facts(full_prefix, semantic_windows),
+            exact_loaded_knowledge=_exact_loaded_knowledge(full_prefix),
+            current_state_hint=_current_state_hint(full_events),
+            instruction=_instruction(full_events),
+            source_digest=digest,
+        )
 
     def _selection(
         self, items: tuple[TranscriptEvent, ...]
@@ -69,13 +187,9 @@ class HistoryProjector:
                     sequence,
                     tuple(_fragment_frame_ids(checkpoint, slot)),
                 )
-                for sequence, (observation_id, checkpoint) in enumerate(
-                    observations.items()
-                )
+                for sequence, (observation_id, checkpoint) in enumerate(observations.items())
             )
-            output = tuple(
-                module.select_history_images(candidates, copy.deepcopy(config))
-            )
+            output = tuple(module.select_history_images(candidates, copy.deepcopy(config)))
             if (
                 any(not isinstance(value, str) for value in output)
                 or len(output) != len(set(output))
@@ -86,9 +200,7 @@ class HistoryProjector:
             selected[slot] = chosen
             policies[slot] = {
                 "config": copy.deepcopy(config),
-                "selected_observation_ids": [
-                    key for key in observations if key in chosen
-                ],
+                "selected_observation_ids": [key for key in observations if key in chosen],
                 "omitted_count": len(observations) - len(chosen),
             }
         return selected, {
@@ -97,59 +209,87 @@ class HistoryProjector:
             "policies": policies,
             "observation_image_count": 0,
             "tool_image_count": 0,
+            "total_image_count": 0,
             "missing_images": [],
         }
 
+    def _selected_visual_candidates(
+        self,
+        items: tuple[TranscriptEvent, ...],
+        event_indices: tuple[int, ...],
+    ) -> tuple[_VisualCandidate, ...]:
+        module_selected, _ = self._selection(items)
+        candidates = list(_visual_candidates(items, event_indices, module_selected))
+        candidates = _deduplicate_visual_candidates(candidates)
+        if not self.media_policy:
+            return tuple(candidates)
+        return _select_visual_candidates(candidates, self.media_policy)
+
     def _project_owned_snapshot(
-        self, items: tuple[TranscriptEvent, ...], registry: "ToolRegistry"
+        self,
+        items: tuple[TranscriptEvent, ...],
+        registry: "ToolRegistry",
+        *,
+        event_indices: tuple[int, ...] | None,
+        section: CompressedHistorySection | None,
     ) -> ProjectionResult:
-        selected, audit = self._selection(items)
+        selected_by_module, audit = self._selection(items)
+        indices = event_indices or tuple(range(len(items)))
+        selected_visual = self._selected_visual_candidates(items, indices)
+        selected_keys = {item.key for item in selected_visual}
+        audit["selected_visual_evidence_refs"] = [item.evidence_ref for item in selected_visual]
+        if self.media_policy:
+            audit["global_media_policy"] = copy.deepcopy(self.media_policy)
+        if section is not None:
+            audit["compaction"] = {
+                "generation": section.generation,
+                "through_event_index": section.through_event_index,
+                "source_digest": section.source_digest,
+                "fallback_used": section.fallback_used,
+            }
         messages: list[dict[str, Any]] = []
         envelope: dict[str, Any] = {}
         first_state_index_by_observation: dict[str, int] = {}
-        for index, event in enumerate(items):
+        for local_index, event in enumerate(items):
             if event.kind != "state_checkpoint":
                 continue
             checkpoint = _payload_dict(event.payload)
             observation_id = checkpoint.get("observation_id")
             if observation_id:
-                first_state_index_by_observation.setdefault(str(observation_id), index)
+                first_state_index_by_observation.setdefault(
+                    str(observation_id), indices[local_index]
+                )
         newest_observation = next(reversed(first_state_index_by_observation), None)
         seen_media: set[str] = set()
-
-        for index, event in enumerate(items):
+        for local_index, event in enumerate(items):
+            global_index = indices[local_index]
             if event.kind == "instruction_envelope":
                 envelope = _payload_dict(event.payload)
                 continue
             if event.kind == "user_instruction":
-                messages.append(
-                    {"role": "user", "content": event.payload["instruction"]}
-                )
+                messages.append({"role": "user", "content": event.payload["instruction"]})
                 context_message = self.assembler.instruction_context_message(envelope)
                 if context_message is not None:
                     messages.append(context_message)
+                if section is not None:
+                    messages.append(self.assembler.compressed_history_message(section))
                 continue
             if event.kind == "state_checkpoint":
                 checkpoint = _payload_dict(event.payload)
                 observation_id = str(checkpoint.get("observation_id") or "unknown")
-                include_media = (
-                    first_state_index_by_observation.get(observation_id) == index
-                )
+                include_media = first_state_index_by_observation.get(observation_id) == global_index
                 inputs = _selected_checkpoint_inputs(
                     checkpoint,
                     observation_id=observation_id,
                     include_media=include_media,
-                    selected=selected,
+                    selected=selected_by_module,
+                    selected_visual=selected_keys,
                     seen_media=seen_media,
                 )
-                timeline_role = (
-                    "CURRENT" if observation_id == newest_observation else "HISTORY"
-                )
+                timeline_role = "CURRENT" if observation_id == newest_observation else "HISTORY"
                 try:
                     content = self.assembler.checkpoint_content(
-                        checkpoint,
-                        model_inputs=inputs,
-                        timeline_role=timeline_role,
+                        checkpoint, model_inputs=inputs, timeline_role=timeline_role
                     )
                 except ValueError as exc:
                     content = self.assembler.checkpoint_content(
@@ -165,10 +305,10 @@ class HistoryProjector:
                         f"observation_id={observation_id}. Treat this as new chronological state."
                     ),
                 }
-                if isinstance(content, list):
-                    body = [prefix, *content]
-                else:
-                    body = [prefix, {"type": "text", "text": content}]
+                body = [prefix, *content] if isinstance(content, list) else [
+                    prefix,
+                    {"type": "text", "text": content},
+                ]
                 image_count = sum(part.get("type") == "image_url" for part in body)
                 audit["observation_image_count"] += image_count
                 if include_media and not image_count:
@@ -209,25 +349,32 @@ class HistoryProjector:
                     {
                         "role": "tool",
                         "tool_call_id": result.tool_call_id,
-                        "content": json.dumps(
-                            result.to_provider_dict(), ensure_ascii=False
-                        ),
+                        "content": json.dumps(result.to_provider_dict(), ensure_ascii=False),
                     }
                 )
-                evidence = self._tool_evidence_message(result)
+                evidence = self._tool_evidence_message(
+                    result, selected_keys=selected_keys, seen_media=seen_media
+                )
                 if evidence is not None:
                     messages.append(evidence)
                     audit["tool_image_count"] += sum(
-                        part.get("type") == "image_url"
-                        for part in evidence["content"]
+                        part.get("type") == "image_url" for part in evidence["content"]
                     )
                 continue
             if event.kind == "protocol_feedback":
                 messages.append({"role": "user", "content": event.payload["message"]})
+        audit["total_image_count"] = (
+            audit["observation_image_count"]
+            + audit["tool_image_count"]
+        )
         return ProjectionResult(messages, audit)
 
     def _tool_evidence_message(
-        self, result: ToolResult
+        self,
+        result: ToolResult,
+        *,
+        selected_keys: set[str],
+        seen_media: set[str],
     ) -> dict[str, Any] | None:
         content: list[dict[str, Any]] = []
         for item in result.model_inputs:
@@ -236,28 +383,450 @@ class HistoryProjector:
             raw_ref = item.get("media_ref")
             if not isinstance(raw_ref, dict):
                 continue
-            ref = raw_ref
+            observation_id = str(raw_ref.get("observation_id") or "unknown")
+            identity = _media_identity(observation_id, raw_ref)
+            if identity not in selected_keys or identity in seen_media:
+                continue
             try:
-                prepared = self.assembler.media_hydrator.hydrate(ref)
+                prepared = self.assembler.media_hydrator.hydrate(raw_ref)
             except ValueError:
                 continue
+            seen_media.add(identity)
             content.extend(
                 [
                     {
                         "type": "text",
                         "text": (
                             f"TOOL EVIDENCE tool_call_id={result.tool_call_id} "
-                            f"observation_id={ref.get('observation_id', 'unknown')}. "
-                            f"{ref.get('usage') or 'Verify this tool evidence.'}"
+                            f"observation_id={observation_id}. "
+                            f"{raw_ref.get('usage') or 'Verify this tool evidence.'}"
                         ),
                     },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": prepared.data_url},
-                    },
+                    {"type": "image_url", "image_url": {"url": prepared.data_url}},
                 ]
             )
         return {"role": "user", "content": content} if content else None
+
+
+def _empty_plan(events: tuple[TranscriptEvent, ...]) -> ProjectionPlan:
+    return ProjectionPlan(
+        compactable_end_event_index=None,
+        windows=(),
+        evidence_catalog=(),
+        deterministic_facts={},
+        exact_loaded_knowledge=(),
+        current_state_hint=_current_state_hint(events),
+        instruction=_instruction(events),
+        source_digest=None,
+    )
+
+
+def _decision_windows(events: tuple[TranscriptEvent, ...]) -> tuple[_DecisionWindow, ...]:
+    assistants = [index for index, event in enumerate(events) if event.kind == "assistant_turn"]
+    windows: list[_DecisionWindow] = []
+    for position, assistant_index in enumerate(assistants):
+        start = 0 if position == 0 else assistant_index
+        end = assistants[position + 1] if position + 1 < len(assistants) else len(events)
+        turn = events[assistant_index].payload
+        call_ids = {call.tool_call_id for call in getattr(turn, "tool_calls", [])}
+        result_ids = {
+            event.payload.tool_call_id
+            for event in events[assistant_index + 1 : end]
+            if event.kind == "tool_result"
+        }
+        windows.append(
+            _DecisionWindow(start, end, assistant_index, bool(call_ids) and call_ids <= result_ids)
+        )
+    return tuple(windows)
+
+
+def _compression_windows(
+    events: tuple[TranscriptEvent, ...],
+    windows: list[_DecisionWindow],
+    cut_local: int,
+    base_event_index: int,
+    registry: "ToolRegistry | None",
+) -> tuple[CompressionWindow, ...]:
+    result: list[CompressionWindow] = []
+    for number, window in enumerate(windows, start=1):
+        if not window.closed or window.end > cut_local:
+            continue
+        payloads = tuple(
+            payload
+            for event in events[window.start : window.end]
+            for payload in [_event_for_compression(event, registry)]
+            if payload is not None
+        )
+        result.append(
+            CompressionWindow(
+                window_id=f"decision_window_{number:04d}",
+                start_event_index=base_event_index + window.start,
+                end_event_index=base_event_index + window.end,
+                events=payloads,
+            )
+        )
+    return tuple(result)
+
+
+def _event_for_compression(
+    event: TranscriptEvent, registry: "ToolRegistry | None"
+) -> dict[str, Any] | None:
+    """Build the narrow semantic view used only by the summary model."""
+
+    if event.kind == "assistant_turn":
+        turn: AssistantTurn = event.payload
+        calls = []
+        for call in turn.tool_calls:
+            calls.append(
+                {
+                    "tool_call_id": call.tool_call_id,
+                    "tool_name": call.tool_name,
+                    "effect": _tool_effect(registry, call.tool_name),
+                    "args": _compression_call_args(call.tool_name, call.args),
+                }
+            )
+        return {
+            "kind": event.kind,
+            "payload": {
+                "public_intent": turn.public_intent,
+                "tool_calls": calls,
+            },
+        }
+    if event.kind == "tool_result":
+        result: ToolResult = event.payload
+        payload: dict[str, Any] = {
+            "tool_call_id": result.tool_call_id,
+            "tool_name": result.tool_name,
+            "effect": _tool_effect(registry, result.tool_name),
+            "status": result.status,
+            "message": result.message,
+            "result_ref": result.result_ref,
+            "requested_args": copy.deepcopy(result.requested_args),
+            "executed_args": copy.deepcopy(result.executed_args),
+            "safety_interventions": copy.deepcopy(result.safety_interventions),
+        }
+        return {"kind": event.kind, "payload": payload}
+    if event.kind == "state_checkpoint":
+        payload = _payload_dict(event.payload)
+        return {
+            "kind": event.kind,
+            "payload": {
+                "observation_id": payload.get("observation_id"),
+                "reason": payload.get("reason"),
+                "motion": _checkpoint_motion(payload),
+            },
+        }
+    if event.kind == "protocol_feedback":
+        return {"kind": event.kind, "payload": {"message": event.payload.get("message")}}
+    if event.kind == "provider_turn_rejected":
+        payload = _payload_dict(event.payload)
+        return {
+            "kind": event.kind,
+            "payload": {
+                key: copy.deepcopy(payload.get(key))
+                for key in ("error", "content_present", "tool_calls")
+                if key in payload
+            },
+        }
+    return None
+
+
+def _tool_effect(registry: "ToolRegistry | None", tool_name: str) -> str | None:
+    if registry is None:
+        return None
+    try:
+        return registry.get(tool_name).runtime.effect
+    except KeyError:
+        return None
+
+
+def _compression_call_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
+    """Remove repeated plan bodies while preserving ordinary tool arguments."""
+
+    if tool_name != "runtime.update_plan":
+        return copy.deepcopy(args)
+    # Checkpoints and deterministic boundary facts already retain the current
+    # plan owner. Replaying every historical full step list wastes the 32k
+    # semantic budget without adding execution evidence.
+    return {
+        key: copy.deepcopy(value)
+        for key, value in args.items()
+        if key not in {"steps", "plan", "task_plan"}
+    }
+
+
+def _checkpoint_motion(checkpoint: dict[str, Any]) -> dict[str, Any]:
+    for fragment in checkpoint.get("fragments", []):
+        if not isinstance(fragment, dict) or fragment.get("name") != "motion":
+            continue
+        content = fragment.get("model_content")
+        if not isinstance(content, dict):
+            return {}
+        return {
+            key: copy.deepcopy(content.get(key))
+            for key in (
+                "instruction_start_relative_uav_motion",
+                "last_window_uav_motion",
+            )
+            if key in content
+        }
+    return {}
+
+
+def _event_dict(event: TranscriptEvent) -> dict[str, Any]:
+    return {"kind": event.kind, "payload": _payload_dict(event.payload)}
+
+
+def _instruction(events: tuple[TranscriptEvent, ...]) -> str:
+    for event in events:
+        if event.kind == "user_instruction":
+            value = event.payload.get("instruction")
+            return value if isinstance(value, str) else ""
+    return ""
+
+
+def _current_state_hint(events: tuple[TranscriptEvent, ...]) -> dict[str, Any]:
+    for event in reversed(events):
+        if event.kind != "state_checkpoint":
+            continue
+        payload = _payload_dict(event.payload)
+        return {
+            "reason": payload.get("reason"),
+            "task_plan": copy.deepcopy(payload.get("task_plan")),
+            "loaded_knowledge": copy.deepcopy(payload.get("loaded_knowledge") or []),
+        }
+    return {}
+
+
+def _evidence_catalog(
+    events: tuple[TranscriptEvent, ...]
+) -> tuple[EvidenceCatalogEntry, ...]:
+    """Assign deterministic aliases to every citable prefix identity.
+
+    Rejected provider turns are not replayed as assistant messages, but their
+    ToolCall IDs are legitimate evidence for explaining protocol failures.
+    Non-evidence implementation IDs such as checkpoints, windows, and artifact
+    paths deliberately never enter this catalog.
+    """
+
+    refs: dict[str, str] = {}
+
+    def add(value: Any, kind: str) -> None:
+        if value is None:
+            return
+        canonical = str(value)
+        if canonical:
+            refs.setdefault(canonical, kind)
+
+    for event in events:
+        if event.kind == "state_checkpoint":
+            add(_payload_dict(event.payload).get("observation_id"), "observation")
+        elif event.kind == "assistant_turn":
+            for call in event.payload.tool_calls:
+                add(call.tool_call_id, "tool_call")
+        elif event.kind == "tool_result":
+            add(event.payload.tool_call_id, "tool_call")
+            add(event.payload.result_ref, "tool_result")
+        elif event.kind == "provider_turn_rejected":
+            payload = _payload_dict(event.payload)
+            tool_calls = payload.get("tool_calls")
+            if not isinstance(tool_calls, list):
+                continue
+            for call in tool_calls:
+                if not isinstance(call, dict):
+                    continue
+                add(call.get("tool_call_id") or call.get("id"), "rejected_tool_call")
+    return tuple(
+        EvidenceCatalogEntry(
+            alias=f"E{index:04d}",
+            canonical_ref=canonical_ref,
+            kind=kind,
+        )
+        for index, (canonical_ref, kind) in enumerate(refs.items(), start=1)
+    )
+
+
+def _deterministic_facts(
+    events: tuple[TranscriptEvent, ...], windows: tuple[CompressionWindow, ...]
+) -> dict[str, Any]:
+    tool_status_counts: dict[str, dict[str, int]] = {}
+    failures: list[dict[str, Any]] = []
+    interventions: list[dict[str, Any]] = []
+    physical_windows = 0
+    boundary_checkpoint: dict[str, Any] = {}
+    for event in events:
+        if event.kind == "state_checkpoint":
+            checkpoint = _payload_dict(event.payload)
+            boundary_checkpoint = {
+                "observation_id": checkpoint.get("observation_id"),
+                "reason": checkpoint.get("reason"),
+                "motion": _checkpoint_motion(checkpoint),
+            }
+            if checkpoint.get("reason") == "physical_window_completed":
+                physical_windows += 1
+        elif event.kind == "tool_result":
+            result: ToolResult = event.payload
+            by_status = tool_status_counts.setdefault(result.tool_name, {})
+            by_status[result.status] = by_status.get(result.status, 0) + 1
+            if result.status != "ok":
+                failures.append(
+                    {
+                        "tool_call_id": result.tool_call_id,
+                        "tool_name": result.tool_name,
+                        "status": result.status,
+                        "message": result.message,
+                        "result_ref": result.result_ref,
+                    }
+                )
+            for intervention in result.safety_interventions:
+                interventions.append(
+                    {"tool_call_id": result.tool_call_id, **copy.deepcopy(intervention)}
+                )
+    return {
+        "compacted_decision_window_count": sum(
+            event.kind == "assistant_turn" for event in events
+        ),
+        "physical_window_count": physical_windows,
+        "tool_status_counts": tool_status_counts,
+        "latest_failures": failures[-5:],
+        "latest_safety_interventions": interventions[-5:],
+        "boundary_checkpoint": boundary_checkpoint,
+    }
+
+
+def _exact_loaded_knowledge(
+    events: tuple[TranscriptEvent, ...]
+) -> tuple[dict[str, Any], ...]:
+    values: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for event in events:
+        if event.kind != "tool_result":
+            continue
+        result: ToolResult = event.payload
+        if result.tool_name != "knowledge.load" or result.status != "ok":
+            continue
+        payload = result.to_provider_dict()
+        digest = hashlib.sha256(
+            json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        if digest not in seen:
+            seen.add(digest)
+            values.append(payload)
+    return tuple(values)
+
+
+def _visual_candidates(
+    events: tuple[TranscriptEvent, ...],
+    event_indices: tuple[int, ...],
+    selected_by_module: dict[str, set[str]],
+) -> tuple[_VisualCandidate, ...]:
+    values: list[_VisualCandidate] = []
+    for local_index, event in enumerate(events):
+        event_index = event_indices[local_index]
+        if event.kind == "state_checkpoint":
+            checkpoint = _payload_dict(event.payload)
+            observation_id = str(checkpoint.get("observation_id") or "unknown")
+            for fragment in checkpoint.get("fragments", []):
+                if not isinstance(fragment, dict):
+                    continue
+                slot = str(fragment.get("name") or "")
+                if slot in selected_by_module and observation_id not in selected_by_module[slot]:
+                    continue
+                for item in fragment.get("model_inputs", []):
+                    ref = item.get("media_ref") if isinstance(item, dict) else None
+                    if not isinstance(item, dict) or item.get("type") != "image" or not isinstance(ref, dict):
+                        continue
+                    values.append(
+                        _candidate(ref, event_index, evidence_ref=observation_id, source_kind="observation")
+                    )
+        elif event.kind == "tool_result":
+            result: ToolResult = event.payload
+            for item in result.model_inputs:
+                ref = item.get("media_ref") if isinstance(item, dict) else None
+                if not isinstance(item, dict) or item.get("type") != "image" or not isinstance(ref, dict):
+                    continue
+                values.append(
+                    _candidate(
+                        ref,
+                        event_index,
+                        evidence_ref=result.tool_call_id,
+                        source_kind="tool_evidence",
+                        tool_call_id=result.tool_call_id,
+                    )
+                )
+    return tuple(values)
+
+
+def _candidate(
+    ref: dict[str, Any],
+    event_index: int,
+    *,
+    evidence_ref: str,
+    source_kind: str,
+    tool_call_id: str | None = None,
+) -> _VisualCandidate:
+    observation_id = str(ref.get("observation_id") or "unknown")
+    return _VisualCandidate(
+        key=_media_identity(observation_id, ref),
+        event_index=event_index,
+        evidence_ref=evidence_ref,
+        observation_id=observation_id,
+        frame_id=str(ref.get("frame_id") or "unknown"),
+        media_ref=copy.deepcopy(ref),
+        source_kind=source_kind,
+        tool_call_id=tool_call_id,
+    )
+
+
+def _deduplicate_visual_candidates(
+    candidates: list[_VisualCandidate],
+) -> list[_VisualCandidate]:
+    by_key: dict[str, _VisualCandidate] = {}
+    for candidate in sorted(candidates, key=lambda item: item.event_index):
+        by_key.setdefault(candidate.key, candidate)
+    return list(by_key.values())
+
+
+def _select_visual_candidates(
+    candidates: list[_VisualCandidate], policy: dict[str, Any]
+) -> tuple[_VisualCandidate, ...]:
+    if not candidates:
+        return ()
+    budget = int(policy["max_request_images"])
+    if len(candidates) <= budget:
+        return tuple(candidates)
+    chosen: set[str] = set()
+    if policy.get("pin_instruction_start"):
+        chosen.add(candidates[0].key)
+    if policy.get("pin_current"):
+        observations = [item for item in candidates if item.source_kind == "observation"]
+        if observations:
+            chosen.add(observations[-1].key)
+    recent = int(policy["keep_recent_visual_events"])
+    chosen.update(item.key for item in candidates[-recent:])
+    remaining_slots = budget - len(chosen)
+    pool = [item for item in candidates if item.key not in chosen]
+    if remaining_slots > 0 and pool:
+        if remaining_slots >= len(pool):
+            chosen.update(item.key for item in pool)
+        elif remaining_slots == 1:
+            chosen.add(pool[-1].key)
+        else:
+            total = len(pool)
+            ages = []
+            for index in range(remaining_slots):
+                age = math.floor(
+                    math.exp(index / (remaining_slots - 1) * math.log(total)) - 1 + 0.5
+                )
+                age = min(total - 1, max(age, ages[-1] + 1 if ages else 0))
+                ages.append(age)
+            for age in ages:
+                chosen.add(pool[total - age - 1].key)
+    return tuple(item for item in candidates if item.key in chosen)[:budget]
+
+
+def _media_identity(observation_id: str, ref: dict[str, Any]) -> str:
+    return f"{observation_id}:{ref.get('sha256') or ref.get('ref') or ''}"
 
 
 def _payload_dict(payload: Any) -> dict[str, Any]:
@@ -286,6 +855,7 @@ def _selected_checkpoint_inputs(
     observation_id: str,
     include_media: bool,
     selected: dict[str, set[str]],
+    selected_visual: set[str],
     seen_media: set[str],
 ) -> list[dict[str, Any]]:
     inputs: list[dict[str, Any]] = []
@@ -303,14 +873,8 @@ def _selected_checkpoint_inputs(
             ref = item.get("media_ref")
             if not include_media or not chosen or not isinstance(ref, dict):
                 continue
-            # The same bytes can be a valid observation at two different
-            # times. Deduplicate repeated references within one observation,
-            # while the hydrator's SHA cache avoids reading/encoding twice.
-            identity = (
-                f"{observation_id}:"
-                f"{ref.get('sha256') or ref.get('ref') or ''}"
-            )
-            if not identity or identity in seen_media:
+            identity = _media_identity(observation_id, ref)
+            if identity not in selected_visual or identity in seen_media:
                 continue
             if str(ref.get("observation_id") or observation_id) != observation_id:
                 continue

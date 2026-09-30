@@ -10,6 +10,10 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+from src.agent.context.compression import (
+    HistoryCompactionCoordinator,
+    HistoryProjectionState,
+)
 from src.agent.mission_state import MissionState
 from src.agent.transcript import AgentTranscript
 from src.env_client import SceneInstance
@@ -30,6 +34,12 @@ class TaskSession:
     transcript: AgentTranscript
     checkpoints: "ContextCheckpointService"
     knowledge_service: Any
+    history_projection_state: HistoryProjectionState = field(
+        default_factory=HistoryProjectionState
+    )
+    history_compaction_coordinator: HistoryCompactionCoordinator = field(
+        default_factory=HistoryCompactionCoordinator
+    )
     decision_index: int = 0
     seen_call_ids: set[str] = field(default_factory=set)
     executed_read_signatures: set[tuple[str, str, str]] = field(default_factory=set)

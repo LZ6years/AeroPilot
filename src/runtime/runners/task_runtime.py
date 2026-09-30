@@ -321,6 +321,8 @@ class TaskRuntime:
                         )
             raise
         finally:
+            if session is not None:
+                session.history_compaction_coordinator.abandon()
             if stop_scene_on_finish and scene is not None:
                 try:
                     self._scenes.stop(scene)

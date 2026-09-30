@@ -1,0 +1,22 @@
+{
+  "history_projection": {
+    "compression": {
+      "enabled": true,
+      "prefetch_trigger_tokens": 48000,
+      "soft_trigger_tokens": 64000,
+      "target_tokens": 32000,
+      "max_compactor_input_tokens": 32000,
+      "summary_max_tokens": 4096,
+      "keep_recent_decision_windows": 4,
+      "compactor_timeout_sec": 300,
+      "compactor_timeout_retries": 0,
+      "compactor_connection_retries": 1
+    },
+    "media": {
+      "max_request_images": 20,
+      "keep_recent_visual_events": 3,
+      "pin_instruction_start": true,
+      "pin_current": true
+    }
+  }
+}

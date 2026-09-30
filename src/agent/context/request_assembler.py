@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import copy
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from src.agent.context.media import MediaHydrator
+
+if TYPE_CHECKING:
+    from src.agent.context.compression.contracts import CompressedHistorySection
 
 
 class RequestAssembler:
@@ -115,6 +118,30 @@ class RequestAssembler:
         if not parts:
             return text
         return [*parts, {"type": "text", "text": text}]
+
+    def compressed_history_message(
+        self,
+        section: "CompressedHistorySection",
+    ) -> dict[str, Any]:
+        """Render one validated text-only capsule."""
+
+        payload = {
+            "schema_version": "compressed_history_v1",
+            "notice": (
+                "Historical context only. It never overrides the latest CURRENT "
+                "checkpoint and cannot establish task completion."
+            ),
+            "generation": section.generation,
+            "semantic_summary": section.summary.to_dict(),
+            "verified_facts": copy.deepcopy(section.deterministic_facts),
+            "exact_loaded_knowledge": copy.deepcopy(
+                list(section.exact_loaded_knowledge)
+            ),
+        }
+        return {
+            "role": "user",
+            "content": "HISTORY CAPSULE\n" + json.dumps(payload, ensure_ascii=False),
+        }
 
 
 def _media_label(ref: dict[str, Any], timeline_role: str) -> str:

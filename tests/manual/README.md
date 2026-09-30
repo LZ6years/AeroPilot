@@ -48,6 +48,7 @@ Every run must use a new `runs/experiments/<probe>/<timestamp>/` directory. Do n
 | `gpu_probe_environment.py` | flyagent + CUDA/GPU | `runs/experiments/gpu_probe_environment/<timestamp>/` | Explicit manual/diagnostic workflow |
 | `gpu_resource_monitor.py` | flyagent + CUDA/GPU | `runs/experiments/gpu_resource_monitor/<timestamp>/` | Explicit manual/diagnostic workflow |
 | `gpu_variance_probe.py` | flyagent + CUDA/GPU | `runs/experiments/gpu_variance_probe/<timestamp>/` | Explicit manual/diagnostic workflow |
+| `history_compaction_probe.py` | flyagent + saved transcript; Provider only with `--invoke-model` | `runs/experiments/history_compaction/<timestamp>/` | Select the largest image-free complete-window prefix under 32k and optionally validate one non-blocking model compaction per sample. |
 | `model_admission_probe.py` | flyagent | `runs/experiments/model_admission_probe/<timestamp>/` | Explicit manual/diagnostic workflow |
 | `model_multimodal_smoke.py` | flyagent | `runs/experiments/model_multimodal_smoke/<timestamp>/` | Explicit manual/diagnostic workflow |
 | `model_native_tool_loop_smoke.py` | flyagent | `runs/experiments/model_native_tool_loop_smoke/<timestamp>/` | Explicit manual/diagnostic workflow |

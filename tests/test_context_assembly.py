@@ -79,6 +79,18 @@ def test_prefix_isolated_and_excludes_subsequent_events():
     assert history.items[2].payload.fragments[0].model_content["nested"]["list"] == [1, 2]
 
 
+def test_snapshot_range_isolated_and_validated():
+    history = transcript()
+    selected = history.snapshot_range(1, 3)
+    assert selected == history.snapshot()[1:3]
+    selected[1].payload.fragments[0].model_content["nested"]["list"].append(9)
+    assert history.items[2].payload.fragments[0].model_content["nested"]["list"] == [1, 2]
+    assert history.event_count == 3
+    for start, end in [(-1, 1), (2, 1), (0, 4), (True, 2)]:
+        with pytest.raises(ValueError):
+            history.snapshot_range(start, end)
+
+
 def test_projection_public_inputs_and_outputs_remain_isolated():
     history = transcript()
     original = copy.deepcopy(history.items)
