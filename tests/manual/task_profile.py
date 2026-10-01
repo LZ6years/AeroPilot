@@ -152,9 +152,9 @@ def install_profile(profile):
     from src.runtime.task.turn_executor import TurnExecutor
     from src.runtime.task import turn_executor
     from evaluation.benchmarks.travel_uav.scenario import TravelUavScenarioController
-    from plugins.capabilities.visual_grounding.locate.scripts import service
-    from plugins.capabilities.visual_grounding.locate.scripts.backends.grounding_dino import GroundingDinoBackend
-    from plugins.capabilities.visual_grounding.locate.scripts.backends.sam import SamBackend
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts import service
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.grounding_dino import GroundingDinoBackend
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.sam import SamBackend
 
     with ExitStack() as stack:
         stack.enter_context(transport_hooks(profile))

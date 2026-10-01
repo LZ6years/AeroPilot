@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from src.plugins.contracts.skill import SkillCapabilityResult
 
-from plugins.capabilities.visual_grounding.locate.scripts.service import service_from_settings
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.service import service_from_settings
 
 
 def handle(payload: dict) -> SkillCapabilityResult:
@@ -12,7 +12,7 @@ def handle(payload: dict) -> SkillCapabilityResult:
     runtime_context = dict(payload.get("runtime_context", {}))
     settings = dict(payload.get("settings", {}))
     observation = dict(runtime_context.get("latest_observation", {}))
-    result = service_from_settings(settings).locate(
+    result = service_from_settings(settings).measure_visible_depth(
         observation=observation,
         observation_id=str(args.get("observation_id") or ""),
         query=str(args.get("query") or "").strip(),
@@ -21,12 +21,12 @@ def handle(payload: dict) -> SkillCapabilityResult:
     )
     candidates = result["data"]["candidates"]
     message = (
-        f"Located {len(candidates)} candidate(s)"
+        f"Measured visible depth for {len(candidates)} candidate(s)"
         + f"; {sum(c.get('distance_status') == 'ok' and c.get('distance_m') is not None for c in candidates)} valid distance estimate(s). Check distance_status; execution success is not measurement validity."
     )
     if not candidates:
-        message = ("No sufficiently confident detection candidates were returned. "
-                   "Whether the target is present remains uncertain.")
+        message = ("Visible-depth measurement found no matching measurable candidate. "
+                   "This is not a search result and gives no evidence that the object is absent.")
     return SkillCapabilityResult(
         message=message,
         data=result["data"],

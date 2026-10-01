@@ -62,7 +62,7 @@ def preview(case_dir: Path, output_dir: Path, *, detailed_audit: bool = False) -
     filtered = []
     for event in audit.agent_transcript:
         payload = event.get("payload", {})
-        if event.get("kind") == "tool_result" and payload.get("tool_name") == "skill.visual_grounding.locate":
+        if event.get("kind") == "tool_result" and payload.get("tool_name") == "skill.visual_grounding.measure_visible_depth":
             candidates = payload.get("data", {}).get("candidates", [])
             filtered.append({"tool_call_id": payload.get("tool_call_id"),
                              "query": payload.get("data", {}).get("query"),

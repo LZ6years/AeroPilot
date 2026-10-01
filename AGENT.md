@@ -42,10 +42,9 @@ instructions; do not copy them into the UAV agent's model-facing memory/prompts.
   tool results, protocol feedback, and state checkpoints for the active
   instruction. Context modules must not duplicate that history.
 - `agent_tool_loop_system.txt` owns task goals, observation interpretation and
-  the feedback loop. `tool_user_system.txt` explains generic parameter, execution
-  and result semantics without naming tools or prescribing a selection order.
-  `tool_use_case_studies.txt` contains illustrative syntax/dependency examples,
-  not executable routes. Tool descriptions own applicability; complex tasks
+  the feedback loop. `tool_user_system.txt` explains only generic call grouping
+  and result semantics without duplicating JSON Schema or permanent examples.
+  Tool descriptions own applicability and exact argument semantics; complex tasks
   should normally start with a plan, while simple tasks may act directly.
 - Model-visible descriptions follow purpose, applicable need, returned content,
   and capability limits. Parameter prose explains meaning, units and effects,
@@ -180,7 +179,7 @@ as if a new image mode had been used in an old request.
 
 The optional fused color bar supports qualitative range only. Precise target-relative
 evidence comes from an enabled callable capability rather than model-authored
-pixel coordinates. The default `skill.visual_grounding.locate` capability is
+pixel coordinates. The default `skill.visual_grounding.measure_visible_depth` capability is
 selected through `configs/plugins.json`; its ToolSpec and private detector,
 segmenter, depth, and threshold settings live in the capability's own JSON.
 Runtime and plugin discovery must not hardcode that plugin ID or its model.

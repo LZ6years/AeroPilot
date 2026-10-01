@@ -172,7 +172,7 @@
     {
       "type": "function",
       "function": {
-        "name": "skill_visual_grounding_locate",
+        "name": "skill_visual_grounding_measure_visible_depth",
         "description": "Locate a natural-language target in the current RGB observation and optionally estimate candidate distances. Applicable to tasks needing candidate locations or target-distance measurements. Returns candidate information, annotated evidence and, when enabled and available, distance estimates. Candidate identity requires interpretation against the task; an empty detection does not prove absence. Distance is camera-to-visible-surface depth, not horizontal or target-center distance.\nExecution: effect=read_only; result_timing=immediate. Independent read-only calls may share a turn; execution may be sequential. At most 2 calls per observation, including same-turn calls.",
         "parameters": {
           "type": "object",

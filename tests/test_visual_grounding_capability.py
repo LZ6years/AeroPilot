@@ -7,12 +7,12 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from plugins.capabilities.visual_grounding.locate.scripts.contracts import (
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.contracts import (
     CandidateMask,
     GroundedCandidate,
     VisualGroundingSettings,
 )
-from plugins.capabilities.visual_grounding.locate.scripts.service import (
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.service import (
     VisualGroundingService,
 )
 from src.agent.context.media import MediaHydrator
@@ -60,7 +60,7 @@ def test_memory_only_rgb_depth_are_consumed_without_backend_artifacts(tmp_path):
             return super().locate(rgb_path, query)
 
     service = VisualGroundingService(ReadingGrounder([_candidate()]), None, _settings())
-    result = service.locate(observation=observation, observation_id="obs_memory",
+    result = service.measure_visible_depth(observation=observation, observation_id="obs_memory",
         query="person", run_dir=None, tool_call_id="fixture")
     assert result["data"]["candidates"][0]["distance_m"] == 7.0
     assert result["data"]["candidates"][0]["distance_status"] == "ok"
@@ -111,7 +111,7 @@ def test_configured_threshold_filters_before_evidence_and_depth(tmp_path):
                   for score in (0.399, 0.4, 0.401)]
     service = VisualGroundingService(FakeGrounder(candidates), None,
                                      _settings(box_threshold=0.4))
-    result = service.locate(observation=_observation(tmp_path), observation_id="obs_0001",
+    result = service.measure_visible_depth(observation=_observation(tmp_path), observation_id="obs_0001",
                             query="object",
                             run_dir=str(tmp_path), tool_call_id="threshold")
     assert [c["confidence"] for c in result["data"]["candidates"]] == [0.401, 0.4]
@@ -129,7 +129,7 @@ def test_all_low_candidates_do_not_segment_or_emit_empty_image(tmp_path):
     service = VisualGroundingService(
         FakeGrounder([GroundedCandidate((1, 1, 10, 10), "weak", 0.399)]),
         segmenter, _settings(box_threshold=0.4))
-    result = service.locate(observation=_observation(tmp_path), observation_id="obs_0001",
+    result = service.measure_visible_depth(observation=_observation(tmp_path), observation_id="obs_0001",
                             query="object",
                             run_dir=str(tmp_path), tool_call_id="empty")
     assert result["data"]["candidates"] == []
@@ -138,12 +138,13 @@ def test_all_low_candidates_do_not_segment_or_emit_empty_image(tmp_path):
 
 
 def test_empty_detection_handler_reports_uncertainty(monkeypatch, tmp_path):
-    from plugins.capabilities.visual_grounding.locate.scripts import handler
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts import handler
     service = VisualGroundingService(FakeGrounder([]), None, _settings())
     monkeypatch.setattr(handler, "service_from_settings", lambda _: service)
     result = handler.handle({"args": {"observation_id": "obs_0001", "query": "object"},
                              "runtime_context": {"latest_observation": _observation(tmp_path)}})
-    assert "remains uncertain" in result.message
+    assert "not a search result" in result.message
+    assert "include_distance" not in result.data
     assert result.data["candidates"] == []
 
 
@@ -152,7 +153,7 @@ def test_missing_depth_retains_candidate_with_unavailable_distance(tmp_path):
     segmenter = FakeSegmenter()
     service = VisualGroundingService(grounder, segmenter, _settings())
 
-    result = service.locate(
+    result = service.measure_visible_depth(
         observation=_observation(tmp_path),
         observation_id="obs_0001",
         query="穿红衣服的人",
@@ -181,7 +182,7 @@ def test_distance_uses_segmented_surface_robust_median(tmp_path):
         FakeGrounder([_candidate()]), segmenter, _settings()
     )
 
-    result = service.locate(
+    result = service.measure_visible_depth(
         observation=_observation(tmp_path, depth),
         observation_id="obs_0001",
         query="person",
@@ -207,7 +208,7 @@ def test_segmentation_failure_falls_back_to_inset_detector_box(tmp_path):
         _settings(),
     )
 
-    result = service.locate(
+    result = service.measure_visible_depth(
         observation=_observation(tmp_path, depth),
         observation_id="obs_0001",
         query="person",
@@ -236,7 +237,7 @@ def test_multiple_depth_surfaces_return_unavailable_instead_of_a_number(tmp_path
         _settings(),
     )
 
-    result = service.locate(
+    result = service.measure_visible_depth(
         observation=_observation(tmp_path, depth),
         observation_id="obs_0001",
         query="person",
@@ -248,7 +249,7 @@ def test_multiple_depth_surfaces_return_unavailable_instead_of_a_number(tmp_path
     candidate = result["data"]["candidates"][0]
     assert candidate["distance_m"] is None
     assert candidate["distance_status"] == "inconsistent_depth_surfaces"
-    from plugins.capabilities.visual_grounding.locate.scripts import handler
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts import handler
     monkeypatch.setattr(handler, "service_from_settings", lambda settings: service)
     public = handler.handle({"args": {"observation_id": "obs_0001", "query": "person"},
                              "runtime_context": {"latest_observation": _observation(tmp_path, depth)}})
@@ -258,7 +259,7 @@ def test_multiple_depth_surfaces_return_unavailable_instead_of_a_number(tmp_path
 
 def test_empty_candidates_and_stale_observation_are_explicit(tmp_path):
     service = VisualGroundingService(FakeGrounder([]), None, _settings())
-    empty = service.locate(
+    empty = service.measure_visible_depth(
         observation=_observation(tmp_path),
         observation_id="obs_0001",
         query="a red vehicle",
@@ -269,7 +270,7 @@ def test_empty_candidates_and_stale_observation_are_explicit(tmp_path):
     assert empty["data"]["candidates"] == []
 
     try:
-        service.locate(
+        service.measure_visible_depth(
             observation=_observation(tmp_path),
             observation_id="obs_old",
             query="a red vehicle",

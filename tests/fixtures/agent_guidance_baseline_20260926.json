@@ -8,7 +8,7 @@
     "configs/plugins.json": "de1fe2e56168903134be7f1aabb0c92c587f1d57f254b5b6880fc0d9a0737946",
     "evaluation/benchmarks/aerial_vln/protocol.py": "ab5b0d38ef7d0e860692abc4519482daa3050f88f0dbbac2a8d5ac1729c2c7c6",
     "evaluation/benchmarks/travel_uav/protocol.py": "9c3d2bdfa36f7e93766afc2af45fa15af0c43403e9a8228e6fd5eeebea2508d9",
-    "plugins/capabilities/visual_grounding/locate/capability.json": "42654b91110507e83e197cc15b8104a97caa38bd5d8464bafa1097c384fe0e80",
+    "plugins/capabilities/visual_grounding/measure_visible_depth/capability.json": "42654b91110507e83e197cc15b8104a97caa38bd5d8464bafa1097c384fe0e80",
     "plugins/knowledge/uav_flight/approach_and_standoff/SKILL.md": "50125341cc931e8b3c6f98797662815ca22bfbad0282e863233682c363a93dc2",
     "plugins/knowledge/uav_flight/orbit_and_surround/SKILL.md": "a05b8fafbb2ee750cffbd5b7369ea1727b96d77c25df6aeb0d02dfa008df1bed",
     "plugins/knowledge/uav_flight/route_traversal_and_passage/SKILL.md": "37838b0c1897f678571fa31020f93e1eda772fc29aa69dda13ad6b54396495e7",
@@ -32,7 +32,7 @@
       "calls": {
         "runtime.update_plan": 5,
         "uav.move_body": 12,
-        "skill.visual_grounding.locate": 16,
+        "skill.visual_grounding.measure_visible_depth": 16,
         "uav.turn_relative": 5,
         "runtime.report_completed": 3
       },
@@ -50,7 +50,7 @@
         "runtime.update_plan": 4,
         "uav.turn_relative": 3,
         "uav.move_body": 10,
-        "skill.visual_grounding.locate": 9,
+        "skill.visual_grounding.measure_visible_depth": 9,
         "runtime.report_completed": 3
       },
       "physical_batches": {
@@ -67,7 +67,7 @@
         "runtime.update_plan": 4,
         "uav.move_body": 9,
         "uav.turn_relative": 5,
-        "skill.visual_grounding.locate": 7,
+        "skill.visual_grounding.measure_visible_depth": 7,
         "runtime.report_completed": 3
       },
       "physical_batches": {
@@ -83,7 +83,7 @@
         "runtime.update_plan": 6,
         "uav.move_body": 27,
         "uav.turn_relative": 13,
-        "skill.visual_grounding.locate": 8,
+        "skill.visual_grounding.measure_visible_depth": 8,
         "runtime.report_completed": 2
       },
       "physical_batches": {
@@ -101,7 +101,7 @@
         "runtime.update_plan": 2,
         "uav.move_body": 17,
         "uav.turn_relative": 4,
-        "skill.visual_grounding.locate": 8
+        "skill.visual_grounding.measure_visible_depth": 8
       },
       "physical_batches": {
         "2": 4,
@@ -116,7 +116,7 @@
       "calls": {
         "runtime.update_plan": 5,
         "uav.move_body": 12,
-        "skill.visual_grounding.locate": 9,
+        "skill.visual_grounding.measure_visible_depth": 9,
         "uav.turn_relative": 6,
         "runtime.report_completed": 2
       },
@@ -133,7 +133,7 @@
         "runtime.update_plan": 5,
         "knowledge.load": 1,
         "uav.move_body": 14,
-        "skill.visual_grounding.locate": 7,
+        "skill.visual_grounding.measure_visible_depth": 7,
         "uav.turn_relative": 1,
         "runtime.report_completed": 2
       },
@@ -150,7 +150,7 @@
         "runtime.update_plan": 4,
         "uav.move_body": 12,
         "uav.turn_relative": 9,
-        "skill.visual_grounding.locate": 9,
+        "skill.visual_grounding.measure_visible_depth": 9,
         "runtime.report_completed": 3
       },
       "physical_batches": {
@@ -165,7 +165,7 @@
       "calls": {
         "runtime.update_plan": 7,
         "uav.move_body": 44,
-        "skill.visual_grounding.locate": 6,
+        "skill.visual_grounding.measure_visible_depth": 6,
         "uav.turn_relative": 15,
         "runtime.report_completed": 3
       },
@@ -183,7 +183,7 @@
         "runtime.update_plan": 5,
         "uav.move_body": 35,
         "uav.turn_relative": 12,
-        "skill.visual_grounding.locate": 8,
+        "skill.visual_grounding.measure_visible_depth": 8,
         "runtime.report_completed": 2
       },
       "physical_batches": {
@@ -198,7 +198,7 @@
       "calls": {
         "knowledge.load": 1,
         "runtime.update_plan": 2,
-        "skill.visual_grounding.locate": 37,
+        "skill.visual_grounding.measure_visible_depth": 37,
         "uav.turn_relative": 17,
         "uav.move_body": 25,
         "runtime.report_completed": 1
@@ -215,7 +215,7 @@
       "calls": {
         "runtime.update_plan": 3,
         "uav.turn_relative": 7,
-        "skill.visual_grounding.locate": 10,
+        "skill.visual_grounding.measure_visible_depth": 10,
         "knowledge.load": 1,
         "uav.move_body": 11,
         "runtime.report_completed": 1
@@ -232,7 +232,7 @@
       "calls": {
         "runtime.update_plan": 2,
         "uav.turn_relative": 4,
-        "skill.visual_grounding.locate": 13,
+        "skill.visual_grounding.measure_visible_depth": 13,
         "uav.move_body": 13,
         "runtime.report_completed": 3
       },
@@ -248,7 +248,7 @@
       "calls": {
         "runtime.update_plan": 2,
         "uav.turn_relative": 7,
-        "skill.visual_grounding.locate": 12,
+        "skill.visual_grounding.measure_visible_depth": 12,
         "uav.move_body": 9,
         "runtime.report_completed": 2
       },
@@ -265,7 +265,7 @@
       "calls": {
         "runtime.update_plan": 3,
         "uav.turn_relative": 15,
-        "skill.visual_grounding.locate": 41,
+        "skill.visual_grounding.measure_visible_depth": 41,
         "uav.move_body": 19,
         "knowledge.load": 1,
         "runtime.report_completed": 1
@@ -284,7 +284,7 @@
         "runtime.update_plan": 1,
         "uav.move_body": 9,
         "knowledge.load": 1,
-        "skill.visual_grounding.locate": 1,
+        "skill.visual_grounding.measure_visible_depth": 1,
         "uav.turn_relative": 2,
         "runtime.report_blocked": 2
       },
@@ -302,7 +302,7 @@
         "runtime.update_plan": 2,
         "uav.turn_relative": 9,
         "uav.move_body": 20,
-        "skill.visual_grounding.locate": 21,
+        "skill.visual_grounding.measure_visible_depth": 21,
         "knowledge.load": 2,
         "runtime.report_completed": 1
       },
@@ -320,7 +320,7 @@
         "runtime.update_plan": 2,
         "uav.turn_relative": 4,
         "uav.move_body": 8,
-        "skill.visual_grounding.locate": 6,
+        "skill.visual_grounding.measure_visible_depth": 6,
         "knowledge.load": 1
       },
       "physical_batches": {
@@ -336,7 +336,7 @@
       "calls": {
         "runtime.update_plan": 3,
         "uav.turn_relative": 3,
-        "skill.visual_grounding.locate": 6,
+        "skill.visual_grounding.measure_visible_depth": 6,
         "uav.move_body": 4,
         "runtime.report_completed": 1
       },
@@ -354,7 +354,7 @@
         "runtime.update_plan": 2,
         "uav.turn_relative": 18,
         "uav.move_body": 29,
-        "skill.visual_grounding.locate": 21,
+        "skill.visual_grounding.measure_visible_depth": 21,
         "knowledge.load": 1,
         "runtime.report_completed": 1
       },

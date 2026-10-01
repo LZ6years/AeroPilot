@@ -35,12 +35,12 @@ def test_callable_skill_is_discovered_from_json_and_exposes_schema():
     listings = registry.skill_capability_catalog.listings()
 
     assert [item["call_name"] for item in listings] == [
-        "skill.visual_grounding.locate"
+        "skill.visual_grounding.measure_visible_depth"
     ]
     assert listings[0]["plugin_id"] == "capabilities.visual_grounding"
     assert capability.settings["grounding_backend"] == "grounding_dino"
-    assert listings[0]["skill_name"] == "visual_grounding_locate"
-    assert listings[0]["wire_name"] == "skill_visual_grounding_locate"
+    assert listings[0]["skill_name"] == "visual_grounding_measure_visible_depth"
+    assert listings[0]["wire_name"] == "skill_visual_grounding_measure_visible_depth"
     assert listings[0]["input_schema"]["required"] == [
         "observation_id",
         "query",
@@ -58,7 +58,7 @@ def test_callable_skill_is_discovered_from_json_and_exposes_schema():
 
 def test_provider_tool_schema_does_not_expose_settings_or_policy_extensions():
     tool = default_registry(_capability_registry()).get(
-        "skill.visual_grounding.locate"
+        "skill.visual_grounding.measure_visible_depth"
     ).to_provider_tool()
     parameters = tool["function"]["parameters"]
 
@@ -70,7 +70,7 @@ def test_provider_tool_schema_does_not_expose_settings_or_policy_extensions():
 def test_registry_exposes_builtin_and_plugin_tools_without_context():
     registry = default_registry(_capability_registry())
     tools = {spec.name: spec for spec in registry.model_specs()}
-    assert {"uav.turn_relative", "uav.move_body", "skill.visual_grounding.locate"} <= tools.keys()
+    assert {"uav.turn_relative", "uav.move_body", "skill.visual_grounding.measure_visible_depth"} <= tools.keys()
     assert "uav.hover" not in tools
     capability = _capability_registry().skill_capability_catalog.capabilities[0]
     assert tools[capability.call_name].input_schema == capability.input_schema
@@ -79,10 +79,10 @@ def test_registry_exposes_builtin_and_plugin_tools_without_context():
 @pytest.mark.parametrize("value", [False, True])
 def test_retired_distance_toggle_is_rejected(value):
     registry = default_registry(_capability_registry())
-    turn = AssistantTurn("t", "Measure", [AgentToolCall("c", "skill.visual_grounding.locate",
+    turn = AssistantTurn("t", "Measure", [AgentToolCall("c", "skill.visual_grounding.measure_visible_depth",
         {"observation_id": "obs_1", "query": "visible object", "include_distance": value})])
     with pytest.raises(NativeTurnValidationError):
-        validate_native_turn(turn, registry, allowed_names={"skill.visual_grounding.locate"},
+        validate_native_turn(turn, registry, allowed_names={"skill.visual_grounding.measure_visible_depth"},
                              latest_observation={"observation_id": "obs_1"})
 
 
@@ -93,10 +93,10 @@ def test_skill_tool_validator_checks_schema_before_execution(extra):
     if extra:
         args["extra"] = True
     turn = AssistantTurn("turn", "Confirm identity", [
-        AgentToolCall("detect", "skill.visual_grounding.locate", args)])
+        AgentToolCall("detect", "skill.visual_grounding.measure_visible_depth", args)])
     def validate():
         return validate_native_turn(turn, registry,
-            allowed_names={"skill.visual_grounding.locate"},
+            allowed_names={"skill.visual_grounding.measure_visible_depth"},
             latest_observation={"observation_id": "obs_0001"})
     if extra:
         with pytest.raises(NativeTurnValidationError):
@@ -121,7 +121,7 @@ def test_dispatcher_passes_private_settings_only_to_handler(monkeypatch):
     result = dispatcher.call(
         "scene_1",
         "uav_1",
-        "skill.visual_grounding.locate",
+        "skill.visual_grounding.measure_visible_depth",
         {
             "observation_id": "obs_0001",
             "query": "路口右侧的人",
@@ -186,4 +186,4 @@ def test_core_registration_and_runtime_do_not_hardcode_visual_grounding_id():
     for path in core_files:
         text = path.read_text(encoding="utf-8")
         assert "capabilities.visual_grounding" not in text, path
-        assert "skill.visual_grounding.locate" not in text, path
+        assert "skill.visual_grounding.measure_visible_depth" not in text, path

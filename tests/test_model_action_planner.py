@@ -182,7 +182,8 @@ def test_request_allowlist_cannot_expose_hover_and_includes_generic_prompts(tmp_
     assert [tool["function"]["name"] for tool in payload["tools"]] == ["uav_turn_relative"]
     systems = [message["content"] for message in payload["messages"] if message["role"] == "system"]
     assert planner.tool_user_prompt in systems
-    assert planner.tool_case_studies in systems
+    assert not any("fictitious format_records" in message for message in systems)
+    assert not hasattr(planner, "tool_case_studies")
 
 
 @pytest.mark.parametrize("stages", [
@@ -338,7 +339,7 @@ def test_native_planner_captures_exact_public_exchange_and_hashed_media(tmp_path
     assert "data:image" not in request_text
     assert "provider_media sha256=" in request_text
     assert exchange["media"][0]["data"] == image_bytes
-    assert exchange["media"][0]["request_path"][:2] == ["messages", 5]
+    assert exchange["media"][0]["request_path"][:2] == ["messages", 4]
     assert exchange["media"][0]["timeline_role"] == "CURRENT"
     assert exchange["media"][0]["observation_id"] == "obs_media"
     assert exchange["media"][0]["frame_id"] == "frame_media"

@@ -50,7 +50,7 @@ def test_manual_gate_missing_artifacts_fails_closed(tmp_path):
 def test_manual_gate_uses_runtime_plugin_tool_surface():
     registry = aerial_vln_case_gate._audit_registry()
 
-    assert "skill.visual_grounding.locate" in registry.names()
+    assert "skill.visual_grounding.measure_visible_depth" in registry.names()
 
 
 @pytest.mark.parametrize("ids", [[], {}, [""], [" x"], [1], ["x", "x"]])

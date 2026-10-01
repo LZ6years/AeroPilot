@@ -15,18 +15,18 @@ from PIL import Image, ImageDraw
 from src.memory.context.media_refs import image_media_ref
 from src.perception.frame_payload import frame_bytes, load_rgb_frame
 
-from plugins.capabilities.visual_grounding.locate.scripts.backends.grounding_dino import (
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.grounding_dino import (
     GroundingDinoBackend,
 )
-from plugins.capabilities.visual_grounding.locate.scripts.backends.sam import SamBackend
-from plugins.capabilities.visual_grounding.locate.scripts.contracts import (
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.sam import SamBackend
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.contracts import (
     CandidateMask,
     GroundedCandidate,
     GroundingBackend,
     SegmentationBackend,
     VisualGroundingSettings,
 )
-from plugins.capabilities.visual_grounding.locate.scripts.depth import (
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.depth import (
     _clamped_box,
     estimate_candidate_depth,
     load_metric_depth,
@@ -46,7 +46,7 @@ class VisualGroundingService:
         self.segmentation_backend = segmentation_backend
         self.settings = settings
 
-    def locate(
+    def measure_visible_depth(
         self,
         *,
         observation: dict[str, Any],
@@ -58,7 +58,7 @@ class VisualGroundingService:
         latest_id = str(observation.get("observation_id") or "")
         if observation_id != latest_id:
             raise ValueError(
-                "visual grounding only accepts the latest observation_id; "
+                "visible-depth measurement only accepts the latest observation_id; "
                 f"requested={observation_id!r}, latest={latest_id!r}"
             )
         frames = observation.get("frames")
@@ -161,8 +161,6 @@ class VisualGroundingService:
             "data": {
                 "observation_id": observation_id,
                 "query": query,
-                # Output-only compatibility for historical report readers.
-                "include_distance": True,
                 "candidates": model_candidates,
                 "audit_details": {
                     "box_threshold": self.settings.box_threshold,

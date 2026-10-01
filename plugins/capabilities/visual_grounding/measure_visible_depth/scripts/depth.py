@@ -6,7 +6,7 @@ from src.perception.frame_payload import load_depth_frame
 
 import numpy as np
 
-from plugins.capabilities.visual_grounding.locate.scripts.contracts import (
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.contracts import (
     CandidateMask,
     DepthEstimate,
     GroundedCandidate,

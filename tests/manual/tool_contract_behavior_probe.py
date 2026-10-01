@@ -48,7 +48,7 @@ CASES = (
     ("complex_search", "Search for the white van, approach it while avoiding obstacles, inspect both sides, and finish above its rear bumper.", "runtime.update_plan"),
     ("complex_route", "Follow the road to the bridge, cross it, locate the second junction, then turn left and stop beside the blue gate.", "runtime.update_plan"),
     ("explicit_knowledge", "Read the available orbit_and_surround guidance before any flight. Reading that guidance is my current request.", "knowledge.load"),
-    ("explicit_distance", "Measure the current distance to the white truck visible on the right. Do not move the vehicle.", "skill.visual_grounding.locate"),
+    ("explicit_distance", "Measure the current distance to the white truck visible on the right. Do not move the vehicle.", "skill.visual_grounding.measure_visible_depth"),
     ("supported_completion", "Turn right by 15 degrees, then finish.", "runtime.report_completed"),
     ("unsafe_blocked", "Move forward one metre if it can be done safely.", "runtime.report_blocked"),
 )

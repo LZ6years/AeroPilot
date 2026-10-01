@@ -11,7 +11,7 @@ from typing import Any
 
 from PIL import Image
 
-from plugins.capabilities.visual_grounding.locate.scripts.contracts import GroundedCandidate
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.contracts import GroundedCandidate
 
 
 class GroundingDinoBackend:

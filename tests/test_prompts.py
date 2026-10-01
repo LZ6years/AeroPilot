@@ -40,13 +40,12 @@ def test_model_facing_prompts_and_reusable_skills_do_not_leak_benchmark_repairs(
 def test_flyagent_rules_contain_general_visual_action_alignment_without_internal_terms():
     rules = (Path("memory") / "FLYAGENT.md").read_text(encoding="utf-8")
 
-    assert "## Who You Are" in rules
-    assert "## Spatial And Action Consistency" in rules
-    assert "When a visible cue is on the left" in rules
-    assert "Apply the same rule in reverse" in rules
+    assert "## Identity And View" in rules
+    assert "## Spatial Consistency" in rules
+    assert "Turn toward a visible cue" in rules
     assert "negative yaw means turn left" not in rules
     assert "positive yaw means turn right" not in rules
-    assert "Do not turn away from a visible cue" in rules
+    assert "turning away" in rules
     assert "does not prove physical travel" in rules
     assert '"Pass the target on its right"' not in rules
     assert "A semantic plan must not translate" not in rules
@@ -59,7 +58,7 @@ def test_flyagent_rules_contain_general_visual_action_alignment_without_internal
             Path("src/agent/planning/prompts/agent_tool_loop_system.txt"),
         ]
     )
-    duplicated_route_rules = ["Who You Are", "How You Work", "Decision Style"]
+    duplicated_route_rules = ["Identity And View", "Operating Cycle", "Spatial Consistency"]
     for rule in duplicated_route_rules:
         assert rule not in parser_prompt
 
@@ -90,12 +89,11 @@ def test_flyagent_rules_contain_general_visual_action_alignment_without_internal
         assert implementation_term not in rules
 
     user_preferences = Path("memory/USER.md").read_text(encoding="utf-8")
-    assert "entity's own facing direction" in user_preferences
-    assert "observer-relative position" in user_preferences
-    assert "route relation" in user_preferences
-    assert "positive evidence for an ordinary front-side route or position" in user_preferences
-    assert "Only an explicit request" in user_preferences
-    assert "to face, orient toward, or turn" in user_preferences
+    assert "target's own facing direction" in user_preferences
+    assert "observer's position around a target" in user_preferences
+    assert "route used to approach or pass it" in user_preferences
+    assert "Only an" in user_preferences
+    assert "request to face, orient or turn" in user_preferences
     for implementation_term in ("Runtime", "Backend", "Schema", "PAST", "NOW", "overlay"):
         assert implementation_term not in user_preferences
 
@@ -125,6 +123,17 @@ def test_orbit_skill_stays_compact_and_action_oriented():
         assert term not in skill
 
 
+def test_visual_target_guidance_preserves_anchored_direction_priors():
+    root = Path("plugins/knowledge/uav_flight/visual_target_task_reasoning")
+    skill = (root / "SKILL.md").read_text(encoding="utf-8")
+    search = (root / "references/search_under_uncertainty.md").read_text(encoding="utf-8")
+
+    assert "remains the primary search corridor" in skill
+    assert "persistent world-relative search corridor" in search
+    assert "Do not accumulate turns that cancel" in search
+    assert "only when no anchored direction prior" in search
+
+
 
 def test_tool_user_is_generic_and_task_prompt_preserves_evidence_roles():
     from src.tools.registry import default_registry
@@ -139,7 +148,7 @@ def test_tool_user_is_generic_and_task_prompt_preserves_evidence_roles():
     assert "status `collision`" in prompt
     assert "recoverable environment outcome" in prompt
     assert "replan" in prompt
-    assert "required" in tool_user and "result_timing" in tool_user
+    assert "required inputs" in tool_user and "execution attributes" in tool_user
     assert "one to three ordered physical" in tool_user
     for retired in ("commit_phase_turn", "phase_strategy", "completion_assessment", "done_when"):
         assert retired not in prompt
@@ -161,12 +170,12 @@ def test_descriptions_keep_capability_boundaries_and_explicit_planning_preferenc
     assert "simple single-step task can act directly" in plan
     assert "stable step IDs" in plan and "revision" in plan
     assert "methods or explanations" in registry.get("knowledge.load").description
-    assert "empty candidate list leaves presence uncertain" in registry.get("skill.visual_grounding.locate").description
+    assert "never call to discover, search for, or test the presence" in registry.get("skill.visual_grounding.measure_visible_depth").description.lower()
     assert "Plan status alone is not completion evidence" in registry.get("runtime.report_completed").description
     assert "cannot continue safely or meaningfully" in registry.get("runtime.report_blocked").description
-    ground = registry.get("skill.visual_grounding.locate").to_provider_tool()["function"]
+    ground = registry.get("skill.visual_grounding.measure_visible_depth").to_provider_tool()["function"]
     assert "inconsistent_depth_surfaces" in ground["description"]
     assert "failed call, not negative scene evidence" in ground["description"]
     assert "metric_depth_unavailable" in ground["description"]
-    assert "directly observed appearance" in ground["parameters"]["properties"]["query"]["description"]
+    assert "candidate already identified in CURRENT RGB" in ground["parameters"]["properties"]["query"]["description"]
     assert "x-flyagent-completion-evidence" not in str(ground)

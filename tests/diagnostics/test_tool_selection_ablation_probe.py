@@ -40,7 +40,7 @@ def fixture_case(tmp_path):
                        'canonical_turn':{'tool_calls':[{'tool_name':'runtime.report_blocked'}] if i==2 else []}})
     audit = {'run_dir':str(run), 'planner_debug':[{'model_rounds':rounds}],
              'agent_transcript':[{'kind':'tool_result','payload':{
-                 'tool_name':'skill.visual_grounding.locate','tool_call_id':'ground','status':'ok'}}]}
+                 'tool_name':'skill.visual_grounding.measure_visible_depth','tool_call_id':'ground','status':'ok'}}]}
     case = tmp_path/'case'
     case.mkdir()
     probe.write_json(case/'audit.json',audit)

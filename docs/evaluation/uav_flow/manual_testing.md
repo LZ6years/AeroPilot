@@ -186,7 +186,7 @@ Planner 图片按 observation 时间排列，每张只发送一次：旧图为 `
 定性远近时，不应调用精确感知工具。
 
 需要当前 RGB 中已见候选的表面距离时，调用
-`skill.visual_grounding.locate(observation_id, query)`；不再提供纯检测输入开关。
+`skill.visual_grounding.measure_visible_depth(observation_id, query)`；该工具只测量 CURRENT RGB 中已确认候选的可见表面深度，不提供通用检测或搜索入口。
 身份、方位和路线关系由模型结合观察判断，不规定接近前或结束前必须调用。
 插件先由开放词汇 detector 生成候选，再用 segmentation mask 内部的稳健中位数
 测距，SAM 不可用时回退到收缩后的 detector box。模型不再自己画 ROI，深度跨越多个表面

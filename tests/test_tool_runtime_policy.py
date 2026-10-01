@@ -44,10 +44,10 @@ def test_grounding_config_permits_independent_calls_without_changing_quota():
             }
         }
     )
-    spec = default_registry(plugins).get("skill.visual_grounding.locate")
+    spec = default_registry(plugins).get("skill.visual_grounding.measure_visible_depth")
     assert spec.runtime.batching == "parallel_safe"
     assert spec.runtime.max_calls_per_observation == 2
-    assert "candidate already observed" in spec.description
+    assert "candidate that you have already identified in the CURRENT RGB" in spec.description
     assert "Execution success does not imply a valid measurement" in spec.description
     blocked = default_registry().get("runtime.report_blocked").to_provider_tool()
     assert "only call in its batch" in blocked["function"]["description"]

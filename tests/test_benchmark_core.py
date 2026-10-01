@@ -832,7 +832,7 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
                     "tool_calls": [
                         {
                             "tool_call_id": "call_grounding",
-                            "tool_name": "skill.visual_grounding.locate",
+                            "tool_name": "skill.visual_grounding.measure_visible_depth",
                             "args": {
                                 "observation_id": "obs_1",
                                 "query": "the person to approach",
@@ -847,7 +847,7 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
                 "tool_result",
                 {
                     "tool_call_id": "call_grounding",
-                    "tool_name": "skill.visual_grounding.locate",
+                    "tool_name": "skill.visual_grounding.measure_visible_depth",
                     "status": "ok",
                     "message": "Located one candidate with robust metric depth.",
                     "requested_args": {
@@ -1017,7 +1017,7 @@ def test_core_review_renders_agent_tool_transcript_causally(tmp_path):
     assert "Manual ROI review required." in html
     assert "semantic target intended by the model" in html
     assert "depth-roi-box" in html
-    assert "skill.visual_grounding.locate" in html
+    assert "skill.visual_grounding.measure_visible_depth" in html
     assert "candidate_01" in html
     assert "Internal grounding and depth audit" in html
     assert "Manual candidate review required." in html

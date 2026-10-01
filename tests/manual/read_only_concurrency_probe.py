@@ -39,7 +39,7 @@ from tests.manual.gpu_probe_environment import (check_interpreter, cache_sources
     environment, validate_environment, other_project_jobs)
 
 BASELINE = ROOT / "tests/manual_outputs/benchmark_20_flash_20260923_v2"
-VISION = "skill.visual_grounding.locate"
+VISION = "skill.visual_grounding.measure_visible_depth"
 
 
 def read(path):
@@ -444,7 +444,7 @@ def execute(root, review, *, input_manifest=None, require_cuda=False):
     try:
         snapshot = Path(manifest["source_snapshot"])
         if require_cuda:
-            settings = read(snapshot / "plugins/capabilities/visual_grounding/locate/capability.json")["settings"]
+            settings = read(snapshot / "plugins/capabilities/visual_grounding/measure_visible_depth/capability.json")["settings"]
             manifest["weight_sources"] = cache_sources(settings)
             from src.plugins import PluginRegistry
             from src.plugins.skills.knowledge_service import KnowledgeService

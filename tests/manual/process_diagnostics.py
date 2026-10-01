@@ -64,9 +64,9 @@ def supervise(command, directory, timeout=None, *, monitor_gpu=False, gpu_sample
 
 def install_grounding_trace(directory):
     """Instrument existing adapters in this child only; keep detection semantics intact."""
-    from plugins.capabilities.visual_grounding.locate.scripts import service
-    from plugins.capabilities.visual_grounding.locate.scripts.backends.grounding_dino import GroundingDinoBackend
-    from plugins.capabilities.visual_grounding.locate.scripts.backends.sam import SamBackend
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts import service
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.grounding_dino import GroundingDinoBackend
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.sam import SamBackend
 
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)

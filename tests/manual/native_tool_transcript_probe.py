@@ -73,7 +73,7 @@ def main() -> None:
                 [
                     AgentToolCall(
                         "call_detect",
-                        "skill.visual_grounding.locate",
+                        "skill.visual_grounding.measure_visible_depth",
                         {
                             "observation_id": "obs_0001",
                             "query": "画面中的人",
@@ -86,7 +86,7 @@ def main() -> None:
         transcript.append_tool_result(
             ToolResult(
                 "call_detect",
-                "skill.visual_grounding.locate",
+                "skill.visual_grounding.measure_visible_depth",
                 "ok",
                 "one grounded candidate",
                 data={

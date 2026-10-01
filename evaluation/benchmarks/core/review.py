@@ -1165,7 +1165,7 @@ def _transcript_record_body(
                 "affected": "Not executed because another call rejected the turn.",
                 "turn_member": "Not executed because the turn combination was invalid.",
             }.get(diagnosis.get("role"), "Rejected; see original message.")
-        if payload.get("tool_name") == "skill.visual_grounding.locate":
+        if payload.get("tool_name") == "skill.visual_grounding.measure_visible_depth":
             candidates = result_data.get("candidates")
             candidate_rows = candidates if isinstance(candidates, list) else []
             result_body = _key_value_table(

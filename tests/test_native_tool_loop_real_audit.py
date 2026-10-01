@@ -413,7 +413,7 @@ def test_audit_accepts_detection_only_visual_grounding_and_marks_manual_review(
                 "tool_calls": [
                     {
                         "tool_call_id": "ground_1",
-                        "tool_name": "skill.visual_grounding.locate",
+                        "tool_name": "skill.visual_grounding.measure_visible_depth",
                         "args": {
                             "observation_id": "obs_1",
                             "query": "the person ahead",
@@ -428,7 +428,7 @@ def test_audit_accepts_detection_only_visual_grounding_and_marks_manual_review(
             "kind": "tool_result",
             "payload": {
                 "tool_call_id": "ground_1",
-                "tool_name": "skill.visual_grounding.locate",
+                "tool_name": "skill.visual_grounding.measure_visible_depth",
                 "status": "ok",
                 "requested_args": {
                     "observation_id": "obs_1",

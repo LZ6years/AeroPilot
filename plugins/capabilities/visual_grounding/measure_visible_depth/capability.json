@@ -1,0 +1,50 @@
+{
+  "call_name": "skill.visual_grounding.measure_visible_depth",
+  "wire_name": "skill_visual_grounding_measure_visible_depth",
+  "description": "Measure camera-to-visible-surface depth of a candidate that you have already identified in the CURRENT RGB. Call only when the image itself supplies direct evidence of that candidate and a distance would change the next decision. Never call to discover, search for, or test the presence of a target or landmark, and never copy an unseen object from the instruction into the query. Returns candidate locations, annotated evidence and distance validity; it does not establish task identity, interpret routes or decide completion. Query only a category and appearance directly supported by the image. An empty candidate list is a failed measurement, not evidence that an object is absent. A detector match does not confirm identity. Distance is camera-to-visible-surface depth, not horizontal or target-center distance. inconsistent_depth_surfaces invalidates the scalar distance; metric_depth_unavailable means metric depth could not be used. Execution success does not imply a valid measurement. An error or rejected result is a failed call, not negative scene evidence. No mandatory approach-time or completion-time measurement is imposed.",
+  "input_schema": {
+    "type": "object",
+    "required": [
+      "observation_id",
+      "query"
+    ],
+    "additionalProperties": false,
+    "properties": {
+      "observation_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Exact observation_id shown on the CURRENT image label."
+      },
+      "query": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 256,
+        "description": "Concise category and appearance of the candidate already identified in CURRENT RGB, e.g. brown-walled building or beige flat roof. Do not copy an unseen instruction object, add invented attributes or alternative identities, or encode task-relative relations such as directly below the UAV."
+      }
+    }
+  },
+  "runtime": {
+    "effect": "read_only",
+    "result_timing": "immediate",
+    "batching": "parallel_safe",
+    "model_exposed": true,
+    "max_calls_per_observation": 2
+  },
+  "settings": {
+    "grounding_backend": "grounding_dino",
+    "grounding_model": "IDEA-Research/grounding-dino-base",
+    "segmentation_backend": "sam",
+    "segmentation_model": "facebook/sam-vit-base",
+    "device": "auto",
+    "box_threshold": 0.4,
+    "text_threshold": 0.25,
+    "max_candidates": 5,
+    "mask_erosion_ratio": 0.08,
+    "box_inset_ratio": 0.2,
+    "minimum_valid_depth_pixels": 9,
+    "minimum_valid_depth_coverage": 0.5,
+    "maximum_coherent_mad_m": 0.25
+  },
+  "handler": "scripts/handler.py",
+  "mock": false
+}

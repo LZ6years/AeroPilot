@@ -17,7 +17,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from plugins.capabilities.visual_grounding.locate.scripts.service import (
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.service import (
     service_from_settings,
 )
 
@@ -70,7 +70,7 @@ def main() -> None:
         settings["device"] = args.device
     if args.sam_encoder_only:
         from PIL import Image
-        from plugins.capabilities.visual_grounding.locate.scripts.backends.sam import SamBackend
+        from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.sam import SamBackend
         backend = SamBackend(settings['segmentation_model'], settings['device'])
         processor, model = backend._load()
         with Image.open(rgb_path) as source:
@@ -91,7 +91,7 @@ def main() -> None:
         }
     service = service_from_settings(settings)
     for repeat in range(args.repeat):
-        result = service.locate(
+        result = service.measure_visible_depth(
             observation={"observation_id": args.observation_id, "frames": frames},
             observation_id=args.observation_id,
             query=args.query,

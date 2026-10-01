@@ -59,8 +59,8 @@ def work_without_barrier(device):
 
 @pytest.mark.parametrize("backend_name", ["grounding", "sam"])
 def test_concurrent_direct_load_constructs_model_once(monkeypatch, backend_name):
-    from plugins.capabilities.visual_grounding.locate.scripts.backends.grounding_dino import GroundingDinoBackend
-    from plugins.capabilities.visual_grounding.locate.scripts.backends.sam import SamBackend
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.grounding_dino import GroundingDinoBackend
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.sam import SamBackend
     counts = {"processor": 0, "model": 0}
     class Processor:
         @classmethod
@@ -87,7 +87,7 @@ def test_concurrent_direct_load_constructs_model_once(monkeypatch, backend_name)
 
 
 def test_service_cache_construction_is_atomic(monkeypatch):
-    from plugins.capabilities.visual_grounding.locate.scripts import service
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts import service
     instances = []
     class Grounder:
         def __init__(self, *a, **k):
@@ -102,7 +102,7 @@ def test_service_cache_construction_is_atomic(monkeypatch):
 
 
 def test_empty_sam_does_not_initialize_device(monkeypatch):
-    from plugins.capabilities.visual_grounding.locate.scripts.backends.sam import SamBackend
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.sam import SamBackend
     backend = SamBackend("unused", "auto")
     monkeypatch.setattr(backend, "_torch", lambda: (_ for _ in ()).throw(AssertionError("No work")))
     assert backend.segment(None, []) == []
@@ -110,8 +110,8 @@ def test_empty_sam_does_not_initialize_device(monkeypatch):
 
 @pytest.mark.parametrize("backend_name", ["grounding", "sam"])
 def test_failed_device_load_is_not_published(monkeypatch, backend_name):
-    from plugins.capabilities.visual_grounding.locate.scripts.backends.grounding_dino import GroundingDinoBackend
-    from plugins.capabilities.visual_grounding.locate.scripts.backends.sam import SamBackend
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.grounding_dino import GroundingDinoBackend
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.sam import SamBackend
     class Processor:
         @staticmethod
         def from_pretrained(*args):

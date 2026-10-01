@@ -10,7 +10,7 @@ from src.adapters.airsim.capture import AirSimCapture
 from src.agent.context.media import MediaHydrator
 from src.memory.context.media_refs import image_media_ref
 from src.perception.frame_payload import load_rgb_frame, load_depth_frame
-from plugins.capabilities.visual_grounding.locate.scripts.depth import load_metric_depth
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.depth import load_metric_depth
 
 
 def capture(tmp_path, source, *, save, raw=b"", floats=None, width=2, height=2):

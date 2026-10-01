@@ -133,7 +133,6 @@ class ModelActionPlanner:
         self.system_prompt = self._load_system_prompt(configured_prompt)
         prompt_dir = Path(__file__).resolve().parent / "prompts"
         self.tool_user_prompt = (prompt_dir / "tool_user_system.txt").read_text(encoding="utf-8").strip()
-        self.tool_case_studies = (prompt_dir / "tool_use_case_studies.txt").read_text(encoding="utf-8").strip()
         self.task_progress_reminder = (prompt_dir / "task_progress_reminder.txt").read_text(encoding="utf-8").strip()
         self.last_request: dict[str, Any] = {}
         self.last_response: dict[str, Any] = {}
@@ -182,7 +181,6 @@ class ModelActionPlanner:
         )
         prefix.add_system(self.system_prompt, key="planner_instruction")
         prefix.add_system(self.tool_user_prompt, key="tool_user_instruction")
-        prefix.add_system(self.tool_case_studies, key="tool_case_studies")
         interval = self.planner_config.task_progress_reminder_interval
         reminder: dict[str, Any] | None = None
         # A transient request instruction, never a durable Transcript event.

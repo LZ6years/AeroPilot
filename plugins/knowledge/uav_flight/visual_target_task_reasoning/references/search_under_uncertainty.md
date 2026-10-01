@@ -1,10 +1,18 @@
 Useful search patterns should be selected by scene context:
 
+- Anchored direction prior: when the instruction supplies a direction or yaw relative
+  to the starting heading, treat it as a persistent world-relative search corridor,
+  not merely the first turn. After aligning, prefer forward progress, safe lateral
+  viewpoint changes and small local corrections. Do not accumulate turns that cancel
+  the supplied direction just to inspect same-category objects elsewhere. A candidate
+  outside that corridor needs stronger appearance and surrounding-relation evidence
+  before it can replace the prior.
 - Choose angular scale from view overlap, the candidate's image position and
   actual visual change after previous turns, not universal degree ranges.
 - No-candidate broad sweep: when the current view has no target-like cue, use a
   larger safe yaw increment within planner limits to inspect genuinely new view
-  area. Continue the chosen sweep direction while it reveals useful new area.
+  area only when no anchored direction prior already defines the likely region.
+  Continue the chosen sweep direction while it reveals useful new area.
 - Local sweep: when the target may be near the current view boundary, use small
   yaw steps so a possible target is not swept past.
 - Peek safely: when an obstacle or corner may hide the target, a changed viewing

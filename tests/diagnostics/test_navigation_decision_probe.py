@@ -16,14 +16,14 @@ from src.memory.context.contracts import (
 
 
 def test_new_grounding_contract_reaches_provider(tmp_path):
-    planner = StubPlanner(response_with_calls(("c", "skill_visual_grounding_locate",
+    planner = StubPlanner(response_with_calls(("c", "skill_visual_grounding_measure_visible_depth",
         {"observation_id": "obs_1", "query": "object"})))
     planner.plan_turn(
         make_transcript(tmp_path),
         default_registry(PluginRegistry.from_config()),
     )
     tool = next(t["function"] for t in planner.last_request["tools"]
-                if t["function"]["name"] == "skill_visual_grounding_locate")
+                if t["function"]["name"] == "skill_visual_grounding_measure_visible_depth")
     assert set(tool["parameters"]["properties"]) == {"observation_id", "query"}
     assert tool["parameters"]["additionalProperties"] is False
     assert "surface" in tool["description"]

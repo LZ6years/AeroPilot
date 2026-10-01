@@ -29,7 +29,7 @@ def test_description_cleanup_preserves_contracts_except_retired_completion_gate(
     # Keep the historical fixture intact. The later grounding migration removes
     # only this task-global policy; schemas, limits and hidden tools stay fixed.
     for tool in baseline:
-        if tool["name"] == "skill.visual_grounding.locate":
+        if tool["name"] == "skill.visual_grounding.measure_visible_depth":
             tool["schema"].pop("x-flyagent-completion-evidence", None)
             tool["schema"]["properties"].pop("include_distance")
             tool["schema"]["required"].remove("include_distance")
@@ -49,7 +49,7 @@ def test_arguments_explain_units_and_effects_not_selection_order():
     movement = registry.get("uav.move_body").input_schema["properties"]
     for name in ("vx", "vy", "vz"):
         assert "m/s" in movement[name]["description"]
-    measurement = registry.get("skill.visual_grounding.locate").input_schema["properties"]
+    measurement = registry.get("skill.visual_grounding.measure_visible_depth").input_schema["properties"]
     assert "CURRENT" in measurement["observation_id"]["description"]
     assert set(measurement) == {"observation_id", "query"}
 
@@ -61,12 +61,12 @@ def test_provider_prose_removes_repeated_global_rules_but_keeps_local_policies()
         assert "effect=" in text and "result_timing=" in text
         assert "Do not mix with runtime-control or physical calls" not in text
         assert "Reuse identical current-observation results" not in text
-    grounding = registry.get("skill.visual_grounding.locate").to_provider_tool()["function"]["description"]
+    grounding = registry.get("skill.visual_grounding.measure_visible_depth").to_provider_tool()["function"]["description"]
     assert "At most 2 calls per observation" in grounding
-    assert "only when" not in grounding
+    assert "Call only when the image itself supplies direct evidence" in grounding
     user = Path("src/agent/planning/prompts/tool_user_system.txt").read_text(encoding="utf-8")
-    assert "These groups do not mix" in user
-    assert "Reuse an identical read result" in user
+    assert "these groups do not mix" in user
+    assert "reuse an applicable read result" in user
 
 
 def test_image_labels_and_active_knowledge_do_not_prescribe_tool_order_or_hover():
@@ -86,8 +86,7 @@ def test_image_labels_and_active_knowledge_do_not_prescribe_tool_order_or_hover(
                 assert retired not in text
     identity = Path("memory/FLYAGENT.md").read_text(encoding="utf-8")
     assert "hold position" not in identity
-    cases = Path("src/agent/planning/prompts/tool_use_case_studies.txt").read_text(encoding="utf-8")
-    assert "save_checklist" not in cases and "format_records" in cases
+    assert not Path("src/agent/planning/prompts/tool_use_case_studies.txt").exists()
 
 
 def test_structural_comparison_does_not_hide_constraints():
@@ -114,7 +113,7 @@ def test_probe_uses_default_memory_fixed_cases_and_no_backend(tmp_path, index):
     envelope = transcript.instruction_envelope()
     checkpoint = transcript.latest_checkpoint()
     assert checkpoint is not None
-    assert "Who You Are" in envelope["identity"]["text"]
+    assert "Identity And View" in envelope["identity"]["text"]
     assert "Precision And Judgment" in envelope["user_preferences"]["text"]
     assert "Synthetic" in json.dumps(checkpoint.to_dict())
     assert observation["observation_id"] in transcript.prior_evidence_reference_ids()

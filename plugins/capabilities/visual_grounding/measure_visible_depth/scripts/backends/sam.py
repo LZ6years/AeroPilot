@@ -11,7 +11,7 @@ import threading
 from src.perception.inference_resources import serialized_inference
 from PIL import Image
 
-from plugins.capabilities.visual_grounding.locate.scripts.contracts import CandidateMask, GroundedCandidate
+from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.contracts import CandidateMask, GroundedCandidate
 
 
 class SamBackend:

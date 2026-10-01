@@ -14,22 +14,23 @@ bearing; inspection needs detail. Alignment does not establish passage or arriva
 ## Evidence Model
 
 Distinguish no candidate currently observed, an uncertain candidate, a directional
-cue and an identifiable target. Not seeing a candidate does not establish absence.
-Current bearing supports alignment. Identify the missing attribute that would
-separate competing identities; neither detector confidence nor a missing detection
-settles identity. Metric claims need valid matching geometry.
+cue and an identifiable target. Non-observation does not establish absence. Identify what
+would separate competing identities; detector confidence does not settle identity.
+Current bearing supports alignment. Metric claims need matching geometry.
 
 ## Decision Procedure
 
-1. Choose an observation that can supply the missing information. A search direction
-   guarantees neither visibility nor range. Safe translation may reveal a target
-   that stationary turning cannot. See [search guidance](references/search_under_uncertainty.md).
-2. Maintain useful search continuity while revealing new area. Reconsider direction
-   when evidence changes the plausible region or motion adds no useful information.
-3. Investigate a candidate when worthwhile: approach if reduced range can reveal
-   detail and the path permits; lateral motion, occlusion clearance or a turn may
-   be more useful. Inspection does not accept identity or prove arrival. Compare
-   the new view with the expected information, not merely the issued action.
+1. Choose an observation that supplies missing information. A search direction
+   guarantees neither visibility nor range; safe translation may reveal what
+   stationary turning cannot. See [search guidance](references/search_under_uncertainty.md).
+2. Maintain useful search continuity while revealing new area. An explicit direction
+   anchored to the starting heading remains the primary search corridor after the
+   initial turn; prefer progress and bounded local inspection near that corridor over
+   repeatedly sweeping away from it. Reconsider direction only when stronger scene
+   evidence changes the plausible region or motion adds no useful information.
+3. Investigate when a new view can resolve identity. Approach, shift, clear an
+   occlusion or turn according to the missing evidence. Inspection does not accept
+   identity or prove arrival.
 4. For facing, correct when clipping, imminent loss or ambiguity prevents usable
    bearing. Do not correct merely for lateral offset or alternate around an already
    usable bearing. Preserve explicit angles; otherwise scale turns to visual purpose.
@@ -38,13 +39,12 @@ settles identity. Metric claims need valid matching geometry.
 
 For facing, an identifiable forward cue with usable bearing suffices. Moderate
 left or right offset is explicitly acceptable; exact centering needs an explicit
-request. Identification alone does not require extra approach. If observation
-supports a separate movement task, judge that task's required relation.
+request. Identification alone does not require approach; judge any separate
+movement relation independently.
 
 ## Recovery
 
-Contradicted attributes can weaken or exclude a candidate and reopen search.
-No new detail calls for checking actual motion, viewpoint and occlusion before
-rejecting identity or trying another view. Temporary occlusion need not invalidate
-an established identity. Do not indefinitely approach or repeat an unproductive
-pattern; choose safe actions that can supply useful evidence.
+Contradicted attributes can exclude a candidate and reopen search. If no detail
+appears, check actual motion, viewpoint and occlusion before changing strategy.
+Temporary occlusion need not invalidate identity. Do not repeat an unproductive
+pattern indefinitely.

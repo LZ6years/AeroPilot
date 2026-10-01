@@ -6,7 +6,7 @@ from tests.manual.read_only_concurrency_probe import accepted_pairs, public_sign
 
 
 def test_selection_requires_both_accepted_calls_on_same_observation():
-    calls = [{"tool_name": "skill.visual_grounding.locate", "tool_call_id": str(n),
+    calls = [{"tool_name": "skill.visual_grounding.measure_visible_depth", "tool_call_id": str(n),
               "args": {"observation_id": "obs1"}} for n in range(2)]
     events = [{"kind": "assistant_turn", "payload": {"tool_calls": calls}}]
     events.extend({"kind": "tool_result", "payload": {"tool_call_id": str(n), "status": "ok"}} for n in range(2))

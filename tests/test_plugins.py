@@ -369,13 +369,12 @@ def test_orbit_and_surround_skill_contains_orbit_guidance_without_runtime_intern
 def test_flyagent_contains_visual_direction_basics_without_case_specific_terms():
     rules = Path("memory/FLYAGENT.md").read_text(encoding="utf-8")
 
-    assert "## Who You Are" in rules
-    assert "## Spatial And Action Consistency" in rules
-    assert "When a visible cue is on the left" in rules
-    assert "Apply the same rule in reverse" in rules
+    assert "## Identity And View" in rules
+    assert "## Spatial Consistency" in rules
+    assert "Turn toward a visible cue" in rules
     assert "negative yaw means turn left" not in rules
     assert "positive yaw means turn right" not in rules
-    assert "Do not turn away from a visible cue" in rules
+    assert "turning away" in rules
     assert "does not prove physical travel" in rules
     forbidden_terms = [
         "UAV-Flow",

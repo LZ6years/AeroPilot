@@ -276,7 +276,7 @@ def test_prior_distance_call_does_not_require_current_requery():
     from src.plugins import PluginRegistry
     from src.tools.registry import default_registry
     registry = default_registry(PluginRegistry.from_config())
-    call = AgentToolCall("range", "skill.visual_grounding.locate", {
+    call = AgentToolCall("range", "skill.visual_grounding.measure_visible_depth", {
         "observation_id": "old", "query": "taxi", "include_distance": True})
     history = (
         TranscriptEvent("user_instruction", {"instruction": "pass the taxi then turn"}),

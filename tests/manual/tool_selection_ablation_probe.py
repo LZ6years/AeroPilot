@@ -127,7 +127,7 @@ def select_samples(case_dir):
         raise ValueError('No captured model requests')
     successful = next(e['payload']['tool_call_id'] for e in audit['agent_transcript']
                       if e['kind'] == 'tool_result'
-                      and e['payload']['tool_name'] == 'skill.visual_grounding.locate'
+                      and e['payload']['tool_name'] == 'skill.visual_grounding.measure_visible_depth'
                       and e['payload']['status'] == 'ok')
     after = next(i for i, r in enumerate(rounds)
                  if any(m['role'] == 'tool' and m.get('tool_call_id') == successful

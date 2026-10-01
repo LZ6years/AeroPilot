@@ -8,7 +8,7 @@
 | 阶段 | 主要文件 | 结果 |
 |---|---|---|
 | 基线 | `tests/fixtures/agent_guidance_baseline_20260926.json` | 原始 20 例索引、模型名、源码/记录散列；原日志未修改 |
-| grounding 与终止 | `plugins/capabilities/visual_grounding/locate/capability.json`、`scripts/handler.py`、`src/runtime/control/actions/terminal.py`、`src/runtime/control/executor.py`、`src/tools/registry.py` | 新描述进入 provider；删除任务级结束前重测门槛；保留引用真实性、任务隔离和结果配对 |
+| grounding 与终止 | `plugins/capabilities/visual_grounding/measure_visible_depth/capability.json`、`scripts/handler.py`、`src/runtime/control/actions/terminal.py`、`src/runtime/control/executor.py`、`src/tools/registry.py` | 新描述进入 provider；删除任务级结束前重测门槛；保留引用真实性、任务隔离和结果配对 |
 | 五份知识 | `plugins/knowledge/uav_flight/*/SKILL.md`、路线 reference、`src/tools/builtins/knowledge.py` | 四项 description 字符串；稳定名称与自主加载；正文保持紧凑，原 reference 路径保留 |
 | 动作与 Plan | `src/agent/planning/prompts/agent_tool_loop_system.txt`、`src/tools/builtins/planning.py` | 实际反馈估计窗口、观察位置与批量依赖；结果/条件式 Plan；允许修正已完成判断 |
 | 任务介绍 | 两个 benchmark 的 `protocol.py` | 任务目标、指令解释、信息特点、结束条件；保留原 landing 协议含义 |

@@ -85,7 +85,7 @@ def run(args):
         if getattr(args, 'sam_coordinate_ab', False):
             manifest['sam_coordinate_ab'] = True
             manifest['limitations'] += ' Experimental coordinate placement A/B; ordinary warm aggregate mixes variants; use per-variant report.'
-        manifest['weight_sources'] = cache_sources(read(snapshot / 'plugins/capabilities/visual_grounding/locate/capability.json')['settings'])
+        manifest['weight_sources'] = cache_sources(read(snapshot / 'plugins/capabilities/visual_grounding/measure_visible_depth/capability.json')['settings'])
         write_json(root / 'manifest.json', manifest)
         for trial in range(1, args.trials + 1):
             if other_project_jobs(ROOT):

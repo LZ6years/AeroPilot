@@ -469,7 +469,7 @@ def _audit_transcript(
                     "metric_depth_successes_requiring_manual_roi_review"
                 ] += 1
             if (
-                payload.get("tool_name") == "skill.visual_grounding.locate"
+                payload.get("tool_name") == "skill.visual_grounding.measure_visible_depth"
                 and payload.get("status") == "ok"
             ):
                 coverage[

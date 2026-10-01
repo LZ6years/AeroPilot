@@ -57,7 +57,7 @@ PROBE_PROMPT = Path(__file__).with_name(
 )
 DEFAULT_OUTPUT_ROOT = REPO_ROOT / "runs" / "manual_native_tool_loop_provider_probe"
 ALLOWED_TOOLS = {
-    "skill.visual_grounding.locate",
+    "skill.visual_grounding.measure_visible_depth",
     "uav.turn_relative",
 }
 
@@ -287,7 +287,7 @@ def _parallel_query_probe(planner, transcript, registry, output_dir, evidence_pa
     """Protocol-only double-call probe; synthetic candidates do not test detection quality."""
     first, first_request, first_attempts = _plan_with_protocol_repair(planner, transcript, registry, stage="parallel_queries")
     calls = first.tool_calls
-    if len(calls) != 2 or any(call.tool_name != "skill.visual_grounding.locate" for call in calls):
+    if len(calls) != 2 or any(call.tool_name != "skill.visual_grounding.measure_visible_depth" for call in calls):
         raise RuntimeError("Parallel probe did not produce two independent grounding calls; branch not observed.")
     if any("include_distance" in call.args for call in calls):
         raise RuntimeError("Parallel probe accepts measurement-only inputs.")
@@ -466,7 +466,7 @@ def _plan_with_protocol_repair(
 
 def _assert_grounding_turn(turn) -> None:
     names = [call.tool_name for call in turn.tool_calls]
-    if names != ["skill.visual_grounding.locate"]:
+    if names != ["skill.visual_grounding.measure_visible_depth"]:
         raise RuntimeError(
             "Grounding stage must contain only the read-only visual-grounding tool; "
             f"received={names}"

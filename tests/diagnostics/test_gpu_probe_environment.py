@@ -39,7 +39,7 @@ def frozen_input(tmp_path):
     image = original / "rgb.png"
     Image.new("RGB", (4, 4)).save(image)
     samples = [{"number": n, "case_id": f"case{n}", "benchmark": "aerial" if n <= 2 else "travel",
-                "calls": [{"tool_name": "skill.visual_grounding.locate", "tool_call_id": f"c{n}_{i}",
+                "calls": [{"tool_name": "skill.visual_grounding.measure_visible_depth", "tool_call_id": f"c{n}_{i}",
                            "args": {"include_distance": False, "observation_id": f"obs{n}", "query": "building"}} for i in (1, 2)],
                 "input_hashes": {str(image): sha(image)},
                 "observation": {"observation_id": f"obs{n}", "frames": {"rgb": {"path": str(image)}}}}
