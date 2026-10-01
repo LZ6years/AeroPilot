@@ -324,7 +324,7 @@ def test_prefetch_uses_all_eligible_windows_and_image_free_semantic_view(tmp_pat
     assert transcript.to_dict() == before
 
 
-def test_64k_pending_falls_back_immediately_then_late_result_upgrades(tmp_path):
+def test_64k_pending_preserves_raw_history_then_accepts_completed_result(tmp_path):
     gate = threading.Event()
     compactor = StubCompactor(gate=gate)
     manager = _manager(compactor)
@@ -339,17 +339,19 @@ def test_64k_pending_falls_back_immediately_then_late_result_upgrades(tmp_path):
     assert elapsed < 0.5
     assert compactor.started.wait(1)
     assert coordinator.poll().status == "pending"
-    assert state.section is not None and state.section.fallback_used
-    assert result.audit["compaction_status"] == "fallback_pending"
-    first_generation = state.capsule_generation
+    assert state.section is None
+    assert state.compacted_through_event_index == 0
+    assert state.capsule_generation == 0
+    assert result.audit["compaction_status"] == "prefetch_pending"
+    assert "HISTORY CAPSULE" not in json.dumps(result.messages, ensure_ascii=False)
 
     gate.set()
     _wait_status(coordinator, "ready")
-    upgraded = _project(manager, transcript, state, coordinator)
+    accepted = _project(manager, transcript, state, coordinator)
 
-    assert state.capsule_generation == first_generation
-    assert state.section is not None and not state.section.fallback_used
-    assert upgraded.audit["compaction_status"] == "late_upgrade"
+    assert state.capsule_generation == 1
+    assert state.section is not None
+    assert accepted.audit["compaction_status"] == "accepted"
     assert coordinator.poll().status == "idle"
 
 
@@ -362,10 +364,12 @@ def test_failed_digest_is_not_retried_until_boundary_changes(tmp_path):
 
     _project(manager, transcript, state, coordinator)
     _wait_status(coordinator, "failed")
-    _project(manager, transcript, state, coordinator)
+    failed = _project(manager, transcript, state, coordinator)
 
     assert len(compactor.requests) == 1
-    assert state.section is not None and state.section.fallback_used
+    assert state.section is None
+    assert state.compacted_through_event_index == 0
+    assert failed.audit["compaction_status"] == "prefetch_failed"
     _append_windows(transcript, 7, 10)
     _project(manager, transcript, state, coordinator)
     assert compactor.started.wait(1)
@@ -375,7 +379,7 @@ def test_failed_digest_is_not_retried_until_boundary_changes(tmp_path):
     assert len(compactor.requests) == 2
 
 
-def test_invalid_late_model_refs_keep_deterministic_fallback(tmp_path):
+def test_invalid_model_refs_preserve_raw_history_and_boundary(tmp_path):
     gate = threading.Event()
     compactor = StubCompactor(
         CompressionDraft(
@@ -390,14 +394,17 @@ def test_invalid_late_model_refs_keep_deterministic_fallback(tmp_path):
     state = HistoryProjectionState()
     transcript = _transcript(tmp_path)
 
-    _project(manager, transcript, state, coordinator)
-    assert state.section is not None and state.section.fallback_used
+    pending = _project(manager, transcript, state, coordinator)
+    assert state.section is None
+    assert pending.audit["compaction_status"] == "prefetch_pending"
     gate.set()
     _wait_status(coordinator, "ready")
     result = _project(manager, transcript, state, coordinator)
 
-    assert state.section is not None and state.section.fallback_used
-    assert result.audit["compaction_status"] == "late_result_invalid"
+    assert state.section is None
+    assert state.compacted_through_event_index == 0
+    assert state.capsule_generation == 0
+    assert result.audit["compaction_status"] == "prefetch_invalid"
     assert result.audit["compaction_errors"] == [
         "mission_progress[0]_unknown_ref:missing_ref"
     ]
@@ -427,7 +434,7 @@ def test_32k_budget_selects_largest_oldest_complete_prefix(tmp_path):
     assert windows[0].end_event_index <= windows[1].start_event_index
 
 
-def test_single_oversized_window_uses_fallback_without_model_call(tmp_path):
+def test_single_oversized_window_stays_raw_without_model_call(tmp_path):
     compactor = StubCompactor(tokens_per_window=1_000)
     manager = _manager(compactor, max_compactor_input=100)
     coordinator = HistoryCompactionCoordinator()
@@ -436,9 +443,11 @@ def test_single_oversized_window_uses_fallback_without_model_call(tmp_path):
     result = _project(manager, _transcript(tmp_path), state, coordinator)
 
     assert compactor.requests == []
-    assert state.section is not None and state.section.fallback_used
-    assert result.audit["activated_candidate"]["decision_window_count"] == 1
-    assert result.audit["activated_candidate"]["estimated_input_tokens"] > 100
+    assert state.section is None
+    assert state.compacted_through_event_index == 0
+    assert result.audit["compaction_status"] == "blocked_oversized_window"
+    assert result.audit["staged_candidate"]["decision_window_count"] == 1
+    assert result.audit["staged_candidate"]["estimated_input_tokens"] > 100
 
 
 def test_compressed_prefix_images_are_omitted_but_current_image_remains(tmp_path):
@@ -584,32 +593,48 @@ def test_second_generation_replaces_first_capsule(tmp_path):
     state = HistoryProjectionState()
 
     first = _project(manager, transcript, state, coordinator)
-    first_boundary = state.compacted_through_event_index
-    assert first.audit["compaction_status"] == "fallback_pending"
+    assert state.section is None
+    assert first.audit["compaction_status"] == "prefetch_pending"
     gate.set()
     _wait_status(coordinator, "ready")
-    _project(manager, transcript, state, coordinator)
+    accepted = _project(manager, transcript, state, coordinator)
     assert state.capsule_generation == 1
+    assert accepted.audit["compaction_status"] == "accepted"
+    first_boundary = state.compacted_through_event_index
 
+    gate.clear()
     _append_windows(transcript, 7, 10)
     second = _project(manager, transcript, state, coordinator)
 
-    assert state.capsule_generation == 2
-    assert state.compacted_through_event_index > first_boundary
+    assert compactor.started.wait(1)
+    assert coordinator.poll().status == "pending"
+    assert second.audit["compaction_status"] == "prefetch_pending"
+    assert state.capsule_generation == 1
+    assert state.compacted_through_event_index == first_boundary
     assert json.dumps(second.messages, ensure_ascii=False).count("HISTORY CAPSULE") == 1
 
+    gate.set()
+    _wait_status(coordinator, "ready")
+    replacement = _project(manager, transcript, state, coordinator)
 
-def test_fallback_has_no_stale_window_count(tmp_path):
+    assert replacement.audit["compaction_status"] == "accepted"
+    assert state.capsule_generation == 2
+    assert state.compacted_through_event_index > first_boundary
+    assert json.dumps(replacement.messages, ensure_ascii=False).count("HISTORY CAPSULE") == 1
+
+
+def test_pending_compaction_does_not_create_a_section_or_advance_boundary(tmp_path):
     gate = threading.Event()
     manager = _manager(StubCompactor(gate=gate))
     state = HistoryProjectionState()
     coordinator = HistoryCompactionCoordinator()
 
-    _project(manager, _transcript(tmp_path), state, coordinator)
+    result = _project(manager, _transcript(tmp_path), state, coordinator)
 
-    assert state.section is not None
-    text = json.dumps(state.section.summary.to_dict(), ensure_ascii=False)
-    assert "decision windows" not in text
+    assert state.section is None
+    assert state.compacted_through_event_index == 0
+    assert state.capsule_generation == 0
+    assert result.audit["compaction_status"] == "prefetch_pending"
     gate.set()
 
 

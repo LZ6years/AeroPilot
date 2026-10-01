@@ -62,26 +62,6 @@ class CompressionValidator:
             normalized,
         )
 
-    @staticmethod
-    def fallback(request: CompressionRequest) -> CompressionDraft:
-        """Keep a prior valid narrative, otherwise emit one conservative handoff."""
-
-        if request.previous_summary is not None:
-            return request.previous_summary
-        refs = [entry.canonical_ref for entry in request.evidence_catalog]
-        return CompressionDraft(
-            mission_progress=(
-                {
-                    "summary": (
-                        "Earlier history was compacted deterministically. Use verified "
-                        "facts and recent raw history for the next decision."
-                    ),
-                    "evidence_refs": refs[:2],
-                },
-            ),
-        )
-
-
 def _contains_forbidden_key(value: Any) -> bool:
     if isinstance(value, dict):
         return bool(_FORBIDDEN_KEYS & value.keys()) or any(

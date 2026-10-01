@@ -246,7 +246,6 @@ class HistoryProjector:
                 "generation": section.generation,
                 "through_event_index": section.through_event_index,
                 "source_digest": section.source_digest,
-                "fallback_used": section.fallback_used,
             }
         messages: list[dict[str, Any]] = []
         envelope: dict[str, Any] = {}

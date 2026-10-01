@@ -23,6 +23,10 @@ warnings、artifact refs、metadata 与构建耗时位于独立 `FragmentAudit`�
 `CURRENT TASK STATE` 表达。Capsule 是 Provider 请求投影，不会替换或删改持久化的
 完整 Transcript。
 
+只有通过结构与证据引用验证的压缩结果才能推进 `through_event_index`。后台压缩仍在
+等待、失败、超时、返回非法内容或遇到超大单窗口时，投影继续保留当前已接受 Capsule
+以及它之后的完整原始事件；尚无 Capsule 时则保留完整历史，不生成替代摘要。
+
 `TaskPlanStep` 原生包含 `id`、`description`、`status` 和 `evidence_refs`。所有引用必须
 来自计划回合开始前已经存在的 observation 或成功 ToolResult/action ref，`completed`
 状态必须至少包含一项引用。动作调用成功只直接证明该动作的执行结果，不自动证明地标、

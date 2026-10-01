@@ -272,7 +272,6 @@ class CompressedHistorySection:
     summary: CompressionDraft
     deterministic_facts: dict[str, Any]
     exact_loaded_knowledge: tuple[dict[str, Any], ...] = ()
-    fallback_used: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "deterministic_facts", copy.deepcopy(self.deterministic_facts))

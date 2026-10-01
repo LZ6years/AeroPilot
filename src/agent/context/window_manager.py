@@ -135,7 +135,6 @@ class ContextWindowManager:
 
         errors: tuple[str, ...] = snapshot.errors
         draft = None
-        fallback_used = True
         status = snapshot.status
         if (
             status == "ready"
@@ -147,23 +146,39 @@ class ContextWindowManager:
             )
             if validation.accepted and validation.normalized_draft is not None:
                 draft = validation.normalized_draft
-                fallback_used = False
                 status = "accepted"
             else:
                 errors = validation.errors
                 coordinator.reject(
                     activation_candidate.request.source_digest, validation.errors
                 )
-                status = "invalid"
+                status = "prefetch_invalid"
         if draft is None:
-            # Pending, failed, oversized, invalid, or unavailable model output
-            # all use the exact selected boundary without waiting or retrying.
-            draft = self.validator.fallback(activation_candidate.request)
-            status = "fallback_pending" if snapshot.status == "pending" else "fallback"
+            # An unvalidated summary can never justify removing raw history.
+            # Keep the current accepted section (if any) and its complete tail;
+            # the next planner turn may accept a completed background result.
+            if status == "pending":
+                status = "prefetch_pending"
+            elif status == "failed":
+                status = "prefetch_failed"
+            elif status == "idle" and preparation_status == "single_window_oversized":
+                status = "blocked_oversized_window"
+            elif status == "ready":
+                status = "prefetch_invalid"
+                errors = errors or ("compaction_result_missing",)
+            result.audit.update(
+                {
+                    "compaction_status": status,
+                    "compaction_errors": list(errors),
+                    "target_unreachable": estimate_before > self.config.target_tokens,
+                    "staged_candidate": self._candidate_audit(activation_candidate),
+                }
+            )
+            self._add_job_audit(result, coordinator.poll())
+            return result
 
-        self._activate(state, activation_candidate, draft, fallback_used=fallback_used)
-        if not fallback_used:
-            coordinator.consume(activation_candidate.request.source_digest)
+        self._activate(state, activation_candidate, draft)
+        coordinator.consume(activation_candidate.request.source_digest)
 
         compacted = self._current_projection(transcript, registry, state)
         estimate_after = self._estimate(
@@ -183,7 +198,7 @@ class ContextWindowManager:
                 "compactor_connection_retries": (
                     self.config.compactor_connection_retries
                 ),
-                "compaction_status": status,
+                "compaction_status": "accepted",
                 "compaction_errors": list(errors),
                 "target_unreachable": estimate_after > self.config.target_tokens,
                 "activated_candidate": self._candidate_audit(activation_candidate),
@@ -218,45 +233,6 @@ class ContextWindowManager:
         candidate = snapshot.candidate
         if snapshot.status != "ready" or candidate is None or snapshot.result is None:
             return {}
-        section = state.section
-        is_late_upgrade = bool(
-            section is not None
-            and section.fallback_used
-            and section.generation == candidate.target_generation
-            and section.source_digest == candidate.request.source_digest
-            and section.through_event_index == candidate.through_event_index
-        )
-        if is_late_upgrade:
-            validation = self.validator.validate(
-                snapshot.result.draft, candidate.request
-            )
-            if not validation.accepted:
-                coordinator.reject(candidate.request.source_digest, validation.errors)
-                return {
-                    "compaction_status": "late_result_invalid",
-                    "compaction_errors": list(validation.errors),
-                }
-            if validation.normalized_draft is None:
-                coordinator.reject(
-                    candidate.request.source_digest,
-                    ("normalized_draft_missing",),
-                )
-                return {
-                    "compaction_status": "late_result_invalid",
-                    "compaction_errors": ["normalized_draft_missing"],
-                }
-            self._activate(
-                state,
-                candidate,
-                validation.normalized_draft,
-                fallback_used=False,
-                preserve_generation=True,
-            )
-            coordinator.consume(candidate.request.source_digest)
-            return {
-                "compaction_status": "late_upgrade",
-                "late_upgrade_elapsed_seconds": snapshot.result.elapsed_seconds,
-            }
         if candidate.base_generation != state.capsule_generation:
             coordinator.consume(candidate.request.source_digest)
             return {"compaction_status": "stale_result_discarded"}
@@ -324,8 +300,9 @@ class ContextWindowManager:
                 high = count - 1
         if best is not None:
             return best, "limited_by_compactor_input_budget"
-        # Keep the one-window candidate only for an immediate deterministic
-        # fallback at 64k. It is deliberately never submitted to the model.
+        # Keep the one-window candidate only to audit the blocking boundary.
+        # It is never submitted, and raw history remains visible because an
+        # oversized window cannot be replaced by an unvalidated summary.
         one = self.projector.analyze(
             new_events,
             base_event_index=base,
@@ -406,27 +383,18 @@ class ContextWindowManager:
         state: HistoryProjectionState,
         candidate: CompressionCandidate,
         draft,
-        *,
-        fallback_used: bool,
-        preserve_generation: bool = False,
     ) -> None:
-        generation = (
-            state.capsule_generation
-            if preserve_generation
-            else candidate.target_generation
-        )
         section = CompressedHistorySection(
-            generation=generation,
+            generation=candidate.target_generation,
             through_event_index=candidate.through_event_index,
             source_digest=candidate.request.source_digest,
             summary=draft,
             deterministic_facts=candidate.deterministic_facts,
             exact_loaded_knowledge=candidate.exact_loaded_knowledge,
-            fallback_used=fallback_used,
         )
         state.section = section
         state.compacted_through_event_index = section.through_event_index
-        state.capsule_generation = generation
+        state.capsule_generation = section.generation
         state.source_digest = section.source_digest
 
     def _add_budget_audit(

@@ -140,8 +140,11 @@ image pixels. Tool results pair to calls through
 event. Tool availability, argument schemas, runtime effects, result
 timing, and batching come from `ToolSpec` plus the provider `tools` array, not
 from duplicate context fields or name-prefix inference. Request-view compaction
-uses an explicit soft token budget and always records its boundary and fallback
-status in projection audit; it never silently truncates durable history.
+uses an explicit soft token budget and records its staged or accepted boundary
+status in projection audit. Only a validated model summary may advance the
+committed boundary; pending, failed, invalid, timed-out, or oversized work keeps
+the current accepted capsule plus its complete raw tail and never silently
+truncates durable history.
 The transcript does not replay phase-start or before-window images. Runtime may
 retain those observation IDs as audit/state anchors, while full image history
 comes from the chronological checkpoints and remains fully stored even when
