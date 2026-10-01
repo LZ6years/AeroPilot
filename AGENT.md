@@ -103,19 +103,25 @@ capability, do not make it in the shared runtime, prompts, or knowledge base.
 
 An instruction-level `InstructionEnvelope` owns static model material exactly once:
 identity, user preferences, caller-owned protocol, knowledge catalog and module
-descriptions. Model-facing `StateCheckpoint` records should be dynamic and decision useful:
-- optional task plan and loaded-knowledge index;
+descriptions. Model-facing `StateCheckpoint` records contain only dynamic sensory state:
 - one current original RGB observation image, preserving scene colors;
 - one compact motion summary containing only measured instruction-start-relative and
   last-window UAV self-motion;
-- knowledge catalog and loaded index, never duplicate knowledge bodies.
+
+MissionState owns the authoritative current task plan. KnowledgeService owns actual
+knowledge loading and MissionState retains only its synchronized lightweight index.
+Before every planner request Runtime builds one transient `CURRENT TASK STATE` after
+history and before any periodic reminder. It is never persisted as a checkpoint or
+Transcript event. Successful `runtime.update_plan` and `knowledge.load` ToolResults
+retain change history; only knowledge ToolResults retain full loaded bodies.
 
 The durable transcript retains every checkpoint and assistant/tool event in
 chronological order. Its provider request view may replace an oldest contiguous
 prefix of complete decision windows with one task-local compressed history
-section. The original instruction, exact loaded knowledge, latest checkpoint,
+section. The original instruction, exact loaded knowledge, latest sensory checkpoint,
 and recent complete windows remain authoritative outside model-authored
-summary text. Compression never adds a durable Transcript event.
+summary text. The transient current task state is uncompressible. Compression never
+adds a durable Transcript event.
 
 `configs/context.json` owns one global request-media budget. Observation and
 tool-evidence images share the default maximum of 20, retain the latest 3 visual
@@ -220,7 +226,7 @@ useful for diagnosis. Convert them into compact, task-relevant summaries first.
 
 Reusable skills are flight-domain knowledge, not runtime documentation. Do not
 reference project-private fields such as `current_phase`, `phase_decision`,
-`phase_progress_evidence`, `model_inputs`, debug metadata, report fields, or
+`phase_progress_evidence`, `media_refs`, debug metadata, report fields, or
 benchmark artifacts from `plugins/knowledge/*/SKILL.md`. Phrase skill guidance
 as general UAV behavior, visual reasoning, movement, route, safety, or
 completion knowledge.
@@ -234,7 +240,8 @@ environmental evidence and cannot automatically complete an instruction.
 
 KnowledgeService snapshots enabled knowledge per instruction. knowledge.load
 returns full body and requested declared references incrementally as ToolResults.
-Context contains only catalog/loading indexes. Loading does not execute text,
+The instruction envelope contains only the catalog; transient current task state
+contains the synchronized loading index. Loading does not execute text,
 register capabilities, or extend permissions. Invalid paths fail without mutation.
 
 `HistoryProjector` owns the request view, not durable history. Context modules

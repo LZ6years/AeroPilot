@@ -1,4 +1,4 @@
-"""Measure Model Context V2 assembly against optional frozen V1 metrics.
+"""Measure Model Context V3 assembly against optional frozen V2 metrics.
 
 This probe never reads V1 runs or imports V1 source. A previous experiment may
 provide a small metrics JSON via --v1-metrics; it is treated as numeric baseline
@@ -171,12 +171,8 @@ def _checkpoint(index: int, image_path: Path) -> StateCheckpoint:
         checkpoint_id=f"checkpoint_{index:04d}",
         reason=reason,
         observation_id=observation_id,
-        task_plan=None,
-        loaded_knowledge=(),
         fragments=fragments,
-        fingerprint=checkpoint_fingerprint(
-            observation_id, None, (), fragments
-        ),
+        fingerprint=checkpoint_fingerprint(observation_id, fragments),
     )
 
 

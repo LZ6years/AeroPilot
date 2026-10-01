@@ -9,7 +9,7 @@ stateful online adapter in the existing `map` context slot for controlled
 ## Online UAV-Flow Context Integration
 
 The experimental provider keeps the normal fragment order and contributes one
-map image through `map.model_inputs`. The shared model-input adapter therefore
+map image through `map.media_refs`. The shared media adapter therefore
 sends existing RGB images first, the STMR image next, and the compact JSON
 context last. The STMR image is labelled as semantic history rather than
 verified traversability.

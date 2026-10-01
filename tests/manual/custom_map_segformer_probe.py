@@ -137,9 +137,9 @@ def _render_custom_map(run_dir: Path) -> dict[str, Any]:
     )
     fragment = PluginContextModule().build(MemorySourceBundle(memory), TaskContextInput(active_instruction=memory.active_instruction)).to_dict()
     sanitized = dict(fragment)
-    sanitized["model_inputs"] = [
+    sanitized["media_refs"] = [
         {key: value for key, value in item.items() if key != "data"}
-        for item in fragment.get("model_inputs", [])
+        for item in fragment.get("media_refs", [])
     ]
     output_dir = run_dir / "contexts" / "custom_map"
     output_dir.mkdir(parents=True, exist_ok=True)

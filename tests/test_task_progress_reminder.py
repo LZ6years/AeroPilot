@@ -33,9 +33,11 @@ def test_reminder_boundary_and_history_isolation(tmp_path, index, expected):
     assert sum(m.get("content") == planner.task_progress_reminder for m in messages) == int(expected)
     if expected:
         assert messages[-1] == {"role": "system", "content": planner.task_progress_reminder}
-        assert messages[-len(history)-1:-1] == history
+        assert messages[-len(history)-2:-2] == history
+        assert messages[-2]["content"].startswith("CURRENT TASK STATE\n")
     else:
-        assert messages[-len(history):] == history
+        assert messages[-len(history)-1:-1] == history
+        assert messages[-1]["content"].startswith("CURRENT TASK STATE\n")
     assert transcript.to_dict() == before
     # Rebuilding the next request cannot carry forward the previous reminder.
     planner.plan_turn(transcript, registry, decision_index=7)
@@ -119,7 +121,7 @@ def test_reminder_follows_complete_tool_result_pairs(tmp_path):
     registry = default_registry()
     expected_history = transcript.provider_messages(registry)
     planner.plan_turn(transcript, registry, decision_index=6)
-    assert planner.last_request["messages"][-len(expected_history)-1:-1] == expected_history
+    assert planner.last_request["messages"][-len(expected_history)-2:-2] == expected_history
     assert expected_history[-1]["role"] == "tool"
     assert planner.last_request["messages"][-1]["role"] == "system"
 
@@ -148,4 +150,4 @@ def test_simulation_baseline_preserves_actual_safety_bounds_and_original_registr
     assert [t["function"]["description"] for t in actual] == [t["function"]["description"] for t in saved["tools"]]
     assert [t["function"]["parameters"] for t in actual] == [t["function"]["parameters"] for t in before]
     assert before == [s.to_provider_tool() for s in registry.model_specs()]
-    assert planner.last_request["messages"][-1]["role"] != "system"
+    assert planner.last_request["messages"][-1]["content"].startswith("CURRENT TASK STATE\n")

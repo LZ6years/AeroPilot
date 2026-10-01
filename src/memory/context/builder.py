@@ -1,4 +1,4 @@
-"""Build binary-free Model Context V2 envelopes and state checkpoints."""
+"""Build binary-free Model Context V3 envelopes and sensory checkpoints."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ DEFAULT_MAP_MEMORY_PATH = Path("memory") / "map" / "map_memory.json"
 
 
 class ModelContextBuilder:
-    """Translate mission state into the two V2 context lifetimes.
+    """Translate mission state into the two V3 context lifetimes.
 
     Plugin discovery and request projection are intentionally absent.  The
     composition root supplies a fully configured registry and static catalog.
@@ -101,18 +101,12 @@ class ModelContextBuilder:
                 MemorySourceBundle(memory, self.map_memory, self.run_memory), stage
             )
         fragments = tuple(result.fragment for result in results)
-        loaded = tuple(copy.deepcopy(state.loaded_knowledge))
-        task_plan = state.task_plan.to_dict() if state.task_plan else None
         observation_id = str(state.latest_observation.get("observation_id") or "") or None
-        fingerprint = checkpoint_fingerprint(
-            observation_id, task_plan, loaded, fragments
-        )
+        fingerprint = checkpoint_fingerprint(observation_id, fragments)
         checkpoint = StateCheckpoint(
             checkpoint_id=checkpoint_id,
             reason=reason,  # type: ignore[arg-type]
             observation_id=observation_id,
-            task_plan=task_plan,
-            loaded_knowledge=loaded,
             fragments=fragments,
             fingerprint=fingerprint,
         )
@@ -123,8 +117,6 @@ class ModelContextBuilder:
         return TaskContextInput(
             active_instruction=state.user_instruction,
             protocol_context=state.protocol_context,
-            task_plan=state.task_plan.to_dict() if state.task_plan else None,
-            loaded_knowledge=copy.deepcopy(state.loaded_knowledge),
             motion_summary=copy.deepcopy(state.motion_summary),
             safety_constraints=self._safety_constraints(state),
             observation_policy={

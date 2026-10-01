@@ -86,7 +86,7 @@ class ToolResult:
                 continue
             raw_ref = item.get("media_ref")
             if not isinstance(raw_ref, dict):
-                raise ValueError("V2 tool image inputs require media_ref")
+                raise ValueError("V3 tool image inputs require media_ref")
             MediaRef(**raw_ref)
 
     def to_dict(self) -> dict[str, Any]:
@@ -260,7 +260,7 @@ class AgentTranscript:
         return tuple(copy.deepcopy(self.items[:event_count]))
 
     def provider_messages(self, registry: "ToolRegistry") -> list[dict[str, Any]]:
-        """Project the complete V2 history through the shared projector."""
+        """Project the complete V3 history through the shared projector."""
         from src.agent.context.projection import HistoryProjector
 
         return HistoryProjector().project(self, registry).messages

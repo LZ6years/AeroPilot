@@ -64,7 +64,7 @@ def test_provider_probe_uses_matching_rgb_dimensions(tmp_path):
     for observation_id, path in _write_probe_images(tmp_path / "rgb").items():
         item = _probe_checkpoint(
             path, observation_id, 1
-        ).fragments[0].model_inputs[0]["media_ref"]
+        ).fragments[0].media_refs[0]["media_ref"]
         with Image.open(path) as image:
             assert image.size == (item["display_width"], item["display_height"]) == (240, 180)
         assert item["height"] == item["display_height"]

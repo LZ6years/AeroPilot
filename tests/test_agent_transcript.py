@@ -50,10 +50,8 @@ def _append_checkpoint(
         checkpoint_id=f"checkpoint_{index:04d}",
         reason="instruction_start" if index == 1 else "physical_window_completed",
         observation_id=observation_id,
-        task_plan=None,
-        loaded_knowledge=(),
         fragments=(fragment,),
-        fingerprint=checkpoint_fingerprint(observation_id, None, (), (fragment,)),
+        fingerprint=checkpoint_fingerprint(observation_id, (fragment,)),
     )
     transcript.append_state(checkpoint)
     return checkpoint
@@ -99,7 +97,7 @@ def test_transcript_projects_checkpoints_calls_and_results_in_order(tmp_path):
         "user", "user", "user", "assistant", "tool"
     ]
     state_json = json.loads(messages[2]["content"][-1]["text"])
-    assert state_json["schema_version"] == "state_checkpoint_v2"
+    assert state_json["schema_version"] == "state_checkpoint_v3"
     assert transcript.latest_checkpoint() == checkpoint
     assert messages[3]["tool_calls"][0]["id"] == "call_detect"
     assert json.loads(messages[4]["content"])["status"] == "ok"

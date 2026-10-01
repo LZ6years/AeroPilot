@@ -113,16 +113,16 @@ def prepare(output: Path, source: Path) -> None:
 
 
 def historical_transcript(sample: dict, output: Path) -> AgentTranscript:
-    """Rehydrate a V2 prefix, never audit truth, future events, or V1 state."""
+    """Rehydrate a V3 prefix, never audit truth, future events, or V2 state."""
     transcript = AgentTranscript(MemoryEventWriter(output))
     envelope: InstructionEnvelope | None = None
     for event in sample["events"]:
         if event.get("schema_version") != TRANSCRIPT_SCHEMA:
-            raise UnsupportedRunSchema("historical probe accepts agent_transcript_v2 only")
+            raise UnsupportedRunSchema("historical probe accepts agent_transcript_v3 only")
         kind, payload = event["kind"], copy.deepcopy(event["payload"])
         if kind == "instruction_envelope":
             if payload.get("schema_version") != INSTRUCTION_ENVELOPE_SCHEMA:
-                raise UnsupportedRunSchema("missing instruction_envelope_v2")
+                raise UnsupportedRunSchema("missing instruction_envelope_v3")
             envelope = InstructionEnvelope(
                 instruction_id="offline_prefix",
                 protocol_context=str(payload.get("protocol_context") or ""),
@@ -143,11 +143,11 @@ def historical_transcript(sample: dict, output: Path) -> AgentTranscript:
             transcript.append_tool_result(ToolResult(**payload))
         elif kind == "state_checkpoint":
             if payload.get("schema_version") != STATE_CHECKPOINT_SCHEMA:
-                raise UnsupportedRunSchema("historical probe accepts state_checkpoint_v2 only")
+                raise UnsupportedRunSchema("historical probe accepts state_checkpoint_v3 only")
             obs = str(payload["observation_id"])
             fragments: list[ContextFragment] = []
             for raw_fragment in payload.get("fragments", []):
-                inputs = tuple(copy.deepcopy(raw_fragment.get("model_inputs") or ()))
+                inputs = tuple(copy.deepcopy(raw_fragment.get("media_refs") or ()))
                 if raw_fragment.get("name") == "image":
                     # Attach only the exact RGB associated with this recorded
                     # observation. Encoding remains transient in projection.
@@ -161,20 +161,16 @@ def historical_transcript(sample: dict, output: Path) -> AgentTranscript:
                     inputs = (ref.to_model_input(),)
                 fragments.append(ContextFragment(
                     str(raw_fragment.get("name") or "unknown"),
-                    dict(raw_fragment.get("model_content") or {}),
+                    dict(raw_fragment.get("content") or {}),
                     inputs,
                 ))
             fragment_tuple = tuple(fragments)
-            task_plan = copy.deepcopy(payload.get("task_plan"))
-            knowledge = tuple(copy.deepcopy(payload.get("loaded_knowledge") or ()))
             transcript.append_state(StateCheckpoint(
                 checkpoint_id=str(payload.get("checkpoint_id") or "checkpoint_0001"),
                 reason=payload.get("reason", "physical_window_completed"),
                 observation_id=obs,
-                task_plan=task_plan,
-                loaded_knowledge=knowledge,
                 fragments=fragment_tuple,
-                fingerprint=checkpoint_fingerprint(obs, task_plan, knowledge, fragment_tuple),
+                fingerprint=checkpoint_fingerprint(obs, fragment_tuple),
             ))
         elif kind == "protocol_feedback":
             transcript.append_protocol_feedback(payload["message"])
@@ -201,12 +197,20 @@ def run(output: Path) -> None:
                       else build_transcript(sample, directory, plugins)[0])
         knowledge = KnowledgeService(plugins.skill_catalog)
         planner = ModelActionPlanner(config)
+        task_plan = None
         row = {"name": sample["name"], "kind": sample["kind"], "rounds": [], "semantic_review": "pending"}
         for index in range(manifest["max_rounds"]):
             started = time.monotonic()
             result = {}
             try:
-                turn = planner.plan_turn(transcript, registry)
+                turn = planner.plan_turn(
+                    transcript,
+                    registry,
+                    current_task_state={
+                        "task_plan": copy.deepcopy(task_plan),
+                        "loaded_knowledge": knowledge.loaded_index(),
+                    },
+                )
                 validate_native_turn(turn, registry, allowed_names={s.name for s in registry.model_specs()},
                     latest_observation={"observation_id": transcript.latest_observation_id()},
                     prior_call_ids={c.tool_call_id for e in transcript.items if e.kind == "assistant_turn" for c in e.payload.tool_calls})
@@ -239,24 +243,7 @@ def run(output: Path) -> None:
                     "Offline local guidance or plan storage; no flight executed.", data=data,
                     requested_args=call.args, executed_args=call.args))
             if turn.tool_calls[0].tool_name == "runtime.update_plan":
-                previous = transcript.latest_checkpoint()
-                if previous is None:
-                    raise RuntimeError("plan update requires a prior V2 checkpoint")
                 task_plan = copy.deepcopy(turn.tool_calls[0].args)
-                transcript.append_state(StateCheckpoint(
-                    checkpoint_id=f"checkpoint_{len([e for e in transcript.items if e.kind == 'state_checkpoint']) + 1:04d}",
-                    reason="plan_updated",
-                    observation_id=previous.observation_id,
-                    task_plan=task_plan,
-                    loaded_knowledge=previous.loaded_knowledge,
-                    fragments=previous.fragments,
-                    fingerprint=checkpoint_fingerprint(
-                        previous.observation_id,
-                        task_plan,
-                        previous.loaded_knowledge,
-                        previous.fragments,
-                    ),
-                ))
         write(directory / "result.json", row)
         rows.append(row)
         write(output / "results.json", rows)

@@ -174,11 +174,9 @@ def build_transcript(case, output, plugins):
             checkpoint_id=f"checkpoint_{index:04d}",
             reason="instruction_start" if index == 1 else "physical_window_completed",
             observation_id=observation["observation_id"],
-            task_plan=None,
-            loaded_knowledge=(),
             fragments=fragments_tuple,
             fingerprint=checkpoint_fingerprint(
-                observation["observation_id"], None, (), fragments_tuple
+                observation["observation_id"], fragments_tuple
             ),
         )
     )
@@ -192,10 +190,8 @@ def _append_synthetic_checkpoint(transcript, observation_id, note, *, index):
             checkpoint_id=f"checkpoint_{index:04d}",
             reason="instruction_start",
             observation_id=observation_id,
-            task_plan=None,
-            loaded_knowledge=(),
             fragments=(fragment,),
-            fingerprint=checkpoint_fingerprint(observation_id, None, (), (fragment,)),
+            fingerprint=checkpoint_fingerprint(observation_id, (fragment,)),
         )
     )
 

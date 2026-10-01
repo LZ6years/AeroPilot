@@ -1,4 +1,4 @@
-"""Assemble final provider content from V2 contracts without semantic cleanup."""
+"""Assemble final provider content from V3 contracts without semantic cleanup."""
 
 from __future__ import annotations
 
@@ -98,26 +98,32 @@ class RequestAssembler:
             "checkpoint_id": checkpoint.get("checkpoint_id"),
             "reason": checkpoint.get("reason"),
             "observation_id": checkpoint.get("observation_id"),
-            "task_plan": copy.deepcopy(checkpoint.get("task_plan")),
-            "loaded_knowledge": copy.deepcopy(
-                checkpoint.get("loaded_knowledge") or []
-            ),
             "fragments": [
                 {
                     "name": fragment.get("name"),
-                    "model_content": copy.deepcopy(
-                        fragment.get("model_content") or {}
-                    ),
+                    "content": copy.deepcopy(fragment.get("content") or {}),
                 }
                 for fragment in checkpoint.get("fragments", [])
                 if isinstance(fragment, dict)
-                and (fragment.get("model_content") or {})
+                and (fragment.get("content") or {})
             ],
         }
         text = json.dumps(text_payload, ensure_ascii=False)
         if not parts:
             return text
         return [*parts, {"type": "text", "text": text}]
+
+    @staticmethod
+    def current_task_state_message(
+        current_task_state: dict[str, Any],
+    ) -> dict[str, str]:
+        """Render the one authoritative, transient task-state request block."""
+
+        return {
+            "role": "system",
+            "content": "CURRENT TASK STATE\n"
+            + json.dumps(copy.deepcopy(current_task_state), ensure_ascii=False),
+        }
 
     def compressed_history_message(
         self,

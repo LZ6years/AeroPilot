@@ -449,10 +449,10 @@ def test_skill_catalog_rejects_unknown_reference_paths():
 def test_skills_context_is_directory_only_and_load_index_is_isolated():
     registry = _uav_flight_registry()
     module = DefaultSkillsContextModule(warnings=registry.warnings)
-    state = TaskContextInput("Inspect route", loaded_knowledge=[{"name": "route_traversal_and_passage"}])
+    state = TaskContextInput("Inspect route")
     result = module.build(MemorySourceBundle(None), state)
-    assert result.fragment.model_content == {}
-    assert "skill_text" not in str(result.fragment.model_content)
-    assert "selected_skills" not in result.fragment.model_content
-    assert "knowledge_catalog" not in result.fragment.model_content
-    assert len(state.loaded_knowledge) == 1
+    assert result.fragment.content == {}
+    assert "skill_text" not in str(result.fragment.content)
+    assert "selected_skills" not in result.fragment.content
+    assert "knowledge_catalog" not in result.fragment.content
+    assert not hasattr(state, "loaded_knowledge")

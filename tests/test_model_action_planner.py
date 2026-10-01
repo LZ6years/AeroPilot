@@ -88,10 +88,8 @@ def make_transcript(tmp_path):
             checkpoint_id="checkpoint_0001",
             reason="instruction_start",
             observation_id="obs_0001",
-            task_plan=None,
-            loaded_knowledge=(),
             fragments=(fragment,),
-            fingerprint=checkpoint_fingerprint("obs_0001", None, (), (fragment,)),
+            fingerprint=checkpoint_fingerprint("obs_0001", (fragment,)),
         )
     )
     return transcript
@@ -109,11 +107,44 @@ def test_native_planner_sends_tools_and_parses_canonical_call(tmp_path):
     payload = planner.payloads[0]
     assert "tools" in payload
     assert "response_format" not in payload
-    assert payload["messages"][-1]["role"] == "user"
+    assert payload["messages"][-1]["role"] == "system"
+    assert payload["messages"][-1]["content"].startswith("CURRENT TASK STATE\n")
     assert any(
         tool["function"]["name"] == "runtime_report_completed"
         for tool in payload["tools"]
     )
+
+
+def test_current_task_state_is_injected_once_after_history(tmp_path):
+    planner = StubPlanner(
+        response_with_calls(("call_1", "uav_turn_relative", {"yaw_deg": 10}))
+    )
+    transcript = make_transcript(tmp_path)
+    task_state = {
+        "task_plan": {
+            "revision": 2,
+            "steps": [{"id": "approach", "status": "in_progress"}],
+        },
+        "loaded_knowledge": [{"name": "visual_target_navigation"}],
+    }
+
+    planner.plan_turn(
+        transcript,
+        default_registry(),
+        current_task_state=task_state,
+    )
+
+    messages = planner.payloads[0]["messages"]
+    blocks = [
+        message
+        for message in messages
+        if isinstance(message.get("content"), str)
+        and message["content"].startswith("CURRENT TASK STATE\n")
+    ]
+    assert len(blocks) == 1
+    assert json.loads(blocks[0]["content"].split("\n", 1)[1]) == task_state
+    assert blocks[0] == messages[-1]
+    assert planner.last_exchange["current_task_state"] == task_state
 
 
 def test_planner_records_provider_usage_in_task_local_projection_state(tmp_path):
@@ -165,7 +196,8 @@ def test_tool_selection_prompt_and_descriptions_do_not_force_a_control_call(tmp_
     assert request["tool_choice"] == "auto"
     assert request["temperature"] == 0
     assert "response_format" not in request
-    assert request["messages"][-len(history_before):] == history_before
+    assert request["messages"][-len(history_before) - 1 : -1] == history_before
+    assert request["messages"][-1]["content"].startswith("CURRENT TASK STATE\n")
     assert transcript.provider_messages(registry) == history_before
     assert request["tools"] == [spec.to_provider_tool() for spec in registry.model_specs()]
     assert "before the first physical action" in registry.get("runtime.update_plan").description
@@ -319,10 +351,8 @@ def test_native_planner_captures_exact_public_exchange_and_hashed_media(tmp_path
             checkpoint_id="checkpoint_0001",
             reason="instruction_start",
             observation_id="obs_media",
-            task_plan=None,
-            loaded_knowledge=(),
             fragments=(fragment,),
-            fingerprint=checkpoint_fingerprint("obs_media", None, (), (fragment,)),
+            fingerprint=checkpoint_fingerprint("obs_media", (fragment,)),
         )
     )
     response = response_with_calls(("call_1", "uav_hover", {}), content=None)
@@ -376,14 +406,16 @@ def test_native_planner_replays_tool_result_in_full_transcript(tmp_path):
     planner.plan_turn(transcript, registry)
 
     messages = planner.payloads[-1]["messages"]
-    assert [message["role"] for message in messages[-5:]] == [
+    assert [message["role"] for message in messages[-6:]] == [
         "system",
         "user",
         "user",
         "assistant",
         "tool",
+        "system",
     ]
-    assert messages[-1]["tool_call_id"] == "call_1"
+    assert messages[-2]["tool_call_id"] == "call_1"
+    assert messages[-1]["content"].startswith("CURRENT TASK STATE\n")
 
 
 @pytest.mark.parametrize(

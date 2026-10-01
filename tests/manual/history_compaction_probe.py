@@ -150,7 +150,7 @@ def main() -> int:
         )
         forbidden = {
             term: semantic.count(term)
-            for term in ("model_inputs", "media_ref", "base64", "data:image")
+            for term in ("model_inputs", "media_refs", "media_ref", "base64", "data:image")
         }
         row = {
             "transcript": str(path),

@@ -1,6 +1,6 @@
 # Run outputs
 
-正式 run 使用 Context V2：
+正式 run 使用 Context V3：
 
 ```text
 <run>/
@@ -24,7 +24,7 @@ Transcript 与 checkpoint 禁止内嵌 base64。Provider 请求中的临时媒�
 目录，保存 manifest、环境诊断和必要结果。已删除的 `tests/manual_outputs/` 不再是
 合法输出位置。
 
-V1 artifact 不被 V2 reader 兼容或静默解析。
+V2 及更旧 artifact 不被 V3 reader 兼容或静默解析。
 
 物理窗口的 `status` 可以是 `ok`、`collision` 或 `error`；步骤还可以是
 `skipped`。`collision` 表示可恢复的环境碰撞，不计作基础设施失败。碰撞步骤的

@@ -318,10 +318,8 @@ def test_old_and_new_runtime_produce_identical_requests_with_images(tmp_path, wo
             checkpoint_id='checkpoint_0001',
             reason='instruction_start',
             observation_id='obs_image',
-            task_plan=None,
-            loaded_knowledge=(),
             fragments=(fragment,),
-            fingerprint=checkpoint_fingerprint('obs_image', None, (), (fragment,)),
+            fingerprint=checkpoint_fingerprint('obs_image', (fragment,)),
         ))
         runtime.agent_transcript.append_assistant(AssistantTurn('read', 'read', calls))
         if mode == 'baseline':

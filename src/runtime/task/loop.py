@@ -35,6 +35,7 @@ class TaskLoop:
         state = session.state
         allowed = self.turn_executor.allowed_tools(session.scene, self.registry)
         while not state.completed and not state.stopped:
+            current_task_state = session.current_task_state()
             self.evidence.write_state(session)
             stop_reason = self._stop_reason(session)
             if stop_reason is not None:
@@ -52,6 +53,7 @@ class TaskLoop:
                     history_compaction_coordinator=(
                         session.history_compaction_coordinator
                     ),
+                    current_task_state=current_task_state,
                 )
             except AgentProtocolError as exc:
                 self.journal.capture_provider_exchange(

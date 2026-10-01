@@ -1276,11 +1276,11 @@ def _audit_checkpoint_image_contract(
     )
     if not isinstance(image_fragment, dict):
         return
-    inputs = image_fragment.get("model_inputs")
+    inputs = image_fragment.get("media_refs")
     inputs = [item for item in inputs if isinstance(item, dict)] if isinstance(inputs, list) else []
     refs = [item.get("media_ref") for item in inputs if isinstance(item.get("media_ref"), dict)]
     rgb = [item for item in refs if item.get("role") != "current_depth"]
-    unavailable = _object(image_fragment.get("model_content")).get("visual_evidence") == "current_rgb_unavailable"
+    unavailable = _object(image_fragment.get("content")).get("visual_evidence") == "current_rgb_unavailable"
     if unavailable and not rgb:
         return
     if len(rgb) != 1 or rgb[0].get("role") != "current_observation":

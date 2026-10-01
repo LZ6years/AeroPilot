@@ -1,4 +1,4 @@
-"""Runtime evidence memory and Model Context V2 composition."""
+"""Runtime evidence memory and Model Context V3 composition."""
 
 from src.memory.context.builder import ModelContextBuilder
 from src.memory.flight_memory import FlightMemory

@@ -48,11 +48,12 @@ cleanup。task 级可变数据位于 `TaskSession`；循环计数和 planner 时
 
 - `memory/context`：从 `MissionStateView + FlightMemory` 生成 Envelope 和 Checkpoint。
 - `agent/context`：历史选择、Provider 投影、请求顺序和临时媒体水合。
-- `runtime/context`：checkpoint 发布、去重、V2 artifact 与 schema 拒绝。
+- `runtime/context`：感知 checkpoint 发布、去重、V3 artifact 与 schema 拒绝。
 - `RuntimeFactory`：创建并注入同一组 Plugin、Tool、Context 与 Planner 依赖。
 
-模型只收到原始 instruction 一次。动态状态通过不可变 checkpoint 进入 Transcript；
-没有模型可见状态变化的只读结果或协议拒绝不会发布 checkpoint。
+模型只收到原始 instruction 一次。观察、运动与媒体状态通过不可变 checkpoint 进入
+Transcript；当前计划和已加载知识在每次请求中通过一份临时 `CURRENT TASK STATE`
+提供。计划更新、知识加载、普通只读结果和协议拒绝都不会发布感知 checkpoint。
 
 ## 不变量
 

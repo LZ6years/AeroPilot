@@ -19,13 +19,15 @@ from src.memory.context.contracts import (
 
 def test_context_fragment_is_immutable_from_caller_mutation():
     content = {"nested": {"value": 1}}
-    inputs = [{"type": "text", "text": "evidence"}]
+    inputs = [{"type": "image", "media_ref": {"ref": "frame.png"}}]
     fragment = ContextFragment("test", content, tuple(inputs))
     content["nested"]["value"] = 2
-    inputs[0]["text"] = "changed"
+    inputs[0]["media_ref"]["ref"] = "changed.png"
 
-    assert fragment.model_content == {"nested": {"value": 1}}
-    assert fragment.model_inputs == ({"type": "text", "text": "evidence"},)
+    assert fragment.content == {"nested": {"value": 1}}
+    assert fragment.media_refs == (
+        {"type": "image", "media_ref": {"ref": "frame.png"}},
+    )
 
 
 def test_fragment_audit_fields_never_enter_model_fragment():
@@ -40,23 +42,19 @@ def test_fragment_audit_fields_never_enter_model_fragment():
         build_duration_ms=1.2,
     )
 
-    assert set(fragment.to_dict()) == {"name", "model_content", "model_inputs"}
+    assert set(fragment.to_dict()) == {"name", "content", "media_refs"}
     assert audit.to_dict()["metadata"]["world_pose"]["x"] == 20
     assert "world_pose" not in json.dumps(fragment.to_dict())
 
 
-def test_checkpoint_fingerprint_covers_all_model_visible_dynamic_fields():
+def test_checkpoint_fingerprint_covers_all_sensory_model_fields():
     first = ContextFragment("pose", {"agl_m": 2.0})
     changed = ContextFragment("pose", {"agl_m": 2.1})
 
-    baseline = checkpoint_fingerprint("obs_1", None, (), (first,))
+    baseline = checkpoint_fingerprint("obs_1", (first,))
 
-    assert baseline != checkpoint_fingerprint("obs_2", None, (), (first,))
-    assert baseline != checkpoint_fingerprint("obs_1", {"revision": 1}, (), (first,))
-    assert baseline != checkpoint_fingerprint(
-        "obs_1", None, ({"name": "guide"},), (first,)
-    )
-    assert baseline != checkpoint_fingerprint("obs_1", None, (), (changed,))
+    assert baseline != checkpoint_fingerprint("obs_2", (first,))
+    assert baseline != checkpoint_fingerprint("obs_1", (changed,))
 
 
 def test_checkpoint_rejects_unknown_reason():
@@ -66,10 +64,8 @@ def test_checkpoint_rejects_unknown_reason():
             checkpoint_id="checkpoint_0001",
             reason="arbitrary",  # type: ignore[arg-type]
             observation_id=None,
-            task_plan=None,
-            loaded_knowledge=(),
             fragments=(fragment,),
-            fingerprint=checkpoint_fingerprint(None, None, (), (fragment,)),
+            fingerprint=checkpoint_fingerprint(None, (fragment,)),
         )
 
 
@@ -115,10 +111,8 @@ def test_instruction_envelope_and_checkpoint_have_distinct_lifetimes():
         checkpoint_id="checkpoint_0001",
         reason="instruction_start",
         observation_id="obs_1",
-        task_plan=None,
-        loaded_knowledge=(),
         fragments=(fragment,),
-        fingerprint=checkpoint_fingerprint("obs_1", None, (), (fragment,)),
+        fingerprint=checkpoint_fingerprint("obs_1", (fragment,)),
     )
 
     assert "identity" in envelope.to_dict()

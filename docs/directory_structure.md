@@ -8,7 +8,7 @@ src/
     planning/                  # 模型 planner 与原生 tool-call 校验
   memory/
     context/
-      contracts.py             # Context V2 与 MissionStateView
+      contracts.py             # Context V3、MissionStateView 与感知契约
       builder.py               # Envelope / Checkpoint 构建
       documents.py
       registry.py

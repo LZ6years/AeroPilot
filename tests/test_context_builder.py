@@ -1,4 +1,4 @@
-"""Model Context V2 builder and registry contract tests."""
+"""Model Context V3 builder and registry contract tests."""
 
 from __future__ import annotations
 
@@ -89,7 +89,7 @@ def test_instruction_envelope_owns_static_content_without_raw_instruction(tmp_pa
 
     envelope = builder.build_instruction_envelope(state, memory).to_dict()
 
-    assert envelope["schema_version"] == "instruction_envelope_v2"
+    assert envelope["schema_version"] == "instruction_envelope_v3"
     assert envelope["instruction_id"] == memory.active_instruction_id
     assert envelope["protocol_context"] == "caller protocol"
     assert envelope["identity"]["name"] == "FlyAgent"
@@ -117,14 +117,14 @@ def test_checkpoint_contains_only_dynamic_model_fields_and_separate_audit(tmp_pa
     )
     payload = checkpoint.to_dict()
 
-    assert payload["schema_version"] == "state_checkpoint_v2"
+    assert payload["schema_version"] == "state_checkpoint_v3"
     assert payload["observation_id"] == observation_id
-    assert payload["task_plan"]["steps"][0]["id"] == "look"
-    assert payload["loaded_knowledge"] == [{"name": "guide", "version": "1"}]
+    assert "task_plan" not in payload
+    assert "loaded_knowledge" not in payload
     assert [item["name"] for item in payload["fragments"]] == [
         "skills", "image", "pose", "motion", "map"
     ]
-    assert all(set(item) == {"name", "model_content", "model_inputs"} for item in payload["fragments"])
+    assert all(set(item) == {"name", "content", "media_refs"} for item in payload["fragments"])
     assert all("source" in item and "build_duration_ms" in item for item in audits)
     assert "data:image/" not in json.dumps(payload)
 
@@ -142,8 +142,8 @@ def test_motion_fragment_keeps_dynamic_safety_and_observation_policy(tmp_path):
     )
     motion = next(item for item in checkpoint.fragments if item.name == "motion")
 
-    assert motion.model_content["observation_policy"]["modalities"] == ["rgb", "pose"]
-    assert motion.model_content["safety_constraints"]["yaw_scan_remaining_deg"] == 30.0
+    assert motion.content["observation_policy"]["modalities"] == ["rgb", "pose"]
+    assert motion.content["safety_constraints"]["yaw_scan_remaining_deg"] == 30.0
 
 
 def test_image_fragment_is_media_ref_and_does_not_embed_base64(tmp_path):
@@ -161,7 +161,7 @@ def test_image_fragment_is_media_ref_and_does_not_embed_base64(tmp_path):
         state, memory, checkpoint_id="checkpoint_0001", reason="instruction_start"
     )
     image = next(item for item in checkpoint.fragments if item.name == "image")
-    ref = image.model_inputs[0]["media_ref"]
+    ref = image.media_refs[0]["media_ref"]
 
     assert ref["ref"] == "frame.png"
     assert ref["observation_id"] == observation_id
@@ -185,8 +185,8 @@ def test_missing_current_rgb_never_reuses_older_frame(tmp_path):
     image = next(item for item in checkpoint.fragments if item.name == "image")
 
     assert current_id != old_id
-    assert image.model_inputs == ()
-    assert image.model_content == {"visual_evidence": "current_rgb_unavailable"}
+    assert image.media_refs == ()
+    assert image.content == {"visual_evidence": "current_rgb_unavailable"}
 
 
 def test_registry_returns_module_results_and_ignores_disabled_modules(tmp_path):

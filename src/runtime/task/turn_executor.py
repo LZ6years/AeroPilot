@@ -150,18 +150,8 @@ class TurnExecutor:
             session.consecutive_rejections += 1
         else:
             session.consecutive_rejections = 0
-            if turn.tool_calls[0].tool_name == "runtime.update_plan":
-                session.checkpoints.publish(
-                    state, session.memory, "plan_updated"
-                )
         return TurnOutcome(
             kind="runtime_control",
-            checkpoint_reason=(
-                "plan_updated"
-                if result.status != "rejected"
-                and turn.tool_calls[0].tool_name == "runtime.update_plan"
-                else None
-            ),
             reset_rejections=result.status != "rejected",
         )
 
@@ -178,16 +168,10 @@ class TurnExecutor:
             session.executed_read_signatures.add(
                 read_call_signature(observation_id, call.tool_name, call.args)
             )
-        loaded_before = copy.deepcopy(state.loaded_knowledge)
         results = self._execute_native_read_calls(
             session, turn.public_intent, turn.tool_calls, decision_id
         )
         state.loaded_knowledge = session.knowledge_service.loaded_index()
-        knowledge_changed = state.loaded_knowledge != loaded_before
-        if knowledge_changed:
-            session.checkpoints.publish(
-                state, session.memory, "knowledge_loaded"
-            )
         self.journal.write_turn(
             "read_only_turn_recorded",
             {"decision_id": decision_id, "tool_results": results},
@@ -197,7 +181,6 @@ class TurnExecutor:
             session.consecutive_rejections = 0
         return TurnOutcome(
             kind="read_only",
-            checkpoint_reason="knowledge_loaded" if knowledge_changed else None,
             reset_rejections=all_ok,
         )
 

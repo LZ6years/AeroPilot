@@ -120,7 +120,7 @@ def test_probe_uses_default_memory_fixed_cases_and_no_backend(tmp_path, index):
     if index == 8:
         assert "synthetic_prior_call" in transcript.prior_evidence_reference_ids()
     if index == 7:
-        media_ref = checkpoint.fragments[-1].model_inputs[0]["media_ref"]
+        media_ref = checkpoint.fragments[-1].media_refs[0]["media_ref"]
         assert media_ref["ref"].endswith("frame_000001.png")
         assert len(media_ref["sha256"]) == 64
 

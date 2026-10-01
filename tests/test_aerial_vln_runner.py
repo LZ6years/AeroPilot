@@ -182,13 +182,13 @@ def test_aerial_vln_planner_uses_current_rgb_only_when_stmr_is_ready(
 
     ready_fragment = stmr_module.build(sources, stage)
 
-    assert ready_fragment.fragment.model_inputs[0]["media_ref"]["role"] == "stmr_semantic_map"
+    assert ready_fragment.fragment.media_refs[0]["media_ref"]["role"] == "stmr_semantic_map"
     assert not hasattr(image_module, "include_phase_start_reference")
 
     stmr_module.online_builder = FailingOnlineStmrBuilder()
     failed_fragment = stmr_module.build(sources, stage)
 
-    assert failed_fragment.fragment.model_inputs == ()
+    assert failed_fragment.fragment.media_refs == ()
     assert not hasattr(image_module, "include_phase_start_reference")
 
 

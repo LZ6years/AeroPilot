@@ -86,8 +86,8 @@ class PluginContextModule(ContextModule):
         return ContextModuleResult(
             ContextFragment(
                 name=self.name,
-                model_content=content,
-                model_inputs=(model_input,) if model_input else (),
+                content=content,
+                media_refs=(model_input,) if model_input else (),
             ),
             FragmentAudit(
                 name=self.name,
@@ -124,7 +124,7 @@ class PluginContextModule(ContextModule):
                 "center_pose": "Latest UAV pose used as the local map center.",
                 "map_config": "Grid size, meters per cell, orientation, and semantic projection status.",
             },
-            "model_inputs": "One rendered PNG image with role custom_map when artifact generation succeeds.",
+            "media_refs": "One rendered PNG image with role custom_map when artifact generation succeeds.",
             "audit_fields": {
                 "projection_debug": "Human-only projection diagnostics.",
                 "path_cells": "Human-only rendered path cells.",

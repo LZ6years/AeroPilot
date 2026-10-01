@@ -245,16 +245,16 @@ def test_map_context_shadow_is_baseline_and_planner_adds_one_image(tmp_path):
     shadow = PluginContextModule(mode="shadow", online_builder=fake).build(sources, _stage_context())
     planner = PluginContextModule(mode="planner", online_builder=fake).build(sources, _stage_context())
 
-    assert shadow.fragment.model_inputs == ()
-    assert "stmr" not in shadow.fragment.model_content
-    assert len(planner.fragment.model_inputs) == 1
-    ref = planner.fragment.model_inputs[0]["media_ref"]
+    assert shadow.fragment.media_refs == ()
+    assert "stmr" not in shadow.fragment.content
+    assert len(planner.fragment.media_refs) == 1
+    ref = planner.fragment.media_refs[0]["media_ref"]
     assert ref["usage"] == STMR_MAP_USAGE
     assert "START/ENTRY to NOW" in ref["usage"]
     assert "image top is current forward" in ref["usage"]
-    assert planner.fragment.model_content["stmr"]["representation"] == "semantic_history_not_traversability"
-    assert planner.fragment.model_content["stmr"]["trajectory_summary"]["pose_count"] == 1
-    assert "trajectory_trace" not in planner.fragment.model_content["stmr"]
+    assert planner.fragment.content["stmr"]["representation"] == "semantic_history_not_traversability"
+    assert planner.fragment.content["stmr"]["trajectory_summary"]["pose_count"] == 1
+    assert "trajectory_trace" not in planner.fragment.content["stmr"]
 
 
 def test_map_context_failure_falls_back_without_model_input():
@@ -269,9 +269,9 @@ def test_map_context_failure_falls_back_without_model_input():
         _stage_context(),
     )
 
-    assert planner.fragment.model_inputs == ()
+    assert planner.fragment.media_refs == ()
     assert "stmr_map_failed:RuntimeError" in planner.audit.warnings
-    assert shadow.fragment.model_inputs == ()
+    assert shadow.fragment.media_refs == ()
     assert shadow.audit.warnings == ()
 
 
@@ -328,10 +328,10 @@ def test_stmr_planner_summary_stays_bounded_as_history_grows(tmp_path):
 
     short = fragment_for(1)
     long = fragment_for(1000)
-    short_text = json.dumps(short.fragment.model_content, sort_keys=True)
-    long_text = json.dumps(long.fragment.model_content, sort_keys=True)
+    short_text = json.dumps(short.fragment.content, sort_keys=True)
+    long_text = json.dumps(long.fragment.content, sort_keys=True)
 
-    assert len(long.fragment.model_inputs) == len(short.fragment.model_inputs) == 1
+    assert len(long.fragment.media_refs) == len(short.fragment.media_refs) == 1
     assert "trajectory_trace" not in long_text
     assert "frame_history" not in long_text
     assert len(long_text) - len(short_text) < 32
@@ -349,22 +349,20 @@ def test_stmr_media_follows_rgb_and_precedes_context_json(tmp_path):
         usage=STMR_MAP_USAGE,
     )
     checkpoint = {
-        "schema_version": "state_checkpoint_v2",
+        "schema_version": "state_checkpoint_v3",
         "checkpoint_id": "checkpoint_0001",
         "reason": "instruction_start",
         "observation_id": "obs",
-        "task_plan": None,
-        "loaded_knowledge": [],
         "fragments": [
             {
                 "name": "image",
-                "model_content": {},
-                "model_inputs": [rgb_ref.to_model_input()],
+                "content": {},
+                "media_refs": [rgb_ref.to_model_input()],
             },
             {
                 "name": "map",
-                "model_content": {"stmr": {"representation": "semantic_history_not_traversability"}},
-                "model_inputs": [map_ref.to_model_input()],
+                "content": {"stmr": {"representation": "semantic_history_not_traversability"}},
+                "media_refs": [map_ref.to_model_input()],
             },
         ],
     }

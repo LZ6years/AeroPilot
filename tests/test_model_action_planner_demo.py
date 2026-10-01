@@ -18,7 +18,8 @@ def test_demo_memory_needs_only_instruction(tmp_path):
         state, memory, checkpoint_id="checkpoint_0001", reason="instruction_start"
     )
     assert "Turn towards the entrance" not in json.dumps(envelope.to_dict())
-    assert checkpoint.task_plan is None
+    assert "task_plan" not in checkpoint.to_dict()
+    assert "loaded_knowledge" not in checkpoint.to_dict()
     assert all(fragment.name != "instruction" for fragment in checkpoint.fragments)
 
 

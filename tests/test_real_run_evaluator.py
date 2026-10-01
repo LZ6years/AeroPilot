@@ -100,7 +100,7 @@ def write_completed_run_boilerplate(run_dir: Path) -> None:
     write_json(run_dir / "latest_state.json", {"completed": True, "connected": True, "airborne": True})
     write_json(
         run_dir / "contexts" / "latest_checkpoint.json",
-        {"schema_version": "state_checkpoint_v2", "checkpoint_id": "checkpoint_0001"},
+        {"schema_version": "state_checkpoint_v3", "checkpoint_id": "checkpoint_0001"},
     )
 
 

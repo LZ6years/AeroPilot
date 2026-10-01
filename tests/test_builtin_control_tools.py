@@ -33,10 +33,8 @@ def checkpoint(observation_id: str, index: int = 1) -> StateCheckpoint:
         f"checkpoint_{index:04d}",
         "instruction_start" if index == 1 else "physical_window_completed",
         observation_id,
-        None,
-        (),
         (fragment,),
-        checkpoint_fingerprint(observation_id, None, (), (fragment,)),
+        checkpoint_fingerprint(observation_id, (fragment,)),
     )
 
 

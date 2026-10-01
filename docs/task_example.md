@@ -8,10 +8,11 @@
 4. 模型返回一个 `uav.move_body` 原生 tool call。
 5. TurnExecutor 校验回合；Safety 审查后交给 PhysicalWindowExecutor。
 6. 物理窗口执行动作、稳定等待并自动采集一次 after observation。
-7. Runtime 发布 `physical_window_completed`；下一请求读取新的 checkpoint。
+7. Runtime 发布 `physical_window_completed`；下一请求读取新的 checkpoint，并在历史
+   后附加一份当前计划与知识索引。
 8. 模型调用 `runtime.report_completed` 并引用当前 observation 证据。
 9. Runtime 采集终态证据，发布 `task_terminal`，执行 shutdown 与 cleanup。
 
-只读工具可在任意非物理回合运行。加载知识导致模型状态变化时发布
-`knowledge_loaded`；普通只读结果和协议拒绝只进入 Transcript。计划是可选的；
-`runtime.update_plan` 成功后发布 `plan_updated`。
+只读工具可在任意非物理回合运行。`knowledge.load` 与 `runtime.update_plan` 的结果只
+进入 Transcript；其最新状态在下一请求的 `CURRENT TASK STATE` 中统一体现，不产生
+额外 observation checkpoint。

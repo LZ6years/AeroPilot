@@ -7,4 +7,4 @@ episode instruction 与 protocol context 传入同一原生工具循环。Benchm
 远端 readiness 的纯逻辑契约保留在产品测试，真实 SSH/模拟器检查属于 diagnostics
 或 manual。任务真值和 reference route 不得进入模型上下文。
 
-产物遵循 [Context V2](../../context_v2.md) 与 [run outputs](../../run_outputs.md)。
+产物遵循 [Context V3](../../context_v3.md) 与 [run outputs](../../run_outputs.md)。

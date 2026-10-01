@@ -15,16 +15,14 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
 
-INSTRUCTION_ENVELOPE_SCHEMA = "instruction_envelope_v2"
-STATE_CHECKPOINT_SCHEMA = "state_checkpoint_v2"
-TRANSCRIPT_SCHEMA = "agent_transcript_v2"
-HISTORY_PROJECTION_SCHEMA = "history_projection_v2"
+INSTRUCTION_ENVELOPE_SCHEMA = "instruction_envelope_v3"
+STATE_CHECKPOINT_SCHEMA = "state_checkpoint_v3"
+TRANSCRIPT_SCHEMA = "agent_transcript_v3"
+HISTORY_PROJECTION_SCHEMA = "history_projection_v3"
 
 CheckpointReason = Literal[
     "instruction_start",
     "physical_window_completed",
-    "plan_updated",
-    "knowledge_loaded",
     "task_terminal",
 ]
 
@@ -40,8 +38,6 @@ class MissionStateView(Protocol):
     run_id: str
     user_instruction: str
     protocol_context: str
-    task_plan: Any
-    loaded_knowledge: list[dict[str, Any]]
     motion_summary: dict[str, Any]
     observation_modalities: tuple[str, ...]
     latest_observation: dict[str, Any]
@@ -55,8 +51,6 @@ CHECKPOINT_REASONS = frozenset(
     {
         "instruction_start",
         "physical_window_completed",
-        "plan_updated",
-        "knowledge_loaded",
         "task_terminal",
     }
 )
@@ -83,7 +77,7 @@ class MediaRef:
     digest of the normalized provider payload in request audit data.
     Runtime-persisted ``ref`` values use POSIX paths relative to the owning run;
     absolute refs are reserved for base-less standalone diagnostics and are not
-    part of durable Context V2 artifacts.
+    part of durable Context V3 artifacts.
     """
 
     ref: str
@@ -158,22 +152,29 @@ class ContextFragment:
     """
 
     name: str
-    model_content: dict[str, Any] = field(default_factory=dict)
-    model_inputs: tuple[dict[str, Any], ...] = ()
+    content: dict[str, Any] = field(default_factory=dict)
+    media_refs: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "model_content", _clone(dict(self.model_content)))
+        object.__setattr__(self, "content", _clone(dict(self.content)))
+        for item in self.media_refs:
+            if item.get("type") != "image" or not isinstance(
+                item.get("media_ref"), dict
+            ):
+                raise ValueError(
+                    "ContextFragment.media_refs accepts only image media_ref entries"
+                )
         object.__setattr__(
             self,
-            "model_inputs",
-            tuple(_clone(dict(item)) for item in self.model_inputs),
+            "media_refs",
+            tuple(_clone(dict(item)) for item in self.media_refs),
         )
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
-            "model_content": _clone(self.model_content),
-            "model_inputs": [_clone(item) for item in self.model_inputs],
+            "content": _clone(self.content),
+            "media_refs": [_clone(item) for item in self.media_refs],
         }
 
 
@@ -215,8 +216,6 @@ class TaskContextInput:
 
     active_instruction: str
     protocol_context: str = ""
-    task_plan: dict[str, Any] | None = None
-    loaded_knowledge: list[dict[str, Any]] = field(default_factory=list)
     motion_summary: dict[str, Any] = field(default_factory=dict)
     safety_constraints: dict[str, Any] = field(default_factory=dict)
     observation_policy: dict[str, Any] = field(default_factory=dict)
@@ -263,8 +262,6 @@ class StateCheckpoint:
     checkpoint_id: str
     reason: CheckpointReason
     observation_id: str | None
-    task_plan: dict[str, Any] | None
-    loaded_knowledge: tuple[dict[str, Any], ...]
     fragments: tuple[ContextFragment, ...]
     fingerprint: str
     schema_version: str = STATE_CHECKPOINT_SCHEMA
@@ -275,8 +272,6 @@ class StateCheckpoint:
 
     def model_payload(self) -> dict[str, Any]:
         return {
-            "task_plan": _clone(self.task_plan),
-            "loaded_knowledge": [_clone(item) for item in self.loaded_knowledge],
             "fragments": [fragment.to_dict() for fragment in self.fragments],
         }
 
@@ -293,16 +288,12 @@ class StateCheckpoint:
 
 def checkpoint_fingerprint(
     observation_id: str | None,
-    task_plan: dict[str, Any] | None,
-    loaded_knowledge: tuple[dict[str, Any], ...],
     fragments: tuple[ContextFragment, ...],
 ) -> str:
     """Hash every model-visible dynamic field, excluding publication metadata."""
 
     payload = {
         "observation_id": observation_id,
-        "task_plan": task_plan,
-        "loaded_knowledge": list(loaded_knowledge),
         "fragments": [fragment.to_dict() for fragment in fragments],
     }
     encoded = json.dumps(
@@ -315,7 +306,7 @@ def assert_binary_free(value: Any, *, path: str = "$") -> None:
     """Reject inline provider media before a checkpoint becomes durable."""
 
     if isinstance(value, str) and value.startswith("data:image/"):
-        raise ValueError(f"inline image data is forbidden in V2 context at {path}")
+        raise ValueError(f"inline image data is forbidden in V3 context at {path}")
     if isinstance(value, dict):
         for key, item in value.items():
             assert_binary_free(item, path=f"{path}.{key}")

@@ -1,4 +1,4 @@
-# Model Context V2 组装探针
+# Model Context V3 组装探针
 
 该探针只测量当前 V2 契约，不读取 V1 run、不导入 V1 源码，也不尝试迁移旧 artifact。
 它构造固定长度的 checkpoint 历史，通过真实 `HistoryProjector`、

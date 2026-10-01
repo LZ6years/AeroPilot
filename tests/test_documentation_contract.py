@@ -10,7 +10,7 @@ CURRENT_DOCUMENTS = (
     Path("README.md"),
     Path("docs/README.md"),
     Path("docs/architecture.md"),
-    Path("docs/context_v2.md"),
+    Path("docs/context_v3.md"),
     Path("docs/plugin_system.md"),
     Path("docs/testing.md"),
     Path("docs/directory_structure.md"),
@@ -46,6 +46,12 @@ def test_current_documents_do_not_publish_retired_context_api():
         "ModelInputAssembler",
         "runtime.commit_phase_turn",
         "semantic_phases",
+        "Context V2",
+        "context_v2.md",
+        "model_content",
+        "model_inputs",
+        "plan_updated",
+        "knowledge_loaded",
     )
     violations = {
         str(document): [term for term in forbidden if term in document.read_text(encoding="utf-8-sig")]

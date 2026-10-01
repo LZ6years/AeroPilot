@@ -134,12 +134,8 @@ def _checkpoint(index: int, *, image_ref: MediaRef | None = None) -> StateCheckp
         checkpoint_id=f"checkpoint_{index:04d}",
         reason="instruction_start" if index == 0 else "physical_window_completed",
         observation_id=observation_id,
-        task_plan={"large_repeated_plan": "excluded"},
-        loaded_knowledge=(),
         fragments=fragment_tuple,
-        fingerprint=checkpoint_fingerprint(
-            observation_id, {"large_repeated_plan": "excluded"}, (), fragment_tuple
-        ),
+        fingerprint=checkpoint_fingerprint(observation_id, fragment_tuple),
     )
 
 
@@ -226,7 +222,22 @@ def _manager(
     return ContextWindowManager(projector, config, compactor=compactor)
 
 
-def _project(manager, transcript, state, coordinator, *, fixed_size: int = 0):
+def _project(
+    manager,
+    transcript,
+    state,
+    coordinator,
+    *,
+    fixed_size: int = 0,
+    current_task_state: dict | None = None,
+):
+    task_state = current_task_state or {
+        "task_plan": {
+            "revision": 4,
+            "steps": [{"id": "inspect", "status": "in_progress"}],
+        },
+        "loaded_knowledge": [{"name": "flight", "version": "1"}],
+    }
     return manager.project(
         transcript,
         default_registry(),
@@ -235,6 +246,7 @@ def _project(manager, transcript, state, coordinator, *, fixed_size: int = 0):
         fixed_messages=[{"role": "system", "content": "x" * fixed_size}],
         tools=[],
         parameters={"temperature": 0},
+        current_task_state=task_state,
     )
 
 
@@ -286,6 +298,13 @@ def test_prefetch_uses_all_eligible_windows_and_image_free_semantic_view(tmp_pat
     assert result.audit["compaction_status"] == "prefetch_started"
     assert len(compactor.requests) == 1
     request = compactor.requests[0]
+    assert request.current_state_hint == {
+        "task_plan": {
+            "revision": 4,
+            "steps": [{"id": "inspect", "status": "in_progress"}],
+        },
+        "loaded_knowledge": [{"name": "flight", "version": "1"}],
+    }
     assert len(request.windows) == 4
     semantic = json.dumps(
         [window.to_dict() for window in request.windows], ensure_ascii=False
@@ -422,10 +441,8 @@ def test_compressed_prefix_images_are_omitted_but_current_image_remains(tmp_path
         checkpoint_id="checkpoint_current",
         reason="physical_window_completed",
         observation_id="obs_current",
-        task_plan=None,
-        loaded_knowledge=(),
         fragments=(fragment,),
-        fingerprint=checkpoint_fingerprint("obs_current", None, (), (fragment,)),
+        fingerprint=checkpoint_fingerprint("obs_current", (fragment,)),
     )
     section = CompressedHistorySection(
         generation=1,
@@ -494,7 +511,21 @@ def test_exact_knowledge_is_reinjected_outside_semantic_request(tmp_path):
     state = HistoryProjectionState()
     coordinator = HistoryCompactionCoordinator()
 
-    result = _project(manager, transcript, state, coordinator)
+    current_task_state = {
+        "task_plan": {"revision": 7, "steps": []},
+        "loaded_knowledge": [{"name": "flight", "version": "loaded"}],
+    }
+    result = _project(
+        manager,
+        transcript,
+        state,
+        coordinator,
+        current_task_state=current_task_state,
+    )
+    candidate = coordinator.poll().candidate
+    assert candidate is not None
+    assert candidate.request.current_state_hint == current_task_state
+    assert body in json.dumps(candidate.exact_loaded_knowledge, ensure_ascii=False)
     assert body not in json.dumps(coordinator.poll().candidate.request.windows, default=str)
     rendered = json.dumps(result.messages, ensure_ascii=False)
     assert rendered.count(body) == 1

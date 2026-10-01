@@ -56,9 +56,11 @@ class ContextWindowManager:
         fixed_messages: list[dict[str, Any]],
         tools: list[dict[str, Any]],
         parameters: dict[str, Any],
+        current_task_state: dict[str, Any] | None = None,
     ) -> ProjectionResult:
         """Return immediately with a full, staged, or compacted request view."""
 
+        task_state = copy.deepcopy(current_task_state or {})
         # Standalone callers intentionally remain stateless and preserve full
         # history. Production supplies both objects from its TaskSession.
         if state is None or not self.config.enabled:
@@ -90,7 +92,7 @@ class ContextWindowManager:
         # submit() owns the per-digest retry prohibition.
         if snapshot.status in {"idle", "failed"}:
             candidate, preparation_status = self._prepare_candidate(
-                transcript, registry, state
+                transcript, registry, state, task_state
             )
             if candidate is not None and (
                 candidate.estimated_input_tokens
@@ -124,7 +126,7 @@ class ContextWindowManager:
             activation_candidate = snapshot.candidate
         if activation_candidate is None:
             activation_candidate, preparation_status = self._prepare_candidate(
-                transcript, registry, state
+                transcript, registry, state, task_state
             )
         if activation_candidate is None:
             result.audit.setdefault("compaction_status", preparation_status)
@@ -267,6 +269,7 @@ class ContextWindowManager:
         transcript: "AgentTranscript",
         registry: "ToolRegistry",
         state: HistoryProjectionState,
+        current_task_state: dict[str, Any],
     ) -> tuple[CompressionCandidate | None, str]:
         base = max(2, state.compacted_through_event_index)
         new_events = transcript.snapshot_range(base)
@@ -275,6 +278,7 @@ class ContextWindowManager:
             base_event_index=base,
             keep_recent_decision_windows=self.config.keep_recent_decision_windows,
             registry=registry,
+            current_task_state=current_task_state,
         )
         if initial.compactable_end_event_index is None:
             return None, "no_complete_prefix"
@@ -288,6 +292,7 @@ class ContextWindowManager:
             keep_recent_decision_windows=self.config.keep_recent_decision_windows,
             all_events_for_evidence=full_events,
             registry=registry,
+            current_task_state=current_task_state,
         )
         if plan.source_digest is None or plan.source_digest == state.source_digest:
             return None, "unchanged_boundary"
@@ -309,6 +314,7 @@ class ContextWindowManager:
                 all_events_for_evidence=full_events,
                 max_compactable_windows=count,
                 registry=registry,
+                current_task_state=current_task_state,
             )
             trial = self._candidate_from_plan(limited_plan, state)
             if trial.estimated_input_tokens <= self.config.max_compactor_input_tokens:
@@ -327,6 +333,7 @@ class ContextWindowManager:
             all_events_for_evidence=full_events,
             max_compactable_windows=1,
             registry=registry,
+            current_task_state=current_task_state,
         )
         return self._candidate_from_plan(one, state), "single_window_oversized"
 

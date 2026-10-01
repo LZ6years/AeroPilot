@@ -34,7 +34,7 @@ class DefaultPoseContextModule(ContextModule):
         recent_delta = pose_delta(poses[-2], poses[-1]) if len(poses) >= 2 else {}
         content = _model_pose_content(latest_pose)
         return ContextModuleResult(
-            ContextFragment(name=self.name, model_content=content),
+            ContextFragment(name=self.name, content=content),
             FragmentAudit(
                 name=self.name,
                 source=self.__class__.__name__,

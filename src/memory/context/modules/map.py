@@ -24,14 +24,14 @@ class DefaultMapContextModule(ContextModule):
         recalled = []
         if sources.map_memory is not None:
             recalled = sources.map_memory.recall(memory.map_id, memory.scene_instance_id, limit=self.max_items)
-        model_content = {
+        content = {
                 "recalled_map_memories": recalled,
                 "requires_reconfirmation": any(
                     item.get("requires_reconfirmation", True) for item in recalled
                 ),
             }
         return ContextModuleResult(
-            ContextFragment(self.name, model_content),
+            ContextFragment(self.name, content),
             FragmentAudit(
                 name=self.name,
                 source=self.__class__.__name__,

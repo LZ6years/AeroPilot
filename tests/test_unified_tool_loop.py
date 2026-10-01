@@ -123,6 +123,9 @@ class ScriptedPlanner:
             {
                 "envelope": transcript.instruction_envelope(),
                 "checkpoint": checkpoint.to_dict() if checkpoint else {},
+                "current_task_state": copy.deepcopy(
+                    kwargs.get("current_task_state") or {}
+                ),
             }
         )
         self.histories.append(transcript.snapshot())
@@ -533,7 +536,24 @@ def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
     for context in runtime.planner.contexts:
         checkpoint = context["checkpoint"]
         assert not {"current_phase", "phase_strategy", "semantic_plan"} & checkpoint.keys()
+        assert "task_plan" not in checkpoint
+        assert "loaded_knowledge" not in checkpoint
         assert context["envelope"]["protocol_context"] == "Episode-specific guidance."
+    assert runtime.planner.contexts[0]["current_task_state"] == {
+        "task_plan": None,
+        "loaded_knowledge": [],
+    }
+    assert runtime.planner.contexts[1]["current_task_state"]["loaded_knowledge"][0][
+        "name"
+    ] == "guide"
+    assert runtime.planner.contexts[2]["current_task_state"]["task_plan"][
+        "steps"
+    ][0]["id"] == "go"
+    assert [
+        event.payload.reason
+        for event in runtime.agent_transcript.items
+        if event.kind == "state_checkpoint"
+    ] == ["instruction_start", "physical_window_completed"]
     assert len([k for k in runtime.recorder.artifacts if k.startswith("debug/tool_loop/")]) == 4
 
 
@@ -693,7 +713,8 @@ def test_context_never_selects_knowledge_or_exposes_unloaded_body(tmp_path):
     assert context["envelope"]["knowledge_catalog"] == [
         {"name": "guide", "description": "Navigation guidance"}
     ]
-    assert context["checkpoint"]["loaded_knowledge"] == []
+    assert "loaded_knowledge" not in context["checkpoint"]
+    assert context["current_task_state"]["loaded_knowledge"] == []
     assert "phase_start" not in runtime.memory.observation_anchors
 
 

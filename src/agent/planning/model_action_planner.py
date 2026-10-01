@@ -150,6 +150,7 @@ class ModelActionPlanner:
         decision_index: int | None = None,
         history_projection_state: HistoryProjectionState | None = None,
         history_compaction_coordinator: HistoryCompactionCoordinator | None = None,
+        current_task_state: dict[str, Any] | None = None,
     ) -> AssistantTurn:
         """Request one turn; Runtime supplies a one-based, instruction-local index.
 
@@ -159,6 +160,11 @@ class ModelActionPlanner:
 
         if decision_index is not None and (type(decision_index) is not int or decision_index < 1):
             raise ValueError("decision_index must be a positive integer or None")
+        task_state = copy.deepcopy(
+            current_task_state
+            if current_task_state is not None
+            else {"task_plan": None, "loaded_knowledge": []}
+        )
 
         if not self.provider_config.api_key:
             raise ModelActionPlannerConfigError(
@@ -192,7 +198,10 @@ class ModelActionPlanner:
         if self.provider_config.thinking_mode:
             parameters["thinking"] = {"type": self.provider_config.thinking_mode}
         provider_tools = [spec.to_provider_tool() for spec in specs]
-        fixed_messages = prefix.build()
+        task_state_message = self.history_projector.assembler.current_task_state_message(
+            task_state
+        )
+        fixed_messages = [*prefix.build(), task_state_message]
         if reminder is not None:
             fixed_messages = [*fixed_messages, reminder]
         projection = (
@@ -204,6 +213,7 @@ class ModelActionPlanner:
                 fixed_messages=fixed_messages,
                 tools=provider_tools,
                 parameters=parameters,
+                current_task_state=task_state,
             )
             if self.context_window_manager is not None
             else self.history_projector.project(transcript, registry)
@@ -211,6 +221,7 @@ class ModelActionPlanner:
         builder = MessageBuilder()
         builder.extend(prefix.build(), key="fixed_prefix")
         builder.extend(projection.messages, key="history")
+        builder.extend([task_state_message], key="current_task_state")
         if reminder is not None:
             builder.extend([reminder], key="task_progress_reminder")
         request = ModelRequest(
@@ -230,6 +241,7 @@ class ModelActionPlanner:
             "media": media,
             "response": None,
             "history_projection": projection.audit,
+            "current_task_state": copy.deepcopy(task_state),
         }
         data = self._request(payload)
         if self.context_window_manager is not None:

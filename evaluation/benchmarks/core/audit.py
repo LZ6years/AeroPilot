@@ -195,7 +195,7 @@ class BenchmarkAuditReader:
             )
             for relative in _AUDIT_FILES
         }
-        _require_v2_transcript(records["memory/agent_transcript.jsonl"])
+        _require_v3_transcript(records["memory/agent_transcript.jsonl"])
         observations = records["memory/observations.jsonl"]
         start_index = _ref_line(cursor.task_initial_observation_ref)
         if start_index is not None:
@@ -941,7 +941,7 @@ def _active_instruction_transcript(
     observation, so a plain timestamp slice would drop the user instruction.
     The first transcript record at or after the observation boundary identifies
     the active ``instruction_id``; all bounded records with that ID are kept.
-    V2 records always have instruction IDs. The cursor's line limits have
+    V3 records always have instruction IDs. The cursor's line limits have
     already excluded anything appended after freeze.
     """
 
@@ -968,14 +968,14 @@ def _active_instruction_transcript(
             if str(item.get("instruction_id") or "") == instruction_id
         ]
 
-    raise UnsupportedRunSchema("agent_transcript_v2 requires instruction_id")
+    raise UnsupportedRunSchema("agent_transcript_v3 requires instruction_id")
 
 
-def _require_v2_transcript(records: list[dict[str, Any]]) -> None:
+def _require_v3_transcript(records: list[dict[str, Any]]) -> None:
     for record in records:
         if record.get("schema_version") != TRANSCRIPT_SCHEMA:
             raise UnsupportedRunSchema(
-                "memory/agent_transcript.jsonl is not agent_transcript_v2"
+                "memory/agent_transcript.jsonl is not agent_transcript_v3"
             )
         kind = record.get("kind")
         payload = record.get("payload")

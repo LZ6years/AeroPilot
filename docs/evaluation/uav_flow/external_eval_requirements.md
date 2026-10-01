@@ -99,7 +99,7 @@ flowchart LR
 3. 使用 `initial_pos` 初始化 UnrealCV 场景中的 UAV/camera。
 4. 如 task 包含 `obj_id/use_obj/target_pos`，按 benchmark 语义放置目标对象。
 5. 采集 RGB 和 pose，转成 UAV-Agent observation。
-6. 默认 image module 将最近 RGB 作为 `model_inputs[type=image]` 传给 planner。
+6. 默认 image module 将最近 RGB 作为 `media_refs[type=image]` 交给请求组装器延迟水合。
 7. UAV-Agent 按自己的 runtime loop 输出并执行 tool action。
 8. 保存 trajectory、run artifacts、Provider Request、动作和 AgentTranscript。
 9. 用 `reference_path_preprocessed` 计算 nDTW。

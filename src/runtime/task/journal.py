@@ -159,6 +159,12 @@ class RuntimeJournal:
         ).hexdigest()[:16]
         debug_ref = f"debug/tool_loop/{namespace}/{decision_id}.json"
         checkpoint = session.transcript.latest_checkpoint()
+        exchange = getattr(planner, "last_exchange", None)
+        current_task_state = (
+            exchange.get("current_task_state")
+            if isinstance(exchange, dict)
+            else {}
+        )
         self.recorder.write_json(
             debug_ref,
             {
@@ -169,6 +175,11 @@ class RuntimeJournal:
                 "checkpoint_observation_id": session.transcript.latest_observation_id(),
                 "model_context": redact_provider_value(
                     checkpoint.to_dict() if checkpoint is not None else {}
+                ),
+                "current_task_state": redact_provider_value(
+                    current_task_state
+                    if isinstance(current_task_state, dict)
+                    else {}
                 ),
                 "model_rounds": [record],
             },
@@ -200,6 +211,9 @@ class RuntimeJournal:
         projection = exchange.get("history_projection")
         if isinstance(projection, dict):
             record["history_projection"] = projection
+        current_task_state = exchange.get("current_task_state")
+        if isinstance(current_task_state, dict):
+            record["current_task_state"] = current_task_state
         transport = exchange.get("transport")
         if isinstance(transport, dict):
             record["transport"] = transport

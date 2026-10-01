@@ -209,7 +209,7 @@ def test_custom_map_builds_fragment_image_matrix_and_path_summary(tmp_path):
 
     result = PluginContextModule().build(MemorySourceBundle(memory), _stage_context())
     fragment = result.fragment.to_dict()
-    content = fragment["model_content"]
+    content = fragment["content"]
 
     assert fragment["name"] == "custom_map"
     assert content["path_summary"]["pose_count"] == 4
@@ -222,9 +222,9 @@ def test_custom_map_builds_fragment_image_matrix_and_path_summary(tmp_path):
     assert any(-1 in row for row in content["semantic_matrix"])
     assert content["map_config"]["semantic_projection"] == "mask_downsampled_without_depth_projection"
     assert result.audit.metadata["html_report"].endswith("latest_custom_map.html")
-    assert fragment["model_inputs"][0]["type"] == "image"
-    assert fragment["model_inputs"][0]["media_ref"]["role"] == "custom_map"
-    rendered_path = tmp_path / fragment["model_inputs"][0]["media_ref"]["ref"]
+    assert fragment["media_refs"][0]["type"] == "image"
+    assert fragment["media_refs"][0]["media_ref"]["role"] == "custom_map"
+    rendered_path = tmp_path / fragment["media_refs"][0]["media_ref"]["ref"]
     html_path = Path(result.audit.metadata["html_report"])
     assert rendered_path.exists()
     assert html_path.exists()
@@ -321,7 +321,7 @@ def test_custom_map_html_contains_projected_point_cloud_debug(tmp_path):
 
     result = PluginContextModule().build(MemorySourceBundle(memory), _stage_context())
     fragment = result.fragment.to_dict()
-    content = fragment["model_content"]
+    content = fragment["content"]
 
     assert content["map_config"]["semantic_projection"] == "depth_mask_projected_to_topdown"
     projection_debug = result.audit.metadata["projection_debug"]
@@ -448,7 +448,7 @@ def test_configured_registry_includes_custom_map_schema(tmp_path):
     schema = module_registry.describe_modules()["custom_map"]["model_fields"]
     assert "semantic_matrix" in schema
     assert schema["semantic_matrix"] == PluginContextModule().describe_output()["model_fields"]["semantic_matrix"]
-    assert result.fragment.model_inputs[0]["media_ref"]["role"] == "custom_map"
+    assert result.fragment.media_refs[0]["media_ref"]["role"] == "custom_map"
 
 
 def _has_green_uav_marker(image: Image.Image) -> bool:

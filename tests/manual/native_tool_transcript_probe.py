@@ -58,12 +58,8 @@ def main() -> None:
                 checkpoint_id="checkpoint_0001",
                 reason="instruction_start",
                 observation_id="obs_0001",
-                task_plan=None,
-                loaded_knowledge=(),
                 fragments=(fragment,),
-                fingerprint=checkpoint_fingerprint(
-                    "obs_0001", None, (), (fragment,)
-                ),
+                fingerprint=checkpoint_fingerprint("obs_0001", (fragment,)),
             )
         )
         transcript.append_assistant(

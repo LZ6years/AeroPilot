@@ -368,12 +368,8 @@ def _probe_checkpoint(
         checkpoint_id=f"checkpoint_{index:04d}",
         reason=("instruction_start" if index == 1 else "physical_window_completed"),
         observation_id=observation_id,
-        task_plan=None,
-        loaded_knowledge=(),
         fragments=fragments,
-        fingerprint=checkpoint_fingerprint(
-            observation_id, None, (), fragments
-        ),
+        fingerprint=checkpoint_fingerprint(observation_id, fragments),
     )
 
 

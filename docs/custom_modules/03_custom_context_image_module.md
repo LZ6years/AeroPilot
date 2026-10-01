@@ -77,7 +77,7 @@ class PluginContextModule(DefaultImageContextModule):
             enabled=fragment.enabled,
             source=self.__class__.__name__,
             content=content,
-            model_inputs=list(fragment.model_inputs),
+            media_refs=list(fragment.media_refs),
             facts=list(fragment.facts),
             inferences=[
                 *fragment.inferences,
@@ -159,7 +159,7 @@ plugins/research/my_image_processor/context_modules/image.py
 | 字段 | 什么时候用 |
 | --- | --- |
 | `content` | 模块的主要结构化输出 |
-| `model_inputs` | 要额外发给模型的图片或文本输入 |
+| `media_refs` | 要延迟水合并发送给模型的图片引用 |
 | `facts` | 可靠、可验证、来自传感器或明确执行结果的事实 |
 | `inferences` | 模型 caption、启发式分析、可能需要确认的判断 |
 | `risks` | 缺图、mock frame、caption 失败、不确定性 |
@@ -176,9 +176,9 @@ plugins/research/my_image_processor/context_modules/image.py
 
 ## 6. 如果要传图片或文本给模型
 
-如果你希望 planner 直接收到图片或额外文本，用 `model_inputs`。
+如果你希望 planner 直接收到图片，使用 `media_refs`；额外文本属于 `content`。
 
-`model_inputs`是有序序列。通用组装器会保持 module 提供的文本与图片交错顺序，
+`media_refs` 是有序图片引用序列。通用组装器会保持 module 提供的图片顺序，
 并在这些输入之后追加结构化 JSON Context；它不会理解或重新排列自定义角色。
 因此，若一段文字用于约束紧随其后的图片，应把文字放在图片之前；若用于提醒
 如何使用刚发送的图片，应放在图片之后。
@@ -186,7 +186,7 @@ plugins/research/my_image_processor/context_modules/image.py
 文本输入示例：
 
 ```python
-model_inputs = [
+media_refs = [
     {
         "type": "text",
         "source": "image",
@@ -199,7 +199,7 @@ model_inputs = [
 ]
 ```
 
-图片输入建议优先复用默认 image module 的能力。默认 image module 已经会把 latest real RGB 转成 data URL image input。
+图片输入建议优先复用默认 image module 的能力。默认 image module 生成 `MediaRef`，只在请求组装期间由 `MediaHydrator` 编码。
 
 如果你自己构造图片输入，必须保证：
 
@@ -212,14 +212,14 @@ model_inputs = [
 当前正式图像链由 `src/memory/context/modules/image/` 提供。默认模块读取
 FlightMemory 中的 RGB frame 引用，生成 checkpoint 的 image model input；历史图片
 选择继续由同一个模块的 `select_history_images()` 实现。自定义模块应复用通用
-`ContextModule` 与 `ContextModuleContribution` 契约，不依赖已删除的研究 caption 插件。
+`ContextModule` 与 `ContextModuleResult` 契约，不依赖已删除的研究 caption 插件。
 
 ## 8. 如何验证
 
 最小验证：
 
 ```powershell
-& 'F:\conda_env\flyagent\python.exe' -m pytest tests/test_context_builder.py tests/test_model_context_v2.py -q
+& 'F:\conda_env\flyagent\python.exe' -m pytest tests/test_context_builder.py tests/test_model_context_v3.py -q
 ```
 
 如果你新增了自己的插件，建议新增一个测试：

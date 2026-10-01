@@ -203,10 +203,10 @@ class DefaultImageContextModule(ContextModule):
         return ContextModuleResult(
             ContextFragment(
                 name=self.name,
-                model_content=(
+                content=(
                     {} if model_inputs else {"visual_evidence": "current_rgb_unavailable"}
                 ),
-                model_inputs=tuple(model_inputs),
+                media_refs=tuple(model_inputs),
             ),
             FragmentAudit(
                 name=self.name,
@@ -241,7 +241,7 @@ class DefaultImageContextModule(ContextModule):
             "model_fields": {
                 "visual_evidence": "Present only when the current RGB is unavailable.",
             },
-            "model_inputs": (
+            "media_refs": (
                 "Exactly one image for this checkpoint, using the pixel-aligned RGB-depth "
                 "overlay plus a bottom meter color bar when configured and valid, otherwise "
                 "raw RGB. Temporal roles are text labels added by transcript projection."

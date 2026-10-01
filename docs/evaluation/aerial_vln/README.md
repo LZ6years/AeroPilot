@@ -9,4 +9,4 @@ Benchmark 自行组装 PluginRegistry、ToolRegistry 或 ContextBuilder。
 `tests/test_aerial_vln_case_gate.py`；真实引擎、网络与性能检查位于
 `tests/diagnostics/` 或 `tests/manual/`。
 
-产物遵循 [Context V2](../../context_v2.md) 与 [run outputs](../../run_outputs.md)。
+产物遵循 [Context V3](../../context_v3.md) 与 [run outputs](../../run_outputs.md)。

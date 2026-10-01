@@ -65,10 +65,8 @@ def _add_image_checkpoint(transcript, tmp_path, index: int) -> MediaRef:
             checkpoint_id=f"checkpoint_{index:04d}",
             reason="instruction_start" if index == 1 else "physical_window_completed",
             observation_id=observation_id,
-            task_plan=None,
-            loaded_knowledge=(),
             fragments=(fragment,),
-            fingerprint=checkpoint_fingerprint(observation_id, None, (), (fragment,)),
+            fingerprint=checkpoint_fingerprint(observation_id, (fragment,)),
         )
     )
     return ref
@@ -139,10 +137,8 @@ def test_same_sha_is_encoded_once_per_instruction_cache(tmp_path):
             checkpoint_id="checkpoint_0002",
             reason="physical_window_completed",
             observation_id="obs_0002",
-            task_plan=None,
-            loaded_knowledge=(),
             fragments=(fragment,),
-            fingerprint=checkpoint_fingerprint("obs_0002", None, (), (fragment,)),
+            fingerprint=checkpoint_fingerprint("obs_0002", (fragment,)),
         )
     )
     hydrator = MediaHydrator(base_dir=tmp_path)
@@ -204,10 +200,8 @@ def test_missing_selected_media_is_explicit_and_never_substitutes_old_image(tmp_
             checkpoint_id="checkpoint_0002",
             reason="physical_window_completed",
             observation_id="obs_0002",
-            task_plan=None,
-            loaded_knowledge=(),
             fragments=(fragment,),
-            fingerprint=checkpoint_fingerprint("obs_0002", None, (), (fragment,)),
+            fingerprint=checkpoint_fingerprint("obs_0002", (fragment,)),
         )
     )
 

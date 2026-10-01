@@ -7,6 +7,7 @@ passing large, weakly-related argument lists between helpers.
 
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -48,3 +49,15 @@ class TaskSession:
     def next_decision_id(self) -> str:
         self.decision_index += 1
         return f"decision_{self.decision_index:04d}"
+
+    def current_task_state(self) -> dict[str, Any]:
+        """Return the transient authoritative state for the next model turn."""
+
+        loaded = self.knowledge_service.loaded_index()
+        self.state.loaded_knowledge = copy.deepcopy(loaded)
+        return {
+            "task_plan": (
+                self.state.task_plan.to_dict() if self.state.task_plan else None
+            ),
+            "loaded_knowledge": copy.deepcopy(loaded),
+        }

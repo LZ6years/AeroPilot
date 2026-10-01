@@ -1,7 +1,7 @@
 # FlyAgent
 
 FlyAgent 是面向 UAV 仿真环境的原生工具循环 Agent。模型按时间顺序读取
-Context V2 checkpoint、历史工具结果与图像引用，并选择只读工具、1–3 个物理
+Context V3 感知 checkpoint、当前任务状态、历史工具结果与图像引用，并选择只读工具、1–3 个物理
 工具或 Runtime 控制工具；Runtime 负责安全审查、执行、自动观测和持久化。
 
 ## 开始使用
@@ -21,7 +21,7 @@ Context V2 checkpoint、历史工具结果与图像引用，并选择只读工�
 
 - [文档索引](docs/README.md)
 - [架构与职责边界](docs/architecture.md)
-- [Context V2](docs/context_v2.md)
+- [Context V3](docs/context_v3.md)
 - [插件系统](docs/plugin_system.md)
 - [测试与诊断](docs/testing.md)
 - [运行产物](docs/run_outputs.md)

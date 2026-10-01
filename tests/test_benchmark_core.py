@@ -1808,7 +1808,7 @@ def test_legacy_tool_transcript_is_rejected(tmp_path):
         "\n".join(json.dumps(item) for item in records), encoding="utf-8"
     )
 
-    with pytest.raises(UnsupportedRunSchema, match="agent_transcript_v2"):
+    with pytest.raises(UnsupportedRunSchema, match="agent_transcript_v3"):
         BenchmarkAuditReader().read(EpisodeAuditCursor.freeze(run_dir))
 
 
@@ -2199,7 +2199,7 @@ def write_audit_fixture(run_dir: Path) -> None:
         memory / "agent_transcript.jsonl",
         {
             "id": "turn_0001",
-            "schema_version": "agent_transcript_v2",
+            "schema_version": "agent_transcript_v3",
             "timestamp": "2026-01-01T00:00:00.500000+00:00",
             "instruction_id": "inst_1",
             "kind": "user_instruction",
@@ -2210,12 +2210,12 @@ def write_audit_fixture(run_dir: Path) -> None:
         memory / "agent_transcript.jsonl",
         {
             "id": "turn_0002",
-            "schema_version": "agent_transcript_v2",
+            "schema_version": "agent_transcript_v3",
             "timestamp": "2026-01-01T00:00:01.100000+00:00",
             "instruction_id": "inst_1",
             "kind": "state_checkpoint",
             "payload": {
-                "schema_version": "state_checkpoint_v2",
+                "schema_version": "state_checkpoint_v3",
                 "observation_id": "obs_0001",
                 "context": {"current_phase": {"name": "align"}},
             },
@@ -2247,7 +2247,7 @@ def _png_bytes() -> bytes:
 def _transcript_event(kind: str, payload: dict, index: int) -> dict:
     return {
         "id": f"turn_{index:04d}",
-        "schema_version": "agent_transcript_v2",
+        "schema_version": "agent_transcript_v3",
         "timestamp": f"2026-01-01T00:00:{index:02d}+00:00",
         "instruction_id": "inst_transcript",
         "kind": kind,

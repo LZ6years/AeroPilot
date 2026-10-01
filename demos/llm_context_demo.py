@@ -74,16 +74,12 @@ def run_demo(output: Path, *, client: Any, settings: ProviderSettings, mode: str
     )
     for index in (1, 2):
         fragment = ContextFragment("demo", {"round": index})
-        fingerprint = checkpoint_fingerprint(
-            f"obs_{index}", None, (), (fragment,)
-        )
+        fingerprint = checkpoint_fingerprint(f"obs_{index}", (fragment,))
         transcript.append_state(
             StateCheckpoint(
                 checkpoint_id=f"checkpoint_{index:06d}",
                 reason=("instruction_start" if index == 1 else "physical_window_completed"),
                 observation_id=f"obs_{index}",
-                task_plan=None,
-                loaded_knowledge=(),
                 fragments=(fragment,),
                 fingerprint=fingerprint,
             )

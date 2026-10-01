@@ -64,7 +64,7 @@ DEFAULT_LIMIT = 8
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Evaluate default image model_inputs with visual instruction cases.")
+    parser = argparse.ArgumentParser(description="Evaluate default image media_refs with visual instruction cases.")
     parser.add_argument("--cases", default=str(DEFAULT_CASES))
     parser.add_argument("--run-dir", default="", help="Optional run directory; uses artifacts/rgb/*.png as ad hoc cases.")
     parser.add_argument("--past-image", default="", help="Optional phase-start RGB for one explicit temporal-pair case.")
@@ -221,7 +221,7 @@ def build_model_user_content(
         item
         for fragment in context.get("fragments", [])
         if isinstance(fragment, dict)
-        for item in fragment.get("model_inputs", [])
+        for item in fragment.get("media_refs", [])
         if isinstance(item, dict)
     ]
     return RequestAssembler(MediaHydrator(base_dir=run_dir)).checkpoint_content(
@@ -260,7 +260,7 @@ def evaluate_case_context(
 ) -> dict[str, Any]:
     image_fragment = _fragment(context, "image")
     image_inputs = [
-        item for item in image_fragment.get("model_inputs", [])
+        item for item in image_fragment.get("media_refs", [])
         if isinstance(item, dict) and item.get("type") == "image"
     ]
     image_input = image_inputs[0] if image_inputs else {}
@@ -322,7 +322,7 @@ def call_visual_eval_model(
     eval_context = dict(context)
     request_fragment = {
         "name": "visual_eval_request",
-        "model_content": {
+        "content": {
         "case_id": case["id"],
         "must_mention_any": expected.get("must_mention_any", []),
         "forbidden_terms": expected.get("forbidden_terms", []),
@@ -333,7 +333,7 @@ def call_visual_eval_model(
             "uses_image": True,
         },
         },
-        "model_inputs": [],
+        "media_refs": [],
     }
     eval_context["fragments"] = [
         *list(context.get("fragments", [])), request_fragment
@@ -600,10 +600,10 @@ def _structural_pass(metrics: dict[str, Any]) -> bool:
 
 
 def _image_fragment_summary(fragment: dict[str, Any]) -> dict[str, Any]:
-    content = fragment.get("model_content", {}) if isinstance(fragment.get("model_content"), dict) else {}
+    content = fragment.get("content", {}) if isinstance(fragment.get("content"), dict) else {}
     audit = fragment.get("_audit", {}) if isinstance(fragment.get("_audit"), dict) else {}
     metadata = audit.get("metadata", {}) if isinstance(audit.get("metadata"), dict) else {}
-    model_inputs = fragment.get("model_inputs", []) if isinstance(fragment.get("model_inputs"), list) else []
+    model_inputs = fragment.get("media_refs", []) if isinstance(fragment.get("media_refs"), list) else []
     summaries = []
     for item in model_inputs:
         if not isinstance(item, dict):
@@ -620,7 +620,7 @@ def _image_fragment_summary(fragment: dict[str, Any]) -> dict[str, Any]:
         "source": audit.get("source"),
         "visual_evidence": metadata.get("visual_evidence", {}),
         "has_visual_description": "visual_description" in content,
-        "model_inputs": summaries,
+        "media_refs": summaries,
         "artifact_refs": list(audit.get("artifact_refs", [])),
         "warnings": list(audit.get("warnings", [])),
     }
@@ -654,7 +654,7 @@ def _markdown_report(summary: dict[str, Any], results: list[dict[str, Any]]) -> 
     lines = [
         "# Visual Instruction Eval",
         "",
-        "This checks the default image context module path: metadata plus latest real RGB `model_inputs[type=image]`.",
+        "This checks the default image context module path: metadata plus latest real RGB `media_refs[type=image]`.",
         "",
         "## Summary",
         "",

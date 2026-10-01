@@ -11,6 +11,7 @@ from PIL import Image
 from src.agent.context.media import MediaHydrationError, MediaHydrator
 from src.agent.context.projection import HistoryProjector
 from src.agent.context.request_assembler import RequestAssembler
+from src.agent.planning.task_plan import TaskPlan
 from src.agent.transcript import AgentTranscript
 from src.memory.context.contracts import (
     ContextFragment,
@@ -63,14 +64,12 @@ class CountingBuilder:
     def build_checkpoint(self, state, memory, *, checkpoint_id, reason):
         self.build_count += 1
         fragment = ContextFragment("pose", {"sequence": self.dynamic})
-        fingerprint = checkpoint_fingerprint(None, None, (), (fragment,))
+        fingerprint = checkpoint_fingerprint(None, (fragment,))
         return (
             StateCheckpoint(
                 checkpoint_id=checkpoint_id,
                 reason=reason,
                 observation_id=None,
-                task_plan=None,
-                loaded_knowledge=(),
                 fragments=(fragment,),
                 fingerprint=fingerprint,
             ),
@@ -92,10 +91,8 @@ def _checkpoint(index: int) -> StateCheckpoint:
         checkpoint_id=f"checkpoint_{index:04d}",
         reason="instruction_start" if index == 1 else "physical_window_completed",
         observation_id=f"obs_{index}",
-        task_plan=None,
-        loaded_knowledge=(),
         fragments=(fragment,),
-        fingerprint=checkpoint_fingerprint(f"obs_{index}", None, (), (fragment,)),
+        fingerprint=checkpoint_fingerprint(f"obs_{index}", (fragment,)),
     )
 
 
@@ -107,9 +104,9 @@ def test_checkpoint_service_builds_once_per_publish_and_deduplicates(tmp_path):
     service.begin_instruction(State(), Memory())
 
     first = service.publish(State(), Memory(), "instruction_start")
-    duplicate = service.publish(State(), Memory(), "plan_updated")
+    duplicate = service.publish(State(), Memory(), "physical_window_completed")
     builder.dynamic = 1
-    second = service.publish(State(), Memory(), "plan_updated")
+    second = service.publish(State(), Memory(), "physical_window_completed")
 
     assert first is not None and second is not None
     assert duplicate is None
@@ -231,7 +228,7 @@ def test_runtime_media_hydrator_rejects_absolute_ref(tmp_path):
         MediaHydrator(base_dir=tmp_path).hydrate(ref)
 
 
-def test_v2_artifacts_are_binary_free_and_v1_is_rejected(tmp_path):
+def test_v3_artifacts_are_binary_free_and_v2_is_rejected(tmp_path):
     checkpoint = _checkpoint(1)
     checkpoint_path = tmp_path / "checkpoint.json"
     checkpoint_path.write_text(
@@ -241,7 +238,9 @@ def test_v2_artifacts_are_binary_free_and_v1_is_rejected(tmp_path):
     assert load_state_checkpoint(checkpoint_path)["checkpoint_id"] == "checkpoint_0001"
 
     legacy = tmp_path / "legacy.json"
-    legacy.write_text(json.dumps({"schema_version": "context_v1"}), encoding="utf-8")
+    legacy.write_text(
+        json.dumps({"schema_version": "state_checkpoint_v2"}), encoding="utf-8"
+    )
     with pytest.raises(UnsupportedRunSchema):
         load_state_checkpoint(legacy)
 
@@ -371,7 +370,7 @@ def test_runtime_factory_hydrates_workspace_relative_capture_path(
         for fragment in checkpoint["checkpoint"]["fragments"]
         if fragment["name"] == "image"
     )
-    ref = image_fragment["model_inputs"][0]["media_ref"]["ref"]
+    ref = image_fragment["media_refs"][0]["media_ref"]["ref"]
     assert ref == "artifacts/scene/rgb/frame_000001.png"
 
 
@@ -424,7 +423,7 @@ def test_checkpoint_build_defers_media_read_until_projection(
     assert hydrator.stats()["hits"] == 1
 
 
-def test_checkpoint_fingerprint_is_stable_for_unchanged_model_state(tmp_path):
+def test_checkpoint_fingerprint_ignores_task_state_changes(tmp_path):
     state = _state()
     memory, writer = _memory(tmp_path, state)
     _record_observation(writer, memory, state)
@@ -440,11 +439,20 @@ def test_checkpoint_fingerprint_is_stable_for_unchanged_model_state(tmp_path):
         checkpoint_id="checkpoint_0001",
         reason="instruction_start",
     )
+    state.task_plan = TaskPlan().updated(
+        {
+            "explanation": "Inspect the current scene",
+            "steps": [
+                {"id": "inspect", "description": "Inspect", "status": "in_progress"}
+            ]
+        }
+    )
+    state.loaded_knowledge = [{"name": "visual_target_navigation"}]
     second, _ = builder.build_checkpoint(
         state,
         memory,
         checkpoint_id="checkpoint_0002",
-        reason="plan_updated",
+        reason="physical_window_completed",
     )
 
     assert first.fingerprint == second.fingerprint

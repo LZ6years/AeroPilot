@@ -55,7 +55,7 @@ def test_json_image_mode_preserves_depth_source(tmp_path, overlay):
     result = registry.modules["image"].build(
         MemorySourceBundle(memory), TaskContextInput("Inspect")
     )
-    media_ref = result.fragment.model_inputs[0]["media_ref"]
+    media_ref = result.fragment.media_refs[0]["media_ref"]
     rendered = decode_data_url_image(
         MediaHydrator(base_dir=tmp_path).hydrate(media_ref).data_url
     )
@@ -95,12 +95,12 @@ def test_initial_plan_survives_observation_time_boundary_but_not_freeze(tmp_path
                         "payload": {"instruction_id": "inst1", "parse_result": {"plan": {"phases": []}}}})
     append_jsonl(tmp_path / "memory/observations.jsonl", {"id": "obs1", "timestamp": "2026-01-01T00:00:02+00:00"})
     append_jsonl(tmp_path / "memory/agent_transcript.jsonl", {
-        "schema_version": "agent_transcript_v2", "instruction_id": "inst1",
+        "schema_version": "agent_transcript_v3", "instruction_id": "inst1",
         "kind": "user_instruction", "timestamp": "2026-01-01T00:00:01+00:00", "payload": {}})
     append_jsonl(tmp_path / "memory/agent_transcript.jsonl", {
-        "schema_version": "agent_transcript_v2", "instruction_id": "inst1",
+        "schema_version": "agent_transcript_v3", "instruction_id": "inst1",
         "kind": "state_checkpoint", "timestamp": "2026-01-01T00:00:02.100000+00:00",
-        "payload": {"schema_version": "state_checkpoint_v2", "checkpoint_id": "checkpoint_0001"}})
+        "payload": {"schema_version": "state_checkpoint_v3", "checkpoint_id": "checkpoint_0001"}})
     cursor = EpisodeAuditCursor.freeze(tmp_path)
     append_jsonl(events, {"event": "initial_semantic_plan", "timestamp": "2026-01-01T00:00:03+00:00",
                         "payload": {"instruction_id": "inst1", "fake": True}})

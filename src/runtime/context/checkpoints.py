@@ -1,4 +1,4 @@
-"""Publish Model Context V2 at explicit Runtime state boundaries."""
+"""Publish Model Context V3 at explicit sensory state boundaries."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from src.memory.flight_memory import FlightMemory
 
 
 class UnsupportedRunSchema(ValueError):
-    """Raised instead of guessing how to interpret V1 artifacts."""
+    """Raised instead of guessing how to interpret pre-V3 artifacts."""
 
 
 class ContextCheckpointService:
@@ -75,7 +75,7 @@ class ContextCheckpointService:
         self.recorder.write_json(
             f"debug/context_checkpoints/{checkpoint.checkpoint_id}.json",
             {
-                "schema_version": "context_checkpoint_audit_v2",
+                "schema_version": "context_checkpoint_audit_v3",
                 "checkpoint": payload,
                 "fragment_audits": list(fragment_audits),
             },
@@ -83,8 +83,8 @@ class ContextCheckpointService:
         return checkpoint
 
 
-def load_v2_json(path: str | Path, *, expected_schema: str) -> dict[str, Any]:
-    """Read a V2 artifact and reject missing or legacy schema markers."""
+def load_v3_json(path: str | Path, *, expected_schema: str) -> dict[str, Any]:
+    """Read a V3 artifact and reject missing or legacy schema markers."""
 
     artifact = Path(path)
     payload = json.loads(artifact.read_text(encoding="utf-8"))
@@ -96,8 +96,8 @@ def load_v2_json(path: str | Path, *, expected_schema: str) -> dict[str, Any]:
 
 
 def load_instruction_envelope(path: str | Path) -> dict[str, Any]:
-    return load_v2_json(path, expected_schema=INSTRUCTION_ENVELOPE_SCHEMA)
+    return load_v3_json(path, expected_schema=INSTRUCTION_ENVELOPE_SCHEMA)
 
 
 def load_state_checkpoint(path: str | Path) -> dict[str, Any]:
-    return load_v2_json(path, expected_schema=STATE_CHECKPOINT_SCHEMA)
+    return load_v3_json(path, expected_schema=STATE_CHECKPOINT_SCHEMA)

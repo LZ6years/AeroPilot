@@ -114,7 +114,7 @@ def test_explicit_past_now_pair_projects_only_latest_checkpoint_image(tmp_path):
         if fragment["name"] == "image"
     )
     assert [
-        item["media_ref"]["role"] for item in image["model_inputs"]
+        item["media_ref"]["role"] for item in image["media_refs"]
     ] == ["current_observation"]
 
     content = module.build_model_user_content(context, run_dir=run_dir)

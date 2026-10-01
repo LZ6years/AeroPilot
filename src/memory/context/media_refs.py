@@ -15,7 +15,7 @@ def run_relative_media_ref(path: str | Path, run_dir: str | Path) -> str:
     """Return a portable POSIX media path contained by one Runtime run.
 
     Capture adapters may report absolute paths or paths relative to the process
-    working directory.  Context V2 persists neither form: durable model media
+    working directory.  Context V3 persists neither form: durable model media
     is always addressed relative to ``run_dir`` so a complete run can be moved
     without rewriting checkpoints or Transcript records.
     """

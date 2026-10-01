@@ -88,5 +88,5 @@ Every run must use a new `runs/experiments/<probe>/<timestamp>/` directory. Do n
 ## Retired probes
 
 - `image_context_probe.py` and its note were removed with the V1 RGB encoding cache.
-- `context_build_probe.py` was replaced by `context_assembly_probe.py` and the product tests in `tests/test_model_context_v2.py`.
+- `context_build_probe.py` was replaced by `context_assembly_probe.py` and the product tests in `tests/test_model_context_v3.py`.
 - Product-contract checks belong in `tests/`; profiler, GPU, simulator, and network assertions belong in `tests/diagnostics/`.

@@ -50,7 +50,7 @@ DEFAULT_MULTIMODAL_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Run a real Qwen multimodal smoke test through FlyAgent model_inputs.",
+        description="Run a real Qwen multimodal smoke test through FlyAgent media_refs.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("--env-path", default=".env")
@@ -79,19 +79,17 @@ def build_probe_context(run_dir: Path) -> dict[str, Any]:
     image_path = run_dir / "artifacts" / "rgb" / "qwen_multimodal_smoke.png"
     write_probe_image(image_path)
     context = {
-        "schema_version": "state_checkpoint_v2",
+        "schema_version": "state_checkpoint_v3",
         "checkpoint_id": "checkpoint_0001",
         "reason": "instruction_start",
         "observation_id": "obs_probe_0001",
-        "task_plan": None,
-        "loaded_knowledge": [],
         "fragments": [
             {
                 "name": "manual_probe_image",
-                "model_content": {
+                "content": {
                     "target": "red square and blue dot smoke test"
                 },
-                "model_inputs": [
+                "media_refs": [
                     image_media_ref(
                         image_path,
                         observation_id="obs_probe_0001",
@@ -122,7 +120,7 @@ def build_payload(config: ModelConfig, context: dict[str, Any]) -> dict[str, Any
     inputs = [
         item
         for fragment in context["fragments"]
-        for item in fragment.get("model_inputs", [])
+        for item in fragment.get("media_refs", [])
     ]
     content = RequestAssembler(MediaHydrator()).checkpoint_content(
         context,
@@ -230,8 +228,8 @@ def _run_probe(config: ModelConfig, run_dir: Path) -> None:
 
 
 def _assert_encoded_image_input(context: dict[str, Any]) -> None:
-    model_inputs = context["fragments"][0]["model_inputs"]
-    assert model_inputs, "custom image module did not produce model_inputs"
+    model_inputs = context["fragments"][0]["media_refs"]
+    assert model_inputs, "custom image module did not produce media_refs"
     first = model_inputs[0]
     assert first["type"] == "image"
     assert first["media_ref"]["role"] == "current_observation"

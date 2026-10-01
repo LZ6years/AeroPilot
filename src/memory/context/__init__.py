@@ -1,4 +1,4 @@
-"""Model Context V2 contracts, builder and pluggable modules."""
+"""Model Context V3 contracts, builder and pluggable modules."""
 
 from src.memory.context.builder import ModelContextBuilder
 from src.memory.context.registry import ContextModuleConfigError, ContextModuleRegistry

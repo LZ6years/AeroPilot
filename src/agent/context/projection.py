@@ -126,6 +126,7 @@ class HistoryProjector:
         all_events_for_evidence: tuple[TranscriptEvent, ...] | None = None,
         max_compactable_windows: int | None = None,
         registry: "ToolRegistry | None" = None,
+        current_task_state: dict[str, Any] | None = None,
     ) -> ProjectionPlan:
         """Choose the oldest complete prefix without invoking a model."""
 
@@ -133,7 +134,7 @@ class HistoryProjector:
         windows = _decision_windows(owned)
         closed = [window for window in windows if window.closed]
         if len(closed) <= keep_recent_decision_windows:
-            return _empty_plan(owned)
+            return _empty_plan(owned, current_task_state)
         eligible = (
             closed[:-keep_recent_decision_windows]
             if keep_recent_decision_windows
@@ -141,11 +142,11 @@ class HistoryProjector:
         )
         if max_compactable_windows is not None:
             if max_compactable_windows < 1:
-                return _empty_plan(owned)
+                return _empty_plan(owned, current_task_state)
             eligible = eligible[:max_compactable_windows]
         cut_local = eligible[-1].end
         if cut_local <= 0:
-            return _empty_plan(owned)
+            return _empty_plan(owned, current_task_state)
         semantic_windows = _compression_windows(
             owned, eligible, cut_local, base_event_index, registry
         )
@@ -162,7 +163,7 @@ class HistoryProjector:
             evidence_catalog=_evidence_catalog(full_prefix),
             deterministic_facts=_deterministic_facts(full_prefix, semantic_windows),
             exact_loaded_knowledge=_exact_loaded_knowledge(full_prefix),
-            current_state_hint=_current_state_hint(full_events),
+            current_state_hint=copy.deepcopy(current_task_state or {}),
             instruction=_instruction(full_events),
             source_digest=digest,
         )
@@ -408,14 +409,17 @@ class HistoryProjector:
         return {"role": "user", "content": content} if content else None
 
 
-def _empty_plan(events: tuple[TranscriptEvent, ...]) -> ProjectionPlan:
+def _empty_plan(
+    events: tuple[TranscriptEvent, ...],
+    current_task_state: dict[str, Any] | None,
+) -> ProjectionPlan:
     return ProjectionPlan(
         compactable_end_event_index=None,
         windows=(),
         evidence_catalog=(),
         deterministic_facts={},
         exact_loaded_knowledge=(),
-        current_state_hint=_current_state_hint(events),
+        current_state_hint=copy.deepcopy(current_task_state or {}),
         instruction=_instruction(events),
         source_digest=None,
     )
@@ -545,9 +549,9 @@ def _compression_call_args(tool_name: str, args: dict[str, Any]) -> dict[str, An
 
     if tool_name != "runtime.update_plan":
         return copy.deepcopy(args)
-    # Checkpoints and deterministic boundary facts already retain the current
-    # plan owner. Replaying every historical full step list wastes the 32k
-    # semantic budget without adding execution evidence.
+    # The transient CURRENT TASK STATE retains the authoritative current plan.
+    # Replaying every historical full step list wastes the semantic budget
+    # without adding execution evidence.
     return {
         key: copy.deepcopy(value)
         for key, value in args.items()
@@ -559,7 +563,7 @@ def _checkpoint_motion(checkpoint: dict[str, Any]) -> dict[str, Any]:
     for fragment in checkpoint.get("fragments", []):
         if not isinstance(fragment, dict) or fragment.get("name") != "motion":
             continue
-        content = fragment.get("model_content")
+        content = fragment.get("content")
         if not isinstance(content, dict):
             return {}
         return {
@@ -583,19 +587,6 @@ def _instruction(events: tuple[TranscriptEvent, ...]) -> str:
             value = event.payload.get("instruction")
             return value if isinstance(value, str) else ""
     return ""
-
-
-def _current_state_hint(events: tuple[TranscriptEvent, ...]) -> dict[str, Any]:
-    for event in reversed(events):
-        if event.kind != "state_checkpoint":
-            continue
-        payload = _payload_dict(event.payload)
-        return {
-            "reason": payload.get("reason"),
-            "task_plan": copy.deepcopy(payload.get("task_plan")),
-            "loaded_knowledge": copy.deepcopy(payload.get("loaded_knowledge") or []),
-        }
-    return {}
 
 
 def _evidence_catalog(
@@ -732,7 +723,7 @@ def _visual_candidates(
                 slot = str(fragment.get("name") or "")
                 if slot in selected_by_module and observation_id not in selected_by_module[slot]:
                     continue
-                for item in fragment.get("model_inputs", []):
+                for item in fragment.get("media_refs", []):
                     ref = item.get("media_ref") if isinstance(item, dict) else None
                     if not isinstance(item, dict) or item.get("type") != "image" or not isinstance(ref, dict):
                         continue
@@ -842,7 +833,7 @@ def _fragment_frame_ids(checkpoint: dict[str, Any], slot: str) -> list[str]:
         str(ref.get("frame_id") or "")
         for fragment in checkpoint.get("fragments", [])
         if isinstance(fragment, dict) and fragment.get("name") == slot
-        for item in fragment.get("model_inputs", [])
+        for item in fragment.get("media_refs", [])
         if isinstance(item, dict)
         for ref in [item.get("media_ref")]
         if isinstance(ref, dict)
@@ -864,7 +855,7 @@ def _selected_checkpoint_inputs(
             continue
         slot = str(fragment.get("name") or "")
         chosen = slot not in selected or observation_id in selected[slot]
-        for item in fragment.get("model_inputs", []):
+        for item in fragment.get("media_refs", []):
             if not isinstance(item, dict):
                 continue
             if item.get("type") != "image":

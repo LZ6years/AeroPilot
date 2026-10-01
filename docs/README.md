@@ -3,11 +3,11 @@
 ## Current
 
 - [架构](architecture.md)：生产依赖方向、Runtime 服务链和状态所有权。
-- [Context V2](context_v2.md)：Envelope、Checkpoint、Projection、MediaRef。
+- [Context V3](context_v3.md)：Envelope、感知 Checkpoint、当前任务状态、Projection、MediaRef。
 - [插件系统](plugin_system.md)：发现、贡献与 Factory 注入边界。
 - [目录结构](directory_structure.md)：当前源码目录及职责。
 - [任务闭环示例](task_example.md)：phase-free 原生工具循环。
-- [运行产物](run_outputs.md)：V2 artifact 与诊断输出。
+- [运行产物](run_outputs.md)：V3 artifact 与诊断输出。
 - [测试](testing.md)：产品回归、diagnostics、manual 和真实实验。
 - [Runtime controls](runtime_control/README.md)
 - [Simulator control](simulator_control/README.md)

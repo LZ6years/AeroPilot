@@ -117,7 +117,7 @@ def test_task_runtime_applies_initial_pose_before_first_configured_observation(t
         fragment for fragment in latest_checkpoint["fragments"]
         if fragment["name"] == "motion"
     )
-    assert motion["model_content"]["observation_policy"]["modalities"] == ["rgb", "pose"]
+    assert motion["content"]["observation_policy"]["modalities"] == ["rgb", "pose"]
     assert "uav.set_pose" not in actions_text
     assert flight_memory["reset_epoch"] == 1
 

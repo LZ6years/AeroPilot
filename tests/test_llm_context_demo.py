@@ -35,7 +35,7 @@ def test_mock_two_rounds_persist_and_replay(tmp_path, monkeypatch):
     assert [r["kind"] for r in records] == [
         "instruction_envelope", "user_instruction", "state_checkpoint", "assistant_turn",
         "state_checkpoint", "assistant_turn"]
-    assert all(record["schema_version"] == "agent_transcript_v2" for record in records)
+    assert all(record["schema_version"] == "agent_transcript_v3" for record in records)
     answer = records[3]["payload"]["public_intent"]
     assert second["request"]["messages"][3]["content"] == answer
     original = (output / "final_history.json").read_bytes()
@@ -56,10 +56,8 @@ def test_builder_does_not_mutate_transcript(tmp_path):
             "checkpoint_0001",
             "instruction_start",
             "obs_1",
-            None,
-            (),
             (fragment,),
-            checkpoint_fingerprint("obs_1", None, (), (fragment,)),
+            checkpoint_fingerprint("obs_1", (fragment,)),
         )
     )
     before = transcript.to_dict()

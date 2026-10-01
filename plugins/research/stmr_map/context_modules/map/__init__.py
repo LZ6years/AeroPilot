@@ -2,7 +2,7 @@
 
 The module deliberately keeps perception and voxel diagnostics out of the
 planner payload.  It preserves the default recalled-map clues, adds one compact
-STMR summary, and supplies one labelled PNG through ``model_inputs`` so the
+STMR summary, and supplies one labelled PNG through ``media_refs`` so the
 shared planner adapter places it before the trailing JSON context.
 """
 
@@ -104,7 +104,7 @@ class PluginContextModule(ContextModule):
                 "stmr.trajectory_summary": "Compact numeric actual-motion summary; the full ordered trace remains debug-only.",
                 "stmr.representation": "Always semantic_history_not_traversability; blank cells are not verified free space.",
             },
-            "model_inputs": "At most one labelled STMR PNG, ordered after existing RGB inputs and before context JSON.",
+            "media_refs": "At most one labelled STMR PNG, ordered after existing RGB inputs and before context JSON.",
             "audit_fields": {
                 "stmr_map_unavailable": "The online STMR update failed; only default recalled-map clues remain.",
                 "stmr_map_stale": "At least one newer observation failed, so the latest successful map may be stale.",
@@ -139,8 +139,8 @@ def _planner_fragment(
     return ContextModuleResult(
         ContextFragment(
             name="map",
-            model_content={**baseline.fragment.model_content, "stmr": result.context_content()},
-            model_inputs=(model_input,) if model_input is not None else (),
+            content={**baseline.fragment.content, "stmr": result.context_content()},
+            media_refs=(model_input,) if model_input is not None else (),
         ),
         FragmentAudit(
             name="map",
@@ -159,7 +159,7 @@ def _planner_fragment(
 
 def _fallback_fragment(baseline: ContextModuleResult, exc: Exception) -> ContextModuleResult:
     return ContextModuleResult(
-        ContextFragment("map", dict(baseline.fragment.model_content)),
+        ContextFragment("map", dict(baseline.fragment.content)),
         FragmentAudit(
             name="map",
             source=PluginContextModule.__name__,
