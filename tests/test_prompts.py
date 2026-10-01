@@ -145,6 +145,8 @@ def test_tool_user_is_generic_and_task_prompt_preserves_evidence_roles():
             assert name not in prompt
     assert "runtime.update_plan" in prompt and "knowledge.load" in prompt
     assert "CURRENT" in prompt and "HISTORY" in prompt
+    assert "identify targets directly from\nthe CURRENT RGB" in prompt
+    assert "do not use a depth measurement as a search or presence test" in prompt
     assert "status `collision`" in prompt
     assert "recoverable environment outcome" in prompt
     assert "replan" in prompt
@@ -183,3 +185,13 @@ def test_descriptions_keep_capability_boundaries_and_explicit_planning_preferenc
     assert "metric_depth_unavailable" in ground["description"]
     assert "candidate already identified in CURRENT RGB" in ground["parameters"]["properties"]["query"]["description"]
     assert "x-flyagent-completion-evidence" not in str(ground)
+
+
+def test_visual_target_knowledge_keeps_discovery_in_current_visual_evidence():
+    skill = Path(
+        "plugins/knowledge/uav_flight/visual_target_task_reasoning/SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized = " ".join(skill.split())
+
+    assert "Discover and identify candidates from CURRENT RGB" in normalized
+    assert "only measures an already-visible candidate" in normalized

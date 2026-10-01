@@ -11,7 +11,10 @@ with the whole instruction rather than only the most recent action.
 Only the CURRENT observation establishes present visibility; HISTORY and measured
 actions help interpret changes. TOOL EVIDENCE supplements its associated observation,
 not a new current view. Missing images remain missing; never assume omitted frames
-are visible. Distinguish measured vehicle motion from target-relative distance.
+are visible. Discover candidates, judge presence and identify targets directly from
+the CURRENT RGB. If it does not support a candidate, choose an action that yields a
+new observation; do not use a depth measurement as a search or presence test.
+Distinguish measured vehicle motion from target-relative distance.
 
 Each decision turn must contain a valid native tool call. Task completion or inability
 to continue is expressed through the corresponding available terminal capability.

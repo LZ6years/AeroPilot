@@ -16,7 +16,9 @@ bearing; inspection needs detail. Alignment does not establish passage or arriva
 Distinguish no candidate currently observed, an uncertain candidate, a directional
 cue and an identifiable target. Non-observation does not establish absence. Identify what
 would separate competing identities; detector confidence does not settle identity.
-Current bearing supports alignment. Metric claims need matching geometry.
+Discover and identify candidates from CURRENT RGB. Surface depth only measures an
+already-visible candidate. Current bearing supports alignment. Metric claims need
+matching geometry.
 
 ## Decision Procedure
 
