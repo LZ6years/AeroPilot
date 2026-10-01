@@ -121,7 +121,10 @@ prefix of complete decision windows with one task-local compressed history
 section. The original instruction, exact loaded knowledge, latest sensory checkpoint,
 and recent complete windows remain authoritative outside model-authored
 summary text. The transient current task state is uncompressible. Compression never
-adds a durable Transcript event.
+adds a durable Transcript event. A history capsule describes only progress,
+decisions/outcomes, and failures/recovery at or before its explicit event boundary.
+It never owns current work, next steps, remaining work, or the current plan; those
+belong exclusively to the one transient `CURRENT TASK STATE` block.
 
 `configs/context.json` owns one global request-media budget. Observation and
 tool-evidence images share the default maximum of 20, retain the latest 3 visual

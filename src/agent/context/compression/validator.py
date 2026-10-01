@@ -79,12 +79,6 @@ class CompressionValidator:
                     "evidence_refs": refs[:2],
                 },
             ),
-            open_work=(
-                {
-                    "summary": "Continue from the latest CURRENT checkpoint; this summary does not establish completion.",
-                    "evidence_refs": [],
-                },
-            ),
         )
 
 

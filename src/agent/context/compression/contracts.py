@@ -146,7 +146,6 @@ _SUMMARY_FIELDS = (
     "mission_progress",
     "decisions_and_outcomes",
     "failures_and_recovery",
-    "open_work",
 )
 
 
@@ -157,7 +156,6 @@ class CompressionDraft:
     mission_progress: tuple[dict[str, Any], ...] = ()
     decisions_and_outcomes: tuple[dict[str, Any], ...] = ()
     failures_and_recovery: tuple[dict[str, Any], ...] = ()
-    open_work: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         for name in _SUMMARY_FIELDS:

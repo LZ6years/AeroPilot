@@ -82,9 +82,6 @@ class StubCompactor:
                     "evidence_refs": refs[:1],
                 },
             ),
-            open_work=(
-                {"summary": "Continue from CURRENT evidence.", "evidence_refs": []},
-            ),
         )
         return CompactionCallResult(
             draft=draft,
@@ -492,6 +489,9 @@ def test_compressed_prefix_images_are_omitted_but_current_image_remains(tmp_path
         message for message in result.messages if "HISTORY CAPSULE" in str(message)
     )
     assert isinstance(capsule["content"], str)
+    assert '"schema_version": "compressed_history_v2"' in capsule["content"]
+    assert '"through_event_index": 30' in capsule["content"]
+    assert "open_work" not in capsule["content"]
     assert "CURRENT observation_id=obs_current" in rendered
 
 
@@ -662,7 +662,6 @@ def test_model_compactor_uses_strict_unbounded_schema_and_no_tools():
                                         ],
                                         "decisions_and_outcomes": [],
                                         "failures_and_recovery": [],
-                                        "open_work": [],
                                     }
                                 )
                             },
@@ -787,7 +786,6 @@ def test_rejected_tool_call_uses_alias_and_normalizes_to_canonical_ref(tmp_path)
                                                 "evidence_refs": [rejected_entry.alias],
                                             }
                                         ],
-                                        "open_work": [],
                                     }
                                 )
                             },
@@ -880,7 +878,6 @@ def test_previous_capsule_refs_are_remapped_and_unknown_alias_is_rejected():
                                         ],
                                         "decisions_and_outcomes": [],
                                         "failures_and_recovery": [],
-                                        "open_work": [],
                                     }
                                 )
                             },
@@ -903,7 +900,7 @@ def test_previous_capsule_refs_are_remapped_and_unknown_alias_is_rejected():
 
     rejected = validator.validate(
         CompressionDraft(
-            open_work=(
+            decisions_and_outcomes=(
                 {"summary": "Unknown old alias.", "evidence_refs": ["E9999"]},
             )
         ),
@@ -911,7 +908,7 @@ def test_previous_capsule_refs_are_remapped_and_unknown_alias_is_rejected():
     )
     assert not rejected.accepted
     assert rejected.normalized_draft is None
-    assert rejected.errors == ("open_work[0]_unknown_ref:E9999",)
+    assert rejected.errors == ("decisions_and_outcomes[0]_unknown_ref:E9999",)
 
 
 def test_model_compactor_rejects_length_finish_reason():

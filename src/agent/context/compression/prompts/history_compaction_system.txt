@@ -4,7 +4,6 @@ Return exactly one JSON object with these array fields:
 - mission_progress
 - decisions_and_outcomes
 - failures_and_recovery
-- open_work
 
 Each item must contain only `summary` and `evidence_refs`.
 
@@ -16,9 +15,10 @@ can affect a later decision. Do not repeat facts already present under
 `evidence_refs`. The response schema is the authoritative alias allowlist.
 Never invent an alias, observation, tool call, result, position, or state. The
 CURRENT state hint is relevance guidance only: do not present it as historical
-evidence. Do not declare the task complete, generate a current-state claim,
-emit tool calls, expose hidden reasoning, or add fields outside the required
-schema.
+evidence. Describe only what occurred at or before the supplied history boundary.
+Do not emit current work, next steps, remaining work, current plans or current-state
+claims. Do not declare the task complete, emit tool calls, expose hidden reasoning,
+or add fields outside the required schema.
 
 Produce the compact JSON directly. Do not spend output on a step-by-step
 analysis before the JSON.

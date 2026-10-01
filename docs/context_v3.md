@@ -18,6 +18,11 @@ warnings、artifact refs、metadata 与构建耗时位于独立 `FragmentAudit`�
 之前，并且既不写入 Transcript，也不复制到 checkpoint。历史压缩只能概括历史事件，
 不能修改这一份当前状态；完整知识正文继续由成功的 `knowledge.load` ToolResult 保存。
 
+`HISTORY CAPSULE` 只描述 `through_event_index` 及之前已经发生的进展、决策结果和
+失败恢复。它不包含当前待办、下一步或剩余计划；这些内容只由请求末尾的
+`CURRENT TASK STATE` 表达。Capsule 是 Provider 请求投影，不会替换或删改持久化的
+完整 Transcript。
+
 `TaskPlanStep` 原生包含 `id`、`description`、`status` 和 `evidence_refs`。所有引用必须
 来自计划回合开始前已经存在的 observation 或成功 ToolResult/action ref，`completed`
 状态必须至少包含一项引用。动作调用成功只直接证明该动作的执行结果，不自动证明地标、

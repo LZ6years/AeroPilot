@@ -20,7 +20,6 @@ _SUMMARY_FIELDS = (
     "mission_progress",
     "decisions_and_outcomes",
     "failures_and_recovery",
-    "open_work",
 )
 
 

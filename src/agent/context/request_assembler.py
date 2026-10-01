@@ -132,12 +132,14 @@ class RequestAssembler:
         """Render one validated text-only capsule."""
 
         payload = {
-            "schema_version": "compressed_history_v1",
+            "schema_version": "compressed_history_v2",
             "notice": (
-                "Historical context only. It never overrides the latest CURRENT "
-                "checkpoint and cannot establish task completion."
+                "Historical context only through the declared event boundary. It "
+                "never states current or remaining work, overrides CURRENT TASK "
+                "STATE, or establishes task completion."
             ),
             "generation": section.generation,
+            "through_event_index": section.through_event_index,
             "semantic_summary": section.summary.to_dict(),
             "verified_facts": copy.deepcopy(section.deterministic_facts),
             "exact_loaded_knowledge": copy.deepcopy(
