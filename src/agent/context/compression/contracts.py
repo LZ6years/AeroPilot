@@ -28,7 +28,8 @@ class HistoryCompressionConfig:
     compactor_timeout_retries: int = 0
     compactor_connection_retries: int = 1
     max_request_images: int = 20
-    keep_recent_visual_events: int = 3
+    max_tool_evidence_images: int = 4
+    keep_recent_observations: int = 3
     pin_instruction_start: bool = True
     pin_current: bool = True
 
@@ -44,7 +45,7 @@ class HistoryCompressionConfig:
             "summary_max_tokens",
             "keep_recent_decision_windows",
             "max_request_images",
-            "keep_recent_visual_events",
+            "keep_recent_observations",
         )
         for name in positive:
             value = getattr(self, name)
@@ -66,8 +67,19 @@ class HistoryCompressionConfig:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int) or value < 0:
                 raise ValueError(f"{name} must be a non-negative integer")
-        minimum_pins = int(self.pin_instruction_start) + int(self.pin_current)
-        if self.max_request_images < max(self.keep_recent_visual_events, minimum_pins):
+        if (
+            type(self.max_tool_evidence_images) is not int
+            or self.max_tool_evidence_images < 0
+        ):
+            raise ValueError("max_tool_evidence_images must be a non-negative integer")
+        if self.max_tool_evidence_images > self.max_request_images:
+            raise ValueError("max_tool_evidence_images must not exceed max_request_images")
+        minimum_observations = (
+            self.keep_recent_observations
+            + int(self.pin_instruction_start)
+            + int(self.pin_current)
+        )
+        if self.max_request_images < minimum_observations:
             raise ValueError("max_request_images is too small for pinned media")
 
     @classmethod
@@ -89,7 +101,8 @@ class HistoryCompressionConfig:
             "compactor_timeout_retries", "compactor_connection_retries",
         }
         allowed_media = {
-            "max_request_images", "keep_recent_visual_events",
+            "max_request_images", "max_tool_evidence_images",
+            "keep_recent_observations",
             "pin_instruction_start", "pin_current",
         }
         if set(compression) - allowed_compression:
@@ -140,6 +153,39 @@ class EvidenceCatalogEntry:
             for value in (self.alias, self.canonical_ref, self.kind)
         ):
             raise ValueError("evidence catalog fields must be non-empty strings")
+
+
+@dataclass(frozen=True)
+class HistoryMediaEntry:
+    """Binary-free identity for media that may outlive its raw history event."""
+
+    event_index: int
+    evidence_ref: str
+    observation_id: str
+    frame_id: str
+    media_ref: dict[str, Any]
+    source_kind: str
+    checkpoint_reason: str | None = None
+    tool_call_id: str | None = None
+
+    def __post_init__(self) -> None:
+        if type(self.event_index) is not int or self.event_index < 0:
+            raise ValueError("history media event_index must be a non-negative integer")
+        if self.source_kind not in {"observation", "tool_evidence"}:
+            raise ValueError("history media source_kind is invalid")
+        if any(
+            not isinstance(value, str) or not value
+            for value in (self.evidence_ref, self.observation_id, self.frame_id)
+        ):
+            raise ValueError("history media identity fields must be non-empty strings")
+        object.__setattr__(self, "media_ref", copy.deepcopy(dict(self.media_ref)))
+
+    @property
+    def key(self) -> str:
+        return (
+            f"{self.observation_id}:"
+            f"{self.media_ref.get('sha256') or self.media_ref.get('ref') or ''}"
+        )
 
 
 _SUMMARY_FIELDS = (
@@ -247,6 +293,7 @@ class CompressionCandidate:
     base_generation: int
     deterministic_facts: dict[str, Any]
     exact_loaded_knowledge: tuple[dict[str, Any], ...] = ()
+    prefix_media: tuple[HistoryMediaEntry, ...] = ()
     estimated_input_tokens: int = 0
 
     def __post_init__(self) -> None:
@@ -256,6 +303,7 @@ class CompressionCandidate:
             "exact_loaded_knowledge",
             tuple(copy.deepcopy(dict(item)) for item in self.exact_loaded_knowledge),
         )
+        object.__setattr__(self, "prefix_media", tuple(self.prefix_media))
 
     @property
     def target_generation(self) -> int:
@@ -272,6 +320,7 @@ class CompressedHistorySection:
     summary: CompressionDraft
     deterministic_facts: dict[str, Any]
     exact_loaded_knowledge: tuple[dict[str, Any], ...] = ()
+    prefix_media: tuple[HistoryMediaEntry, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "deterministic_facts", copy.deepcopy(self.deterministic_facts))
@@ -280,6 +329,7 @@ class CompressedHistorySection:
             "exact_loaded_knowledge",
             tuple(copy.deepcopy(dict(item)) for item in self.exact_loaded_knowledge),
         )
+        object.__setattr__(self, "prefix_media", tuple(self.prefix_media))
 
 
 @dataclass(frozen=True)

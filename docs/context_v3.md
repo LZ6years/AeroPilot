@@ -39,6 +39,15 @@ warnings、artifact refs、metadata 与构建耗时位于独立 `FragmentAudit`�
 instruction 级 SHA-LRU 上限为 32 项、32 MiB，结束后清空。独立诊断工具可以在不提供
 `base_dir` 时使用绝对临时引用，但这种引用不得写入 Runtime 的 V3 artifact。
 
+每个 Provider 请求最多选择 20 张图片，优先级依次为：真实的 instruction-start
+observation、当前 observation、最近 3 个更早 observation、最多 4 张位于 raw tail 或被
+Capsule 引用的 tool evidence，以及填充剩余名额的对数采样旧 observation。tool evidence
+不能挤掉这些 observation 锚点。压缩前缀只在 `CompressedHistorySection` 中保留轻量、
+无二进制的 `MediaRef` 索引；语义 compactor 和 `HISTORY CAPSULE` 都不接收图片。最终被
+策略选中的前缀图片才会在 Capsule 后作为 `HISTORY EVIDENCE` 延迟读取和编码，raw tail
+图片仍附着于原 checkpoint 或 ToolResult。当前 RGB 缺失时会明确标记 unavailable，历史
+图片不会被提升为 `CURRENT`。
+
 Provider 顺序固定为：身份和偏好；Planner/ToolUser；原始 instruction；protocol、
 知识目录和静态说明；按时间排序的 checkpoint/assistant/tool/feedback；一份
 `CURRENT TASK STATE`；可选进度提醒。

@@ -9,7 +9,10 @@ from typing import TYPE_CHECKING, Any
 from src.agent.context.media import MediaHydrator
 
 if TYPE_CHECKING:
-    from src.agent.context.compression.contracts import CompressedHistorySection
+    from src.agent.context.compression.contracts import (
+        CompressedHistorySection,
+        HistoryMediaEntry,
+    )
 
 
 class RequestAssembler:
@@ -149,6 +152,40 @@ class RequestAssembler:
         return {
             "role": "user",
             "content": "HISTORY CAPSULE\n" + json.dumps(payload, ensure_ascii=False),
+        }
+
+    def history_evidence_message(
+        self,
+        entry: "HistoryMediaEntry",
+    ) -> dict[str, Any]:
+        """Hydrate one selected image whose original event is in the capsule."""
+
+        ref = copy.deepcopy(entry.media_ref)
+        prepared = self.media_hydrator.hydrate(ref)
+        if entry.source_kind == "tool_evidence":
+            heading = (
+                f"HISTORY TOOL EVIDENCE event_index={entry.event_index} "
+                f"tool_call_id={entry.tool_call_id or entry.evidence_ref} "
+                f"observation_id={entry.observation_id}."
+            )
+        else:
+            heading = (
+                f"HISTORY EVIDENCE event_index={entry.event_index} "
+                f"observation_id={entry.observation_id}."
+            )
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"{heading} This image is historical and cannot establish "
+                        "current visibility.\n"
+                        f"{_media_label(ref, 'HISTORY')}"
+                    ),
+                },
+                {"type": "image_url", "image_url": {"url": prepared.data_url}},
+            ],
         }
 
 

@@ -9,6 +9,7 @@ from src.agent.context.compression import (
     HistoryCompactionCoordinator,
     HistoryCompressionConfig,
     HistoryCompactor,
+    HistoryMediaEntry,
     HistoryProjectionState,
     ModelHistoryCompactor,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "HistoryCompressionConfig",
     "HistoryCompactionCoordinator",
     "HistoryCompactor",
+    "HistoryMediaEntry",
     "HistoryProjectionState",
     "HistoryProjector",
     "MediaHydrator",

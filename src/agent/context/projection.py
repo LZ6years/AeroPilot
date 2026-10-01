@@ -18,6 +18,7 @@ from src.agent.context.compression.contracts import (
     CompressedHistorySection,
     CompressionWindow,
     EvidenceCatalogEntry,
+    HistoryMediaEntry,
 )
 from src.agent.context.request_assembler import RequestAssembler
 from src.agent.transcript import AgentTranscript, AssistantTurn, ToolResult, TranscriptEvent
@@ -43,6 +44,7 @@ class ProjectionPlan:
     evidence_catalog: tuple[EvidenceCatalogEntry, ...]
     deterministic_facts: dict[str, Any]
     exact_loaded_knowledge: tuple[dict[str, Any], ...]
+    prefix_media: tuple[HistoryMediaEntry, ...]
     current_state_hint: dict[str, Any]
     instruction: str
     source_digest: str | None
@@ -57,15 +59,10 @@ class _DecisionWindow:
 
 
 @dataclass(frozen=True)
-class _VisualCandidate:
-    key: str
-    event_index: int
-    evidence_ref: str
-    observation_id: str
-    frame_id: str
-    media_ref: dict[str, Any]
-    source_kind: str
-    tool_call_id: str | None = None
+class _VisualSelection:
+    candidate: HistoryMediaEntry
+    tier: str
+
 
 class HistoryProjector:
     """Select history identities first, then hydrate only selected media."""
@@ -153,6 +150,17 @@ class HistoryProjector:
         full_events = copy.deepcopy(all_events_for_evidence or owned)
         cut_global = base_event_index + cut_local
         full_prefix = full_events[:cut_global] if all_events_for_evidence else owned[:cut_local]
+        prefix_base = 0 if all_events_for_evidence else base_event_index
+        selected_by_module, _ = self._selection(full_prefix)
+        prefix_media = _deduplicate_visual_candidates(
+            list(
+                _visual_candidates(
+                    full_prefix,
+                    tuple(range(prefix_base, prefix_base + len(full_prefix))),
+                    selected_by_module,
+                )
+            )
+        )
         serialized = [_event_dict(item) for item in full_prefix]
         digest = hashlib.sha256(
             json.dumps(serialized, ensure_ascii=False, sort_keys=True).encode("utf-8")
@@ -163,6 +171,7 @@ class HistoryProjector:
             evidence_catalog=_evidence_catalog(full_prefix),
             deterministic_facts=_deterministic_facts(full_prefix, semantic_windows),
             exact_loaded_knowledge=_exact_loaded_knowledge(full_prefix),
+            prefix_media=tuple(prefix_media),
             current_state_hint=copy.deepcopy(current_task_state or {}),
             instruction=_instruction(full_events),
             source_digest=digest,
@@ -218,13 +227,23 @@ class HistoryProjector:
         self,
         items: tuple[TranscriptEvent, ...],
         event_indices: tuple[int, ...],
-    ) -> tuple[_VisualCandidate, ...]:
+        section: CompressedHistorySection | None,
+    ) -> tuple[_VisualSelection, ...]:
         module_selected, _ = self._selection(items)
-        candidates = list(_visual_candidates(items, event_indices, module_selected))
+        candidates = [*(section.prefix_media if section else ())]
+        candidates.extend(_visual_candidates(items, event_indices, module_selected))
         candidates = _deduplicate_visual_candidates(candidates)
         if not self.media_policy:
-            return tuple(candidates)
-        return _select_visual_candidates(candidates, self.media_policy)
+            return tuple(_VisualSelection(item, "unbounded") for item in candidates)
+        current_observation_id = _latest_observation_id(items)
+        cited_refs = _summary_evidence_refs(section) if section else frozenset()
+        return _select_visual_candidates(
+            candidates,
+            self.media_policy,
+            compacted_through=(section.through_event_index if section else None),
+            current_observation_id=current_observation_id,
+            cited_refs=cited_refs,
+        )
 
     def _project_owned_snapshot(
         self,
@@ -236,9 +255,24 @@ class HistoryProjector:
     ) -> ProjectionResult:
         selected_by_module, audit = self._selection(items)
         indices = event_indices or tuple(range(len(items)))
-        selected_visual = self._selected_visual_candidates(items, indices)
-        selected_keys = {item.key for item in selected_visual}
-        audit["selected_visual_evidence_refs"] = [item.evidence_ref for item in selected_visual]
+        selected_visual = self._selected_visual_candidates(items, indices, section)
+        selected_keys = {item.candidate.key for item in selected_visual}
+        audit["selected_visual_evidence_refs"] = [
+            item.candidate.evidence_ref for item in selected_visual
+        ]
+        audit["selected_visual_evidence"] = [
+            {
+                "event_index": item.candidate.event_index,
+                "evidence_ref": item.candidate.evidence_ref,
+                "observation_id": item.candidate.observation_id,
+                "frame_id": item.candidate.frame_id,
+                "source_kind": item.candidate.source_kind,
+                "selection_tier": item.tier,
+                "ref": item.candidate.media_ref.get("ref"),
+                "sha256": item.candidate.media_ref.get("sha256"),
+            }
+            for item in selected_visual
+        ]
         if self.media_policy:
             audit["global_media_policy"] = copy.deepcopy(self.media_policy)
         if section is not None:
@@ -261,6 +295,15 @@ class HistoryProjector:
                 )
         newest_observation = next(reversed(first_state_index_by_observation), None)
         seen_media: set[str] = set()
+        prefix_visual = (
+            [
+                item.candidate
+                for item in selected_visual
+                if item.candidate.event_index < section.through_event_index
+            ]
+            if section is not None
+            else []
+        )
         for local_index, event in enumerate(items):
             global_index = indices[local_index]
             if event.kind == "instruction_envelope":
@@ -273,6 +316,29 @@ class HistoryProjector:
                     messages.append(context_message)
                 if section is not None:
                     messages.append(self.assembler.compressed_history_message(section))
+                    for entry in prefix_visual:
+                        if entry.key in seen_media:
+                            continue
+                        try:
+                            messages.append(
+                                self.assembler.history_evidence_message(entry)
+                            )
+                        except ValueError as exc:
+                            audit["missing_images"].append(
+                                {
+                                    "observation_id": entry.observation_id,
+                                    "evidence_ref": entry.evidence_ref,
+                                    "reason": str(exc),
+                                }
+                            )
+                            continue
+                        seen_media.add(entry.key)
+                        counter = (
+                            "tool_image_count"
+                            if entry.source_kind == "tool_evidence"
+                            else "observation_image_count"
+                        )
+                        audit[counter] += 1
                 continue
             if event.kind == "state_checkpoint":
                 checkpoint = _payload_dict(event.payload)
@@ -418,6 +484,7 @@ def _empty_plan(
         evidence_catalog=(),
         deterministic_facts={},
         exact_loaded_knowledge=(),
+        prefix_media=(),
         current_state_hint=copy.deepcopy(current_task_state or {}),
         instruction=_instruction(events),
         source_digest=None,
@@ -709,8 +776,8 @@ def _visual_candidates(
     events: tuple[TranscriptEvent, ...],
     event_indices: tuple[int, ...],
     selected_by_module: dict[str, set[str]],
-) -> tuple[_VisualCandidate, ...]:
-    values: list[_VisualCandidate] = []
+) -> tuple[HistoryMediaEntry, ...]:
+    values: list[HistoryMediaEntry] = []
     for local_index, event in enumerate(events):
         event_index = event_indices[local_index]
         if event.kind == "state_checkpoint":
@@ -727,7 +794,13 @@ def _visual_candidates(
                     if not isinstance(item, dict) or item.get("type") != "image" or not isinstance(ref, dict):
                         continue
                     values.append(
-                        _candidate(ref, event_index, evidence_ref=observation_id, source_kind="observation")
+                        _candidate(
+                            ref,
+                            event_index,
+                            evidence_ref=observation_id,
+                            source_kind="observation",
+                            checkpoint_reason=str(checkpoint.get("reason") or ""),
+                        )
                     )
         elif event.kind == "tool_result":
             result: ToolResult = event.payload
@@ -753,70 +826,178 @@ def _candidate(
     *,
     evidence_ref: str,
     source_kind: str,
+    checkpoint_reason: str | None = None,
     tool_call_id: str | None = None,
-) -> _VisualCandidate:
+) -> HistoryMediaEntry:
     observation_id = str(ref.get("observation_id") or "unknown")
-    return _VisualCandidate(
-        key=_media_identity(observation_id, ref),
+    return HistoryMediaEntry(
         event_index=event_index,
         evidence_ref=evidence_ref,
         observation_id=observation_id,
         frame_id=str(ref.get("frame_id") or "unknown"),
         media_ref=copy.deepcopy(ref),
         source_kind=source_kind,
+        checkpoint_reason=checkpoint_reason,
         tool_call_id=tool_call_id,
     )
 
 
 def _deduplicate_visual_candidates(
-    candidates: list[_VisualCandidate],
-) -> list[_VisualCandidate]:
-    by_key: dict[str, _VisualCandidate] = {}
+    candidates: list[HistoryMediaEntry],
+) -> list[HistoryMediaEntry]:
+    by_key: dict[str, HistoryMediaEntry] = {}
     for candidate in sorted(candidates, key=lambda item: item.event_index):
         by_key.setdefault(candidate.key, candidate)
     return list(by_key.values())
 
 
 def _select_visual_candidates(
-    candidates: list[_VisualCandidate], policy: dict[str, Any]
-) -> tuple[_VisualCandidate, ...]:
+    candidates: list[HistoryMediaEntry],
+    policy: dict[str, Any],
+    *,
+    compacted_through: int | None,
+    current_observation_id: str | None,
+    cited_refs: frozenset[str],
+) -> tuple[_VisualSelection, ...]:
+    """Choose visual anchors without letting tool evidence crowd out RGB history."""
+
     if not candidates:
         return ()
     budget = int(policy["max_request_images"])
-    if len(candidates) <= budget:
-        return tuple(candidates)
-    chosen: set[str] = set()
+    chosen: dict[str, str] = {}
+
+    def choose(candidate: HistoryMediaEntry, tier: str) -> None:
+        if len(chosen) < budget:
+            chosen.setdefault(candidate.key, tier)
+
+    observations = [
+        item for item in candidates if item.source_kind == "observation"
+    ]
+    # Context module order places the primary image before auxiliary visual
+    # modules. Keep one representative per observation so a single checkpoint
+    # cannot consume the entire cross-source request budget.
+    representatives: dict[str, HistoryMediaEntry] = {}
+    for item in observations:
+        representatives.setdefault(item.observation_id, item)
+    observation_values = list(representatives.values())
+
     if policy.get("pin_instruction_start"):
-        chosen.add(candidates[0].key)
-    if policy.get("pin_current"):
-        observations = [item for item in candidates if item.source_kind == "observation"]
-        if observations:
-            chosen.add(observations[-1].key)
-    recent = int(policy["keep_recent_visual_events"])
-    chosen.update(item.key for item in candidates[-recent:])
+        instruction_start = next(
+            (
+                item
+                for item in observation_values
+                if item.checkpoint_reason == "instruction_start"
+            ),
+            None,
+        )
+        if instruction_start is not None:
+            choose(instruction_start, "instruction_start")
+
+    current = next(
+        (
+            item
+            for item in reversed(observation_values)
+            if item.observation_id == current_observation_id
+        ),
+        None,
+    )
+    if policy.get("pin_current") and current is not None:
+        choose(current, "current")
+
+    recent_count = int(policy["keep_recent_observations"])
+    recent_pool = [
+        item
+        for item in observation_values
+        if current is None or item.key != current.key
+    ]
+    for item in recent_pool[-recent_count:]:
+        choose(item, "recent_observation")
+
+    eligible_tools = [
+        item
+        for item in candidates
+        if item.source_kind == "tool_evidence"
+        and (
+            compacted_through is None
+            or item.event_index >= compacted_through
+            or item.evidence_ref in cited_refs
+        )
+    ]
+    tool_limit = min(
+        int(policy["max_tool_evidence_images"]),
+        max(0, budget - len(chosen)),
+    )
+    for item in sorted(
+        eligible_tools, key=lambda candidate: candidate.event_index, reverse=True
+    )[:tool_limit]:
+        tier = (
+            "capsule_tool_evidence"
+            if compacted_through is not None
+            and item.event_index < compacted_through
+            else "tail_tool_evidence"
+        )
+        choose(item, tier)
+
     remaining_slots = budget - len(chosen)
-    pool = [item for item in candidates if item.key not in chosen]
-    if remaining_slots > 0 and pool:
-        if remaining_slots >= len(pool):
-            chosen.update(item.key for item in pool)
-        elif remaining_slots == 1:
-            chosen.add(pool[-1].key)
-        else:
-            total = len(pool)
-            ages = []
-            for index in range(remaining_slots):
-                age = math.floor(
-                    math.exp(index / (remaining_slots - 1) * math.log(total)) - 1 + 0.5
-                )
-                age = min(total - 1, max(age, ages[-1] + 1 if ages else 0))
-                ages.append(age)
-            for age in ages:
-                chosen.add(pool[total - age - 1].key)
-    return tuple(item for item in candidates if item.key in chosen)[:budget]
+    older_observations = [
+        item for item in observation_values if item.key not in chosen
+    ]
+    for item in _log_spaced_candidates(older_observations, remaining_slots):
+        choose(item, "log_history")
+
+    return tuple(
+        _VisualSelection(item, chosen[item.key])
+        for item in candidates
+        if item.key in chosen
+    )
+
+
+def _log_spaced_candidates(
+    candidates: list[HistoryMediaEntry], slots: int
+) -> tuple[HistoryMediaEntry, ...]:
+    """Return recent-to-old log-spaced identities, including both extremes."""
+
+    if slots <= 0 or not candidates:
+        return ()
+    if slots >= len(candidates):
+        return tuple(candidates)
+    if slots == 1:
+        return (candidates[-1],)
+    total = len(candidates)
+    ages: list[int] = []
+    for index in range(slots):
+        age = math.floor(
+            math.exp(index / (slots - 1) * math.log(total)) - 1 + 0.5
+        )
+        age = min(total - 1, max(age, ages[-1] + 1 if ages else 0))
+        ages.append(age)
+    return tuple(candidates[total - age - 1] for age in ages)
 
 
 def _media_identity(observation_id: str, ref: dict[str, Any]) -> str:
     return f"{observation_id}:{ref.get('sha256') or ref.get('ref') or ''}"
+
+
+def _latest_observation_id(events: tuple[TranscriptEvent, ...]) -> str | None:
+    for event in reversed(events):
+        if event.kind != "state_checkpoint":
+            continue
+        observation_id = _payload_dict(event.payload).get("observation_id")
+        if observation_id:
+            return str(observation_id)
+    return None
+
+
+def _summary_evidence_refs(
+    section: CompressedHistorySection,
+) -> frozenset[str]:
+    refs: set[str] = set()
+    for items in section.summary.to_dict().values():
+        for item in items:
+            values = item.get("evidence_refs")
+            if isinstance(values, list):
+                refs.update(str(value) for value in values if value)
+    return frozenset(refs)
 
 
 def _payload_dict(payload: Any) -> dict[str, Any]:

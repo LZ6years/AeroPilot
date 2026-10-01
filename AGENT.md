@@ -127,13 +127,17 @@ It never owns current work, next steps, remaining work, or the current plan; tho
 belong exclusively to the one transient `CURRENT TASK STATE` block.
 
 `configs/context.json` owns one global request-media budget. Observation and
-tool-evidence images share the default maximum of 20, retain the latest 3 visual
-events consecutively, and use log-spaced older evidence including the first
-retained raw visual event.
-Each selected recent observation image remains at its original checkpoint;
-images from a compressed prefix are omitted from both the semantic compactor and
-the final history capsule. Earlier retained-tail labels say `HISTORY`, and only
-the newest says `CURRENT`.
+tool-evidence images share the default maximum of 20. Selection first reserves
+the true instruction-start observation, the current observation, and the 3 most
+recent earlier observations. It then admits at most 4 raw-tail or Capsule-cited
+tool-evidence images and fills remaining slots with log-spaced older
+observations. Tool evidence cannot displace the reserved observation anchors.
+Compaction records a binary-free `MediaRef` index for the compressed prefix,
+while the semantic compactor and Capsule remain image-free. Only selected
+prefix references are hydrated and injected after the Capsule as `HISTORY
+EVIDENCE`; selected raw-tail media remains attached to its original checkpoint
+or ToolResult. Earlier labels say `HISTORY`, only the newest real checkpoint
+says `CURRENT`, and a missing current RGB is never replaced by an older image.
 Labels carry `observation_id`, `frame_id`, and scene dimensions outside the
 image pixels. Tool results pair to calls through
 `tool_call_id`. The original instruction is owned only by the `user_instruction`

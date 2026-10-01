@@ -216,7 +216,7 @@ def test_missing_selected_media_is_explicit_and_never_substitutes_old_image(tmp_
     assert result.audit["missing_images"]
 
 
-def test_global_media_budget_includes_observation_and_tool_evidence(tmp_path):
+def test_global_media_budget_caps_tool_evidence_without_crowding_observation(tmp_path):
     transcript = _transcript(tmp_path)
     _add_image_checkpoint(transcript, tmp_path, 1)
     calls = []
@@ -252,7 +252,8 @@ def test_global_media_budget_includes_observation_and_tool_evidence(tmp_path):
         assembler=RequestAssembler(MediaHydrator(base_dir=tmp_path)),
         media_policy={
             "max_request_images": 20,
-            "keep_recent_visual_events": 3,
+            "max_tool_evidence_images": 4,
+            "keep_recent_observations": 3,
             "pin_instruction_start": True,
             "pin_current": True,
         },
@@ -261,7 +262,75 @@ def test_global_media_budget_includes_observation_and_tool_evidence(tmp_path):
     projected = projector.project(transcript, default_registry())
     rendered = json.dumps(projected.messages, ensure_ascii=False)
 
-    assert projected.audit["total_image_count"] == 20
+    assert projected.audit["total_image_count"] == 5
     assert projected.audit["observation_image_count"] == 1
-    assert projected.audit["tool_image_count"] == 19
-    assert rendered.count("data:image/png;base64,") == 20
+    assert projected.audit["tool_image_count"] == 4
+    assert rendered.count("data:image/png;base64,") == 5
+    selected_tools = [
+        item
+        for item in projected.audit["selected_visual_evidence"]
+        if item["source_kind"] == "tool_evidence"
+    ]
+    assert len(selected_tools) == 4
+    assert {item["selection_tier"] for item in selected_tools} == {
+        "tail_tool_evidence"
+    }
+
+
+def test_layered_media_budget_keeps_start_current_recent_and_log_history(tmp_path):
+    transcript = _transcript(tmp_path)
+    for index in range(1, 26):
+        _add_image_checkpoint(transcript, tmp_path, index)
+    calls = []
+    results = []
+    for index in range(8):
+        output = BytesIO()
+        Image.new("RGB", (2, 2), (0, index, 0)).save(output, format="PNG")
+        raw = output.getvalue()
+        path = tmp_path / f"evidence_{index}.png"
+        path.write_bytes(raw)
+        call_id = f"evidence_{index}"
+        ref = MediaRef(
+            ref=path.name,
+            sha256=hashlib.sha256(raw).hexdigest(),
+            mime_type="image/png",
+            observation_id=f"tool_obs_{index}",
+            frame_id=f"tool_frame_{index}",
+            role="tool_evidence",
+        )
+        calls.append(AgentToolCall(call_id, "uav.turn_relative", {"yaw_deg": 1}))
+        results.append(
+            ToolResult(
+                call_id,
+                "uav.turn_relative",
+                "ok",
+                model_inputs=[ref.to_model_input()],
+            )
+        )
+    transcript.append_assistant(AssistantTurn("turn", "Inspect", calls))
+    for result in results:
+        transcript.append_tool_result(result)
+    projector = HistoryProjector(
+        assembler=RequestAssembler(MediaHydrator(base_dir=tmp_path)),
+        media_policy={
+            "max_request_images": 20,
+            "max_tool_evidence_images": 4,
+            "keep_recent_observations": 3,
+            "pin_instruction_start": True,
+            "pin_current": True,
+        },
+    )
+
+    projected = projector.project(transcript, default_registry())
+    selected = projected.audit["selected_visual_evidence"]
+    observation_ids = {
+        item["observation_id"]
+        for item in selected
+        if item["source_kind"] == "observation"
+    }
+
+    assert projected.audit["total_image_count"] == 20
+    assert projected.audit["observation_image_count"] == 16
+    assert projected.audit["tool_image_count"] == 4
+    assert {"obs_0001", "obs_0022", "obs_0023", "obs_0024", "obs_0025"} <= observation_ids
+    assert any(item["selection_tier"] == "log_history" for item in selected)

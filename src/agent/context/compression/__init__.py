@@ -11,6 +11,7 @@ from src.agent.context.compression.contracts import (
     EvidenceCatalogEntry,
     HistoryCompressionConfig,
     HistoryCompactor,
+    HistoryMediaEntry,
     HistoryProjectionState,
 )
 from src.agent.context.compression.coordinator import HistoryCompactionCoordinator
@@ -28,6 +29,7 @@ __all__ = [
     "HistoryCompressionConfig",
     "HistoryCompactionCoordinator",
     "HistoryCompactor",
+    "HistoryMediaEntry",
     "HistoryProjectionState",
     "ModelHistoryCompactor",
 ]

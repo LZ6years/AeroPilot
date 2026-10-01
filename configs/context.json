@@ -14,7 +14,8 @@
     },
     "media": {
       "max_request_images": 20,
-      "keep_recent_visual_events": 3,
+      "max_tool_evidence_images": 4,
+      "keep_recent_observations": 3,
       "pin_instruction_start": true,
       "pin_current": true
     }

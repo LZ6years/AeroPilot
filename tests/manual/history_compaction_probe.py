@@ -133,6 +133,11 @@ def main() -> int:
             "max_compactor_input_tokens": config.max_compactor_input_tokens,
             "summary_max_tokens": config.summary_max_tokens,
             "keep_recent_decision_windows": config.keep_recent_decision_windows,
+            "max_request_images": config.max_request_images,
+            "max_tool_evidence_images": config.max_tool_evidence_images,
+            "keep_recent_observations": config.keep_recent_observations,
+            "pin_instruction_start": config.pin_instruction_start,
+            "pin_current": config.pin_current,
         },
         "samples": {},
     }
@@ -140,7 +145,7 @@ def main() -> int:
     for label, path in args.sample:
         transcript = _load(path)
         candidate, preparation = manager._prepare_candidate(  # diagnostic seam
-            transcript, registry, HistoryProjectionState()
+            transcript, registry, HistoryProjectionState(), {}
         )
         if candidate is None:
             raise RuntimeError(f"{label}: no compression candidate ({preparation})")
@@ -161,6 +166,21 @@ def main() -> int:
             "max_compactor_input_tokens": config.max_compactor_input_tokens,
             "forbidden_media_term_counts": forbidden,
             "source_digest": candidate.request.source_digest,
+            "indexed_prefix_media_count": len(candidate.prefix_media),
+            "indexed_prefix_media": [
+                {
+                    "event_index": item.event_index,
+                    "evidence_ref": item.evidence_ref,
+                    "observation_id": item.observation_id,
+                    "frame_id": item.frame_id,
+                    "source_kind": item.source_kind,
+                    "checkpoint_reason": item.checkpoint_reason,
+                    "tool_call_id": item.tool_call_id,
+                    "ref": item.media_ref.get("ref"),
+                    "sha256": item.media_ref.get("sha256"),
+                }
+                for item in candidate.prefix_media
+            ],
             "status": "prepared",
         }
         report["samples"][label] = row

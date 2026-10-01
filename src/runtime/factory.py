@@ -165,8 +165,11 @@ class RuntimeFactory:
             hydrator = MediaHydrator(base_dir=recorder.run_dir)
             media_policy = {
                 "max_request_images": self.history_compression_config.max_request_images,
-                "keep_recent_visual_events": (
-                    self.history_compression_config.keep_recent_visual_events
+                "max_tool_evidence_images": (
+                    self.history_compression_config.max_tool_evidence_images
+                ),
+                "keep_recent_observations": (
+                    self.history_compression_config.keep_recent_observations
                 ),
                 "pin_instruction_start": (
                     self.history_compression_config.pin_instruction_start

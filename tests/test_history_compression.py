@@ -21,6 +21,7 @@ from src.agent.context.compression import (
     EvidenceCatalogEntry,
     HistoryCompactionCoordinator,
     HistoryCompressionConfig,
+    HistoryMediaEntry,
     HistoryProjectionState,
     ModelHistoryCompactor,
 )
@@ -205,13 +206,15 @@ def _manager(
         summary_max_tokens=4_096,
         keep_recent_decision_windows=keep,
         max_request_images=20,
-        keep_recent_visual_events=3,
+        max_tool_evidence_images=4,
+        keep_recent_observations=3,
     )
     projector = HistoryProjector(
         assembler=assembler,
         media_policy={
             "max_request_images": 20,
-            "keep_recent_visual_events": 3,
+            "max_tool_evidence_images": 4,
+            "keep_recent_observations": 3,
             "pin_instruction_start": True,
             "pin_current": True,
         },
@@ -278,6 +281,23 @@ def test_compression_config_has_large_window_and_retry_constraints():
     )
     assert config.compactor_timeout_sec == 300
     assert config.compactor_timeout_retries == 0
+    configured_media = HistoryCompressionConfig.from_mapping(
+        {
+            "media": {
+                "max_request_images": 20,
+                "max_tool_evidence_images": 4,
+                "keep_recent_observations": 3,
+                "pin_instruction_start": True,
+                "pin_current": True,
+            }
+        }
+    )
+    assert configured_media.max_tool_evidence_images == 4
+    assert configured_media.keep_recent_observations == 3
+    with pytest.raises(ValueError, match="unknown history media option"):
+        HistoryCompressionConfig.from_mapping(
+            {"media": {"keep_recent_visual_events": 3}}
+        )
     with pytest.raises(ValueError, match="target < prefetch <= soft"):
         HistoryCompressionConfig(
             target_tokens=48_000,
@@ -316,6 +336,13 @@ def test_prefetch_uses_all_eligible_windows_and_image_free_semantic_view(tmp_pat
     semantic = json.dumps(
         [window.to_dict() for window in request.windows], ensure_ascii=False
     )
+    candidate = coordinator.poll().candidate
+    assert candidate is not None
+    assert candidate.prefix_media
+    media_index = json.dumps(
+        [entry.media_ref for entry in candidate.prefix_media], ensure_ascii=False
+    )
+    assert "data:image" not in media_index
     assert all(term not in semantic for term in ("model_inputs", "media_ref", "base64"))
     assert "large_repeated_plan" not in semantic
     assert "audit_details" not in semantic
@@ -330,7 +357,7 @@ def test_64k_pending_preserves_raw_history_then_accepts_completed_result(tmp_pat
     manager = _manager(compactor)
     coordinator = HistoryCompactionCoordinator()
     state = HistoryProjectionState()
-    transcript = _transcript(tmp_path)
+    transcript = _transcript(tmp_path, with_images=True)
 
     started = time.monotonic()
     result = _project(manager, transcript, state, coordinator)
@@ -344,6 +371,9 @@ def test_64k_pending_preserves_raw_history_then_accepts_completed_result(tmp_pat
     assert state.capsule_generation == 0
     assert result.audit["compaction_status"] == "prefetch_pending"
     assert "HISTORY CAPSULE" not in json.dumps(result.messages, ensure_ascii=False)
+    staged = coordinator.poll().candidate
+    assert staged is not None
+    assert staged.prefix_media
 
     gate.set()
     _wait_status(coordinator, "ready")
@@ -351,6 +381,7 @@ def test_64k_pending_preserves_raw_history_then_accepts_completed_result(tmp_pat
 
     assert state.capsule_generation == 1
     assert state.section is not None
+    assert state.section.prefix_media == staged.prefix_media
     assert accepted.audit["compaction_status"] == "accepted"
     assert coordinator.poll().status == "idle"
 
@@ -450,7 +481,8 @@ def test_single_oversized_window_stays_raw_without_model_call(tmp_path):
     assert result.audit["staged_candidate"]["estimated_input_tokens"] > 100
 
 
-def test_compressed_prefix_images_are_omitted_but_current_image_remains(tmp_path):
+def test_compressed_prefix_visual_anchor_and_current_image_are_both_hydrated(tmp_path):
+    start_ref = _image_ref(tmp_path, 1, "obs_start")
     current_ref = _image_ref(tmp_path, 25, "obs_current")
     fragment = ContextFragment("image", {}, (current_ref.to_model_input(),))
     current = StateCheckpoint(
@@ -470,12 +502,25 @@ def test_compressed_prefix_images_are_omitted_but_current_image_remains(tmp_path
             )
         ),
         deterministic_facts={},
+        prefix_media=(
+            HistoryMediaEntry(
+                event_index=2,
+                evidence_ref="obs_start",
+                observation_id="obs_start",
+                frame_id=start_ref.frame_id,
+                media_ref=start_ref.to_dict(),
+                source_kind="observation",
+                checkpoint_reason="instruction_start",
+            ),
+        ),
     )
+    hydrator = MediaHydrator(base_dir=tmp_path)
     projector = HistoryProjector(
-        assembler=RequestAssembler(MediaHydrator(base_dir=tmp_path)),
+        assembler=RequestAssembler(hydrator),
         media_policy={
             "max_request_images": 20,
-            "keep_recent_visual_events": 3,
+            "max_tool_evidence_images": 4,
+            "keep_recent_observations": 3,
             "pin_instruction_start": True,
             "pin_current": True,
         },
@@ -492,8 +537,11 @@ def test_compressed_prefix_images_are_omitted_but_current_image_remains(tmp_path
     )
     rendered = json.dumps(result.messages, ensure_ascii=False)
 
-    assert result.audit["total_image_count"] == 1
-    assert rendered.count("data:image/png;base64,") == 1
+    assert result.audit["total_image_count"] == 2
+    assert rendered.count("data:image/png;base64,") == 2
+    assert "HISTORY EVIDENCE event_index=2 observation_id=obs_start" in rendered
+    assert hydrator.stats()["reads"] == 2
+    assert hydrator.stats()["encodes"] == 2
     capsule = next(
         message for message in result.messages if "HISTORY CAPSULE" in str(message)
     )
@@ -502,6 +550,99 @@ def test_compressed_prefix_images_are_omitted_but_current_image_remains(tmp_path
     assert '"through_event_index": 30' in capsule["content"]
     assert "open_work" not in capsule["content"]
     assert "CURRENT observation_id=obs_current" in rendered
+
+
+def test_only_capsule_cited_prefix_tool_evidence_is_hydrated(tmp_path):
+    start_ref = _image_ref(tmp_path, 1, "obs_start")
+    cited_ref = _image_ref(tmp_path, 2, "obs_tool_cited")
+    uncited_ref = _image_ref(tmp_path, 3, "obs_tool_uncited")
+    current_ref = _image_ref(tmp_path, 4, "obs_current")
+    current_fragment = ContextFragment(
+        "image", {}, (current_ref.to_model_input(),)
+    )
+    current = StateCheckpoint(
+        checkpoint_id="checkpoint_current",
+        reason="physical_window_completed",
+        observation_id="obs_current",
+        fragments=(current_fragment,),
+        fingerprint=checkpoint_fingerprint("obs_current", (current_fragment,)),
+    )
+    section = CompressedHistorySection(
+        generation=1,
+        through_event_index=30,
+        source_digest="digest",
+        summary=CompressionDraft(
+            decisions_and_outcomes=(
+                {
+                    "summary": "The cited tool result informed an earlier decision.",
+                    "evidence_refs": ["cited_call"],
+                },
+            )
+        ),
+        deterministic_facts={},
+        prefix_media=(
+            HistoryMediaEntry(
+                event_index=2,
+                evidence_ref="obs_start",
+                observation_id="obs_start",
+                frame_id=start_ref.frame_id,
+                media_ref=start_ref.to_dict(),
+                source_kind="observation",
+                checkpoint_reason="instruction_start",
+            ),
+            HistoryMediaEntry(
+                event_index=10,
+                evidence_ref="cited_call",
+                observation_id="obs_tool_cited",
+                frame_id=cited_ref.frame_id,
+                media_ref=cited_ref.to_dict(),
+                source_kind="tool_evidence",
+                tool_call_id="cited_call",
+            ),
+            HistoryMediaEntry(
+                event_index=11,
+                evidence_ref="uncited_call",
+                observation_id="obs_tool_uncited",
+                frame_id=uncited_ref.frame_id,
+                media_ref=uncited_ref.to_dict(),
+                source_kind="tool_evidence",
+                tool_call_id="uncited_call",
+            ),
+        ),
+    )
+    hydrator = MediaHydrator(base_dir=tmp_path)
+    projector = HistoryProjector(
+        assembler=RequestAssembler(hydrator),
+        media_policy={
+            "max_request_images": 20,
+            "max_tool_evidence_images": 4,
+            "keep_recent_observations": 3,
+            "pin_instruction_start": True,
+            "pin_current": True,
+        },
+    )
+
+    result = projector.project_compacted(
+        (
+            TranscriptEvent(
+                "instruction_envelope",
+                InstructionEnvelope("instruction", "", {}, {}, (), ()),
+            ),
+            TranscriptEvent("user_instruction", {"instruction": "inspect"}),
+        ),
+        (TranscriptEvent("state_checkpoint", current),),
+        section,
+        default_registry(),
+    )
+    rendered = json.dumps(result.messages, ensure_ascii=False)
+
+    assert result.audit["total_image_count"] == 3
+    assert result.audit["observation_image_count"] == 2
+    assert result.audit["tool_image_count"] == 1
+    assert "HISTORY TOOL EVIDENCE event_index=10 tool_call_id=cited_call" in rendered
+    assert "uncited_call" not in rendered
+    assert "obs_tool_uncited" not in rendered
+    assert hydrator.stats()["reads"] == 3
 
 
 def test_exact_knowledge_is_reinjected_outside_semantic_request(tmp_path):

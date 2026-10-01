@@ -369,6 +369,7 @@ class ContextWindowManager:
             base_generation=state.capsule_generation,
             deterministic_facts=plan.deterministic_facts,
             exact_loaded_knowledge=plan.exact_loaded_knowledge,
+            prefix_media=plan.prefix_media,
             estimated_input_tokens=estimate,
         )
 
@@ -391,6 +392,7 @@ class ContextWindowManager:
             summary=draft,
             deterministic_facts=candidate.deterministic_facts,
             exact_loaded_knowledge=candidate.exact_loaded_knowledge,
+            prefix_media=candidate.prefix_media,
         )
         state.section = section
         state.compacted_through_event_index = section.through_event_index
@@ -431,7 +433,8 @@ class ContextWindowManager:
             "target_generation": candidate.target_generation,
             "decision_window_count": len(candidate.request.windows),
             "estimated_input_tokens": candidate.estimated_input_tokens,
-            "image_count": 0,
+            "compactor_image_count": 0,
+            "indexed_prefix_media_count": len(candidate.prefix_media),
         }
 
     def _add_job_audit(
