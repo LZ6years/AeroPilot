@@ -57,7 +57,8 @@ def test_batch_observation_audit_does_not_count_terminal_refresh():
 def test_advisory_audit_checks_applied_revision_and_rejected_updates():
     from src.agent.planning.task_plan import TaskPlan
     args = {"explanation": "Reach endpoint", "steps": [
-        {"id": "go", "description": "Move to endpoint", "status": "in_progress"}]}
+        {"id": "go", "description": "Move to endpoint", "status": "in_progress",
+         "evidence_refs": []}]}
     plan = TaskPlan().updated(args).to_dict()
     records = [
         {"kind": "assistant_turn", "payload": {"tool_calls": [

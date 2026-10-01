@@ -16,6 +16,7 @@ PUBLIC_RUNTIME_EVENTS = frozenset(
         "model_turn_recorded",
         "task_control_recorded",
         "read_only_turn_recorded",
+        "plan_read_only_turn_recorded",
         "physical_window_recorded",
         "task_terminal",
         "instruction_failed",
@@ -70,6 +71,7 @@ class RuntimeJournal:
             "tool_turn_rejected",
             "task_control_recorded",
             "read_only_turn_recorded",
+            "plan_read_only_turn_recorded",
         }:
             raise ValueError(f"Unsupported turn event: {event}")
         self.event(event, payload)

@@ -2,9 +2,10 @@ Use only tools declared in this request. Their descriptions and schemas define
 purpose, applicability, required inputs, units, limits and result meaning. Supply
 only supported values; do not invent identifiers, defaults or measurements.
 
-Respect each tool's execution attributes. A turn contains one exclusive control
-call, one to three ordered physical calls, or independent `parallel_safe` reads;
-these groups do not mix. `after_batch_observation` arrives after the full physical
+Respect each tool's execution attributes. A turn contains one exclusive terminal
+control, one to three ordered physical calls, independent `parallel_safe` reads,
+or one plan update together with such reads. Physical and terminal groups never mix
+with other calls. `after_batch_observation` arrives after the full physical
 batch, never between its calls. Wait for a result before making a dependent call,
 and reuse an applicable read result for the same observation.
 

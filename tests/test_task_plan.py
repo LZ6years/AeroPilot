@@ -5,8 +5,14 @@ import pytest
 from src.agent.planning.task_plan import TaskPlan
 
 
-def step(id="one", status="pending", description="Reach the gate"):
-    return {"id": id, "description": description, "status": status}
+def step(id="one", status="pending", description="Reach the gate", evidence_refs=None):
+    refs = ["obs_1"] if status == "completed" and evidence_refs is None else (evidence_refs or [])
+    return {
+        "id": id,
+        "description": description,
+        "status": status,
+        "evidence_refs": refs,
+    }
 
 
 def test_plan_updates_are_isolated_and_do_not_complete_mission():
@@ -28,6 +34,8 @@ def test_plan_updates_are_isolated_and_do_not_complete_mission():
     [step(), step()],
     [step(status="in_progress"), step("two", "in_progress")],
     [step(status="invented")], [step(description=" ")],
+    [step(status="completed", evidence_refs=[])],
+    [step(evidence_refs=["obs_1", "obs_1"])],
     [{**step(), "extra": True}], ["not a step"],
 ])
 def test_invalid_steps_are_rejected(steps):

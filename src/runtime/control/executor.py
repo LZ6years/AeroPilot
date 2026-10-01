@@ -6,7 +6,11 @@ from __future__ import annotations
 from src.agent.transcript import AgentToolCall, ToolResult, TranscriptEvent
 from src.tools.registry import ToolRegistry
 from src.tools.validation import validate_tool_args
-from src.runtime.control.actions.task_plan import PlanState, apply_plan_update
+from src.runtime.control.actions.task_plan import (
+    PlanState,
+    apply_plan_update,
+    plan_evidence_refs,
+)
 from src.runtime.control.actions.terminal import (
     TerminalState, apply_terminal, environmental_evidence_refs,
 )
@@ -18,7 +22,7 @@ def execute_builtin_control(
     registry: ToolRegistry,
     history: tuple[TranscriptEvent, ...],
 ) -> ToolResult:
-    """Execute a validated exclusive control turn using the unique ToolRegistry.
+    """Execute one validated control call using the unique ToolRegistry.
 
     This function owns no tool definitions, model calls, observations or cleanup.
     Runtime persists its result and performs terminal hover/observation itself.
@@ -27,12 +31,20 @@ def execute_builtin_control(
     """
     try:
         spec = registry.get(call.tool_name)
+        expected_batching = (
+            "sidecar" if call.tool_name == "runtime.update_plan" else "single"
+        )
         if (spec.runtime.effect != "runtime_control" or not spec.runtime.model_exposed
-                or spec.runtime.batching != "single" or spec.runtime.result_timing != "immediate"):
+                or spec.runtime.batching != expected_batching
+                or spec.runtime.result_timing != "immediate"):
             raise ValueError("tool is not an exposed immediate control")
         validate_tool_args(call.args, spec.input_schema)
         if call.tool_name == "runtime.update_plan":
-            data = apply_plan_update(state, call.args)
+            data = apply_plan_update(
+                state,
+                call.args,
+                available_evidence=plan_evidence_refs(history, registry),
+            )
         elif call.tool_name in {"runtime.report_completed", "runtime.report_blocked"}:
             data = apply_terminal(
                 state, call.args, completed=call.tool_name == "runtime.report_completed",

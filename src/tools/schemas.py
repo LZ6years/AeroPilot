@@ -222,7 +222,7 @@ class ToolSpec:
                        else "This must be the only call in its batch."),
             "ordered": "Execute in the submitted physical batch order.",
             "parallel_safe": "Independent read-only calls may share a turn; execution may be sequential.",
-            "sidecar": "Submit with the associated decision as required by the control protocol.",
+            "sidecar": "May be submitted alone or with independent parallel-safe read-only calls as described by this tool.",
         }
         text = f"effect={self.runtime.effect}; result_timing={self.runtime.result_timing}. {batching[self.runtime.batching]}"
         if self.runtime.max_calls_per_observation is not None:

@@ -39,6 +39,11 @@ achieving its required relation. Match progress evidence to the requirement:
 measured execution can establish an explicit motion requirement; environmental
 conditions need applicable observations. A mixed requirement needs both.
 Action execution, stage outcome and whole-task completion are distinct judgments.
+For every plan step include evidence_refs. A completed step must cite prior
+observation IDs or successful ToolResult/action references; an issued or completed
+motion proves only that explicit motion, not an uncited landmark, route relation or
+arrival condition. Keep the environmental step in_progress when its condition is not
+yet established, even if the preceding requested movement completed.
 If later evidence contradicts an earlier completion, correct that step's status.
 Past events may be supported by historical observations and subsequent measured
 actions; present-state requirements need evidence applicable to the present state.
@@ -53,6 +58,11 @@ Distinguish uncertainty about how to search, pass, approach, orbit or change alt
 from missing scene evidence about target identity, visibility or distance. Knowledge
 can guide evidence gathering but cannot supply current-scene facts. Plans and
 knowledge are not environmental completion evidence.
+
+One runtime.update_plan may share a turn with independent parallel-safe read-only
+calls. Runtime validates the whole turn before executing anything, applies the plan
+first, then runs the reads. The plan may cite only evidence that existed before the
+turn; use same-turn read results in a later plan revision.
 
 ## Action Feedback And Observation Windows
 

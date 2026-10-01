@@ -105,7 +105,8 @@ def test_checkpoint_contains_only_dynamic_model_fields_and_separate_audit(tmp_pa
     state.task_plan = TaskPlan().updated(
         {
             "explanation": "inspect safely",
-            "steps": [{"id": "look", "description": "Look", "status": "in_progress"}],
+            "steps": [{"id": "look", "description": "Look", "status": "in_progress",
+                       "evidence_refs": []}],
         }
     )
     state.loaded_knowledge = [{"name": "guide", "version": "1"}]

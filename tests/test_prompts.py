@@ -148,6 +148,9 @@ def test_tool_user_is_generic_and_task_prompt_preserves_evidence_roles():
     assert "status `collision`" in prompt
     assert "recoverable environment outcome" in prompt
     assert "replan" in prompt
+    assert "For every plan step include evidence_refs" in prompt
+    assert "same-turn read results in a later plan revision" in prompt
+    assert "motion proves only that explicit motion" in prompt
     assert "required inputs" in tool_user and "execution attributes" in tool_user
     assert "one to three ordered physical" in tool_user
     for retired in ("commit_phase_turn", "phase_strategy", "completion_assessment", "done_when"):
@@ -169,6 +172,7 @@ def test_descriptions_keep_capability_boundaries_and_explicit_planning_preferenc
     assert "before the first physical action" in plan
     assert "simple single-step task can act directly" in plan
     assert "stable step IDs" in plan and "revision" in plan
+    assert "parallel-safe read-only" in plan
     assert "methods or explanations" in registry.get("knowledge.load").description
     assert "never call to discover, search for, or test the presence" in registry.get("skill.visual_grounding.measure_visible_depth").description.lower()
     assert "Plan status alone is not completion evidence" in registry.get("runtime.report_completed").description

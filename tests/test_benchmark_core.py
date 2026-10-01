@@ -133,7 +133,8 @@ def test_unified_review_displays_checkpoint_plan_without_future_backfill(tmp_pat
              "model_rounds": []}
     second = {**first, "decision_id": "d2", "decision_index": 2,
               "model_context": {"task_plan": {"revision": 1, "steps": [
-                  {"id": "a", "description": "Reach <gate>", "status": "in_progress"}]}}}
+                  {"id": "a", "description": "Reach <gate>", "status": "in_progress",
+                   "evidence_refs": []}]}}}
     audit = SimpleNamespace(planner_debug=[first, second], agent_transcript=[], events=[])
     rendered = _phase_decision_review(audit, (), tmp_path, {})
     first_card, second_card = rendered.split('id="decision-d2"')

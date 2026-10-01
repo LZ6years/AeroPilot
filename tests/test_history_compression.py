@@ -234,7 +234,12 @@ def _project(
     task_state = current_task_state or {
         "task_plan": {
             "revision": 4,
-            "steps": [{"id": "inspect", "status": "in_progress"}],
+            "steps": [{
+                "id": "inspect",
+                "description": "Inspect the route",
+                "status": "in_progress",
+                "evidence_refs": ["obs_0001"],
+            }],
         },
         "loaded_knowledge": [{"name": "flight", "version": "1"}],
     }
@@ -301,7 +306,12 @@ def test_prefetch_uses_all_eligible_windows_and_image_free_semantic_view(tmp_pat
     assert request.current_state_hint == {
         "task_plan": {
             "revision": 4,
-            "steps": [{"id": "inspect", "status": "in_progress"}],
+            "steps": [{
+                "id": "inspect",
+                "description": "Inspect the route",
+                "status": "in_progress",
+                "evidence_refs": ["obs_0001"],
+            }],
         },
         "loaded_knowledge": [{"name": "flight", "version": "1"}],
     }

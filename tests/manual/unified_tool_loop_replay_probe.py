@@ -48,7 +48,8 @@ def run_replay(output: Path, rgb: Path | None = None) -> dict:
     planner = ScriptedPlanner([
         [call("knowledge", "knowledge.load", name="offline_guide")],
         [call("plan", "runtime.update_plan", explanation="Scripted replay only", steps=[
-            {"id": "move", "description": "Exercise one ordered motion batch", "status": "in_progress"}])],
+            {"id": "move", "description": "Exercise one ordered motion batch", "status": "in_progress",
+             "evidence_refs": []}])],
         [move("move1"), move("move2")], [done()],
     ])
     plugins = PluginRegistry(skill_catalog=SkillCatalog([

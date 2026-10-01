@@ -235,8 +235,11 @@ There is one ToolRegistry for builtins, UAV tools and injected capabilities.
 Plugin discovery and registry composition happen only in `RuntimeFactory`.
 TaskRuntime.run_task accepts raw instructions and optional protocol_context.
 No parser, automatic skill selector, fixed Phase, commit or semantic updater runs.
-MissionState owns one optional plan with stable IDs and revisions. Plans are not
-environmental evidence and cannot automatically complete an instruction.
+MissionState owns one optional plan with stable IDs and revisions. Every plan step
+retains `evidence_refs`; completed steps require references that existed before the
+submitting turn. Runtime validates provenance, not whether the evidence semantically
+proves the step. Plans are not environmental evidence and cannot automatically
+complete an instruction.
 
 KnowledgeService snapshots enabled knowledge per instruction. knowledge.load
 returns full body and requested declared references incrementally as ToolResults.
@@ -248,8 +251,11 @@ register capabilities, or extend permissions. Invalid paths fail without mutatio
 build current state; Transcript retains full append-only intent/results. No
 transport, task semantics or history selection policy belongs in knowledge.
 
-Physical turns contain 1–3 ordered calls, read-only turns follow ToolSpec batching,
-and each control call is exclusive. Safety reviews actual arguments. Each physical
+Physical turns contain 1–3 ordered calls and read-only turns follow ToolSpec batching.
+Terminal controls are exclusive. One `runtime.update_plan` may share a turn with
+independent `parallel_safe` read-only calls: the whole turn is prevalidated, the plan
+uses only pre-turn evidence and commits first, and ToolResults retain submission order.
+Safety reviews actual arguments. Each physical
 batch has one automatic after observation; terminal refreshes are separate.
 The instruction limit is 300 physical windows, with 10 nonphysical rounds and
 6 consecutive protocol rejections by default. Plan changes cannot reset limits.

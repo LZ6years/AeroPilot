@@ -576,13 +576,21 @@ def _audit_transcript(
 
         read_calls = [(call, spec) for call, spec in specs if spec.runtime.effect == "read_only"]
         physical_calls = [(call, spec) for call, spec in specs if spec.runtime.effect == "physical"]
+        controls = [(call, spec) for call, spec in specs if spec.runtime.effect == "runtime_control"]
+        plan_read_mix = (
+            len(controls) == 1
+            and controls[0][0].get("tool_name") == "runtime.update_plan"
+            and not physical_calls
+            and len(read_calls) + 1 == len(specs)
+            and all(spec.runtime.batching == "parallel_safe" for _, spec in read_calls)
+        )
         if read_calls:
             coverage["read_only_turns"] += 1
-            if len(read_calls) != len(specs):
+            if len(read_calls) != len(specs) and not plan_read_mix:
                 violations.append(
                     Violation(
                         "read_only_turn_mixed",
-                        "read-only tools cannot be mixed with control or physical tools",
+                        "read-only tools may mix only with one plan update, never terminal or physical tools",
                         case_id,
                         transcript_id,
                     )
@@ -604,15 +612,36 @@ def _audit_transcript(
                 case_id,
                 transcript_id,
             )
-            continue
+            if not controls:
+                continue
 
-        controls = [(call, spec) for call, spec in specs if spec.runtime.effect == "runtime_control"]
         if controls:
             coverage["control_turns"] += 1
-            if len(controls) != 1 or len(turn_calls) != 1:
-                violations.append(Violation("control_turn_mixed", "control tools require an exclusive turn", case_id, transcript_id))
+            if len(controls) != 1 or (len(turn_calls) != 1 and not plan_read_mix):
+                violations.append(Violation("control_turn_mixed", "terminal controls are exclusive; plan updates may mix only with parallel-safe reads", case_id, transcript_id))
             for call, _ in controls:
                 name = call.get("tool_name")
+                if name == "runtime.update_plan":
+                    paired = results.get(_string(call.get("tool_call_id")), [])
+                    if len(paired) == 1 and paired[0][1].get("status") == "ok":
+                        known_refs = _prior_plan_evidence_refs(
+                            records, assistant_index, registry
+                        )
+                        for step in _dict_items(_object(call.get("args")).get("steps")):
+                            refs = step.get("evidence_refs")
+                            if (
+                                not isinstance(refs, list)
+                                or any(not isinstance(ref, str) or ref not in known_refs for ref in refs)
+                                or (step.get("status") == "completed" and not refs)
+                            ):
+                                violations.append(Violation(
+                                    "plan_evidence_invalid",
+                                    "plan evidence must exist before the turn and completed steps require it",
+                                    case_id,
+                                    transcript_id,
+                                    _string(call.get("tool_call_id")),
+                                ))
+                    continue
                 if name not in {"runtime.report_completed", "runtime.report_blocked"}:
                     continue
                 paired = results.get(_string(call.get("tool_call_id")), [])
@@ -1088,6 +1117,30 @@ def _prior_evidence_refs(records, assistant_index, registry) -> set[str]:
             if spec.runtime.effect not in {"physical", "read_only"} or spec.kind == "knowledge":
                 continue
             refs.add(payload["tool_call_id"])
+            if payload.get("result_ref"):
+                refs.add(payload["result_ref"])
+    return refs
+
+
+def _prior_plan_evidence_refs(records, assistant_index, registry) -> set[str]:
+    """Observations and successful environmental/read results before a plan turn."""
+
+    refs = set()
+    for item in records[:assistant_index]:
+        payload = _payload(item)
+        if item.get("kind") == "user_instruction":
+            refs.clear()
+        elif item.get("kind") == "state_checkpoint" and payload.get("observation_id"):
+            refs.add(payload["observation_id"])
+        elif item.get("kind") == "tool_result" and payload.get("status") in {"ok", "collision"}:
+            try:
+                spec = registry.get(payload.get("tool_name"))
+            except KeyError:
+                continue
+            if spec.runtime.effect not in {"physical", "read_only"}:
+                continue
+            if payload.get("tool_call_id"):
+                refs.add(payload["tool_call_id"])
             if payload.get("result_ref"):
                 refs.add(payload["result_ref"])
     return refs

@@ -40,6 +40,7 @@ from src.runtime.factory import RuntimeFactory
 from src.tools.builtins import builtin_tools
 from src.tools.dispatcher import ToolDispatcher
 from src.tools.registry import ToolRegistry, default_registry
+from src.tools.schemas import ToolRuntimePolicy, ToolSpec
 from src.uav import pose_measurements
 from src.uav.config import UavSafetyConfig
 from src.uav.motion import body_velocity_to_world_delta
@@ -197,8 +198,9 @@ def test_public_runtime_loads_knowledge_then_optional_plan_then_batch(tmp_path):
                   tmp_path / "SKILL.md", body="Use current evidence.")
     runtime, backend = public_runtime(tmp_path, [
         [call("read", "knowledge.load", name="guide")],
-        [call("plan", "runtime.update_plan", explanation="Reach endpoint", steps=[
-            {"id": "reach", "description": "Reach requested endpoint", "status": "in_progress"}])],
+            [call("plan", "runtime.update_plan", explanation="Reach endpoint", steps=[
+                {"id": "reach", "description": "Reach requested endpoint", "status": "in_progress",
+                 "evidence_refs": []}])],
         [move("m1"), move("m2")], [done()],
     ], plugins=PluginRegistry(skill_catalog=SkillCatalog([skill])))
     state = runtime.run_task("map", "Move four meters")
@@ -516,7 +518,8 @@ def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [
         [call("knowledge", "knowledge.load", name="guide")],
         [call("plan", "runtime.update_plan", explanation="Two short movements", steps=[
-            {"id": "go", "description": "Reach the endpoint", "status": "in_progress"}])],
+            {"id": "go", "description": "Reach the endpoint", "status": "in_progress",
+             "evidence_refs": []}])],
         [move("m1"), move("m2")], [done()],
     ])
     run_loop(runtime, state, scene)
@@ -577,6 +580,108 @@ def test_mixed_turn_rejected_before_any_action_then_corrected(tmp_path, workers)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
     assert [r.status for r in results] == ["rejected", "rejected", "ok", "ok"]
     assert len(backend.actions) == 1 and state.loaded_knowledge == []
+
+
+def test_plan_and_knowledge_share_turn_and_preserve_submission_order(tmp_path):
+    runtime, state, scene, backend = harness(tmp_path, [
+        [
+            call("knowledge", "knowledge.load", name="guide"),
+            call("plan", "runtime.update_plan", explanation="Use the guide", steps=[{
+                "id": "reach", "description": "Reach the endpoint",
+                "status": "in_progress", "evidence_refs": [],
+            }]),
+        ],
+        [done(observation="obs_0001")],
+    ])
+
+    run_loop(runtime, state, scene)
+
+    results = [
+        event.payload
+        for event in runtime.agent_transcript.items
+        if event.kind == "tool_result"
+    ]
+    assert [result.tool_call_id for result in results] == [
+        "knowledge", "plan", "done"
+    ]
+    assert state.task_plan.revision == 1
+    assert state.loaded_knowledge[0]["name"] == "guide"
+    assert any(
+        name == "plan_read_only_turn_recorded"
+        for name, _ in runtime.recorder.events
+    )
+
+
+def test_invalid_plan_rejects_same_turn_reads_before_execution(tmp_path):
+    runtime, state, scene, backend = harness(tmp_path, [
+        [
+            call("knowledge", "knowledge.load", name="guide"),
+            call("bad_plan", "runtime.update_plan", explanation="Claim future read", steps=[{
+                "id": "guide", "description": "Load the guide", "status": "completed",
+                "evidence_refs": ["knowledge"],
+            }]),
+        ],
+        [call("good_plan", "runtime.update_plan", explanation="Wait for evidence", steps=[{
+            "id": "guide", "description": "Load the guide", "status": "in_progress",
+            "evidence_refs": [],
+        }])],
+        [done(observation="obs_0001")],
+    ])
+
+    run_loop(runtime, state, scene)
+
+    results = [
+        event.payload
+        for event in runtime.agent_transcript.items
+        if event.kind == "tool_result"
+    ]
+    assert [result.status for result in results[:2]] == ["rejected", "rejected"]
+    assert state.loaded_knowledge == []
+    assert state.task_plan.revision == 1
+
+
+def test_partial_read_failure_does_not_rollback_mixed_turn_plan(tmp_path):
+    runtime, state, scene, backend = harness(tmp_path, [
+        [
+            call("read_ok", "test.read_ok"),
+            call("plan", "runtime.update_plan", explanation="Inspect", steps=[{
+                "id": "inspect", "description": "Inspect the route",
+                "status": "in_progress", "evidence_refs": [],
+            }]),
+            call("read_failed", "test.read_failed"),
+        ],
+        [done(observation="obs_0001")],
+    ])
+    for name in ("test.read_ok", "test.read_failed"):
+        runtime.tools.registry.register(ToolSpec.from_input_schema(
+            name,
+            name.replace(".", "_"),
+            "skill_capability",
+            "test read",
+            {},
+            ToolRuntimePolicy("read_only", "immediate", "parallel_safe", True),
+        ))
+
+    def read_call(_scene, _agent, tool, _args, **_kwargs):
+        return ActionResult(
+            ok=tool == "test.read_ok",
+            action=tool,
+            message="ok" if tool == "test.read_ok" else "read failed",
+        )
+
+    runtime.tools.call = read_call
+    run_loop(runtime, state, scene)
+
+    results = [
+        event.payload
+        for event in runtime.agent_transcript.items
+        if event.kind == "tool_result"
+    ]
+    assert [result.tool_call_id for result in results] == [
+        "read_ok", "plan", "read_failed", "done"
+    ]
+    assert [result.status for result in results[:3]] == ["ok", "ok", "error"]
+    assert state.task_plan.revision == 1
 
 
 def test_plan_changes_cannot_reset_nonphysical_guard(tmp_path):

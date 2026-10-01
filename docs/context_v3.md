@@ -18,6 +18,11 @@ warnings、artifact refs、metadata 与构建耗时位于独立 `FragmentAudit`�
 之前，并且既不写入 Transcript，也不复制到 checkpoint。历史压缩只能概括历史事件，
 不能修改这一份当前状态；完整知识正文继续由成功的 `knowledge.load` ToolResult 保存。
 
+`TaskPlanStep` 原生包含 `id`、`description`、`status` 和 `evidence_refs`。所有引用必须
+来自计划回合开始前已经存在的 observation 或成功 ToolResult/action ref，`completed`
+状态必须至少包含一项引用。动作调用成功只直接证明该动作的执行结果，不自动证明地标、
+路线关系或目标接近条件；这些语义判断仍由模型结合后续观察完成。
+
 `MediaRef` 只保存路径/引用、SHA、MIME、尺寸和 observation/frame ID。Runtime 持久化
 的 `ref` 固定为当前 run 目录下的 POSIX 相对路径，例如
 `artifacts/scene_x/rgb/frame_000001.png`；禁止绝对路径、`..` 和依赖进程工作目录的

@@ -116,7 +116,7 @@
       "type": "function",
       "function": {
         "name": "runtime_update_plan",
-        "description": "Create or revise a task plan using stable step IDs. For complex tasks, normally use this as the first call; a simple single-step task can act directly. Returns the saved plan and its revision. A plan records intended work and progress; it does not execute flight or provide environmental completion evidence.\nExecution: effect=runtime_control; result_timing=immediate. This must be the only call in its batch.",
+        "description": "Create or revise a task plan using stable step IDs. Use before the first physical action for multiple ordered subgoals, landmark-dependent actions or progress across observations; a simple single-step task can act directly. Update when evidence establishes progress or changes the approach, without rewriting unchanged plans. Returns the saved plan and its revision. A plan records intended work and progress; it does not execute flight or provide environmental completion evidence. It may share a turn only with independent parallel-safe read-only calls; the plan may cite only evidence from before that turn.\nExecution: effect=runtime_control; result_timing=immediate. May be submitted alone or with independent parallel-safe read-only calls as described by this tool.",
         "parameters": {
           "type": "object",
           "additionalProperties": false,

@@ -11,18 +11,22 @@ def planning_tool() -> ToolSpec:
                      "a simple single-step task can act directly. Update when evidence establishes progress or "
                      "changes the approach, without rewriting unchanged plans. Returns the saved plan "
                      "and its revision. A plan records intended work and progress; it does not execute flight "
-                     "or provide environmental completion evidence."),
-        runtime=ToolRuntimePolicy("runtime_control", "immediate", "single", True),
+                     "or provide environmental completion evidence. It may share a turn only with independent "
+                     "parallel-safe read-only calls; the plan may cite only evidence from before that turn."),
+        runtime=ToolRuntimePolicy("runtime_control", "immediate", "sidecar", True),
         parameters=(
             ToolParameter("explanation", "string", "Brief basis for the plan or change in progress or approach, using relevant observations and actual execution feedback.",
                           True, {"minLength": 1}),
             ToolParameter("steps", "array", "Ordered task steps with persistent identities.", True, {
                 "items": {"type": "object", "additionalProperties": False,
-                          "required": ["id", "description", "status"],
+                          "required": ["id", "description", "status", "evidence_refs"],
                           "properties": {
                               "id": {"type": "string", "minLength": 1, "description": "Stable step identifier."},
                               "description": {"type": "string", "minLength": 1, "description": "User-required outcome with its order and conditions. An explicit action may be a step without an invented landmark. Keep unseen facts unconfirmed; specify motion parameters only when instructed or supported by evidence."},
                               "status": {"type": "string", "description": "Match evidence to the requirement: actual motion for explicit actions, applicable observations for environmental relations, both for mixed requirements. Issuing a call alone is insufficient. Revise completion contradicted by later evidence.",
-                                         "enum": ["pending", "in_progress", "completed", "cancelled"]}}}}),
+                                         "enum": ["pending", "in_progress", "completed", "cancelled"]},
+                              "evidence_refs": {"type": "array", "description": "Prior observation IDs or successful ToolResult/action references supporting this step. Required and non-empty when status is completed; use an empty array when no evidence is claimed.",
+                                                "items": {"type": "string", "minLength": 1},
+                                                "uniqueItems": True}}}}),
         ),
     )

@@ -12,6 +12,7 @@ TurnKind = Literal[
     "protocol_rejected",
     "runtime_control",
     "read_only",
+    "plan_read_only",
     "physical",
 ]
 

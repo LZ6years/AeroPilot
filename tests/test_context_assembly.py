@@ -130,7 +130,8 @@ def test_runtime_only_copies_validated_control_prefix(tmp_path, monkeypatch, ter
         [move("mixed"), call("mixed_plan", "runtime.update_plan", steps=[])],
         [call("read", "knowledge.load", name="missing")],
         [call("plan", "runtime.update_plan", explanation="Inspect", steps=[
-            {"id": "inspect", "description": "Inspect", "status": "in_progress"}])],
+            {"id": "inspect", "description": "Inspect", "status": "in_progress",
+             "evidence_refs": []}])],
         [move("move")],
         [call("terminal", f"runtime.report_{terminal}", reason="Observed", evidence_refs=["obs_0002"],
               **({"blocking_condition": "insufficient_evidence"} if terminal == "blocked" else {}))],

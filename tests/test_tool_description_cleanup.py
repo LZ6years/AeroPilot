@@ -33,6 +33,15 @@ def test_description_cleanup_preserves_contracts_except_retired_completion_gate(
             tool["schema"].pop("x-flyagent-completion-evidence", None)
             tool["schema"]["properties"].pop("include_distance")
             tool["schema"]["required"].remove("include_distance")
+        if tool["name"] == "runtime.update_plan":
+            tool["runtime"]["batching"] = "sidecar"
+            step_schema = tool["schema"]["properties"]["steps"]["items"]
+            step_schema["required"].append("evidence_refs")
+            step_schema["properties"]["evidence_refs"] = {
+                "type": "array",
+                "items": {"type": "string", "minLength": 1},
+                "uniqueItems": True,
+            }
     assert probe.structural_contracts(current) == probe.structural_contracts(baseline)
     assert sum(tool["runtime"]["model_exposed"] for tool in current) == 7
     for before, after in zip(baseline, current):
@@ -65,7 +74,8 @@ def test_provider_prose_removes_repeated_global_rules_but_keeps_local_policies()
     assert "At most 2 calls per observation" in grounding
     assert "Call only when the image itself supplies direct evidence" in grounding
     user = Path("src/agent/planning/prompts/tool_user_system.txt").read_text(encoding="utf-8")
-    assert "these groups do not mix" in user
+    assert "Physical and terminal groups never mix" in user
+    assert "one plan update together with such reads" in user
     assert "reuse an applicable read result" in user
 
 

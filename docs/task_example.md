@@ -13,6 +13,8 @@
 8. 模型调用 `runtime.report_completed` 并引用当前 observation 证据。
 9. Runtime 采集终态证据，发布 `task_terminal`，执行 shutdown 与 cleanup。
 
-只读工具可在任意非物理回合运行。`knowledge.load` 与 `runtime.update_plan` 的结果只
-进入 Transcript；其最新状态在下一请求的 `CURRENT TASK STATE` 中统一体现，不产生
-额外 observation checkpoint。
+只读工具可在任意非物理回合运行。一个 `runtime.update_plan` 可以和若干独立的
+`parallel_safe` 只读调用同回合提交，但计划只能引用回合开始前的证据；同回合新得到的
+只读结果要到下一次计划修订才能引用。计划先提交、只读调用后执行，ToolResult 仍按模型
+提交顺序进入 Transcript。二者的最新状态在下一请求的 `CURRENT TASK STATE` 中统一
+体现，不产生额外 observation checkpoint。

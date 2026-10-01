@@ -12,7 +12,10 @@ from src.memory.context.contracts import (
     StateCheckpoint,
     checkpoint_fingerprint,
 )
-from src.runtime.control.actions.task_plan import apply_plan_update
+from src.runtime.control.actions.task_plan import (
+    apply_plan_update,
+    plan_evidence_refs,
+)
 from src.runtime.control.actions.terminal import apply_terminal, environmental_evidence_refs
 from src.runtime.control.executor import execute_builtin_control
 from src.tools.registry import ToolRegistry
@@ -47,11 +50,11 @@ def test_builtin_declarations_have_explicit_policies():
         assert spec.runtime.result_timing == "immediate"
         assert spec.wire_name == spec.name.replace(".", "_")
         assert "commit" not in spec.to_provider_tool()["function"]["description"]
-        if spec.runtime.effect == "runtime_control":
+        if spec.runtime.effect == "runtime_control" and spec.name != "runtime.update_plan":
             assert "only call" in spec.to_provider_tool()["function"]["description"]
     assert specs["knowledge.load"].runtime.effect == "read_only"
     assert specs["knowledge.load"].runtime.batching == "parallel_safe"
-    assert specs["runtime.update_plan"].runtime.batching == "single"
+    assert specs["runtime.update_plan"].runtime.batching == "sidecar"
 
 
 def test_minimal_tool_arguments_and_terminal_evidence():
@@ -86,8 +89,9 @@ def test_plan_and_knowledge_descriptions_explain_selection_without_new_parameter
 def test_plan_application_does_not_reset_windows_or_complete_task():
     mission = state()
     payload = {"explanation": "Observed the endpoint", "steps": [
-        {"id": "go", "description": "Reach the endpoint", "status": "completed"}]}
-    result = apply_plan_update(mission, payload)
+        {"id": "go", "description": "Reach the endpoint", "status": "completed",
+         "evidence_refs": ["obs1"]}]}
+    result = apply_plan_update(mission, payload, available_evidence=frozenset({"obs1"}))
     assert mission.task_plan.revision == 1
     assert mission.window_count == 7
     assert not mission.completed
@@ -97,6 +101,16 @@ def test_plan_application_does_not_reset_windows_or_complete_task():
     before = mission.task_plan
     with pytest.raises(ValueError, match="disappear"):
         apply_plan_update(mission, {"explanation": "forget", "steps": []})
+    assert mission.task_plan is before
+
+    invalid = {"explanation": "unsupported completion", "steps": [{
+        "id": "go", "description": "Reach the endpoint", "status": "completed",
+        "evidence_refs": ["future_result"],
+    }]}
+    with pytest.raises(ValueError, match="before this turn"):
+        apply_plan_update(
+            mission, invalid, available_evidence=frozenset({"obs1"})
+        )
     assert mission.task_plan is before
 
 
@@ -156,6 +170,24 @@ def test_evidence_requires_returned_environment_result_not_intent_or_knowledge()
     assert environmental_evidence_refs(events, registry) == {"obs1", "seen", "sensor_ref"}
     events.append(TranscriptEvent("user_instruction", {"instruction": "new task"}))
     assert environmental_evidence_refs(events, registry) == set()
+
+
+def test_plan_evidence_accepts_prior_successful_results_but_not_failed_or_control():
+    registry = ToolRegistry()
+    for spec in builtin_tools():
+        registry.register(spec)
+    registry.register(ToolSpec.from_input_schema(
+        "sensor", "sensor", "skill_capability", "", {},
+        ToolRuntimePolicy("read_only", "immediate", "parallel_safe", True),
+    ))
+    events = (
+        TranscriptEvent("user_instruction", {"instruction": "go"}),
+        TranscriptEvent("state_checkpoint", checkpoint("obs1")),
+        TranscriptEvent("tool_result", ToolResult("read", "sensor", "ok", result_ref="action_read")),
+        TranscriptEvent("tool_result", ToolResult("failed", "sensor", "error", result_ref="bad")),
+        TranscriptEvent("tool_result", ToolResult("plan", "runtime.update_plan", "ok")),
+    )
+    assert plan_evidence_refs(events, registry) == {"obs1", "read", "action_read"}
 
 
 @pytest.fixture
@@ -222,6 +254,44 @@ def test_control_and_physical_turns_are_separate(loop_registry):
         assert failure.value.diagnostic == {"code": code, "scope": "turn"}
 
 
+def test_plan_may_share_turn_with_parallel_safe_reads_in_any_submission_order(loop_registry):
+    plan = AgentToolCall("plan", "runtime.update_plan", {"explanation": "inspect", "steps": []})
+    reads = [
+        AgentToolCall("read1", "sensor", {"value": 1}),
+        AgentToolCall("read2", "sensor", {"value": 2}),
+    ]
+    assert validate_calls(loop_registry, [plan, *reads]) == "plan_read_only"
+    assert validate_calls(loop_registry, [reads[0], plan, reads[1]]) == "plan_read_only"
+
+    complete = AgentToolCall(
+        "done", "runtime.report_completed", {"reason": "done", "evidence_refs": ["obs1"]}
+    )
+    with pytest.raises(NativeTurnValidationError) as failure:
+        validate_calls(loop_registry, [complete, reads[0]])
+    assert failure.value.diagnostic["code"] == "control_not_exclusive"
+
+
+def test_plan_and_visible_depth_contract_validate_together():
+    from src.plugins import PluginRegistry
+    from src.tools.registry import default_registry
+
+    registry = default_registry(PluginRegistry.from_config())
+    turn = AssistantTurn("turn", "measure", [
+        AgentToolCall("plan", "runtime.update_plan", {"explanation": "measure first", "steps": []}),
+        AgentToolCall(
+            "depth",
+            "skill.visual_grounding.measure_visible_depth",
+            {"observation_id": "obs1", "query": "visible red roof"},
+        ),
+    ])
+    assert validate_native_turn(
+        turn,
+        registry,
+        allowed_names=set(registry.names()),
+        latest_observation={"observation_id": "obs1"},
+    ) == "plan_read_only"
+
+
 def test_schema_error_attributes_the_actual_bad_call(loop_registry):
     calls = [AgentToolCall("good", "motion", {"value": 1}),
              AgentToolCall("bad", "motion", {"value": "one"})]
@@ -244,7 +314,8 @@ def test_control_executor_uses_registry_and_closes_invalid_request(loop_registry
     mission = state()
     result = execute_builtin_control(AgentToolCall("plan1", "runtime.update_plan", {
         "explanation": "Short route", "steps": [
-            {"id": "go", "description": "Reach the gate", "status": "in_progress"}],
+            {"id": "go", "description": "Reach the gate", "status": "in_progress",
+             "evidence_refs": []}],
     }), mission, loop_registry, ())
     assert result.status == "ok" and result.data["plan"]["revision"] == 1
     rejected = execute_builtin_control(AgentToolCall("plan2", "runtime.update_plan", {

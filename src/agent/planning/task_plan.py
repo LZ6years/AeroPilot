@@ -18,19 +18,45 @@ class TaskPlanStep:
     id: str
     description: str
     status: str
+    evidence_refs: tuple[str, ...] = ()
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "TaskPlanStep":
-        if not isinstance(value, dict) or set(value) != {"id", "description", "status"}:
-            raise ValueError("plan step requires only id, description and status")
-        if any(not isinstance(value[key], str) or not value[key].strip() for key in value):
+        required = {"id", "description", "status", "evidence_refs"}
+        if not isinstance(value, dict) or set(value) != required:
+            raise ValueError(
+                "plan step requires only id, description, status and evidence_refs"
+            )
+        if any(
+            not isinstance(value[key], str) or not value[key].strip()
+            for key in ("id", "description", "status")
+        ):
             raise ValueError("plan step fields must be non-empty strings")
         if value["status"] not in PLAN_STATUSES:
             raise ValueError("unsupported plan step status")
-        return cls(value["id"].strip(), value["description"].strip(), value["status"])
+        refs = value["evidence_refs"]
+        if (
+            not isinstance(refs, list)
+            or any(not isinstance(ref, str) or not ref.strip() for ref in refs)
+            or len(set(refs)) != len(refs)
+        ):
+            raise ValueError("plan step evidence_refs must be unique non-empty strings")
+        if value["status"] == "completed" and not refs:
+            raise ValueError("completed plan steps require prior evidence_refs")
+        return cls(
+            value["id"].strip(),
+            value["description"].strip(),
+            value["status"],
+            tuple(ref.strip() for ref in refs),
+        )
 
-    def to_dict(self) -> dict[str, str]:
-        return {"id": self.id, "description": self.description, "status": self.status}
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "description": self.description,
+            "status": self.status,
+            "evidence_refs": list(self.evidence_refs),
+        }
 
 
 @dataclass(frozen=True)

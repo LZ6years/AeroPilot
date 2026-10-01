@@ -203,6 +203,8 @@ def test_tool_selection_prompt_and_descriptions_do_not_force_a_control_call(tmp_
     assert "before the first physical action" in registry.get("runtime.update_plan").description
     system_text = "\n".join(message["content"] for message in request["messages"] if message["role"] == "system")
     assert "call runtime.update_plan before the first" in system_text
+    assert "completed step must cite prior" in system_text
+    assert "same-turn read results in a later plan revision" in system_text
     assert "uav_hover" not in {tool["function"]["name"] for tool in request["tools"]}
 
 
@@ -226,7 +228,8 @@ def test_request_allowlist_cannot_expose_hover_and_includes_generic_prompts(tmp_
 def test_plan_descriptions_and_updated_prompt_reach_provider_unchanged(tmp_path, stages):
     from src.tools.validation import validate_tool_args
 
-    steps = [{"id": str(i), "description": description, "status": "in_progress" if i == 0 else "pending"}
+    steps = [{"id": str(i), "description": description,
+              "status": "in_progress" if i == 0 else "pending", "evidence_refs": []}
              for i, description in enumerate(stages)]
     args = {"explanation": "Current evidence", "steps": steps}
     planner = StubPlanner(response_with_calls(
