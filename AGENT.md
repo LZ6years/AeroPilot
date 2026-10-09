@@ -28,6 +28,10 @@ instructions; do not copy them into the UAV agent's model-facing memory/prompts.
   Runtime/report callers own persistence. No hidden provider reasoning enters
   audit snapshots. The legacy Agent HTTP implementation has been removed;
   all production model callers use the shared client/injection contract.
+  ProviderConfig selects the wire API explicitly. The shared LLM boundary may
+  translate canonical Chat-style messages and tools to the Responses API and
+  normalize its output, while Transcript, Planner and Runtime retain one
+  ToolCall contract. Never infer this protocol from a model name or URL.
 
 - `src/memory/context/modules/` builds compact model-facing context from
   runtime memory. It owns field names, compression, role labels, and the split
@@ -44,12 +48,13 @@ instructions; do not copy them into the UAV agent's model-facing memory/prompts.
 - `agent_tool_loop_system.txt` owns task goals, observation interpretation and
   the feedback loop. `tool_user_system.txt` explains only generic call grouping
   and result semantics without duplicating JSON Schema or permanent examples.
-  Tool descriptions own applicability and exact argument semantics; complex tasks
-  should normally start with a plan, while simple tasks may act directly.
+  Tool descriptions own applicability and exact argument semantics. Plans are
+  optional state for retaining ordered outcomes and constraints; tasks may act
+  directly when a plan would not improve continuity.
 - Model-visible descriptions follow purpose, applicable need, returned content,
   and capability limits. Parameter prose explains meaning, units and effects,
-  not tool-selection priority. The complex-task planning preference is explicit;
-  other descriptions must not introduce an unrelated first/last-resort ordering.
+  not tool-selection priority. Descriptions must not introduce an unrelated
+  first/last-resort ordering.
   Shared call rules belong in ToolUser; per-tool execution attributes come from
   ToolRuntimePolicy. Knowledge explains evidence and flight methods without
   prescribing hidden actions or duplicating a capability's selection policy.
@@ -168,9 +173,10 @@ observations, ordinary calls/results, and rejected-turn ToolCall IDs. The
 Compactor sees only those aliases under a request-specific response schema;
 validation restores canonical references before a Capsule is committed. Alias
 identities never enter the Transcript or the committed Capsule.
-Its dedicated provider client disables hidden thinking for direct structured
-compression and uses the configured 300-second timeout without timeout retries;
-the ordinary Planner provider policy is unchanged.
+Its dedicated provider client uses the explicitly configured lowest supported
+reasoning mode for direct structured compression (or disables legacy thinking
+when that dialect supports it) and uses the configured 300-second timeout
+without timeout retries; the ordinary Planner provider policy is unchanged.
 Transcript snapshots are deep-copy isolated. Context modules may provide pure
 history-image selectors through the base interface: candidates contain only
 observation IDs, order and frame IDs. The Image module owns `recency_log`;

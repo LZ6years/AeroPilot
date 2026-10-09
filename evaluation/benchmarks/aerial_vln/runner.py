@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 import shutil
@@ -203,6 +203,15 @@ class AerialVlnBenchmarkRunner:
                 self.config.limit_per_difficulty
             ),
         )
+        if self.config.episode_ids is not None:
+            by_id = {case.episode_id: case for case in cases}
+            missing = set(self.config.episode_ids) - by_id.keys()
+            if missing:
+                raise ValueError(f"episode_ids unavailable after split classification: {sorted(missing)}")
+            cases = [by_id[key] for key in self.config.episode_ids]
+            selection = replace(selection, selected_assignments=tuple(
+                selection.assignment_by_episode[key] for key in self.config.episode_ids
+            ))
         if not cases:
             raise ValueError(
                 "AerialVLN difficulty selection produced no cases"
@@ -336,7 +345,7 @@ class AerialVlnBenchmarkRunner:
         }
         _write_json(eval_dir / "manifest.json", manifest)
         review_paths: dict[str, str] = {}
-        if self.config.generate_html_review:
+        if self.config.generate_html_review and self.config.report_profile == "audit":
             review_paths = BenchmarkReviewRenderer().write(
                 eval_dir,
                 BenchmarkSummaryReview(
@@ -443,7 +452,7 @@ class AerialVlnBenchmarkRunner:
         run_dir = RunStore(self.config.run_root).create_run_dir(
             f"aerial_vln_{case.episode_id}"
         )
-        recorder = AsyncRunLogger(run_dir)
+        recorder = AsyncRunLogger(run_dir, capture_provider_debug=self.config.report_profile == "audit")
         execution = None
         setup_error = None
         stmr_module: StmrMapContextModule | None = None
@@ -494,10 +503,13 @@ class AerialVlnBenchmarkRunner:
             else EpisodeAuditCursor.freeze(run_dir)
         )
         audit = BenchmarkAuditReader().read(audit_cursor)
-        frame_assets = FrameAssetResolver().materialize(audit, case_dir)
-        audit_path = write_audit_json(
-            case_dir / "audit.json", audit, frame_assets
-        )
+        if self.config.report_profile == "audit":
+            frame_assets = FrameAssetResolver().materialize(audit, case_dir)
+            audit_path = write_audit_json(case_dir / "audit.json", audit, frame_assets)
+        else:
+            frame_assets = ()
+            _write_json(case_dir / "audit_cursor.json", audit_cursor.to_dict())
+            audit_path = str(case_dir / "audit_cursor.json")
 
         if execution is None:
             outcome = {
@@ -541,7 +553,7 @@ class AerialVlnBenchmarkRunner:
                 "uav_action_steps", trace["action_count"]
             ),
         }
-        if infrastructure_error and (outcome.get("error") or {}).get("error_type") == "SceneRecoveryRequired":
+        if infrastructure_error:
             metrics = {key: value for key, value in metrics.items()
                        if key in {"trajectory_ned", "reference_path_ned", "uav_action_steps"}}
             outcome["final_score_available"] = False
@@ -587,6 +599,14 @@ class AerialVlnBenchmarkRunner:
         _write_json(case_dir / "trajectory.json", trajectory)
         _write_json(case_dir / "trace.json", trace)
         _write_json(case_dir / "metrics.json", metrics)
+        if self.config.report_profile != "audit" and self.config.generate_html_review:
+            from evaluation.benchmarks.core.process_review import write_process_review
+            try:
+                case_result["report"] = write_process_review(case_dir, case_result, case.instruction,
+                                                             profile=self.config.report_profile)
+            except Exception as exc:
+                case_result["report_error"] = {"error_type": type(exc).__name__, "error": str(exc)}
+            _write_json(case_dir / "case_result.json", case_result)
         _write_json(case_dir / "stmr_summary.json", stmr_summary)
         _write_json(
             case_dir / "manifest.json",
@@ -1003,7 +1023,7 @@ class AerialVlnBenchmarkRunner:
         missing = []
         if not self.config.save_artifacts:
             missing.append("save_artifacts=true")
-        if not self.config.enable_action_planner_debug:
+        if self.config.report_profile == "audit" and not self.config.enable_action_planner_debug:
             missing.append("enable_action_planner_debug=true")
         if missing:
             raise ValueError(
@@ -1283,6 +1303,7 @@ def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
         item["metrics"]
         for item in results
         if isinstance(item.get("metrics"), dict) and item["metrics"]
+        and item.get("final_score_available", not bool(item.get("infrastructure_error")))
     ]
     keys = (
         "distance_to_goal",

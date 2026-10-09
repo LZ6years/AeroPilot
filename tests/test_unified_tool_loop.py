@@ -193,6 +193,44 @@ def test_public_constructor_raw_instruction_and_terminal_lifecycle(tmp_path):
     assert len(terminal) == 1
 
 
+@pytest.mark.parametrize("failures", [2, 7])
+def test_tls_stream_recovery_keeps_current_decision_and_executes_move_once(tmp_path, failures):
+    import ssl
+    from src.agent.planning.model_action_planner import ModelActionPlanner
+    from src.llm import DefaultModelClient
+    from tests.test_provider_http import _FakeSdk, _RawResponse, _Clock
+
+    runtime, backend = public_runtime(tmp_path, [])
+    config = ModelConfig(model_name="offline", api_key="test-only", stream=True, provider_connection_retries=8)
+    sdk = _FakeSdk()
+    clock = _Clock()
+    wire_move = runtime.tools.registry.get("uav.move_body").wire_name
+    wire_done = runtime.tools.registry.get("runtime.report_completed").wire_name
+    partial = b'data: {"choices":[{"index":0,"delta":{"content":"discard this failed fragment"},"finish_reason":null}]}\n\n'
+    def complete(identity, name, args):
+        chunk = {"choices": [{"index": 0, "delta": {"content": "Act from current evidence", "tool_calls": [
+            {"index": 0, "id": identity, "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]},
+            "finish_reason": "tool_calls"}]}
+        return _RawResponse([("data: " + json.dumps(chunk) + "\n\n").encode()])
+    sequence = iter([*[_RawResponse([partial], error=ssl.SSLEOFError("TLS EOF")) for _ in range(failures)],
+                     complete("move_once", wire_move, {"vx": 1, "vy": 0, "vz": 0, "duration": 2}),
+                     complete("done", wire_done, {"reason": "At endpoint", "evidence_refs": ["obs_0002"]})])
+    sdk.chat.completions.with_streaming_response.create = lambda **kwargs: next(sequence)
+    client = DefaultModelClient(config.to_provider_settings(), sdk_client=sdk, clock=clock.time, sleep=clock.sleep)
+    runtime.planner = ModelActionPlanner(config, client=client)
+    runtime._task_loop.planner = runtime.planner
+    state = runtime.run_task("map", "Move two meters")
+    assert state.completed and state.physical_window_count == 1
+    assert len([action for action, _ in backend.actions if action == "move_body"]) == 1
+    records = persisted_transcript(tmp_path)
+    turns = [event for event in records if event["kind"] == "assistant_turn"]
+    assert len(turns) == 2
+    assert "discard this failed fragment" not in json.dumps(records)
+    assert not any(event["kind"] == "provider_turn_rejected" for event in records)
+    traces = [payload for name, payload in runtime.recorder.events if name == "model_turn_recorded"]
+    assert len(traces) == 2
+
+
 def test_public_runtime_loads_knowledge_then_optional_plan_then_batch(tmp_path):
     skill = Skill("knowledge.test", "guide", "Guide", "summary", tmp_path,
                   tmp_path / "SKILL.md", body="Use current evidence.")
@@ -698,7 +736,7 @@ def test_plan_changes_cannot_reset_nonphysical_guard(tmp_path):
 def test_failed_first_physical_call_closes_remaining_as_skipped(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [
         [move("failed"), move("skipped")],
-        [call("blocked", "runtime.report_blocked", blocking_condition="unsafe_to_continue",
+        [call("blocked", "runtime.report_blocked",
               reason="Motion unavailable", evidence_refs=["obs_0002"])],
     ])
     backend.fail_move = True

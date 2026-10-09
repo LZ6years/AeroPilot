@@ -3,6 +3,7 @@
 ## Current
 
 - [架构](architecture.md)：生产依赖方向、Runtime 服务链和状态所有权。
+- [飞行工作台](operator_workbench.md)：React UI、Python API、CityEnviron 连接与 V3 回放。
 - [Context V3](context_v3.md)：Envelope、感知 Checkpoint、当前任务状态、Projection、MediaRef。
 - [插件系统](plugin_system.md)：发现、贡献与 Factory 注入边界。
 - [目录结构](directory_structure.md)：当前源码目录及职责。

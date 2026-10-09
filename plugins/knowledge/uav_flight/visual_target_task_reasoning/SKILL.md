@@ -13,26 +13,24 @@ bearing; inspection needs detail. Alignment does not establish passage or arriva
 
 ## Evidence Model
 
-Distinguish no candidate currently observed, an uncertain candidate, a directional
-cue and an identifiable target. Non-observation does not establish absence. Identify what
-would separate competing identities; detector confidence does not settle identity.
-Discover and identify candidates from CURRENT RGB. Surface depth only measures an
-already-visible candidate. Current bearing supports alignment. Metric claims need
-matching geometry.
+Distinguish a candidate outside the current view, a tentative candidate, a directional
+cue and an identifiable target. Choose viewpoints that separate competing identities.
+Discover and identify candidates from CURRENT RGB; surface depth measures a selected
+visible candidate. Current bearing supports alignment, and metric claims use matching
+geometry.
 
 ## Decision Procedure
 
-1. Choose an observation that supplies missing information. A search direction
-   guarantees neither visibility nor range; safe translation may reveal what
-   stationary turning cannot. See [search guidance](references/search_under_uncertainty.md).
-2. Maintain useful search continuity while revealing new area. An explicit direction
-   anchored to the starting heading remains the primary search corridor after the
-   initial turn; prefer progress and bounded local inspection near that corridor over
-   repeatedly sweeping away from it. Reconsider direction only when stronger scene
-   evidence changes the plausible region or motion adds no useful information.
+1. Choose a viewpoint that expands useful coverage. Turning changes bearing;
+   translation, ascent or lateral movement can reveal areas hidden from a stationary
+   view. See [search guidance](references/search_under_uncertainty.md).
+2. Interpret directional cues in their stated reference frame. A direction anchored
+   to the starting heading remains tied to that frame rather than the current heading,
+   but does not prescribe a later motion sequence. Choose the next viewpoint from
+   current coverage, scene cues and accumulated measured motion.
 3. Investigate when a new view can resolve identity. Approach, shift, clear an
-   occlusion or turn according to the missing evidence. Inspection does not accept
-   identity or prove arrival.
+   occlusion or turn according to the viewpoint needed. Inspection and arrival remain
+   separate outcomes.
 4. For facing, correct when clipping, imminent loss or ambiguity prevents usable
    bearing. Do not correct merely for lateral offset or alternate around an already
    usable bearing. Preserve explicit angles; otherwise scale turns to visual purpose.
@@ -47,6 +45,5 @@ movement relation independently.
 ## Recovery
 
 Contradicted attributes can exclude a candidate and reopen search. If no detail
-appears, check actual motion, viewpoint and occlusion before changing strategy.
-Temporary occlusion need not invalidate identity. Do not repeat an unproductive
-pattern indefinitely.
+appears, compare actual motion, viewpoint and occlusion, then choose a pattern that
+adds different coverage. Temporary occlusion need not invalidate identity.

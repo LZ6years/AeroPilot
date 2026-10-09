@@ -17,7 +17,7 @@ from plugins.research.flight_experience.contracts import obj,STRING,STRINGS,CHAN
 from plugins.research.flight_experience import read_run,run_experiment,ExperimentSettings
 from plugins.research.flight_experience.store import Store,dumps,digest
 from plugins.research.flight_experience.maintenance import validate_change
-from src.llm import DefaultModelClient
+from src.llm import create_model_client
 from src.agent.config import load_model_config
 
 
@@ -34,8 +34,8 @@ def main():
     bundle=read_run(Path(original['source']))
     model=load_model_config(ROOT/'.env')
     settings=replace(model.to_provider_settings(),model_name='qwen3.8-flash',timeout_sec=180,provider_timeout_retries=1)
-    reflection,reviewer=DefaultModelClient(settings),DefaultModelClient(settings)
-    parameters={'thinking':{'type':model.thinking_mode}} if model.thinking_mode else {}
+    reflection,reviewer=create_model_client(settings),create_model_client(settings)
+    parameters=model.thinking_parameters()
     if args.mode=='capability':
         if (output/'capability.json').exists():
             raise ValueError('Capability report already exists')

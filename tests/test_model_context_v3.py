@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
+from src.agent.config import ModelConfig
 from src.agent.context.media import MediaHydrationError, MediaHydrator
 from src.agent.context.projection import HistoryProjector
 from src.agent.context.request_assembler import RequestAssembler
@@ -75,6 +76,37 @@ class CountingBuilder:
             ),
             (),
         )
+
+
+def test_runtime_factory_persists_effective_redacted_model_config(tmp_path):
+    from src.plugins import PluginRegistry
+    from src.runtime.factory import RuntimeFactory
+
+    recorder = Recorder(tmp_path)
+    model_config = ModelConfig(
+        model_name="test-model",
+        api_key="secret-key",
+        output_language="zh",
+    )
+
+    RuntimeFactory(plugin_registry=PluginRegistry()).create_task_runtime(
+        object(),
+        recorder,
+        planner=object(),
+        model_config=model_config,
+        context_builder=CountingBuilder(),
+    )
+
+    artifact = json.loads(
+        (tmp_path / "config/effective_model_config.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert artifact["schema_version"] == "effective_model_config_v1"
+    assert artifact["model_config"]["output_language"] == "zh"
+    assert artifact["model_config"]["model_name"] == "test-model"
+    assert artifact["model_config"]["has_api_key"] is True
+    assert "secret-key" not in json.dumps(artifact)
 
 
 class State:

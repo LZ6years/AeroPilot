@@ -13,9 +13,10 @@ from typing import Any, Callable
 class AsyncRunLogger:
     """Small async file logger for one FlyAgent run directory."""
 
-    def __init__(self, run_dir: str | Path) -> None:
+    def __init__(self, run_dir: str | Path, *, capture_provider_debug: bool = True) -> None:
         # Prepare output paths and start one writer thread for this run.
         self.run_dir = Path(run_dir)
+        self.capture_provider_debug = capture_provider_debug
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.events_path = self.run_dir / "events.jsonl"
         self.debug_events_path = self.run_dir / "debug" / "debug_events.jsonl"
@@ -39,7 +40,7 @@ class AsyncRunLogger:
         record = {
             "timestamp": self._timestamp(),
             "event": event,
-            "payload": payload,
+            "payload": payload if self.capture_provider_debug else _binary_free(payload),
         }
         self._enqueue(lambda: self._append_jsonl(self.events_path, record))
 
@@ -48,13 +49,15 @@ class AsyncRunLogger:
         record = {
             "timestamp": self._timestamp(),
             "event": event,
-            "payload": payload,
+            "payload": payload if self.capture_provider_debug else _binary_free(payload),
         }
         self._enqueue(lambda: self._append_jsonl(self.debug_events_path, record))
 
     def write_json(self, name: str, data: dict[str, Any]) -> Path:
         # Queue a JSON artifact write under the run directory.
         path = self._resolve(name)
+        if not self.capture_provider_debug:
+            data = _binary_free(data)
         self._enqueue(lambda: self._write_text(path, json.dumps(data, indent=2, ensure_ascii=False)))
         return path
 
@@ -193,3 +196,14 @@ class AsyncRunLogger:
         # Write a complete binary file.
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
+
+
+def _binary_free(value: Any) -> Any:
+    """Omit redundant sensor bytes from human diagnostics, preserving refs."""
+    if isinstance(value, dict):
+        return {key: _binary_free(item) for key, item in value.items() if key != "base64"}
+    if isinstance(value, (list, tuple)):
+        return [_binary_free(item) for item in value]
+    if isinstance(value, bytes) or (isinstance(value, str) and value.startswith("data:image/")):
+        return "[media stored in artifacts]"
+    return value

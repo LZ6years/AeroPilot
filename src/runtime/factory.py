@@ -18,7 +18,7 @@ from src.agent.context.request_assembler import RequestAssembler
 from src.agent.context.window_manager import ContextWindowManager
 from src.agent.safety import SafetySupervisor
 from src.env_client import EnvClient
-from src.llm import DefaultModelClient
+from src.llm import create_model_client
 from src.memory.context.builder import ModelContextBuilder
 from src.memory.context.registry import ContextModuleRegistry
 from src.plugins import PluginRegistry
@@ -141,6 +141,18 @@ class RuntimeFactory:
             provider_config = provider_config or model_config.provider_config()
             planner_config = planner_config or model_config.planner_config()
             tool_loop_config = tool_loop_config or model_config.tool_loop_config()
+        if model_config is not None and callable(
+            getattr(model_config, "redacted_summary", None)
+        ):
+            write_json = getattr(recorder, "write_json", None)
+            if callable(write_json):
+                write_json(
+                    "config/effective_model_config.json",
+                    {
+                        "schema_version": "effective_model_config_v1",
+                        "model_config": model_config.redacted_summary(),
+                    },
+                )
         planner = planner or ModelActionPlanner(
             provider_config=provider_config or ProviderConfig(),
             planner_config=planner_config or PlannerConfig(),
@@ -185,6 +197,7 @@ class RuntimeFactory:
             compactor_settings = replace(
                 planner_settings,
                 timeout_sec=self.history_compression_config.compactor_timeout_sec,
+                retry_deadline_sec=self.history_compression_config.compactor_timeout_sec,
                 provider_timeout_retries=(
                     self.history_compression_config.compactor_timeout_retries
                 ),
@@ -193,9 +206,15 @@ class RuntimeFactory:
                 ),
             )
             compactor = ModelHistoryCompactor(
-                DefaultModelClient(compactor_settings),
+                create_model_client(compactor_settings),
                 summary_max_tokens=(
                     self.history_compression_config.summary_max_tokens
+                ),
+                thinking_parameters=(
+                    planner.provider_config.compaction_parameters()
+                ),
+                structured_output_format=(
+                    planner.provider_config.structured_output_format
                 ),
             )
             planner.history_projector = projector

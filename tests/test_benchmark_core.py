@@ -55,6 +55,21 @@ def test_provider_round_applied_strategy_requires_event_evidence(tmp_path):
     assert "advance" in rendered
 
 
+def test_provider_round_labels_sdk_capture(tmp_path):
+    from evaluation.benchmarks.core.review import _provider_round
+
+    rendered = _provider_round(
+        {
+            "request": {"messages": [], "tools": []},
+            "transport": {"backend": "openai_python_sdk"},
+            "runtime_outcome": {"status": "accepted"},
+        },
+        tmp_path,
+        [],
+    )
+    assert "Captured OpenAI SDK Request Payload" in rendered
+
+
 def test_state_checkpoints_repeat_safe_image_links_and_report_missing_assets(tmp_path):
     from evaluation.benchmarks.core.review import _agent_tool_transcript
     image_path = tmp_path / "review_assets" / "same.png"
@@ -1774,7 +1789,7 @@ def test_core_review_renders_provider_rounds_and_keeps_terminal_decision_separat
         "Decision 2 · obs_0002 · 1 model round · complete_task · "
         "no physical window"
     ) in page
-    assert "Actual Provider Request" in page
+    assert "Captured OpenAI SDK Request Payload" in page
     assert "exact system prompt" in page
     assert "runtime_commit_phase_turn" in page
     assert "tool_arguments_fallback" in page

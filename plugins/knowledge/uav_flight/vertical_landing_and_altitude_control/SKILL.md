@@ -22,15 +22,14 @@ specified as yaw, heading, pitch or camera angle. See
 
 1. Establish the purpose: requested height, clearance, useful observation or a
    landing region. Explicit height requirements and necessary clearance remain binding.
-2. Use effective bounded progress while far from the required relation. A safety
-   limit is not a recommended magnitude; do not default to tiny or maximum steps.
-   Where the task permits, choose height to support the next observation as well
-   as clearance.
+2. While far from the required relation, choose a height change that produces a
+   meaningfully different viewpoint or clearance. Where the task permits, choose
+   height to support the next observation as well as vertical progress.
 3. Compare actual height change and before/after surface appearance. Re-estimate
-   remaining need after constraints or changed geometry; shorten adjustments near
-   the requested height or surface. Even a smaller adjustment still needs a safe supported direction.
+   remaining need after changed geometry; shorten adjustments near the requested
+   height or surface.
 4. Preserve vertical and horizontal components of an instructed non-zero angled
-   path unless safety or a final correction requires a simpler motion.
+   path unless a final correction requires a simpler motion.
 
 ## Completion And Stop
 
@@ -44,7 +43,6 @@ evidence-supported clearance margin.
 ## Recovery
 
 If cues disappear or conflict, compare views and measured motion to distinguish
-normal passage, changed angle, occlusion and possible overshoot. Do not automatically
-continue upward or descend because a cue left view. Recover a useful view when
-needed and safe; otherwise state the limitation. Never continue blind descent;
-correct overshoot gently near a surface. Do not invent intermediate observations.
+normal passage, changed angle, occlusion and possible overshoot. Use a different
+viewpoint to restore the surface or clearance relation before the next dependent
+correction. Near a surface, use shorter corrections and the next real observation.

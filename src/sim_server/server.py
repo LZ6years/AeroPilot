@@ -28,6 +28,8 @@ from .remote.tunnel import SshTunnel
 from .scene_manager import SceneManager
 from .lifecycle import SceneLifecycle, SceneLifecycleError
 from src.adapters.airsim.client import close_airsim_client
+from src.sim_server.preview import PreviewConfig, PreviewService
+from src.sim_server.preview.base import add_preview_camera
 
 
 class SimulationServer:
@@ -47,6 +49,7 @@ class SimulationServer:
         remote_scene_control: RemoteSceneControl | None = None,
         settings_renderer: AirSimSettingsRenderer | None = None,
         backend_registry: BackendRegistry | None = None,
+        preview_config: PreviewConfig | None = None,
     ) -> None:
         self.map_packages = {pkg.map_id: pkg for pkg in map_packages}
         self.port_policy = port_policy or PortPolicy()
@@ -72,6 +75,27 @@ class SimulationServer:
         self._owned: dict[str, str] = {}
         self.lifecycle: dict[str, SceneLifecycle] = {}
         self._observed_modalities: dict[str, set[str]] = {}
+        self.preview_config = preview_config
+        self.preview_services: dict[str, PreviewService] = {}
+
+    def open_preview(self, scene_instance_id: str) -> PreviewService:
+        """Optional human-only service, deliberately outside EnvClient v1."""
+        from src.sim_server.preview.airsim import AirSimPreviewSource
+
+        if self.preview_config is None:
+            raise ValueError("UI preview is not enabled for this server")
+        scene = self.scene_manager.get(scene_instance_id)
+        package = self._get_package(scene.map_id)
+        if package.control_protocol != "airsim":
+            raise ValueError(f"Independent preview is not supported for {package.control_protocol}")
+        if scene_instance_id not in self.preview_services:
+            config = self.preview_config
+            service = PreviewService(lambda: AirSimPreviewSource(
+                scene.control_host, scene.control_port, package.airsim["vehicle_name"], config
+            ), config)
+            self.preview_services[scene_instance_id] = service
+            service.start()
+        return self.preview_services[scene_instance_id]
 
     def health_check(self) -> bool:
         return True
@@ -162,6 +186,9 @@ class SimulationServer:
                 # A full disk must not prevent process/tunnel release either.
                 errors.append({"stage": "lifecycle_log", "error_type": type(exc).__name__, "error": str(exc)})
 
+        preview = self.preview_services.pop(instance_id, None)
+        if preview is not None:
+            attempt("preview_closed", preview.close)
         if scene is not None:
             attempt("backend_closed", lambda: backend.stop(scene))
         ownership = self._owned.get(instance_id)
@@ -427,6 +454,7 @@ class SimulationServer:
                 scene_dir / "settings.json",
                 api_server_port,
                 template_path=template_path,
+                preview_config=(self.preview_config if self.execution_mode.may_start_process and not package.launch.get("manual", False) else None),
             )
             return rendered.path, rendered.sha256
 
@@ -621,6 +649,8 @@ class SimulationServer:
             settings["Vehicles"][vehicle_name]["Cameras"] = {
                 camera_name: {"CaptureSettings": capture_settings}
             }
+        if self.preview_config is not None and self.execution_mode.may_start_process and not package.launch.get("manual", False):
+            add_preview_camera(settings, vehicle_name, camera_name, self.preview_config)
         settings_path.write_text(
             json.dumps(settings, indent=2), encoding="utf-8"
         )

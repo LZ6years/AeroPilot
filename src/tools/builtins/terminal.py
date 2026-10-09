@@ -3,12 +3,6 @@
 from src.tools.schemas import ToolParameter, ToolRuntimePolicy, ToolSpec
 
 
-BLOCKING_CONDITIONS = (
-    "lost_required_reference", "insufficient_evidence", "unsafe_to_continue",
-    "missing_capability", "irreducible_ambiguity", "no_progress",
-)
-
-
 def terminal_tools() -> list[ToolSpec]:
     tools = []
     for name in ("report_completed", "report_blocked"):
@@ -22,8 +16,6 @@ def terminal_tools() -> list[ToolSpec]:
         )
         if name == "report_blocked":
             parameters += (
-                ToolParameter("blocking_condition", "string", "Condition preventing safe meaningful progress.",
-                              True, {"enum": list(BLOCKING_CONDITIONS)}),
                 ToolParameter("suggested_user_action", "string", "Optional action the user can take to resolve the blocker."),
             )
         tools.append(ToolSpec(
@@ -33,10 +25,11 @@ def terminal_tools() -> list[ToolSpec]:
                 "all requested outcomes. Returns the accepted terminal state or rejection feedback; Runtime "
                 "handles final stabilization and cleanup. Plan status alone is not completion evidence. "
                 if name == "report_completed" else
-                "Report the instruction as incomplete with a blocking condition and environmental evidence. "
-                "Applicable when the task cannot continue safely or meaningfully. Returns the accepted terminal "
-                "state or rejection feedback; Runtime handles final stabilization and cleanup. "
-                "This ends the instruction without claiming that its requested outcomes were achieved."
+                "Report the instruction as incomplete only after distinct useful actions or viewpoint changes "
+                "still cannot provide a path forward. Temporary non-visibility or one unsuccessful observation "
+                "is not sufficient. Returns the accepted terminal state or rejection feedback; Runtime handles "
+                "final stabilization and cleanup. This ends the instruction without claiming that its requested "
+                "outcomes were achieved."
             ),
             runtime=ToolRuntimePolicy("runtime_control", "immediate", "single", True),
             parameters=parameters,

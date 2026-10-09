@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
-from src.llm import DefaultModelClient, ModelRequest
+from src.llm import ModelRequest, create_model_client
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import public_response_snapshot
 from src.agent.config import load_model_config
@@ -272,7 +272,7 @@ def run(case_dirs, output, *, validate_only=False, repeats=3, env_path='.env', c
                                     'timeout_retries':settings.provider_timeout_retries,
                                     'connection_retries':settings.provider_connection_retries}
             write_json(output/'manifest.json', manifest)
-            client = DefaultModelClient(settings)
+            client = create_model_client(settings)
         else:
             client = client_factory()
         for index, repeat, group in schedule(len(samples), repeats):

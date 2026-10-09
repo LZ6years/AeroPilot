@@ -185,7 +185,7 @@ def can_continue(status, result):
 
 def model_preflight(root, manifest):
     """One saved RGB/native-tool request verifies access; returned calls never run."""
-    from src.llm import DefaultModelClient, ModelRequest
+    from src.llm import ModelRequest, create_model_client
     from tests.manual.tool_selection_ablation_probe import restore_request, wire_check
     candidates = sorted((BASELINE / "cases").glob("13_*/runs/*/debug/tool_loop/*/decision_0001.json"))
     if not candidates:
@@ -195,15 +195,16 @@ def model_preflight(root, manifest):
     run = next(parent for parent in source.parents if (parent / "debug").is_dir())
     payload = restore_request(record["request"], record["request_media"], run)
     config = load_model_config(manifest["env_path"])
-    parameters = {k: v for k, v in payload.items() if k not in ("model", "messages", "tools", "thinking")}
-    if config.thinking_mode:
-        parameters["thinking"] = {"type": config.thinking_mode}
+    parameters = {k: v for k, v in payload.items() if k not in (
+        "model", "messages", "tools", "thinking", "enable_thinking"
+    )}
+    parameters.update(config.thinking_parameters())
     status = {"source": str(source), "source_sha256": sha(source), "tools_executed": False,
               "config": config.redacted_summary(), "status": "running"}
     write_json(root / "model_preflight.json", status)
     trace = {}
     try:
-        response = DefaultModelClient(config.to_provider_settings()).request(
+        response = create_model_client(config.to_provider_settings()).request(
             ModelRequest(messages=payload["messages"], tools=payload["tools"], parameters=parameters),
             transport_trace=trace)
         status.update(request=response.request_snapshot, response=response.response_snapshot,

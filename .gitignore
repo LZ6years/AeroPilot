@@ -39,3 +39,10 @@ docs/hyperframes/
 Thumbs.db
 .idea/
 .vscode/
+
+# Browser workstation dependencies and generated outputs
+node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+frontend/*.tsbuildinfo

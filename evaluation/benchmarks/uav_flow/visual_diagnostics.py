@@ -11,13 +11,12 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
-import urllib.error
-import urllib.request
 from pathlib import Path
 from typing import Any
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from src.agent.config import ModelConfig
+from src.llm import ModelClient, ModelRequest, create_model_client
 
 
 SCHEMA_VERSION = "uav_flow_visual_diagnostics_v1"
@@ -39,8 +38,20 @@ def write_visual_diagnostics(
     output_path = Path(case_dir) / "visual_diagnostics.json"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     frames = _sample_frames(sorted((run_path / "artifacts" / "rgb").glob("*.png")), max_frames)
+    model_client = (
+        create_model_client(model_config.to_provider_settings())
+        if enabled and model_config.api_key
+        else None
+    )
     records = [
-        _diagnose_frame(case, frame, index, enabled=enabled, model_config=model_config)
+        _diagnose_frame(
+            case,
+            frame,
+            index,
+            enabled=enabled,
+            model_config=model_config,
+            model_client=model_client,
+        )
         for index, frame in enumerate(frames, start=1)
     ]
     payload = {
@@ -66,6 +77,7 @@ def _diagnose_frame(
     *,
     enabled: bool,
     model_config: ModelConfig,
+    model_client: ModelClient | None = None,
 ) -> dict[str, Any]:
     base = {
         "frame_index": index,
@@ -81,7 +93,7 @@ def _diagnose_frame(
     if not model_config.api_key:
         return {**base, "status": "skipped", "evidence_text": "missing model api key"}
     try:
-        judged = _call_model(case, frame, model_config)
+        judged = _call_model(case, frame, model_config, model_client=model_client)
     except Exception as exc:
         return {
             **base,
@@ -92,27 +104,30 @@ def _diagnose_frame(
     return {**base, **_normalize_model_result(judged), "status": "judged"}
 
 
-def _call_model(case: UavFlowCase, frame: Path, config: ModelConfig) -> dict[str, Any]:
+def _call_model(
+    case: UavFlowCase,
+    frame: Path,
+    config: ModelConfig,
+    *,
+    model_client: ModelClient | None = None,
+) -> dict[str, Any]:
     payload = _payload(case, frame, config)
-    request = urllib.request.Request(
-        config.chat_completions_url(),
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    client = model_client or create_model_client(config.to_provider_settings())
+    response = client.request(
+        ModelRequest(
+            messages=payload["messages"],
+            parameters={
+                key: value
+                for key, value in payload.items()
+                if key not in {"model", "messages", "tools", "stream"}
+            },
+        ),
+        error_prefix="UAV-Flow visual diagnostic request failed",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=float(config.timeout_sec)) as response:
-            raw = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"HTTP {exc.code} {exc.reason}; body={body[:500]}") from exc
-    content = raw.get("choices", [{}])[0].get("message", {}).get("content", "")
-    if isinstance(content, list):
-        content = "".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
-    return _parse_json_object(str(content))
+    content = response.text
+    if content is None:
+        raise ValueError("visual diagnostic model returned no text")
+    return _parse_json_object(content)
 
 
 def _payload(case: UavFlowCase, frame: Path, config: ModelConfig) -> dict[str, Any]:

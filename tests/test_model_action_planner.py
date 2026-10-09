@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import hashlib
-import http.client
 import json
 from io import BytesIO
 from pathlib import Path
@@ -25,7 +24,8 @@ from src.memory.context.contracts import (
     checkpoint_fingerprint,
 )
 from src.memory.stores import MemoryEventWriter
-from src.agent.config import ModelConfig
+from src.agent.config import ModelConfig, ProviderConfig
+from src.llm import ModelResponse
 from src.agent.context.compression import HistoryCompressionConfig, HistoryProjectionState
 from src.agent.context.window_manager import ContextWindowManager
 from src.tools.registry import default_registry
@@ -71,6 +71,16 @@ def response_with_calls(*calls, content="Inspect and act from the current eviden
     }
 
 
+class CaptureClient:
+    def __init__(self, response: dict) -> None:
+        self.response = response
+        self.requests = []
+
+    def request(self, request, **kwargs):
+        self.requests.append(request)
+        return ModelResponse(self.response)
+
+
 def make_transcript(tmp_path):
     transcript = AgentTranscript(MemoryEventWriter(tmp_path))
     envelope = InstructionEnvelope(
@@ -93,6 +103,29 @@ def make_transcript(tmp_path):
         )
     )
     return transcript
+
+
+def test_stream_transport_field_is_not_replayed_as_generation_parameter(tmp_path):
+    client = CaptureClient(
+        response_with_calls(
+            ("call_1", "uav_turn_relative", {"yaw_deg": 10})
+        )
+    )
+    planner = ModelActionPlanner(
+        provider_config=ProviderConfig(
+            model_name="gpt-stream",
+            api_key="test-key",
+            base_url="https://example.test/v1",
+            stream=True,
+        ),
+        client=client,
+    )
+
+    planner.plan_turn(make_transcript(tmp_path), default_registry())
+
+    assert len(client.requests) == 1
+    assert "stream" not in client.requests[0].parameters
+    assert planner.last_request["stream"] is True
 
 
 def test_native_planner_sends_tools_and_parses_canonical_call(tmp_path):
@@ -145,6 +178,38 @@ def test_current_task_state_is_injected_once_after_history(tmp_path):
     assert json.loads(blocks[0]["content"].split("\n", 1)[1]) == task_state
     assert blocks[0] == messages[-1]
     assert planner.last_exchange["current_task_state"] == task_state
+
+
+@pytest.mark.parametrize(
+    "output_language,language_name",
+    [("en", "English"), ("zh", "Simplified Chinese")],
+)
+def test_output_language_policy_is_injected_once_as_fixed_context(
+    tmp_path, output_language, language_name
+):
+    planner = StubPlanner(
+        response_with_calls(("call_1", "uav_turn_relative", {"yaw_deg": 10})),
+        output_language=output_language,
+    )
+
+    planner.plan_turn(make_transcript(tmp_path), default_registry())
+
+    messages = planner.payloads[0]["messages"]
+    policies = [
+        message["content"]
+        for message in messages
+        if isinstance(message.get("content"), str)
+        and message["content"].startswith("OUTPUT LANGUAGE POLICY")
+    ]
+    assert len(policies) == 1
+    assert language_name in policies[0]
+    assert "runtime.update_plan explanation and step" in policies[0]
+    assert messages.index(next(m for m in messages if m["content"] == policies[0])) < next(
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message.get("content"), str)
+        and message["content"].startswith("CURRENT TASK STATE\n")
+    )
 
 
 def test_planner_records_provider_usage_in_task_local_projection_state(tmp_path):
@@ -200,11 +265,19 @@ def test_tool_selection_prompt_and_descriptions_do_not_force_a_control_call(tmp_
     assert request["messages"][-1]["content"].startswith("CURRENT TASK STATE\n")
     assert transcript.provider_messages(registry) == history_before
     assert request["tools"] == [spec.to_provider_tool() for spec in registry.model_specs()]
-    assert "before the first physical action" in registry.get("runtime.update_plan").description
+    plan = registry.get("runtime.update_plan")
+    assert "long or difficult route" in plan.description
+    assert "next intended objective" in plan.description
     system_text = "\n".join(message["content"] for message in request["messages"] if message["role"] == "system")
-    assert "call runtime.update_plan before the first" in system_text
-    assert "completed step must cite prior" in system_text
-    assert "same-turn read results in a later plan revision" in system_text
+    assert "Use runtime.update_plan when retaining ordered outcomes" not in system_text
+    assert "before the first physical action" not in system_text
+    assert "completed step cites prior" not in system_text
+    assert "evidence from before that turn" not in plan.description
+    provider_plan = next(
+        tool for tool in request["tools"]
+        if tool["function"]["name"] == "runtime_update_plan"
+    )
+    assert "independent parallel-safe read-only calls" in provider_plan["function"]["description"]
     assert "uav_hover" not in {tool["function"]["name"] for tool in request["tools"]}
 
 
@@ -252,42 +325,30 @@ def test_plan_descriptions_and_updated_prompt_reach_provider_unchanged(tmp_path,
     assert replay[-1]["tool_call_id"] == "strategy_call"
 
 
-def test_native_planner_transport_retry_is_one_model_round_and_not_transcript(
-    tmp_path, monkeypatch
-):
-    class Response:
-        def __enter__(self):
-            return self
+def test_native_planner_sdk_transport_is_one_model_round_and_not_transcript(tmp_path):
+    class SdkClient:
+        calls = 0
 
-        def __exit__(self, exc_type, exc, traceback):
-            return None
+        def request(self, request, *, error_prefix, transport_trace=None):
+            self.calls += 1
+            transport_trace.update(
+                backend="openai_python_sdk",
+                configured_max_retries=2,
+                final_status="success",
+            )
+            return ModelResponse(
+                response_with_calls(("call_1", "uav_hover", {})),
+                transport_trace=dict(transport_trace),
+            )
 
-        def read(self):
-            return json.dumps(
-                response_with_calls(("call_1", "uav_hover", {}))
-            ).encode("utf-8")
-
-    outcomes = [http.client.RemoteDisconnected("closed"), Response()]
-    sleeps = []
-    requests = []
-
-    def fake_urlopen(request, timeout):
-        requests.append(request.data)
-        outcome = outcomes.pop(0)
-        if isinstance(outcome, Exception):
-            raise outcome
-        return outcome
-
-    monkeypatch.setattr(
-        "src.llm.transport.urllib.request.urlopen", fake_urlopen
-    )
-    monkeypatch.setattr("src.llm.transport.time.sleep", sleeps.append)
+    client = SdkClient()
     planner = ModelActionPlanner(
         ModelConfig(
             model_name="stub",
             api_key="test-key",
             base_url="https://example.test/v1",
-        )
+        ),
+        client=client,
     )
     transcript = make_transcript(tmp_path)
     registry = default_registry()
@@ -296,22 +357,12 @@ def test_native_planner_transport_retry_is_one_model_round_and_not_transcript(
     turn = planner.plan_turn(transcript, registry, decision_index=6)
 
     assert turn.tool_calls[0].tool_name == "uav.hover"
-    assert requests[0] == requests[1]
-    assert json.loads(requests[0])["messages"][-1]["content"] == planner.task_progress_reminder
+    assert client.calls == 1
     assert transcript.provider_messages(registry) == messages_before
-    assert sleeps == [2.0]
     assert planner.last_exchange["transport"] == {
-        "attempt_count": 2,
-        "retry_count": 1,
+        "backend": "openai_python_sdk",
+        "configured_max_retries": 2,
         "final_status": "success",
-        "retries": [
-            {
-                "attempt": 1,
-                "category": "connection",
-                "error_type": "RemoteDisconnected",
-                "delay_sec": 2.0,
-            }
-        ],
     }
 
 
@@ -372,7 +423,7 @@ def test_native_planner_captures_exact_public_exchange_and_hashed_media(tmp_path
     assert "data:image" not in request_text
     assert "provider_media sha256=" in request_text
     assert exchange["media"][0]["data"] == image_bytes
-    assert exchange["media"][0]["request_path"][:2] == ["messages", 4]
+    assert exchange["media"][0]["request_path"][:2] == ["messages", 5]
     assert exchange["media"][0]["timeline_role"] == "CURRENT"
     assert exchange["media"][0]["observation_id"] == "obs_media"
     assert exchange["media"][0]["frame_id"] == "frame_media"
@@ -457,6 +508,25 @@ def test_native_planner_accepts_null_content_with_read_only_fallback(tmp_path):
 
     assert turn.public_intent_source == "tool_arguments_fallback"
     assert turn.public_intent == "Request uav.get_pose for observation obs_0001."
+
+
+def test_native_planner_localizes_null_content_fallback_to_chinese(tmp_path):
+    planner = StubPlanner(
+        response_with_calls(
+            (
+                "call_pose",
+                "uav_get_pose",
+                {"observation_id": "obs_0001"},
+            ),
+            content=None,
+        ),
+        output_language="zh",
+    )
+
+    turn = planner.plan_turn(make_transcript(tmp_path), default_registry())
+
+    assert turn.public_intent_source == "tool_arguments_fallback"
+    assert turn.public_intent == "针对观测 obs_0001 请求 uav.get_pose。"
 
 
 @pytest.mark.parametrize("name,args", [
@@ -572,3 +642,37 @@ def test_thinking_mode_reaches_wire_and_public_option_audit(tmp_path, mode):
         assert 'thinking' not in payload
     assert 'reasoning_effort' not in payload
     assert payload['temperature'] == 0
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [("disabled", False), ("enabled", True)],
+)
+def test_enable_thinking_wire_format_reaches_provider(tmp_path, mode, expected):
+    planner = StubPlanner(
+        response_with_calls(
+            ("call_1", "uav_turn_relative", {"yaw_deg": 10})
+        ),
+        thinking_mode=mode,
+        thinking_wire_format="enable_thinking",
+    )
+
+    planner.plan_turn(make_transcript(tmp_path), default_registry())
+
+    assert planner.payloads[0]["enable_thinking"] is expected
+    assert planner.last_request["enable_thinking"] is expected
+    assert "thinking" not in planner.payloads[0]
+
+
+def test_reasoning_effort_reaches_canonical_request(tmp_path):
+    planner = StubPlanner(
+        response_with_calls(
+            ("call_1", "uav_turn_relative", {"yaw_deg": 10})
+        ),
+        reasoning_effort="low",
+    )
+
+    planner.plan_turn(make_transcript(tmp_path), default_registry())
+
+    assert planner.payloads[0]["reasoning_effort"] == "low"
+    assert planner.last_request["reasoning_effort"] == "low"

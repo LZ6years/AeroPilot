@@ -17,7 +17,7 @@ from src.agent.transcript import AgentToolCall, AssistantTurn, ToolResult, Trans
 from src.runtime.control.actions.terminal import environmental_evidence_refs, apply_terminal
 from src.agent.config import load_model_config
 from src.tools.registry import default_registry
-from src.llm import DefaultModelClient, ModelRequest
+from src.llm import ModelRequest, create_model_client
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import public_response_snapshot
 from tests.manual.tool_selection_ablation_probe import restore_request, wire_check
@@ -92,7 +92,7 @@ def run_probe(run, output):
         manifest.append({**{k:v for k,v in sample.items() if k!='variants'},
                          'requests':{k:snapshot_request(v)[0] for k,v in sample['variants'].items()}})
     write_json(output/'manifest.json',{'source_run':str(run.resolve()),'samples':manifest,'planned_requests':36})
-    client=DefaultModelClient(config.to_provider_settings()); rows=[]; status='running'
+    client=create_model_client(config.to_provider_settings()); rows=[]; status='running'
     try:
         for sample in samples:
             for repeat in range(3):

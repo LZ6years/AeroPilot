@@ -67,18 +67,70 @@ def test_minimal_tool_arguments_and_terminal_evidence():
     with pytest.raises(ValueError):
         validate_tool_args({"reason": "Arrived", "evidence_refs": []},
                            specs["runtime.report_completed"].input_schema)
+    validate_tool_args(
+        {
+            "reason": "Distinct viewpoints made no progress",
+            "evidence_refs": ["obs_1"],
+        },
+        specs["runtime.report_blocked"].input_schema,
+    )
+    assert set(specs["runtime.report_blocked"].input_schema["properties"]) == {
+        "reason", "evidence_refs", "suggested_user_action",
+    }
+    for retired_condition in (
+        "lost_required_reference",
+        "insufficient_evidence",
+        "unsafe_to_continue",
+        "missing_capability",
+        "irreducible_ambiguity",
+        "no_progress",
+    ):
+        with pytest.raises(ValueError):
+            validate_tool_args(
+                {
+                    "reason": "Cannot continue",
+                    "evidence_refs": ["obs_1"],
+                    "blocking_condition": retired_condition,
+                },
+                specs["runtime.report_blocked"].input_schema,
+            )
 
 
-def test_plan_and_knowledge_descriptions_explain_selection_without_new_parameters():
+def test_plan_and_knowledge_descriptions_are_optional_without_new_parameters():
     specs = {spec.name: spec for spec in builtin_tools()}
     plan = specs["runtime.update_plan"]
     knowledge = specs["knowledge.load"]
-    assert "before the first physical action" in plan.description
-    assert "simple single-step task can act directly" in plan.description
-    assert "does not execute flight" in plan.description
-    assert "provides methods" in knowledge.description
-    assert "not current-scene observations or measurements" in knowledge.description
+    assert "optional execution plan" in plan.description
+    assert "long or difficult route" in plan.description
+    assert "completed progress" in plan.description
+    assert "current and remaining stages" in plan.description
+    assert "next intended objective" in plan.description
+    assert "saved plan and revision" in plan.description
+    assert "does not execute actions" in plan.description
+    assert "environmental facts or task completion" in plan.description
+    assert "parallel-safe" not in plan.description
+    assert "provides flight methods" in knowledge.description
+    assert "observations and measurements come from" in knowledge.description
     assert set(plan.input_schema["properties"]) == {"explanation", "steps"}
+    properties = plan.input_schema["properties"]
+    assert properties["explanation"]["description"] == (
+        "Brief reason for creating the plan or changing its recorded progress or approach."
+    )
+    assert properties["steps"]["description"] == (
+        "Complete ordered task plan snapshot with persistent step identities."
+    )
+    step_properties = properties["steps"]["items"]["properties"]
+    assert step_properties["id"]["description"] == "Stable step identifier."
+    assert step_properties["description"]["description"] == (
+        "User-required outcome with its order and conditions."
+    )
+    assert step_properties["status"]["description"] == (
+        "Current progress state for this outcome."
+    )
+    assert step_properties["evidence_refs"]["description"] == (
+        "Prior observation IDs or successful ToolResult/action references supporting this step. "
+        "Required and non-empty when status is completed; use an empty array when no evidence is claimed."
+    )
     assert set(knowledge.input_schema["properties"]) == {"name", "reference_paths"}
     for spec in (plan, knowledge):
         wire = spec.to_provider_tool()["function"]
@@ -130,12 +182,24 @@ def test_blocked_needs_no_plan_or_phase_assessment():
     mission = state()
     result = apply_terminal(mission, {
         "reason": "No safe route is visible", "evidence_refs": ["obs1"],
-        "blocking_condition": "unsafe_to_continue", "suggested_user_action": "Clarify route",
+        "suggested_user_action": "Clarify route",
     }, completed=False, available_evidence=frozenset({"obs1"}))
     assert mission.stopped and not mission.completed
     assert mission.task_plan is None
-    assert mission.stopped_reason == "agent_reported_blocked:unsafe_to_continue"
+    assert mission.stopped_reason == "agent_reported_blocked:no_progress"
     assert result["suggested_user_action"] == "Clarify route"
+
+
+def test_retired_blocking_condition_is_rejected_without_state_mutation():
+    mission = state()
+    before = vars(mission).copy()
+    with pytest.raises(ValueError, match="no longer accepted"):
+        apply_terminal(mission, {
+            "reason": "Cannot continue",
+            "evidence_refs": ["obs1"],
+            "blocking_condition": "no_progress",
+        }, completed=False, available_evidence=frozenset({"obs1"}))
+    assert vars(mission) == before
 
 
 @pytest.mark.parametrize("refs", [[], ["future"], ["obs1", "obs1"], [None]])

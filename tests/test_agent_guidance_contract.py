@@ -27,7 +27,7 @@ def test_revised_request_changes_guidance_not_original_history_or_pixels():
     assert context["instruction"] == "Turn right 79 degrees"
     assert "instruction start" in context["protocol_context"]
     assert len(context["knowledge_catalog"]) == 5
-    assert "actual measured motion" in changed["messages"][0]["content"]
+    assert "actual displacement" in changed["messages"][0]["content"]
     assert "inconsistent_depth_surfaces" in str(changed["tools"])
 
 

@@ -45,8 +45,9 @@ def _frame_sha256(frame: dict[str, Any]) -> str | None:
 
 
 class MemoryEventWriter:
-    def __init__(self, run_dir: str | Path) -> None:
+    def __init__(self, run_dir: str | Path, *, persist_inline_media: bool = True) -> None:
         self.run_dir = Path(run_dir)
+        self.persist_inline_media = persist_inline_media
         self.memory_dir = self.run_dir / "memory"
         self.memory_dir.mkdir(parents=True, exist_ok=True)
         self._counters: dict[str, int] = {}
@@ -146,6 +147,12 @@ class MemoryEventWriter:
         digest = _frame_sha256(metadata)
         if digest is not None:
             metadata["sha256"] = digest
+        if not self.persist_inline_media:
+            # Keep the original in-memory observation intact. Remove a duplicate
+            # only after the capture owner has persisted its exact bytes.
+            raw_path = metadata.get("artifact_path") or metadata.get("path")
+            if raw_path and Path(raw_path).is_file():
+                metadata.pop("base64", None)
         return self._append(
             "frames.jsonl",
             "frame",

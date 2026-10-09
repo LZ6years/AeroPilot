@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any, Iterable, Protocol
 
 from src.agent.transcript import AssistantTurn, ToolResult, TranscriptEvent
-from src.tools.builtins.terminal import BLOCKING_CONDITIONS
 from src.tools.registry import ToolRegistry
 
 
@@ -72,6 +71,8 @@ def apply_terminal(
     """
     if state.completed or state.stopped:
         raise ValueError("task is already terminal")
+    if "blocking_condition" in payload:
+        raise ValueError("blocking_condition is no longer accepted")
     reason = payload.get("reason")
     refs = payload.get("evidence_refs")
     if not isinstance(reason, str) or not reason.strip():
@@ -90,13 +91,10 @@ def apply_terminal(
             "Use observation IDs or successful environmental tool_call_id/result_ref; "
             "image frame IDs, image paths, plans and knowledge are not accepted by themselves."
         )
-    condition = payload.get("blocking_condition")
-    if not completed and condition not in BLOCKING_CONDITIONS:
-        raise ValueError("unsupported blocking_condition")
     source = "runtime.report_completed" if completed else "runtime.report_blocked"
     state.completed = completed
     state.stopped = not completed
-    state.stopped_reason = None if completed else f"agent_reported_blocked:{condition}"
+    state.stopped_reason = None if completed else "agent_reported_blocked:no_progress"
     state.stop_source = source
     return {
         "completed": state.completed, "stopped": state.stopped,

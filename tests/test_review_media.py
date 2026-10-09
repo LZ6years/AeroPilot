@@ -18,7 +18,11 @@ from src.memory.context.registry import ContextModuleRegistry, ContextModuleConf
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MemoryEventWriter, MemoryRecordReader
 from src.runtime.context.media_store import ModelMediaStore
-from evaluation.benchmarks.core.review import _initial_plan_review, _phase_decision_review
+from evaluation.benchmarks.core.review import (
+    _initial_plan_review,
+    _phase_decision_review,
+    _transcript_record_body,
+)
 from evaluation.benchmarks.core.audit import ResolvedFrameAsset
 
 
@@ -130,6 +134,57 @@ def test_compact_timeline_keeps_unapplied_strategy_and_explicit_links(tmp_path):
     assert json.dumps(record) == before
     audit.planner_debug.append({"decision_id": "orphan"})
     assert "ungrouped" in _phase_decision_review(audit, (), tmp_path, {})
+
+
+def test_review_preserves_native_plan_and_intent_language(tmp_path):
+    intent = _transcript_record_body(
+        "assistant_turn",
+        {
+            "public_intent": "继续检查红色车辆。",
+            "public_intent_source": "provider_content",
+            "tool_calls": [],
+        },
+        timeline_role="HISTORY",
+        show_checkpoint_media=False,
+        calls_by_id={},
+        results_by_id={},
+        assets=(),
+        case_dir=tmp_path,
+        fused_images={},
+    )
+    plan = _transcript_record_body(
+        "tool_result",
+        {
+            "tool_call_id": "plan_1",
+            "tool_name": "runtime.update_plan",
+            "status": "ok",
+            "message": "",
+            "data": {
+                "plan": {
+                    "explanation": "根据当前观察更新路线。",
+                    "steps": [
+                        {
+                            "id": "inspect",
+                            "description": "确认红色车辆。",
+                            "status": "in_progress",
+                            "evidence_refs": [],
+                        }
+                    ],
+                }
+            },
+        },
+        timeline_role="HISTORY",
+        show_checkpoint_media=False,
+        calls_by_id={},
+        results_by_id={},
+        assets=(),
+        case_dir=tmp_path,
+        fused_images={},
+    )
+
+    assert "继续检查红色车辆。" in intent
+    assert "根据当前观察更新路线。" in plan
+    assert "确认红色车辆。" in plan
 
 
 def test_single_case_probe_preserves_original_case_identity():

@@ -36,7 +36,6 @@ class DefaultMotionContextModule(ContextModule):
                 "instruction-start body frame; last-window motion uses that batch's starting "
                 "body frame. Unknown measurements remain null."
             ),
-            "safety_constraints": dict(stage_context.safety_constraints),
             "observation_policy": dict(stage_context.observation_policy),
         }
         return ContextModuleResult(
@@ -45,7 +44,10 @@ class DefaultMotionContextModule(ContextModule):
                 name=self.name,
                 source=self.__class__.__name__,
                 confidence="high",
-                metadata={"physical_window_count": stage_context.metadata.get("physical_window_count")},
+                metadata={
+                    "physical_window_count": stage_context.metadata.get("physical_window_count"),
+                    "safety_constraints": dict(stage_context.safety_constraints),
+                },
             ),
         )
 
@@ -59,11 +61,11 @@ class DefaultMotionContextModule(ContextModule):
                 "instruction_start_relative_uav_motion": "Cumulative measured motion from instruction origin.",
                 "last_window_uav_motion": "Measured motion across the latest physical batch.",
                 "field_semantics": "Self-motion is not target-relative distance.",
-                "safety_constraints": "Current dynamic flight and stationary-scan constraints.",
                 "observation_policy": "Automatic observation timing and requested modalities.",
             },
             "audit_fields": {
-                "physical_window_count": "Number of completed physical windows."
+                "physical_window_count": "Number of completed physical windows.",
+                "safety_constraints": "Runtime-only dynamic flight and stationary-scan diagnostics.",
             },
         }
 
@@ -75,4 +77,3 @@ def _optional_float(value: Any) -> float | None:
         return round(float(value), 3)
     except (TypeError, ValueError):
         return None
-

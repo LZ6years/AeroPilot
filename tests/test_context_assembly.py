@@ -133,8 +133,7 @@ def test_runtime_only_copies_validated_control_prefix(tmp_path, monkeypatch, ter
             {"id": "inspect", "description": "Inspect", "status": "in_progress",
              "evidence_refs": []}])],
         [move("move")],
-        [call("terminal", f"runtime.report_{terminal}", reason="Observed", evidence_refs=["obs_0002"],
-              **({"blocking_condition": "insufficient_evidence"} if terminal == "blocked" else {}))],
+        [call("terminal", f"runtime.report_{terminal}", reason="Observed", evidence_refs=["obs_0002"])],
     ]
     runtime, backend = public_runtime(tmp_path, batches)
     original_snapshot = AgentTranscript.snapshot

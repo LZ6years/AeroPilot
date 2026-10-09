@@ -172,6 +172,8 @@ class FlightEvidenceRecorder:
                         frame_refs[str(modality)] = str(artifact_path)
         return {
             "source": source or observation.get("source"),
+            "observation_id": observation.get("observation_id"),
+            "pose": dict(observation.get("pose") or {}),
             "timestamp": observation.get("timestamp"),
             "scene_instance_id": observation.get("scene_instance_id"),
             "agent_id": observation.get("agent_id"),

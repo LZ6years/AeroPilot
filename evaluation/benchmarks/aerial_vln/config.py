@@ -41,6 +41,8 @@ class AerialVlnEvalConfig:
     save_artifacts: bool = False
     generate_html_review: bool = True
     enable_action_planner_debug: bool = False
+    report_profile: str = "audit"
+    episode_ids: tuple[str, ...] | None = None
     # STMR is benchmark opt-in. Shadow builds report-only spatial memory after
     # an episode; planner additionally exposes the compact map to the model.
     stmr_mode: str = "off"
@@ -60,6 +62,10 @@ class AerialVlnEvalConfig:
     dataset_version: str = "unspecified"
 
     def __post_init__(self) -> None:
+        if self.report_profile not in {"audit", "paper_process", "simple_process"}:
+            raise ValueError("Unknown report_profile")
+        if self.episode_ids is not None and (not self.episode_ids or len(set(self.episode_ids)) != len(self.episode_ids)):
+            raise ValueError("episode_ids must be nonempty and unique")
         allowed = {"attach", "managed"}
         if self.execution_mode not in allowed:
             raise ValueError("execution_mode must be explicitly set to " + "/".join(sorted(allowed)) + "; dry execution was removed; use --validate-only for offline checks")
@@ -167,6 +173,8 @@ class AerialVlnEvalConfig:
             enable_action_planner_debug=bool(
                 data.get("enable_action_planner_debug", False)
             ),
+            report_profile=str(data.get("report_profile", "audit")),
+            episode_ids=tuple(data["episode_ids"]) if data.get("episode_ids") is not None else None,
             stmr_mode=_choice(
                 data.get("stmr_mode", "off"),
                 {"off", "shadow", "planner"},

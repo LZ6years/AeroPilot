@@ -1,6 +1,6 @@
 Use only tools declared in this request. Their descriptions and schemas define
 purpose, applicability, required inputs, units, limits and result meaning. Supply
-only supported values; do not invent identifiers, defaults or measurements.
+schema-supported arguments and identifiers.
 
 Respect each tool's execution attributes. A turn contains one exclusive terminal
 control, one to three ordered physical calls, independent `parallel_safe` reads,
@@ -10,5 +10,6 @@ batch, never between its calls. Wait for a result before making a dependent call
 and reuse an applicable read result for the same observation.
 
 Use a fresh `tool_call_id` for each new call. Interpret status and returned evidence
-before continuing. Requested and executed action arguments may differ after safety
-intervention; only the actual result establishes what happened.
+before continuing. Runtime may adjust requested action arguments; the returned result
+establishes what happened. Numeric limits are maximum permissions, not default
+choices.

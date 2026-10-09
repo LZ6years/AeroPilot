@@ -5,7 +5,8 @@
 - `runtime.update_plan`：更新可选任务计划；可单独调用，也可与独立的
   `parallel_safe` 只读调用出现在同一回合。
 - `runtime.report_completed`：以当前 instruction 的环境证据报告完成。
-- `runtime.report_blocked`：以证据和阻塞条件报告无法继续。
+- `runtime.report_blocked`：以证据报告持续且无法由当前能力解决的阻塞；目标暂时
+  不可见本身不是阻塞条件。
 - `knowledge.load`：只读工具；正文以 ToolResult 进入同一 Transcript。
 
 每个 plan step 都带 `evidence_refs`；`completed` 必须引用回合开始前已经存在的

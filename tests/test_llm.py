@@ -6,12 +6,73 @@ import base64
 import copy
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from src.llm import DefaultModelClient, MessageBuilder, ModelRequest, ModelResponse, ProviderSettings
 from src.llm.audit import snapshot_request
-from src.llm.providers.openai_compatible import chat_completions_url, encode_request
+from src.llm.client import normalize_openai_base_url
+from src.llm.providers.openai_compatible import (
+    decode_response,
+    encode_request,
+    is_complete_stream_response,
+)
+from src.llm.providers.openai_responses import (
+    decode_responses_response,
+    encode_responses_request,
+)
+
+
+class _SdkValue:
+    def __init__(self, value, request_id="req_test"):
+        self.value = value
+        self._request_id = request_id
+
+    def model_dump(self, *, mode):
+        assert mode == "json"
+        return copy.deepcopy(self.value)
+
+
+class _Create:
+    def __init__(self, result):
+        self.result = result
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.result
+
+
+class _RawResponse:
+    def __init__(self, body):
+        self.body = body
+        self.headers = {"x-request-id": "req_stream"}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        return False
+
+    def iter_bytes(self):
+        yield self.body
+
+
+class _FakeSdk:
+    def __init__(self, *, chat=None, responses=None, stream=None):
+        chat_create = _Create(chat)
+        stream_create = _Create(stream)
+        chat_create.with_streaming_response = SimpleNamespace(create=stream_create.create)
+        self.chat = SimpleNamespace(completions=chat_create)
+        self.responses_create = _Create(responses)
+        self.responses = SimpleNamespace(create=self.responses_create.create)
+
+
+def _chat_response(content="hello", **message):
+    return _SdkValue({"choices": [{"message": {
+        "role": "assistant", "content": content, **message,
+    }, "finish_reason": "stop"}]})
 
 
 def test_builder_order_edit_and_isolation():
@@ -70,61 +131,164 @@ def test_request_and_wire_encoding_are_independent_copies():
     assert "response_format" not in payload
 
 
-@pytest.mark.parametrize("key", ["model", "messages", "tools"])
+@pytest.mark.parametrize("key", ["model", "messages", "tools", "stream"])
 def test_reserved_request_parameters_fail(key):
     with pytest.raises(ValueError):
         ModelRequest([], parameters={key: "invalid"})
 
 
 @pytest.mark.parametrize("base,expected", [
-    ("", "https://api.openai.com/v1/chat/completions"),
-    ("https://p.test/v1/", "https://p.test/v1/chat/completions"),
-    ("https://p.test/v1/chat/completions", "https://p.test/v1/chat/completions"),
+    ("", ""),
+    ("https://p.test/v1/", "https://p.test/v1"),
+    ("https://p.test/v1/chat/completions", "https://p.test/v1"),
+    ("https://p.test/v1/responses", "https://p.test/v1"),
 ])
-def test_provider_url(base, expected):
-    assert chat_completions_url(base) == expected
+def test_sdk_base_url(base, expected):
+    assert normalize_openai_base_url(base) == expected
+
+
+def test_responses_encoding_preserves_order_tools_images_and_results():
+    image = "data:image/png;base64," + base64.b64encode(b"pixels").decode()
+    request = ModelRequest(
+        messages=[
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": [
+                {"type": "text", "text": "CURRENT"},
+                {"type": "image_url", "image_url": {"url": image}},
+            ]},
+            {"role": "assistant", "content": "I will inspect.", "tool_calls": [{
+                "id": "call_1", "type": "function",
+                "function": {"name": "inspect", "arguments": "{}"},
+            }]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "done"},
+        ],
+        tools=[{"type": "function", "function": {
+            "name": "inspect", "description": "Inspect.",
+            "parameters": {"type": "object", "properties": {}},
+        }}],
+        parameters={
+            "tool_choice": "auto",
+            "temperature": 0,
+            "reasoning_effort": "low",
+            "max_tokens": 100,
+            "response_format": {"type": "json_schema", "json_schema": {
+                "name": "result", "strict": True,
+                "schema": {"type": "object", "properties": {}},
+            }},
+        },
+    )
+
+    payload = encode_responses_request(
+        ProviderSettings(model_name="model", api_protocol="responses"), request
+    )
+
+    assert payload["model"] == "model"
+    assert payload["store"] is False
+    assert payload["input"][1]["content"][1] == {
+        "type": "input_image", "image_url": image,
+    }
+    assert payload["input"][2] == {
+        "role": "assistant",
+        "content": [{"type": "output_text", "text": "I will inspect."}],
+    }
+    assert payload["input"][3] == {
+        "type": "function_call", "call_id": "call_1",
+        "name": "inspect", "arguments": "{}",
+    }
+    assert payload["input"][4] == {
+        "type": "function_call_output", "call_id": "call_1", "output": "done",
+    }
+    assert payload["tools"][0]["name"] == "inspect"
+    assert "function" not in payload["tools"][0]
+    assert payload["reasoning"] == {"effort": "low"}
+    assert payload["max_output_tokens"] == 100
+    assert payload["text"]["format"]["type"] == "json_schema"
+
+
+def test_responses_decode_normalizes_public_text_and_function_calls():
+    body = json.dumps({
+        "id": "resp_1", "model": "model", "status": "completed",
+        "output": [
+            {"type": "reasoning", "summary": [{"text": "private"}]},
+            {"type": "message", "content": [
+                {"type": "output_text", "text": "Checking."},
+            ]},
+            {"type": "function_call", "call_id": "call_1",
+             "name": "inspect", "arguments": "{}"},
+        ],
+        "usage": {"input_tokens": 10, "output_tokens": 3, "total_tokens": 13},
+    }).encode()
+
+    data = decode_responses_response(body)
+
+    assert data["choices"][0]["finish_reason"] == "tool_calls"
+    assert data["choices"][0]["message"] == {
+        "role": "assistant", "content": "Checking.",
+        "tool_calls": [{"id": "call_1", "type": "function", "function": {
+            "name": "inspect", "arguments": "{}",
+        }}],
+    }
+    assert "private" not in json.dumps(data)
+    assert data["usage"]["input_tokens"] == 10
+
+
+def test_responses_client_uses_sdk_resource_and_logical_wire_audit():
+    raw = _SdkValue({
+        "id": "resp_1", "model": "model", "status": "completed",
+        "output": [{"type": "message", "content": [
+            {"type": "output_text", "text": "hello"},
+        ]}],
+    })
+    sdk = _FakeSdk(responses=raw)
+    client = DefaultModelClient(
+        ProviderSettings(model_name="model", api_protocol="responses"),
+        sdk_client=sdk,
+    )
+
+    result = client.request(ModelRequest(
+        [{"role": "user", "content": "hi"}],
+        parameters={"reasoning_effort": "low"},
+    ))
+
+    sent = sdk.responses_create.calls[0]
+    assert sent["input"][0]["content"][0]["text"] == "hi"
+    assert sent["reasoning"] == {"effort": "low"}
+    assert "messages" not in sent
+    assert result.text == "hello"
+    assert result.request_snapshot["input"] == sent["input"]
 
 
 @pytest.mark.parametrize("kwargs", [
     {"timeout_sec": 0}, {"provider_timeout_retries": -1},
     {"provider_connection_retries": -1}, {"provider_timeout_retries": True},
+    {"stream": "true"},
 ])
 def test_invalid_transport_settings(kwargs):
     with pytest.raises(ValueError):
         ProviderSettings(**kwargs)
 
 
-def test_unknown_provider_fails_before_io(monkeypatch):
-    monkeypatch.setattr("src.llm.client.request_bytes", lambda *a, **k: pytest.fail("no I/O"))
-    with pytest.raises(ValueError, match="Unsupported"):
-        DefaultModelClient(ProviderSettings(provider="unknown")).request(
-            ModelRequest([]), error_prefix="test")
+def test_unknown_provider_fails_before_io():
+    with pytest.raises(ValueError, match="unsupported model provider"):
+        ProviderSettings(provider="unknown")
 
 
-def test_client_no_hidden_state_and_safe_audit(monkeypatch):
+def test_client_no_hidden_state_and_safe_audit():
     image = "data:image/png;base64," + base64.b64encode(b"example image bytes").decode()
     messages = [{"role": "user", "content": [
         {"type": "text", "text": "CURRENT observation_id=obs_1"},
         {"type": "image_url", "image_url": {"url": image}}]}]
     original = copy.deepcopy(messages)
-    calls = []
-
-    def transport(url, **kwargs):
-        calls.append((url, kwargs))
-        kwargs["transport_trace"].update(attempt_count=1, retry_count=0, final_status="success")
-        return json.dumps({"choices": [{"message": {
-            "content": None, "tool_calls": [], "reasoning_content": "private thought"},
-            "finish_reason": "tool_calls"}]}).encode()
-
-    monkeypatch.setattr("src.llm.client.request_bytes", transport)
+    sdk = _FakeSdk(chat=_SdkValue({"choices": [{"message": {
+        "content": None, "tool_calls": [], "reasoning_content": "private thought"},
+        "finish_reason": "tool_calls"}]}))
     settings = ProviderSettings(model_name="test", api_key="secret-key")
-    client = DefaultModelClient(settings)
+    client = DefaultModelClient(settings, sdk_client=sdk)
     result = client.request(ModelRequest(messages), error_prefix="test")
     client.request(ModelRequest([]), error_prefix="test")
     assert messages == original
-    assert json.loads(calls[0][1]["body"])["messages"] == messages
-    assert json.loads(calls[1][1]["body"])["messages"] == []
-    assert calls[0][1]["headers"]["Authorization"] == "Bearer secret-key"
+    assert sdk.chat.completions.calls[0]["messages"] == messages
+    assert sdk.chat.completions.calls[1]["messages"] == []
     assert result.media[0]["data"] == b"example image bytes"
     assert result.media[0]["request_path"] == ["messages", 0, "content", 1, "image_url", "url"]
     assert "timeline_role" not in result.media[0]
@@ -165,6 +329,27 @@ def test_llm_dependency_boundary():
                 imports.extend(alias.name for alias in node.names)
         assert not any(name.startswith(forbidden) for name in imports), path
     assert not (root / "src/agent" / "provider_http.py").exists()
+    assert not (root / "src/llm" / "transport.py").exists()
+    assert not (root / "src/llm/providers/codex_sdk").exists()
+    assert not (root / "requirements-codex.txt").exists()
+
+
+def test_model_callers_do_not_import_urllib_transport():
+    root = Path(__file__).resolve().parents[1]
+    model_callers = [
+        root / "src/llm",
+        root / "evaluation/benchmarks/uav_flow/sr_judge.py",
+        root / "evaluation/benchmarks/uav_flow/visual_diagnostics.py",
+        root / "plugins/research/stmr_map/perception/model_landmark_extractor.py",
+        root / "tests/manual/model_multimodal_smoke.py",
+        root / "tests/manual/visual_instruction_eval.py",
+    ]
+    for entry in model_callers:
+        paths = entry.rglob("*.py") if entry.is_dir() else [entry]
+        for path in paths:
+            source = path.read_text(encoding="utf-8")
+            assert "urllib.request" not in source, path
+            assert "urllib.error" not in source, path
 
 
 @pytest.mark.parametrize("content,expected", [
@@ -208,17 +393,100 @@ def test_response_conveniences_are_read_only_and_nested_copies():
             setattr(response, attribute, value)
 
 
-@pytest.mark.parametrize("prefix", [None, "Custom label"])
-def test_error_prefix_default_and_override(monkeypatch, prefix):
-    captured = {}
-
-    def transport(url, **kwargs):
-        captured.update(kwargs)
-        return b'{"choices":[{"message":{"content":"hello"}}]}'
-
-    monkeypatch.setattr("src.llm.client.request_bytes", transport)
-    client = DefaultModelClient(ProviderSettings())
-    kwargs = {} if prefix is None else {"error_prefix": prefix}
-    response = client.request(ModelRequest([]), **kwargs)
+def test_sdk_success_uses_existing_model_response_contract():
+    client = DefaultModelClient(
+        ProviderSettings(), sdk_client=_FakeSdk(chat=_chat_response())
+    )
+    response = client.request(ModelRequest([]), error_prefix="Custom label")
     assert response.text == "hello"
-    assert captured["error_prefix"] == (prefix or "Model request failed")
+    assert response.transport_trace["backend"] == "openai_python_sdk"
+
+
+def test_streaming_client_requests_sse_and_normalizes_tool_calls():
+    body = b"".join(
+        [
+            b'data: {"id":"resp_1","model":"gpt-test","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}\n\n',
+            b'data: {"id":"resp_1","model":"gpt-test","choices":[{"index":0,"delta":{"content":"Checking. ","reasoning_content":"private","tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"uav_move_","arguments":"{\\"vx\\":"}}]},"finish_reason":null}]}\n\n',
+            b'data: {"id":"resp_1","model":"gpt-test","choices":[{"index":0,"delta":{"content":"Moving.","tool_calls":[{"index":0,"function":{"name":"body","arguments":"1}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+            b'data: {"id":"resp_1","model":"gpt-test","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":4,"total_tokens":14}}\n\n',
+            b'data: [DONE]\n\n',
+        ]
+    )
+    sdk = _FakeSdk(stream=_RawResponse(body))
+    result = DefaultModelClient(
+        ProviderSettings(model_name="gpt-test", stream=True), sdk_client=sdk
+    ).request(ModelRequest([{"role": "user", "content": "move"}]))
+
+    sent = sdk.chat.completions.with_streaming_response.create.__self__.calls[0]
+    assert sent["stream"] is True
+    assert result.text == "Checking. Moving."
+    assert result.tool_calls == [
+        {
+            "id": "call_1",
+            "type": "function",
+            "function": {"name": "uav_move_body", "arguments": '{"vx":1}'},
+        }
+    ]
+    assert result.usage == {
+        "prompt_tokens": 10,
+        "completion_tokens": 4,
+        "total_tokens": 14,
+    }
+    assert result.data["choices"][0]["finish_reason"] == "tool_calls"
+    assert "reasoning_content" not in json.dumps(result.data)
+
+
+def test_stream_decoder_accepts_json_provider_fallback():
+    data = decode_response(
+        b'{"model":"test","choices":[{"message":{"content":"hello"}}]}',
+        stream=True,
+    )
+
+    assert data["choices"][0]["message"]["content"] == "hello"
+
+
+def test_stream_completion_requires_terminal_choice_and_complete_tool_call():
+    complete = b"".join(
+        [
+            b'data: {"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"uav_move_body","arguments":"{\\"vx\\":1}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+        ]
+    )
+    missing_finish = complete.replace(b'"tool_calls"}]}', b'null}]}')
+    truncated_arguments = complete.replace(b'{\\"vx\\":1}', b'{\\"vx\\":')
+
+    assert is_complete_stream_response(complete) is True
+    assert is_complete_stream_response(missing_finish) is False
+    assert is_complete_stream_response(truncated_arguments) is False
+
+
+@pytest.mark.parametrize(
+    "body,match",
+    [
+        (b"data: [DONE]\n\n", "no JSON chunks"),
+        (
+            b'data: {"model":"test","choices":[],"usage":{"total_tokens":1}}\n\ndata: [DONE]\n\n',
+            "no choices",
+        ),
+        (
+            b'data: {"error":{"message":"upstream unavailable"}}\n\n',
+            "upstream unavailable",
+        ),
+    ],
+)
+def test_stream_decoder_rejects_incomplete_or_error_streams(body, match):
+    with pytest.raises(ValueError, match=match):
+        decode_response(body, stream=True)
+
+
+def test_stream_protocol_error_marks_transport_trace_invalid():
+    trace = {}
+    client = DefaultModelClient(
+        ProviderSettings(stream=True),
+        sdk_client=_FakeSdk(stream=_RawResponse(b"data: [DONE]\n\n")),
+    )
+
+    with pytest.raises(ValueError, match="no JSON chunks"):
+        client.request(ModelRequest([]), transport_trace=trace)
+
+    assert trace["final_status"] == "failed"
+    assert trace["failure_category"] == "invalid_response"

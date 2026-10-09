@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from src.env_client.schemas import MapPackage
+from src.sim_server.preview.base import PreviewConfig, add_preview_camera
 
 
 @dataclass(frozen=True)
@@ -31,6 +32,8 @@ class AirSimSettingsRenderer:
         destination: str | Path,
         api_server_port: int,
         template_path: str | Path | None = None,
+        *,
+        preview_config: PreviewConfig | None = None,
     ) -> RenderedAirSimSettings:
         template_value = (
             template_path
@@ -47,6 +50,8 @@ class AirSimSettingsRenderer:
         bind_host = package.connection.get("bind_host")
         if bind_host:
             settings["LocalHostIp"] = str(bind_host)
+        if preview_config is not None:
+            add_preview_camera(settings, package.airsim["vehicle_name"], package.airsim["camera_name"], preview_config)
 
         destination_path = Path(destination)
         destination_path.parent.mkdir(parents=True, exist_ok=True)

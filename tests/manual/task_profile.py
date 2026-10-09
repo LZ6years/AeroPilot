@@ -16,7 +16,6 @@ from pathlib import Path
 import threading
 import sys
 import time
-from types import SimpleNamespace
 from unittest.mock import patch
 
 
@@ -105,33 +104,6 @@ class TaskProfile:
 
 
 @contextmanager
-def transport_hooks(profile):
-    """Time actual HTTP attempts and retry sleeps, scoped to the LLM transport.
-
-Use local module facades so unrelated urllib callers and simulator sleeps are
-untouched. The request/response bytes, timeout and original retry policy pass
-through verbatim; the response read stays inside the HTTP span.
-    """
-    from src.llm import transport
-    original_open = transport.urllib.request.urlopen
-
-    @contextmanager
-    def measured_open(*args, **kwargs):
-        with profile.span("model.http_attempt"):
-            with original_open(*args, **kwargs) as response:
-                yield response
-
-    with ExitStack() as stack:
-        request = SimpleNamespace(Request=transport.urllib.request.Request, urlopen=measured_open)
-        stack.enter_context(patch.object(transport, "urllib", SimpleNamespace(
-            request=request, error=transport.urllib.error)))
-        clock = SimpleNamespace(sleep=transport.time.sleep)
-        profile.wrap(stack, clock, "sleep", "model.retry_wait")
-        stack.enter_context(patch.object(transport, "time", clock))
-        yield
-
-
-@contextmanager
 def install_profile(profile):
     """Install observational hooks after imports, only for this experiment."""
     from src.agent.planning.model_action_planner import ModelActionPlanner
@@ -157,7 +129,6 @@ def install_profile(profile):
     from plugins.capabilities.visual_grounding.measure_visible_depth.scripts.backends.sam import SamBackend
 
     with ExitStack() as stack:
-        stack.enter_context(transport_hooks(profile))
         stack.enter_context(inference_observer(profile.inference_event))
         original_invoke = ReadOnlyBatchExecutor._invoke
         def measured_invoke(executor, job):

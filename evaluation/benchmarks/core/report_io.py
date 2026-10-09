@@ -11,7 +11,13 @@ from __future__ import annotations
 
 import os
 import tempfile
+import json
 from pathlib import Path
+
+
+def write_json(path, value):
+    """Atomically persist structured progress and report metadata."""
+    return atomic_write_text(path, json.dumps(value, ensure_ascii=False, indent=2))
 
 
 def atomic_write_text(

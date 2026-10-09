@@ -258,7 +258,7 @@ class AttachRemoteControl:
     ],
 )
 def test_ready_remote_scene_attaches_without_owning_external_ue(
-    tmp_path, execution_mode
+    tmp_path, execution_mode, monkeypatch
 ):
     template = _template(tmp_path)
     package = _package("remote_air", "remote", "airsim", template)
@@ -274,6 +274,10 @@ def test_ready_remote_scene_attaches_without_owning_external_ue(
         backend_registry=registry,
     )
     client = SimulatorEnvClient(service)
+
+    # The fake tunnel never binds a socket. Keep this ownership test independent
+    # of real evaluation tunnels using the same fixture port on this host.
+    monkeypatch.setattr(service.port_manager, "_is_available", lambda port: True)
 
     scene = client.start_scene("remote_air")
     assert scene.process_ownership == "external"

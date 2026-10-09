@@ -242,7 +242,7 @@ def main() -> None:
         "probe_only": True,
         "physical_execution": False,
         "model_config": config.redacted_summary(),
-        "chat_completions_url": config.chat_completions_url(),
+        "sdk_base_url": config.base_url,
         "first_turn": first_turn.to_dict(),
         "second_turn": second_turn.to_dict(),
         "third_turn": third_turn.to_dict(),

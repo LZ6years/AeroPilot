@@ -180,9 +180,13 @@ def _outcome_from_state(
     )
 
 
-def _error_payload(exc: Exception) -> dict[str, str]:
+def _error_payload(exc: Exception) -> dict[str, Any]:
     exc = getattr(exc, "original_error", exc)
-    return {"error_type": type(exc).__name__, "error": str(exc)}
+    from src.llm import ProviderRequestError
+    payload = {"error_type": type(exc).__name__, "error": str(exc)}
+    if isinstance(exc, ProviderRequestError):
+        payload.update(exc.to_dict())
+    return payload
 
 
 def _write_planner_manifest(

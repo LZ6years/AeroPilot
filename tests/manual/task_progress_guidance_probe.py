@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tests.manual.tool_selection_ablation_probe import restore_request, digest, wire_check
-from src.llm import DefaultModelClient, ModelRequest
+from src.llm import ModelRequest, create_model_client
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import public_response_snapshot
 from src.agent.config import load_model_config
@@ -144,7 +144,7 @@ def run(run_dirs, output, *, validate_only=False, client=None, model=None):
     results, status = [], 'validated_only' if validate_only else 'running'
     try:
         if not validate_only:
-            client = client or DefaultModelClient(settings)
+            client = client or create_model_client(settings)
             for index, sample in enumerate(samples):
                 for repeat in range(3):
                     offset = (index + repeat) % 3

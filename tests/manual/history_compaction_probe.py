@@ -37,7 +37,7 @@ from src.agent.context.compression.validator import CompressionValidator
 from src.agent.context.projection import HistoryProjector
 from src.agent.context.window_manager import ContextWindowManager
 from src.agent.transcript import AgentToolCall, AssistantTurn, ToolResult, TranscriptEvent
-from src.llm import DefaultModelClient
+from src.llm import create_model_client
 from src.tools.registry import default_registry
 
 
@@ -107,7 +107,9 @@ def main() -> int:
         provider_connection_retries=config.compactor_connection_retries,
     )
     compactor = ModelHistoryCompactor(
-        DefaultModelClient(settings), summary_max_tokens=config.summary_max_tokens
+        create_model_client(settings), summary_max_tokens=config.summary_max_tokens,
+        thinking_parameters=provider.compaction_parameters(),
+        structured_output_format=provider.structured_output_format,
     )
     manager = ContextWindowManager(HistoryProjector(), config, compactor=compactor)
     registry = default_registry()
@@ -125,7 +127,8 @@ def main() -> int:
         "timeout_sec": settings.timeout_sec,
         "timeout_retries": settings.provider_timeout_retries,
         "connection_retries": settings.provider_connection_retries,
-        "thinking": {"type": "disabled"},
+        "thinking_parameters": provider.compaction_parameters(),
+        "structured_output_format": provider.structured_output_format,
         "compression_config": {
             "prefetch_trigger_tokens": config.prefetch_trigger_tokens,
             "soft_trigger_tokens": config.soft_trigger_tokens,

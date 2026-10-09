@@ -89,12 +89,40 @@ def default_registry(capability_source=None,
     registry.register(_primitive(
         "move_body", "Translate the vehicle using body-frame velocity components for a specified duration. "
         "Applicable to changing position, including horizontal or vertical movement. Returns execution "
-        "feedback. Safety intervention may change the applied motion; vehicle displacement alone does not "
-        "establish distance to a target.",
-        physical, tuple(ToolParameter(name, "number", MOVE_BODY_ARGUMENT_SEMANTICS[name], True)
-                        for name in ("vx", "vy", "vz")) + (
-            ToolParameter("duration", "number", MOVE_BODY_ARGUMENT_SEMANTICS["duration"], True,
-                          {"exclusiveMinimum": 0, "maximum": safety.max_move_duration_sec}),),
+        "feedback. Approximate requested horizontal distance is sqrt(vx^2 + vy^2) * duration, and approximate "
+        "requested vertical distance is abs(vz) * duration. Parameter limits are maximum permissions, not "
+        "default choices. Safety intervention may change the applied motion, so ToolResult is authoritative "
+        "for actual displacement; vehicle displacement alone does not establish distance to a target.",
+        physical, (
+            ToolParameter(
+                "vx", "number", MOVE_BODY_ARGUMENT_SEMANTICS["vx"], True,
+                {
+                    "minimum": -abs(safety.max_linear_velocity_mps),
+                    "maximum": abs(safety.max_linear_velocity_mps),
+                },
+            ),
+            ToolParameter(
+                "vy", "number", MOVE_BODY_ARGUMENT_SEMANTICS["vy"], True,
+                {
+                    "minimum": -abs(safety.max_linear_velocity_mps),
+                    "maximum": abs(safety.max_linear_velocity_mps),
+                },
+            ),
+            ToolParameter(
+                "vz", "number", MOVE_BODY_ARGUMENT_SEMANTICS["vz"], True,
+                {
+                    "minimum": -abs(safety.max_vertical_velocity_mps),
+                    "maximum": abs(safety.max_vertical_velocity_mps),
+                },
+            ),
+            ToolParameter(
+                "duration",
+                "number",
+                MOVE_BODY_ARGUMENT_SEMANTICS["duration"],
+                True,
+                {"exclusiveMinimum": 0, "maximum": safety.max_move_duration_sec},
+            ),
+        ),
     ))
     registry.register(ToolSpec(
         name="env.observe", wire_name="env_observe", kind="observation",

@@ -21,7 +21,7 @@ from the start. Near the requested height or a surface, shorten the step or use
 a simpler final correction when preserving the exact ratio would add risk or
 increase error.
 
-Do not use tiny repeated steps merely because the angle is small. While the
-remaining altitude change is large and the scene is safe, use a bounded move
-that preserves the requested component relation, then reduce the step near the
-target condition.
+Choose the next observation position from the remaining altitude relation, the
+previous window's requested and actual vertical displacement, and the observed
+surface change. Preserve the requested component relation while it remains
+applicable, then recalibrate as the target condition or visible geometry changes.

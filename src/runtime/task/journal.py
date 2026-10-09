@@ -24,6 +24,11 @@ PUBLIC_RUNTIME_EVENTS = frozenset(
         "tool_step_completed",
         "observation_updated",
         "runtime_loop_guard_reached",
+        "instruction_completed",
+        "tool_turn_rejected",
+        "planner_request_started",
+        "operator_control",
+        "operator_decision_discarded",
     }
 )
 
@@ -146,6 +151,21 @@ class RuntimeJournal:
     ) -> None:
         """Persist the exact provider exchange and its canonical Runtime turn."""
 
+        if not getattr(self.recorder, "capture_provider_debug", True):
+            exchange = getattr(planner, "last_exchange", None) or {}
+            response = exchange.get("response") or {}
+            self.write_turn("model_turn_recorded", {
+                "decision_id": decision_id,
+                "instruction_id": session.transcript.instruction_id,
+                "loop_schema": "unified_tool_loop_v2",
+                "transport": exchange.get("transport", {}),
+                "usage": response.get("usage") if isinstance(response, dict) else None,
+                "error_type": error_type,
+                "canonical_turn": turn.to_dict() if turn is not None else None,
+                "observation_id": session.transcript.latest_observation_id(),
+            })
+            return
+
         record = self._provider_round_snapshot(
             planner,
             session.decision_index,
@@ -193,6 +213,8 @@ class RuntimeJournal:
                 "debug_ref": debug_ref,
                 "instruction_id": instruction_id,
                 "loop_schema": "unified_tool_loop_v2",
+                "canonical_turn": turn.to_dict() if turn is not None else None,
+                "observation_id": session.transcript.latest_observation_id(),
             },
         )
 

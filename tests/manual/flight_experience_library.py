@@ -70,13 +70,13 @@ def main():
             parser.error("Choose exactly one of --ids or --all")
         result = store.enqueue(store.list_ids() if args.all else args.ids, request_key=args.request_key)
     elif args.command == "worker":
-        from src.llm import DefaultModelClient
+        from src.llm import create_model_client
         from src.agent.config import load_model_config
         model = load_model_config(args.env)
         reflection = replace(model.to_provider_settings(), model_name=args.reflection_model or model.model_name,timeout_sec=args.timeout,provider_timeout_retries=1)
         review = replace(model.to_provider_settings(), model_name=args.review_model or model.model_name,timeout_sec=args.timeout,provider_timeout_retries=1)
-        parameters = {"thinking": {"type": model.thinking_mode}} if model.thinking_mode else {}
-        instance = Worker(store, DefaultModelClient(reflection), DefaultModelClient(review), args.output, parameters=parameters)
+        parameters = model.thinking_parameters()
+        instance = Worker(store, create_model_client(reflection), create_model_client(review), args.output, parameters=parameters)
         while True:
             result = instance.run_once()
             if args.once:

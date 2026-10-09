@@ -18,8 +18,6 @@ from src.agent.config import ModelConfig
 
 def test_mock_two_rounds_persist_and_replay(tmp_path, monkeypatch):
     monkeypatch.setattr(demo, "load_model_config", lambda *a: pytest.fail("mock must not read .env"))
-    monkeypatch.setattr("src.llm.transport.urllib.request.urlopen",
-                        lambda *a, **k: pytest.fail("mock must not use HTTP"))
     output = tmp_path / "demo"
     assert demo.main(["--output-dir", str(output)]) == 0
     first = json.loads((output / "round_01_request.json").read_text(encoding="utf-8"))

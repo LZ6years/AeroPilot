@@ -8,6 +8,7 @@ import pytest
 from src.tools.registry import ToolRegistry, default_registry
 from src.tools.schemas import ToolParameter, ToolRuntimePolicy, ToolSpec
 from src.tools.validation import ToolArgumentError, validate_tool_args
+from src.uav.config import UavSafetyConfig
 
 
 def test_plugin_conversion_preserves_nested_constraints_and_extensions():
@@ -69,6 +70,36 @@ def test_allowlist_cannot_reopen_hidden_runtime_tools():
     assert registry.model_specs({"uav.hover"}) == []
     assert {s.name for s in registry.model_specs({"uav.hover", "uav.turn_relative"})} == {"uav.turn_relative"}
     assert "uav.hover" not in {s.name for s in registry.model_specs()}
+
+
+def test_move_body_schema_exposes_runtime_safety_ranges():
+    safety = UavSafetyConfig(
+        max_linear_velocity_mps=5.5,
+        max_vertical_velocity_mps=2.5,
+        max_move_duration_sec=7.0,
+    )
+    spec = default_registry(safety_config=safety).get("uav.move_body")
+    properties = spec.input_schema["properties"]
+    assert properties["vx"]["minimum"] == -5.5
+    assert properties["vx"]["maximum"] == 5.5
+    assert properties["vy"]["minimum"] == -5.5
+    assert properties["vy"]["maximum"] == 5.5
+    assert properties["vz"]["minimum"] == -2.5
+    assert properties["vz"]["maximum"] == 2.5
+    assert properties["duration"]["maximum"] == 7.0
+    assert "sqrt(vx^2 + vy^2) * duration" in spec.description
+    assert "abs(vz) * duration" in spec.description
+    assert "maximum permissions, not default choices" in spec.description
+    assert "ToolResult is authoritative" in spec.description
+    validate_tool_args(
+        {"vx": 5.5, "vy": -5.5, "vz": 2.5, "duration": 7.0},
+        spec.input_schema,
+    )
+    with pytest.raises(ToolArgumentError):
+        validate_tool_args(
+            {"vx": 5.6, "vy": 0, "vz": 0, "duration": 1},
+            spec.input_schema,
+        )
 
 
 def test_parameter_names_cannot_be_duplicated():

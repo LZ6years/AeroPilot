@@ -10,6 +10,9 @@
 # Testing
 pytest>=8.0,<9.0
 
+# Model provider client (Chat Completions and Responses API)
+openai==3.24.0
+
 # Image / numeric handling for RGB, depth, and future observation artifacts
 numpy==1.24.4
 opencv-python>=4.8,<5.0

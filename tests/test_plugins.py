@@ -121,8 +121,8 @@ def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources
     assert "Visual Target Task Reasoning" in summary["skill_text"]
     normalized_summary = " ".join(summary["skill_text"].split())
     assert "## Evidence Model" in summary["skill_text"]
-    assert "no candidate currently observed" in normalized_summary
-    assert "uncertain candidate" in normalized_summary
+    assert "candidate outside the current view" in normalized_summary
+    assert "tentative candidate" in normalized_summary
     assert "directional cue" in normalized_summary
     assert "usable bearing" in normalized_summary
     assert "Current bearing supports alignment" in normalized_summary
@@ -153,8 +153,8 @@ def test_skill_loader_lists_references_without_executing_scripts():
 
     visual_refs = summaries["visual_target_task_reasoning"]["available_references"]
     assert visual_refs == ["references/search_under_uncertainty.md"]
-    assert "no candidate currently observed" in summaries["visual_target_task_reasoning"]["skill_text"]
-    assert "uncertain candidate" in summaries["visual_target_task_reasoning"]["skill_text"]
+    assert "candidate outside the current view" in summaries["visual_target_task_reasoning"]["skill_text"]
+    assert "tentative candidate" in summaries["visual_target_task_reasoning"]["skill_text"]
     assert "30-45 degrees" not in summaries["visual_target_task_reasoning"]["skill_text"]
     assert summaries["visual_target_task_reasoning"]["assets"]["scripts"] == []
     planner_guidance = SkillContentLoader().load_planner_guidance(accepted[0])
@@ -185,14 +185,14 @@ def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmati
     normalized_skill_text = " ".join(skill_text.split())
     normalized_reference_text = " ".join(reference_text.split())
 
-    assert "no candidate currently observed" in normalized_skill_text
-    assert "uncertain candidate" in normalized_skill_text
+    assert "candidate outside the current view" in normalized_skill_text
+    assert "tentative candidate" in normalized_skill_text
     assert "directional cue" in normalized_skill_text
     assert "30-45 degrees" not in normalized_skill_text
     assert "current phase decision" not in normalized_skill_text
     assert "artifact paths" not in normalized_skill_text
     assert "hidden benchmark" not in normalized_skill_text
-    assert "Inspection does not accept identity" in normalized_skill_text
+    assert "Inspection and arrival remain separate outcomes" in normalized_skill_text
     assert "Contradicted attributes" in normalized_skill_text
     assert "view overlap" in normalized_reference_text
     assert "30-45" not in reference_text and "5-15" not in reference_text
@@ -216,10 +216,10 @@ def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_refe
     assert "at the requested drop" in normalized
     assert "near the landing surface" in normalized
     assert "shorten adjustments" in normalized
-    assert "a smaller adjustment still needs a safe supported direction" in normalized
+    assert "meaningfully different viewpoint or clearance" in normalized
     assert "landing region" in normalized
     assert "height change, progress, clearance and surface cues" in normalized
-    assert "near a surface" in normalized  # recovery still limits downward steps
+    assert "Near a surface" in normalized
     assert "risk or error" in normalized
     assert "Angled paths deviate from the vertical axis" in normalized
     assert "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))" not in normalized
@@ -231,7 +231,7 @@ def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_refe
     assert "relative to the horizontal plane" not in normalized
     assert "abs(vertical_speed) / horizontal_speed = tan(angle)" not in normalized
     assert "yaw, heading, pitch or camera angle" in normalized
-    assert "effective bounded progress" in normalized
+    assert "effective bounded progress" not in normalized
     assert "reasonable tolerance" in normalized
     assert "not decimal correction" in normalized
     assert "contact sensor" not in normalized
@@ -261,11 +261,11 @@ def test_route_traversal_skill_keeps_completion_core_and_optional_examples():
     assert "route progress" in normalized
     assert "pass through" in normalized
     assert "gap" in normalized
-    assert "bounded translation" in normalized
+    assert "translate through or past it" in normalized
     assert "first useful route view with the latest view" in normalized
     assert "cue is not necessarily a destination" in normalized
     assert "exact unseen boundary" in normalized
-    assert "not a fixed maneuver sequence" in normalized
+    assert "Choose the next observation point" in normalized
     assert "Yaw can inspect a route or change image bearing" in normalized
     assert "Cue absence alone is ambiguous" in normalized
     assert "Passage completion requires a terminal route relation" in normalized
@@ -305,7 +305,7 @@ def test_approach_skill_stops_before_overshoot_and_excludes_route_references():
     assert "before correcting distance" in normalized
     assert "Numeric standoff needs valid target-relative measurement" in normalized
     assert "no repeated measurement is imposed" in normalized
-    assert "not an obligatory direction" in normalized
+    assert "Turn, rise, shift or retrace" in normalized
     forbidden_terms = [
         "UAV-Flow",
         "UnrealCV",
@@ -355,7 +355,7 @@ def test_orbit_and_surround_skill_contains_orbit_guidance_without_runtime_intern
     assert "Orbit direction controls the shift direction, not the yaw sign" in normalized
     assert "Stop orbit movement" in normalized
     assert "repeated radial corrections" in normalized
-    assert "do not enforce a fixed maneuver sequence" in normalized
+    assert "choose a different circulation viewpoint" in normalized
     assert "semantic phase" not in normalized
     assert "phase_decision" not in normalized
     assert "phase_progress_evidence" not in normalized

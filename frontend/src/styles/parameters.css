@@ -1,0 +1,30 @@
+.request-parameters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  max-height: 58px;
+  overflow: auto;
+  font-family: Consolas, monospace;
+  color: #b8ccdd;
+  font-size: 13px;
+}
+.request-parameters > span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.decision-list button strong {
+  flex-shrink: 0;
+  min-width: 48px;
+}
+.decision-list button time {
+  flex-shrink: 0;
+}
+.compact-call {
+  max-height: 83px;
+  overflow: auto;
+}
+.preview-image:fullscreen > img {
+  object-fit: contain;
+}

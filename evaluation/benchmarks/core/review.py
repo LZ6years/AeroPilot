@@ -1758,6 +1758,7 @@ def _provider_round(
     }
     tools = request.get("tools")
     request_messages = request.get("messages")
+    request_title = "Captured OpenAI SDK Request Payload"
     if not request:
         availability = (
             '<p class="empty">Exact provider request unavailable for this model round.</p>'
@@ -1776,7 +1777,7 @@ def _provider_round(
         + "<h5>Runtime handling</h5>"
         + _json_details(outcome, "Protocol feedback and ToolResults")
         + _json_details(canonical, "Canonical parsed turn (may be rejected by Runtime)")
-        + "<h5>Actual Provider Request</h5>"
+        + "<h5>" + _e(request_title) + "</h5>"
         + history_projection_review(model_round.get("history_projection"))
         + _json_details(request_messages, "Complete request messages")
         + _readable_request_messages(request_messages)

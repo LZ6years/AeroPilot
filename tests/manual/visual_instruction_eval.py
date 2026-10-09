@@ -29,8 +29,6 @@ import hashlib
 import json
 import sys
 import time
-import urllib.error
-import urllib.request
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -49,6 +47,7 @@ from src.memory.context.registry import ContextModuleRegistry
 from src.memory.flight_memory import FlightMemory
 from src.memory.stores import MapMemoryStore, MemoryEventWriter, MemoryRecordReader
 from src.agent.config import ModelConfig, load_model_config
+from src.llm import ModelClient, ModelRequest, create_model_client
 
 
 DEFAULT_CASES = REPO_ROOT / "tests" / "fixtures" / "visual_instruction_cases.json"
@@ -311,6 +310,7 @@ def call_visual_eval_model(
     case: dict[str, Any],
     *,
     run_dir: str | Path,
+    model_client: ModelClient | None = None,
 ) -> dict[str, Any]:
     if not config.api_key:
         raise RuntimeError("Missing FLYAGENT_MODEL_API_KEY; API key will not be printed.")
@@ -354,29 +354,26 @@ def call_visual_eval_model(
         "response_format": {"type": "json_object"},
     }
     started = time.perf_counter()
-    request = urllib.request.Request(
-        config.chat_completions_url(),
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    client = model_client or create_model_client(config.to_provider_settings())
+    response = client.request(
+        ModelRequest(
+            messages=payload["messages"],
+            parameters={
+                key: value
+                for key, value in payload.items()
+                if key not in {"model", "messages", "tools", "stream"}
+            },
+        ),
+        error_prefix="visual eval request failed",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=config.timeout_sec) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"visual eval request failed: HTTP {exc.code} {exc.reason}; body={body}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"visual eval request failed: {exc}") from exc
     duration_sec = round(time.perf_counter() - started, 3)
-    content = data["choices"][0]["message"]["content"]
+    content = response.text
+    if content is None:
+        raise RuntimeError("visual eval response contained no text")
     return {
         "parsed": _loads_json_object(content),
         "duration_sec": duration_sec,
-        "usage": data.get("usage", {}),
+        "usage": response.usage or {},
         "model": config.model_name,
     }
 
@@ -457,6 +454,11 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     work_root = output_dir / "memory_cases"
     model_config = load_model_config(args.env_path) if args.call_model else None
+    model_client = (
+        create_model_client(model_config.to_provider_settings())
+        if model_config is not None
+        else None
+    )
     console_lines = [
         f"cases={len(cases)}",
         f"context_config={_repo_path(args.context_config)}",
@@ -478,6 +480,7 @@ def main() -> None:
                 context,
                 case,
                 run_dir=case_run_dir,
+                model_client=model_client,
             )
             if model_config
             else None

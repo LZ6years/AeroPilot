@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import re
 import time
@@ -32,6 +33,8 @@ class ModelHistoryCompactor:
         *,
         summary_max_tokens: int,
         prompt_path: str | Path | None = None,
+        thinking_parameters: dict[str, Any] | None = None,
+        structured_output_format: str = "json_schema",
     ) -> None:
         self.client = client
         self.summary_max_tokens = summary_max_tokens
@@ -41,6 +44,18 @@ class ModelHistoryCompactor:
             else Path(__file__).parent / "prompts" / "history_compaction_system.txt"
         )
         self.system_prompt = path.read_text(encoding="utf-8").strip()
+        # Runtime injects the provider dialect. The legacy default preserves
+        # standalone callers that predate explicit thinking-wire selection.
+        self.thinking_parameters = deepcopy(
+            {"thinking": {"type": "disabled"}}
+            if thinking_parameters is None
+            else thinking_parameters
+        )
+        if structured_output_format not in ("json_schema", "json_object"):
+            raise ValueError(
+                "structured_output_format must be json_schema or json_object"
+            )
+        self.structured_output_format = structured_output_format
 
     def compact(self, request: CompressionRequest) -> CompactionCallResult:
         model_request = self._model_request(request)
@@ -73,9 +88,7 @@ class ModelHistoryCompactor:
         encoded = json.dumps(
             {
                 "messages": model_request.messages,
-                "response_schema": model_request.parameters["response_format"][
-                    "json_schema"
-                ]["schema"],
+                "response_format": model_request.parameters["response_format"],
             },
             ensure_ascii=False,
             separators=(",", ":"),
@@ -109,6 +122,20 @@ class ModelHistoryCompactor:
                 request.deterministic_facts, canonical_to_alias
             ),
         }
+        response_format: dict[str, Any]
+        if self.structured_output_format == "json_object":
+            # The prompt requests JSON explicitly, and CompressionValidator
+            # remains the strict schema/evidence gate after generation.
+            response_format = {"type": "json_object"}
+        else:
+            response_format = {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "uav_history_compaction",
+                    "strict": True,
+                    "schema": summary_schema,
+                },
+            }
         return ModelRequest(
             messages=[
                 {"role": "system", "content": self.system_prompt},
@@ -125,15 +152,8 @@ class ModelHistoryCompactor:
                 # Structured consolidation does not need a second hidden
                 # reasoning budget. The provider default consumed thousands
                 # of reasoning tokens and could exceed the 300-second deadline.
-                "thinking": {"type": "disabled"},
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "uav_history_compaction",
-                        "strict": True,
-                        "schema": summary_schema,
-                    },
-                },
+                **deepcopy(self.thinking_parameters),
+                "response_format": response_format,
             },
         )
 

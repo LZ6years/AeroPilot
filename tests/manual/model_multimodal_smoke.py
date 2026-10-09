@@ -26,8 +26,6 @@ import json
 import os
 import sys
 import tempfile
-import urllib.error
-import urllib.request
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -42,6 +40,8 @@ from src.agent.context.media import MediaHydrator
 from src.agent.context.request_assembler import RequestAssembler
 from src.agent.config import ModelConfig, load_model_config
 from src.memory.context.media_refs import image_media_ref
+from src.llm import ModelRequest, create_model_client
+from src.llm.client import normalize_openai_base_url
 
 
 DEFAULT_MULTIMODAL_MODEL = "qwen3-vl-plus"
@@ -145,30 +145,26 @@ def build_payload(config: ModelConfig, context: dict[str, Any]) -> dict[str, Any
 
 
 def call_openai_compatible_json(config: ModelConfig, payload: dict[str, Any]) -> dict[str, Any]:
-    request = urllib.request.Request(
-        config.chat_completions_url(),
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
+    response = create_model_client(config.to_provider_settings()).request(
+        ModelRequest(
+            messages=payload["messages"],
+            parameters={
+                key: value
+                for key, value in payload.items()
+                if key not in {"model", "messages", "tools", "stream"}
+            },
+        ),
+        error_prefix="Qwen multimodal smoke request failed",
     )
-    try:
-        with urllib.request.urlopen(request, timeout=config.timeout_sec) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Qwen multimodal smoke request failed: HTTP {exc.code} {exc.reason}; body={body}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Qwen multimodal smoke request failed: {exc}") from exc
-    content = data["choices"][0]["message"]["content"]
+    content = response.text
+    if content is None:
+        raise RuntimeError("Qwen multimodal smoke response contained no text")
     return json.loads(content)
 
 
 def redacted_config_summary(config: ModelConfig) -> dict[str, Any]:
     summary = config.redacted_summary()
-    summary["chat_completions_url"] = config.chat_completions_url()
+    summary["sdk_base_url"] = normalize_openai_base_url(config.base_url)
     return summary
 
 

@@ -21,6 +21,7 @@ Context V3 感知 checkpoint、当前任务状态、历史工具结果与图像�
 
 - [文档索引](docs/README.md)
 - [架构与职责边界](docs/architecture.md)
+- [飞行工作台：启动、环境连接与决策回放](docs/operator_workbench.md)
 - [Context V3](docs/context_v3.md)
 - [插件系统](docs/plugin_system.md)
 - [测试与诊断](docs/testing.md)

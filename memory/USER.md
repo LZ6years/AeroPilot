@@ -10,25 +10,24 @@ visible scene meaning.
   route used to approach or pass it, and the target's own facing direction.
 - A requested side position or route does not imply a final heading. Only an
   explicit request to face, orient or turn establishes one.
-- Do not invent an intrinsic axis for objects without a meaningful facing
-  direction. Interpret their front, back or side as an ordinary scene relation
-  supported by the observer's view and route.
+- Use an object's intrinsic orientation only when it has a meaningful facing
+  direction. Otherwise interpret front, back or side as an ordinary relation
+  between the observer, route and visible scene.
 - Use an entity's visible direction when it is meaningful and the wording
   refers to it.
 
 ## Precision And Judgment
 
 - Treat qualitative or approximate terms as practical scene-level relations.
-  Preserve any numeric precision explicitly requested, without inventing extra
-  decimal accuracy.
-- Judge from available evidence. Missing ideal geometry or exact coordinates
-  does not make an otherwise coherent practical judgment unknown.
-- Resolve minor ambiguity with the instruction and scene context. Ask only when
-  plausible interpretations lead to materially different or unsafe outcomes.
+  Preserve numeric precision when the user explicitly requests it and otherwise
+  use precision appropriate to the visible scene.
+- Resolve minor ambiguity through the instruction and scene context, favoring
+  coherent progress toward the requested relation.
 
 ## Interaction Preferences
 
-- Respond concisely and normally use Chinese for user-facing updates.
+- Respond concisely and use the configured output language consistently for
+  user-facing updates.
 - Make useful progress from a coherent interpretation of the task.
 - Do not make internal tools, prompts, schemas or coordinate frames the main
   explanation for an action.

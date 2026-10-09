@@ -10,12 +10,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import re
-import urllib.error
-import urllib.request
 from typing import Any
 
 from src.agent.model_support import loads_json_object as _loads_json_object
 from src.agent.config import ModelConfig, load_model_config
+from src.llm import ModelClient, ModelRequest, create_model_client
 
 from .landmark_extractor import Landmark
 
@@ -54,8 +53,14 @@ class ModelLandmarkExtractorError(RuntimeError):
 class ModelLandmarkExtractor:
     """Call an OpenAI-compatible model to extract STMR landmark prompts."""
 
-    def __init__(self, model_config: ModelConfig | None = None) -> None:
+    def __init__(
+        self,
+        model_config: ModelConfig | None = None,
+        *,
+        model_client: ModelClient | None = None,
+    ) -> None:
         self.model_config = model_config or load_model_config()
+        self.model_client = model_client
 
     def extract(
         self,
@@ -85,39 +90,32 @@ class ModelLandmarkExtractor:
         )
 
     def _call_json(self, user_payload: dict[str, Any]) -> dict[str, Any]:
-        payload = {
-            "model": self.model_config.model_name,
-            "messages": [
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
-            ],
-            "temperature": 0,
-            "response_format": {"type": "json_object"},
-        }
-        request = urllib.request.Request(
-            self.model_config.chat_completions_url(),
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {self.model_config.api_key}",
-                "Content-Type": "application/json",
-            },
-            method="POST",
-        )
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)},
+        ]
         try:
-            with urllib.request.urlopen(request, timeout=self.model_config.timeout_sec) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            body = exc.read().decode("utf-8", errors="replace")
-            raise ModelLandmarkExtractorError(
-                f"LLM landmark request failed: HTTP {exc.code} {exc.reason}; body={body}"
-            ) from exc
-        except urllib.error.URLError as exc:
+            client = self.model_client or create_model_client(
+                self.model_config.to_provider_settings()
+            )
+            response = client.request(
+                ModelRequest(
+                    messages=messages,
+                    parameters={
+                        "temperature": 0,
+                        "response_format": {"type": "json_object"},
+                    },
+                ),
+                error_prefix="LLM landmark request failed",
+            )
+        except Exception as exc:
             raise ModelLandmarkExtractorError(f"LLM landmark request failed: {exc}") from exc
-        try:
-            content = data["choices"][0]["message"]["content"]
-        except (KeyError, IndexError, TypeError) as exc:
-            raise ModelLandmarkExtractorError("LLM landmark response missing choices[0].message.content") from exc
-        parsed = _loads_json_object(str(content))
+        content = response.text
+        if content is None:
+            raise ModelLandmarkExtractorError(
+                "LLM landmark response missing choices[0].message.content"
+            )
+        parsed = _loads_json_object(content)
         parsed["_raw_content"] = content
         return parsed
 

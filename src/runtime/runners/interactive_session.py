@@ -14,6 +14,7 @@ from typing import Any
 from src.agent.mission_state import MissionState
 from src.runtime.configs import TaskExecutionOptions
 from src.runtime.runners.task_runtime import TaskRuntime
+from src.runtime.control.runtime_control import RuntimeControl
 from src.uav import pose_delta, pose_from_observation
 
 
@@ -63,7 +64,9 @@ class InteractiveTaskSession:
     def run_dir(self) -> Path:
         return Path(self.recorder.run_dir)
 
-    def submit_instruction(self, instruction: str) -> dict[str, Any]:
+    def submit_instruction(
+        self, instruction: str, *, control: RuntimeControl | None = None
+    ) -> dict[str, Any]:
         """Run one natural-language instruction while reusing the active scene."""
 
         clean_instruction = instruction.strip()
@@ -73,6 +76,7 @@ class InteractiveTaskSession:
             raise RuntimeError("interactive session is already closed")
 
         try:
+            control_options = {"control": control} if control is not None else {}
             state = self.runtime.run_task(
                 self.map_id,
                 clean_instruction,
@@ -81,6 +85,7 @@ class InteractiveTaskSession:
                 stop_scene_on_finish=False,
                 scene_id=self.scene_id,
                 execution_options=self.execution_options,
+                **control_options,
             )
             self.last_state = state
             summary = build_turn_summary(
@@ -173,6 +178,8 @@ def build_turn_summary(
         "instruction": instruction,
         "run_dir": str(run_dir),
         "completed": state.get("completed"),
+        "stopped": state.get("stopped"),
+        "stop_reason": state.get("stopped_reason"),
         "connected": state.get("connected"),
         "airborne": state.get("airborne"),
         "tools": [{"tool_summary": tool_facts}] if tool_facts else [],

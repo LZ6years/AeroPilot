@@ -11,7 +11,12 @@ import pytest
 
 from src.cli import display as cli_display
 from src.cli.display import CliNarrativePanel, print_summary
-from src.cli.main import build_parser, default_chat_map_id, handle_slash_command
+from src.cli.main import (
+    _load_cli_model_config,
+    build_parser,
+    default_chat_map_id,
+    handle_slash_command,
+)
 
 
 class FakeCliSession:
@@ -229,6 +234,29 @@ def test_cli_defaults_to_chat_model_artifacts():
     assert args.execution == "managed"
     assert args.defer_scene_start is False
     assert args.observation_profile is None
+    assert args.output_language is None
+
+
+def test_cli_output_language_overrides_env_file_without_rewriting_it(
+    tmp_path, monkeypatch
+):
+    monkeypatch.delenv("FLYAGENT_AGENT_OUTPUT_LANGUAGE", raising=False)
+    env_path = tmp_path / ".env"
+    original = "FLYAGENT_AGENT_OUTPUT_LANGUAGE=zh\n"
+    env_path.write_text(original, encoding="utf-8")
+    args = build_parser().parse_args(
+        ["--env-path", str(env_path), "--output-language", "en"]
+    )
+
+    config = _load_cli_model_config(args)
+
+    assert config.output_language == "en"
+    assert env_path.read_text(encoding="utf-8") == original
+
+
+def test_cli_rejects_unknown_output_language():
+    with pytest.raises(SystemExit):
+        build_parser().parse_args(["--output-language", "auto"])
 
 
 def test_cli_accepts_observation_profile_path():

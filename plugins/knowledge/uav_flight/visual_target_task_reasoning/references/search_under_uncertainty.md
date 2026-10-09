@@ -1,29 +1,24 @@
 Useful search patterns should be selected by scene context:
 
-- Anchored direction prior: when the instruction supplies a direction or yaw relative
-  to the starting heading, treat it as a persistent world-relative search corridor,
-  not merely the first turn. After aligning, prefer forward progress, safe lateral
-  viewpoint changes and small local corrections. Do not accumulate turns that cancel
-  the supplied direction just to inspect same-category objects elsewhere. A candidate
-  outside that corridor needs stronger appearance and surrounding-relation evidence
-  before it can replace the prior.
-- Choose angular scale from view overlap, the candidate's image position and
-  actual visual change after previous turns, not universal degree ranges.
-- No-candidate broad sweep: when the current view has no target-like cue, use a
-  larger safe yaw increment within planner limits to inspect genuinely new view
-  area only when no anchored direction prior already defines the likely region.
-  Continue the chosen sweep direction while it reveals useful new area.
-- Local sweep: when the target may be near the current view boundary, use small
-  yaw steps so a possible target is not swept past.
-- Peek safely: when an obstacle or corner may hide the target, a changed viewing
-  angle or a short reposition can expose it. Repositioning needs clear free space;
-  choose a view change that preserves useful cues without unsupported movement.
+- Anchored direction evidence: when the instruction supplies a direction or yaw
+  relative to the starting heading, retain that reference frame while interpreting
+  later observations. It identifies relevant bearing evidence, not a prescribed
+  motion sequence or corridor to follow.
+- Choose the next bearing from view overlap, the candidate's image position, actual
+  visual change after previous turns and relevant area not yet covered. Do not infer
+  an action scale from the available parameter range.
+- No-candidate view: when the current view has no target-like cue, choose a bearing
+  that exposes relevant uncovered area while accounting for any anchored direction.
+- Boundary candidate: when a possible target lies near the current view boundary,
+  choose a view that preserves enough overlap to compare identity and position.
+- Occlusion view: when an obstacle or corner may hide the target, ascent, lateral
+  movement or a short reposition can expose the hidden region while retaining useful
+  route cues.
 - Landmark chaining: use visible landmarks to decide where to look next, but
   keep confidence low until the target itself is observed.
 - Candidate disambiguation: when competing identities change the next action,
-  choose a view that reveals the missing distinguishing attribute. Compare
-  position and appearance, not confidence rankings alone. Keep promising cues
-  in view and reuse results; absence of detection is not proof of absence.
+  choose a view that reveals the distinguishing attribute. Compare position and
+  appearance, and retain promising cues across successive views.
 - Candidate confirmation: when one plausible candidate appears but is not yet
   reliable, compare the available evidence and decide whether investigation is
   worthwhile. A closer or lateral view may expose detail; turning can reveal an
@@ -38,8 +33,8 @@ progress or continuing revisits uninformative views. Avoid direction changes
 unsupported by new information. A visible candidate may justify local inspection;
 if its required attributes are contradicted, reconsider the wider search.
 
-A next landmark not yet visible is different from losing the present route.
-Continue evidence-producing bounded progress while route and free-space cues
-remain coherent. After a recovery, reassess what changed rather than treating
-one attempt as a fixed stopping quota. Stop when no safe useful option remains,
-not simply because the expected landmark has not appeared after a few actions.
+A next landmark outside the current view is different from losing the present route.
+Continue along coherent route and free-space cues to obtain new coverage. After a
+viewpoint change, use what changed to choose the next action. A persistent lack of
+new coverage across distinct useful viewpoints can establish no progress; one
+unsuccessful observation cannot.

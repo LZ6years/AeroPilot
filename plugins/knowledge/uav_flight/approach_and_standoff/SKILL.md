@@ -43,9 +43,8 @@ no repeated measurement is imposed merely because one was used earlier.
 
 ## Recovery
 
-When the relation becomes unclear, compare historical and current views with
-actual motion. Choose a safe view change to recover needed evidence; a bounded
-retrace is one option, not an obligatory direction. Re-observe before dependent
-corrections. Temporary loss after established passage need not require returning.
-Use smaller adjustments near people or tight clearance. If no safe useful recovery
-remains, stop and state the limitation.
+When the relation becomes unclear, compare historical and current views with actual
+motion. Turn, rise, shift or retrace according to the target's last bearing and the
+occlusion geometry, then re-observe before dependent corrections. Temporary loss
+after established passage need not require returning. Use shorter adjustments as
+the requested standoff relation approaches.

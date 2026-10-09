@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 from src.agent.planning.model_action_planner import ModelActionPlanner
@@ -36,6 +37,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="FlyAgent CLI")
     parser.add_argument("--config", default="configs/maps/airvln_maps.json")
     parser.add_argument("--env-path", default=".env", help="Environment file for model configuration")
+    parser.add_argument(
+        "--output-language",
+        choices=["en", "zh"],
+        default=None,
+        help="Override the configured language for model-authored user-facing text",
+    )
     parser.add_argument("--map-id", default=None)
     parser.add_argument("--run-root", default="runs")
     parser.add_argument("--action-config", default="configs/uav_action_config.json")
@@ -173,7 +180,7 @@ def run_task(args: argparse.Namespace) -> None:
     map_id = args.map_id or maps[0].map_id
     run_dir = RunStore(args.run_root).create_run_dir("task")
     recorder = AsyncRunLogger(run_dir)
-    model_config = load_model_config(args.env_path)
+    model_config = _load_cli_model_config(args)
     action_config = load_uav_action_config(args.action_config)
     safety_config = load_uav_safety_config(args.safety_config)
     selected_map = next(pkg for pkg in maps if pkg.map_id == map_id)
@@ -263,7 +270,7 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
     if selected_map is None:
         known = ", ".join(pkg.map_id for pkg in maps)
         raise ValueError(f"Unknown map_id {map_id!r}. Available maps: {known}")
-    model_config = load_model_config(args.env_path)
+    model_config = _load_cli_model_config(args)
     action_config = load_uav_action_config(args.action_config)
     safety_config = load_uav_safety_config(args.safety_config)
     observation_profile = load_observation_profile(args.observation_profile)
@@ -323,6 +330,15 @@ def create_chat_session(args: argparse.Namespace) -> InteractiveTaskSession:
         event_sink=live_printer,
         execution_options=execution_options,
     )
+
+
+def _load_cli_model_config(args: argparse.Namespace):
+    """Apply a process-local language override without rewriting the env file."""
+
+    config = load_model_config(args.env_path)
+    if args.output_language is None:
+        return config
+    return replace(config, output_language=args.output_language)
 
 
 def _write_runtime_environment_config(

@@ -14,7 +14,7 @@ from typing import Any
 
 from src.agent.context.projection import HistoryProjector
 from src.agent.transcript import AgentTranscript, AssistantTurn
-from src.llm import DefaultModelClient, MessageBuilder, ModelRequest, ModelResponse, ProviderRequestError, ProviderSettings
+from src.llm import MessageBuilder, ModelRequest, ModelResponse, ProviderRequestError, ProviderSettings, create_model_client
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import encode_request, public_response_snapshot
 from src.memory.stores import MemoryEventWriter
@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
         if not config.api_key:
             parser.error("real mode requires configured provider credentials")
         settings = config.to_provider_settings()
-        client = DefaultModelClient(settings)
+        client = create_model_client(settings)
     else:
         settings, client = ProviderSettings(model_name="offline-demo"), MockClient()
     try:

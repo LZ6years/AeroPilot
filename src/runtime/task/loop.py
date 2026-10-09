@@ -35,6 +35,8 @@ class TaskLoop:
         state = session.state
         allowed = self.turn_executor.allowed_tools(session.scene, self.registry)
         while not state.completed and not state.stopped:
+            if not self._control_boundary(session, "before_planning"):
+                break
             current_task_state = session.current_task_state()
             self.evidence.write_state(session)
             stop_reason = self._stop_reason(session)
@@ -43,6 +45,11 @@ class TaskLoop:
                 break
 
             decision_id = session.next_decision_id()
+            self.journal.event("planner_request_started", {
+                "decision_id": decision_id,
+                "instruction_id": session.transcript.instruction_id,
+                "observation_id": session.transcript.latest_observation_id(),
+            })
             try:
                 turn = self.planner.plan_turn(
                     session.transcript,
@@ -86,6 +93,13 @@ class TaskLoop:
             self.journal.capture_provider_exchange(
                 self.planner, session, decision_id, turn=turn
             )
+            if not self._control_boundary(session, "before_execution"):
+                self.journal.event("operator_decision_discarded", {
+                    "decision_id": decision_id,
+                    "instruction_id": session.transcript.instruction_id,
+                    "reason": "operator_stop_before_execution",
+                })
+                break
             if not self.turn_executor.call_ids_are_fresh(
                 turn, session.seen_call_ids
             ):
@@ -115,7 +129,26 @@ class TaskLoop:
                 decision_id=decision_id,
                 history_boundary=history_boundary,
             )
+            if not state.completed and not state.stopped:
+                if not self._control_boundary(session, "after_turn"):
+                    break
         self.evidence.write_state(session)
+
+    def _control_boundary(self, session: TaskSession, boundary: str) -> bool:
+        """Only the flight worker acknowledges user control and changes state."""
+
+        if session.control is None:
+            return True
+        def changed(payload):
+            self.journal.event("operator_control", {
+                **payload, "instruction_id": session.transcript.instruction_id,
+            })
+        if session.control.checkpoint(boundary, changed):
+            return True
+        session.state.mark_stopped(
+            session.control.snapshot()["reason"], "operator_control"
+        )
+        return False
 
     def _stop_reason(self, session: TaskSession) -> str | None:
         state = session.state

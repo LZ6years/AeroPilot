@@ -7,6 +7,7 @@ import json
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from evaluation.benchmarks.uav_flow.sr_judge import judge_success, metric_success_assessment, _payload
 from src.agent.config import ModelConfig
+from src.llm import ModelResponse
 
 
 def make_case(class_name: str = "Move") -> UavFlowCase:
@@ -41,27 +42,21 @@ def test_metric_success_assessment_marks_very_low_move_ndtw_as_failure():
 
 
 def test_sr_judge_low_ndtw_overrides_llm_success(monkeypatch):
+    class FakeClient:
+        def request(self, request, *, error_prefix, transport_trace=None):
+            return ModelResponse({"choices": [{"message": {"content": json.dumps(
+                {
+                    "success": True,
+                    "confidence": 0.95,
+                    "reason": "incorrectly says low nDTW confirms alignment",
+                    "failure_type": None,
+                    "needs_human_review": False,
+                }
+            )}}]})
+
     monkeypatch.setattr(
-        "urllib.request.urlopen",
-        lambda *args, **kwargs: FakeResponse(
-            {
-                "choices": [
-                    {
-                        "message": {
-                            "content": json.dumps(
-                                {
-                                    "success": True,
-                                    "confidence": 0.95,
-                                    "reason": "incorrectly says low nDTW confirms alignment",
-                                    "failure_type": None,
-                                    "needs_human_review": False,
-                                }
-                            )
-                        }
-                    }
-                ]
-            }
-        ),
+        "evaluation.benchmarks.uav_flow.sr_judge.create_model_client",
+        lambda settings: FakeClient(),
     )
 
     result = judge_success(
@@ -102,17 +97,3 @@ def test_sr_payload_explains_ndtw_direction_and_turn_metric_mode():
     assert "Treat metric_success_assessment as a hard constraint" in system_prompt
     assert user["metric_success_assessment"]["success"] is False
     assert user["metric_success_assessment"]["metric_mode"] == "rotation_sequence"
-
-
-class FakeResponse:
-    def __init__(self, payload: dict) -> None:
-        self.payload = payload
-
-    def __enter__(self) -> "FakeResponse":
-        return self
-
-    def __exit__(self, exc_type, exc, tb) -> None:
-        return None
-
-    def read(self) -> bytes:
-        return json.dumps(self.payload).encode("utf-8")

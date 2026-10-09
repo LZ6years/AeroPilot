@@ -5,12 +5,10 @@ import json
 from pathlib import Path
 import threading
 from types import SimpleNamespace
-import urllib.error
-import urllib.request
 
 import pytest
 
-from tests.manual.task_profile import TaskProfile, install_profile, summarize, transport_hooks
+from tests.manual.task_profile import TaskProfile, install_profile, summarize
 from tests.manual.airsim_task_profile_probe import (
     ProfileRunner, can_continue, pair_cases, partial_case, verify_frozen,
 )
@@ -54,43 +52,6 @@ def test_worker_time_is_separate_and_native_exit_span_is_missing(tmp_path):
     assert report["incomplete"][0]["name"] == "crashed"
     assert report["malformed_lines"] == 1
     assert not summarize(tmp_path / "missing")["available"]
-
-
-def test_http_retry_timing_preserves_wire_request_and_does_not_patch_global_modules(tmp_path, monkeypatch):
-    from src.llm import transport
-    tick, calls = [0.], []
-    class Response:
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            return False
-        def read(self):
-            tick[0] += 3
-            return b"exact response"
-    def urlopen(request, timeout):
-        calls.append((request.data, timeout, request.full_url))
-        tick[0] += 1
-        if len(calls) == 1:
-            raise urllib.error.URLError("connection refused")
-        return Response()
-    monkeypatch.setattr(urllib.request, "urlopen", urlopen)
-    monkeypatch.setattr(transport.time, "sleep", lambda delay: tick.__setitem__(0, tick[0] + delay))
-    original_time = transport.time
-    profile = TaskProfile(tmp_path / "time.jsonl", clock=lambda: tick[0])
-    trace = {}
-    with transport_hooks(profile), profile.span("request"):
-        assert urllib.request.urlopen is urlopen
-        result = transport.request_bytes("https://test.invalid", headers={}, body=b"exact body",
-            timeout_sec=60, timeout_retries=0, connection_retries=1, error_prefix="test", transport_trace=trace)
-    assert result == b"exact response"
-    assert calls == [(b"exact body", 60, "https://test.invalid")] * 2
-    assert transport.time is original_time
-    assert trace["attempt_count"] == 2 and trace["retry_count"] == 1
-    stages = next(iter(summarize(profile.path)["threads"].values()))
-    assert stages["model.http_attempt"]["count"] == 2
-    assert stages["model.http_attempt"]["inclusive_sec"] == 5
-    assert stages["model.retry_wait"]["inclusive_sec"] == 2
-    assert stages["request"]["exclusive_sec"] == 0
 
 
 def test_descriptor_and_hooks_restore_even_on_failure(tmp_path):

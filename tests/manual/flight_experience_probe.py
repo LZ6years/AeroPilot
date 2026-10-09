@@ -16,7 +16,7 @@ sys.path.insert(0, str(ROOT))
 
 from plugins.research.flight_experience import ExperimentSettings, read_run, run_experiment
 from plugins.research.flight_experience.experiment import prepare_output, write_json
-from src.llm import DefaultModelClient
+from src.llm import create_model_client
 from src.agent.config import load_model_config
 
 
@@ -56,9 +56,9 @@ def main() -> int:
         observation_ids=tuple(args.observations) if args.observations is not None else None,
         **{f"{role}_{direction}_price": getattr(args, f"{role}_{direction}_price")
            for role in ("reflection", "review") for direction in ("input", "output")})
-    parameters = {"thinking": {"type": model.thinking_mode}} if model.thinking_mode else {}
-    result = run_experiment(bundle, args.output, reflection=DefaultModelClient(reflection),
-        reviewer=DefaultModelClient(review), settings=settings, parameters=parameters)
+    parameters = model.thinking_parameters()
+    result = run_experiment(bundle, args.output, reflection=create_model_client(reflection),
+        reviewer=create_model_client(review), settings=settings, parameters=parameters)
     print(f"{result['status']}: {args.output.resolve() / 'report.html'}")
     return 0 if result["status"] == "completed" else 1
 

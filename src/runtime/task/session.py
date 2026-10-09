@@ -22,6 +22,7 @@ from src.memory.flight_memory import FlightMemory
 
 if TYPE_CHECKING:
     from src.runtime.context import ContextCheckpointService
+    from src.runtime.control.runtime_control import RuntimeControl
 
 
 @dataclass
@@ -35,6 +36,7 @@ class TaskSession:
     transcript: AgentTranscript
     checkpoints: "ContextCheckpointService"
     knowledge_service: Any
+    control: "RuntimeControl | None" = None
     history_projection_state: HistoryProjectionState = field(
         default_factory=HistoryProjectionState
     )

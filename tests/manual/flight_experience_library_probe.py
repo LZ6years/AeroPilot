@@ -58,16 +58,16 @@ def main():
         "flight_experiment": store.search(q, scope="experiment"), "flight_production": store.search(q)} for q in queries]
     write_json(output / "summary.json", report)
     if args.run_models and report["candidate_ids"]:
-        from src.llm import DefaultModelClient
+        from src.llm import create_model_client
         from src.agent.config import load_model_config
         model = load_model_config(args.env)
         reflection = replace(model.to_provider_settings(), model_name=args.reflection_model or model.model_name,timeout_sec=180,provider_timeout_retries=1)
         review = replace(model.to_provider_settings(), model_name=args.review_model or model.model_name,timeout_sec=180,provider_timeout_retries=1)
         report["model_config"] = {"reflection_model": reflection.model_name, "review_model": review.model_name,
             "timeout_sec": reflection.timeout_sec, "timeout_retries": reflection.provider_timeout_retries}
-        parameters = {"thinking": {"type": model.thinking_mode}} if model.thinking_mode else {}
+        parameters = model.thinking_parameters()
         store.enqueue(report["candidate_ids"], request_key="initial_batch")
-        worker = Worker(store, DefaultModelClient(reflection), DefaultModelClient(review), output / "maintenance", parameters=parameters)
+        worker = Worker(store, create_model_client(reflection), create_model_client(review), output / "maintenance", parameters=parameters)
         # Bound the main experiment to one attempt per candidate; no timeout replay.
         for _ in report["candidate_ids"]:
             result = worker.run_once()

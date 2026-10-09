@@ -8,6 +8,7 @@ from io import BytesIO
 import pytest
 from PIL import Image
 
+from src.agent.context.request_assembler import RequestAssembler
 from src.agent.mission_state import MissionState
 from src.agent.planning.task_plan import TaskPlan
 from src.memory.context.builder import ModelContextBuilder
@@ -130,7 +131,7 @@ def test_checkpoint_contains_only_dynamic_model_fields_and_separate_audit(tmp_pa
     assert "data:image/" not in json.dumps(payload)
 
 
-def test_motion_fragment_keeps_dynamic_safety_and_observation_policy(tmp_path):
+def test_motion_fragment_keeps_safety_internal_and_observation_policy_visible(tmp_path):
     state = _state()
     state.observation_modalities = ("rgb", "pose")
     state.yaw_scan_extent_deg = 15.0
@@ -138,13 +139,21 @@ def test_motion_fragment_keeps_dynamic_safety_and_observation_policy(tmp_path):
     _record_observation(writer, memory, state)
     builder = _builder(safety_config=UavSafetyConfig(max_yaw_scan_extent_deg=45.0))
 
-    checkpoint, _ = builder.build_checkpoint(
+    checkpoint, audits = builder.build_checkpoint(
         state, memory, checkpoint_id="checkpoint_0001", reason="instruction_start"
     )
     motion = next(item for item in checkpoint.fragments if item.name == "motion")
+    motion_audit = next(item for item in audits if item["name"] == "motion")
 
     assert motion.content["observation_policy"]["modalities"] == ["rgb", "pose"]
-    assert motion.content["safety_constraints"]["yaw_scan_remaining_deg"] == 30.0
+    assert "safety_constraints" not in motion.content
+    assert motion_audit["metadata"]["safety_constraints"]["yaw_scan_remaining_deg"] == 30.0
+    assert "yaw_scan_remaining_deg" not in json.dumps(checkpoint.to_dict())
+    provider_content = RequestAssembler().checkpoint_content(
+        checkpoint.to_dict(), model_inputs=[], timeline_role="CURRENT"
+    )
+    assert "yaw_scan_remaining_deg" not in provider_content
+    assert "max_yaw_scan_extent_deg" not in provider_content
 
 
 def test_image_fragment_is_media_ref_and_does_not_embed_base64(tmp_path):

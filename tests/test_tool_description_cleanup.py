@@ -21,13 +21,14 @@ from tests.support.environment import tool_contract_behavior_probe as probe
 
 def test_description_cleanup_preserves_contracts_except_retired_completion_gate():
     baseline = json.loads(Path("tests/fixtures/tool_description_contract_baseline.json").read_text(encoding="utf-8"))
+    safety = load_uav_safety_config()
     registry = default_registry(
         PluginRegistry.from_config(),
-        safety_config=load_uav_safety_config(),
+        safety_config=safety,
     )
     current = probe.tool_snapshot(registry)
-    # Keep the historical fixture intact. The later grounding migration removes
-    # only this task-global policy; schemas, limits and hidden tools stay fixed.
+    # Keep the historical fixture intact and normalize only intentional contract
+    # migrations before comparing current schemas, limits and hidden tools.
     for tool in baseline:
         if tool["name"] == "skill.visual_grounding.measure_visible_depth":
             tool["schema"].pop("x-flyagent-completion-evidence", None)
@@ -42,6 +43,16 @@ def test_description_cleanup_preserves_contracts_except_retired_completion_gate(
                 "items": {"type": "string", "minLength": 1},
                 "uniqueItems": True,
             }
+        if tool["name"] == "runtime.report_blocked":
+            tool["schema"]["properties"].pop("blocking_condition")
+            tool["schema"]["required"].remove("blocking_condition")
+        if tool["name"] == "uav.move_body":
+            properties = tool["schema"]["properties"]
+            for name in ("vx", "vy"):
+                properties[name]["minimum"] = -safety.max_linear_velocity_mps
+                properties[name]["maximum"] = safety.max_linear_velocity_mps
+            properties["vz"]["minimum"] = -safety.max_vertical_velocity_mps
+            properties["vz"]["maximum"] = safety.max_vertical_velocity_mps
     assert probe.structural_contracts(current) == probe.structural_contracts(baseline)
     assert sum(tool["runtime"]["model_exposed"] for tool in current) == 7
     for before, after in zip(baseline, current):
@@ -70,9 +81,14 @@ def test_provider_prose_removes_repeated_global_rules_but_keeps_local_policies()
         assert "effect=" in text and "result_timing=" in text
         assert "Do not mix with runtime-control or physical calls" not in text
         assert "Reuse identical current-observation results" not in text
+    plan = registry.get("runtime.update_plan")
+    assert "parallel-safe" not in plan.description
+    plan_provider_description = plan.to_provider_tool()["function"]["description"]
+    assert "independent parallel-safe read-only calls" in plan_provider_description
     grounding = registry.get("skill.visual_grounding.measure_visible_depth").to_provider_tool()["function"]["description"]
     assert "At most 2 calls per observation" in grounding
-    assert "Call only when the image itself supplies direct evidence" in grounding
+    assert "candidate selected from the CURRENT RGB" in grounding
+    assert "Never call" not in grounding
     user = Path("src/agent/planning/prompts/tool_user_system.txt").read_text(encoding="utf-8")
     assert "Physical and terminal groups never mix" in user
     assert "one plan update together with such reads" in user

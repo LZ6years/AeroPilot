@@ -19,7 +19,7 @@ sys.path.insert(0, str(ROOT))
 
 from evaluation.benchmarks.aerial_vln.protocol import AERIAL_VLN_PARSER_PROTOCOL_CONTEXT
 from evaluation.benchmarks.travel_uav.protocol import TRAVEL_UAV_PARSER_PROTOCOL_CONTEXT
-from src.llm import DefaultModelClient, ModelRequest
+from src.llm import ModelRequest, create_model_client
 from src.llm.audit import snapshot_request
 from src.llm.providers.openai_compatible import public_response_snapshot
 from src.plugins import PluginRegistry
@@ -101,7 +101,7 @@ def run(source: Path, output: Path, *, round_index: int = 0, prepare_only: bool 
     write_json(output / "probe.json", result)
     if prepare_only:
         return result
-    client = DefaultModelClient(config.to_provider_settings())
+    client = create_model_client(config.to_provider_settings())
     try:
         for row, payload in zip(result["variants"], (original, revised)):
             started = time.monotonic()

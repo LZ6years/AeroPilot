@@ -20,12 +20,11 @@ but cannot place the UAV on a physical side or prove traversal.
 
 ## Decision Procedure
 
-Choose a bounded action from missing route evidence, not a fixed maneuver
-sequence. Establish route, side, or free space before translation.
-Once usable, prefer bounded translation through or past it over repeated
-centering. Compare the first useful route view with the latest view and
-accumulated translation. Reacquire only if that evidence is insufficient or
-contradictory.
+Choose the next observation point from route continuity, side relations and visible
+free space. Once a continuation is usable, translate through or past it rather than
+repeatedly centering. Compare the first useful route view with the latest view and
+accumulated translation. Reacquire when the route changes or conflicts with the
+expected continuation.
 An absent upcoming landmark alone does not invalidate a coherent route.
 
 Request [route examples](references/route_progress_examples.md) for complex
@@ -50,6 +49,6 @@ reacquisition, continued visibility, a final image side or an exact unseen bound
 
 ## Recovery
 
-Compare earlier views with actual motion when cues conflict. Recover a useful
-view if safe; otherwise stop and cite why. Do not replace translation evidence
-with repeated yaw.
+Compare earlier views with actual motion when cues conflict. Turn, rise, shift or
+translate to recover a useful route view according to the occlusion and route shape.
+Repeated yaw without new coverage does not replace translation progress.

@@ -20,7 +20,7 @@ repair supports circulation but must not replace it.
 ## Decision Procedure
 
 Choose from alignment, tangential progress, or radial repair according to the
-current evidence; do not enforce a fixed maneuver sequence. Tangential movement
+current target relation. Tangential movement
 requires a usable target relation and plausible circulation direction. Re-align
 yaw only when needed to keep the reference usable. Continue tangential progress
 while direction remains consistent; if radius becomes clearly unsuitable, use
@@ -48,8 +48,7 @@ progress.
 ## Recovery
 
 If a required relation disappears after a maneuver, compare pre-maneuver and
-current views with measured motion. Try one bounded retrace or correction, then
-re-observe; do not continue a blind shift.
-If repeated radial corrections add no tangential progress, reassess. If no safe
-evidence-producing recovery remains, stop and cite the limitation. Reverse
-circulation only for safety, recovery, or clear directional conflict.
+current views with measured motion. Reorient, retrace or change height according to
+the last target bearing, then observe the resulting relation. If repeated radial
+corrections add no tangential progress, choose a different circulation viewpoint.
+Reverse circulation when recovery or a clear directional conflict calls for it.

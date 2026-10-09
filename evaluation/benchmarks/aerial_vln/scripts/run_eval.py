@@ -73,7 +73,8 @@ def _config_from_args(args: argparse.Namespace) -> AerialVlnEvalConfig:
         data["scene_filter"] = list(args.scene)
     if data.get("generate_html_review", True):
         data["save_artifacts"] = True
-        data["enable_action_planner_debug"] = True
+        if data.get("report_profile", "audit") == "audit":
+            data["enable_action_planner_debug"] = True
     return AerialVlnEvalConfig.from_dict(data)
 
 

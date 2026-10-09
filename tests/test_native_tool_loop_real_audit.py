@@ -506,7 +506,6 @@ def test_audit_accepts_generic_report_blocked_terminal(tmp_path):
                         "tool_call_id": "report_blocked",
                         "tool_name": "runtime.report_blocked",
                         "args": {
-                            "blocking_condition": "insufficient_evidence",
                             "reason": "No safe evidence-producing action remains.",
                             "evidence_refs": ["obs_2", "move_1"],
                         },
@@ -529,7 +528,7 @@ def test_audit_accepts_generic_report_blocked_terminal(tmp_path):
             "payload": {
                 "completed": False,
                 "stopped": True,
-                "stopped_reason": "agent_reported_blocked:insufficient_evidence",
+                "stopped_reason": "agent_reported_blocked:no_progress",
                 "stop_source": "runtime.report_blocked",
             },
         },
@@ -537,7 +536,7 @@ def test_audit_accepts_generic_report_blocked_terminal(tmp_path):
     _write_json(audit_path, audit)
     case_json = json.loads((case_dir / "case.json").read_text(encoding="utf-8"))
     case_json["completed"] = False
-    case_json["stopped_reason"] = "agent_reported_blocked:insufficient_evidence"
+    case_json["stopped_reason"] = "agent_reported_blocked:no_progress"
     _write_json(case_dir / "case.json", case_json)
 
     report = MODULE.audit_evaluation(root)
@@ -558,7 +557,6 @@ def test_audit_rejects_report_blocked_with_unknown_evidence_and_physical_call(tm
             "tool_call_id": "report_bad",
             "tool_name": "runtime.report_blocked",
             "args": {
-                "blocking_condition": "insufficient_evidence",
                 "reason": "Cannot continue.",
                 "evidence_refs": ["obs_unknown"],
             },

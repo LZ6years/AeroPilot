@@ -62,7 +62,7 @@ def test_probe_wire_payload_matches_manifest_and_preserves_capture(tmp_path, mon
             response['model'] = 'flash-version'
             return ModelResponse(data=response)
 
-    monkeypatch.setattr(probe, 'DefaultModelClient', Client)
+    monkeypatch.setattr(probe, 'create_model_client', lambda settings: Client(settings))
     output = tmp_path/'output'
     assert probe.run(runs, output, model='flash') == 'completed'
     manifest = json.loads((output/'manifest.json').read_text(encoding='utf-8'))
@@ -90,7 +90,11 @@ def test_probe_wire_payload_matches_manifest_and_preserves_capture(tmp_path, mon
         def request(self, request):
             return ModelResponse(data={'model': 'flash', 'choices': [{'message': {'content': 'text only'}}]})
 
-    monkeypatch.setattr(probe, 'DefaultModelClient', IncompatibleClient)
+    monkeypatch.setattr(
+        probe,
+        'create_model_client',
+        lambda settings: IncompatibleClient(settings),
+    )
     failed_output = tmp_path/'incompatible'
     with pytest.raises(ValueError, match='Native tool protocol'):
         probe.run(runs, failed_output, model='flash')

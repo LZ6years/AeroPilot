@@ -1098,3 +1098,58 @@ def test_model_compactor_rejects_length_finish_reason():
     )
     with pytest.raises(ValueError, match="truncated"):
         compactor.compact(request)
+
+
+def test_model_compactor_accepts_injected_thinking_wire_parameters():
+    class Client:
+        def __init__(self):
+            self.request_value = None
+
+        def request(self, request, **kwargs):
+            self.request_value = request
+            return ModelResponse(
+                {
+                    "choices": [
+                        {
+                            "finish_reason": "stop",
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "mission_progress": [],
+                                        "decisions_and_outcomes": [],
+                                        "failures_and_recovery": [],
+                                    }
+                                )
+                            },
+                        }
+                    ]
+                }
+            )
+
+    client = Client()
+    compactor = ModelHistoryCompactor(
+        client,
+        summary_max_tokens=4_096,
+        thinking_parameters={"enable_thinking": False},
+        structured_output_format="json_object",
+    )
+    request = CompressionRequest(
+        "digest", "inspect", (CompressionWindow("w", 0, 1, ()),), (), {}, {}
+    )
+
+    compactor.compact(request)
+
+    assert client.request_value.parameters["enable_thinking"] is False
+    assert "thinking" not in client.request_value.parameters
+    assert client.request_value.parameters["response_format"] == {
+        "type": "json_object"
+    }
+
+
+def test_model_compactor_rejects_unknown_structured_output_format():
+    with pytest.raises(ValueError, match="structured_output_format"):
+        ModelHistoryCompactor(
+            object(),
+            summary_max_tokens=4_096,
+            structured_output_format="automatic",
+        )

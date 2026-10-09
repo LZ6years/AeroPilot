@@ -20,6 +20,7 @@ from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.configs.task_execution_options import TaskExecutionOptions
 from src.runtime.context import ContextCheckpointService
 from src.runtime.control.stabilization import UavStabilizer
+from src.runtime.control.runtime_control import RuntimeControl
 from src.runtime.middleware import ToolTelemetryMiddleware
 from src.runtime.task.evidence import FlightEvidenceRecorder
 from src.runtime.task.journal import RuntimeJournal
@@ -89,7 +90,10 @@ class TaskRuntime:
         self.knowledge_service_factory = knowledge_service_factory
 
         self._operation_lock = threading.Lock()
-        self._memory_writer = MemoryEventWriter(recorder.run_dir)
+        self._memory_writer = MemoryEventWriter(
+            recorder.run_dir,
+            persist_inline_media=getattr(recorder, "capture_provider_debug", True),
+        )
         self._memory_reader = MemoryRecordReader(recorder.run_dir)
         self._journal = RuntimeJournal(recorder, event_sink)
         self._stabilizer = UavStabilizer(
@@ -172,6 +176,7 @@ class TaskRuntime:
         execution_options: TaskExecutionOptions | None = None,
         *,
         protocol_context: str | None = None,
+        control: RuntimeControl | None = None,
     ) -> MissionState:
         """Run one task through a fresh TaskSession and return MissionState."""
 
@@ -187,11 +192,14 @@ class TaskRuntime:
                     scene_id,
                     execution_options,
                     protocol_context=protocol_context,
+                    control=control,
                 )
             except Exception as exc:
                 primary_error = exc
                 raise
             finally:
+                if control is not None:
+                    control.finish()
                 flush = getattr(self.recorder, "flush", None)
                 if callable(flush):
                     try:
@@ -214,6 +222,7 @@ class TaskRuntime:
         execution_options: TaskExecutionOptions | None,
         *,
         protocol_context: str | None,
+        control: RuntimeControl | None = None,
     ) -> MissionState:
         if scene_policy not in self.SCENE_POLICIES:
             raise ValueError(f"Unsupported scene policy: {scene_policy}")
@@ -263,6 +272,7 @@ class TaskRuntime:
                 transcript=transcript,
                 checkpoints=checkpoints,
                 knowledge_service=self.knowledge_service_factory(),
+                control=control,
             )
             checkpoints.begin_instruction(state, memory)
             self._journal.event(

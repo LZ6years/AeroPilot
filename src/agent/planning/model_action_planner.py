@@ -12,7 +12,13 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from src.llm import DefaultModelClient, MessageBuilder, ModelClient, ModelRequest
+from src.llm import (
+    MessageBuilder,
+    ModelClient,
+    ModelRequest,
+    create_model_client,
+    encode_provider_request,
+)
 from src.llm.audit import snapshot_request, redact_provider_value
 from src.llm.providers.openai_compatible import encode_request, public_response_snapshot
 from src.agent.context.compression import (
@@ -109,10 +115,18 @@ class ModelActionPlanner:
             model_name=self.provider_config.model_name,
             api_key=self.provider_config.api_key,
             base_url=self.provider_config.base_url,
+            api_protocol=self.provider_config.api_protocol,
+            stream=self.provider_config.stream,
             thinking_mode=self.provider_config.thinking_mode,
+            thinking_wire_format=self.provider_config.thinking_wire_format,
+            reasoning_effort=self.provider_config.reasoning_effort,
+            structured_output_format=(
+                self.provider_config.structured_output_format
+            ),
             timeout_sec=self.provider_config.timeout_sec,
             provider_timeout_retries=self.provider_config.timeout_retries,
             provider_connection_retries=self.provider_config.connection_retries,
+            retry_deadline_sec=self.provider_config.retry_deadline_sec,
             max_tool_rounds=self.tool_loop_config.max_rounds,
             max_consecutive_protocol_rejections=(
                 self.tool_loop_config.max_consecutive_protocol_rejections
@@ -121,8 +135,9 @@ class ModelActionPlanner:
             task_progress_reminder_interval=(
                 self.planner_config.task_progress_reminder_interval
             ),
+            output_language=self.planner_config.output_language,
         )
-        self.client = client if client is not None else DefaultModelClient(
+        self.client = client if client is not None else create_model_client(
             self.provider_config.to_provider_settings()
         )
         # Standalone callers default to full history. Runtime injects the
@@ -134,6 +149,16 @@ class ModelActionPlanner:
         prompt_dir = Path(__file__).resolve().parent / "prompts"
         self.tool_user_prompt = (prompt_dir / "tool_user_system.txt").read_text(encoding="utf-8").strip()
         self.task_progress_reminder = (prompt_dir / "task_progress_reminder.txt").read_text(encoding="utf-8").strip()
+        language_name = {
+            "en": "English",
+            "zh": "Simplified Chinese",
+        }[self.planner_config.output_language]
+        self.output_language_prompt = (
+            (prompt_dir / "output_language_system.txt")
+            .read_text(encoding="utf-8")
+            .strip()
+            .format(language_name=language_name)
+        )
         self.last_request: dict[str, Any] = {}
         self.last_response: dict[str, Any] = {}
         # In-memory only until Runtime writes a decision artifact. Image bytes
@@ -170,10 +195,6 @@ class ModelActionPlanner:
             raise ModelActionPlannerConfigError(
                 "Model action planner requires FLYAGENT_MODEL_API_KEY"
             )
-        if self.provider_config.provider != "openai_compatible":
-            raise ModelActionPlannerConfigError(
-                f"Unsupported model provider: {self.provider_config.provider}"
-            )
         specs = registry.model_specs(allowed_tool_names)
         if not specs:
             raise ModelActionPlannerConfigError(
@@ -185,6 +206,10 @@ class ModelActionPlanner:
             self.history_projector.assembler.memory_system_messages(envelope),
             key="memory_documents",
         )
+        prefix.add_system(
+            self.output_language_prompt,
+            key="output_language_policy",
+        )
         prefix.add_system(self.system_prompt, key="planner_instruction")
         prefix.add_system(self.tool_user_prompt, key="tool_user_instruction")
         interval = self.planner_config.task_progress_reminder_interval
@@ -195,8 +220,7 @@ class ModelActionPlanner:
                 and (decision_index - 1) % interval == 0):
             reminder = {"role": "system", "content": self.task_progress_reminder}
         parameters = {"tool_choice": "auto", "temperature": 0}
-        if self.provider_config.thinking_mode:
-            parameters["thinking"] = {"type": self.provider_config.thinking_mode}
+        parameters.update(self.provider_config.generation_parameters())
         provider_tools = [spec.to_provider_tool() for spec in specs]
         task_state_message = self.history_projector.assembler.current_task_state_message(
             task_state
@@ -231,9 +255,15 @@ class ModelActionPlanner:
         )
         # Preserve the existing subclass hook and failed-request audit, while
         # delegating wire-envelope construction to the provider adapter.
-        payload = encode_request(self.provider_config.to_provider_settings(), request)
-        request_snapshot, media = snapshot_request(payload)
-        annotate_request_media(payload, media)
+        settings = self.provider_config.to_provider_settings()
+        payload = (
+            encode_request(settings, request)
+            if settings.provider == "openai_compatible"
+            else _canonical_request_payload(settings.model_name, request)
+        )
+        wire_payload = encode_provider_request(settings, request)
+        request_snapshot, media = snapshot_request(wire_payload)
+        annotate_request_media(wire_payload, media)
         self.last_request = request_snapshot
         self.last_response = {}
         self.last_exchange = {
@@ -243,7 +273,7 @@ class ModelActionPlanner:
             "history_projection": projection.audit,
             "current_task_state": copy.deepcopy(task_state),
         }
-        data = self._request(payload)
+        data = self._dispatch_request(request, payload)
         if self.context_window_manager is not None:
             usage = data.get("usage") if isinstance(data, dict) else None
             self.context_window_manager.observe_usage(
@@ -271,7 +301,11 @@ class ModelActionPlanner:
                 rejected_turn=_provider_rejection_snapshot(data, error),
             )
         try:
-            return _parse_assistant_turn(message, registry)
+            return _parse_assistant_turn(
+                message,
+                registry,
+                output_language=self.planner_config.output_language,
+            )
         except AgentProtocolError as exc:
             raise AgentProtocolError(
                 str(exc),
@@ -279,17 +313,36 @@ class ModelActionPlanner:
             ) from exc
 
     def _request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Compatibility hook for deterministic planner subclasses."""
+
+        request = ModelRequest(
+            messages=payload["messages"],
+            tools=payload.get("tools"),
+            parameters={key: value for key, value in payload.items()
+                        if key not in {"model", "messages", "tools", "stream"}},
+        )
+        return self._request_model(request)
+
+    def _dispatch_request(
+        self,
+        request: ModelRequest,
+        compatibility_payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        # Existing diagnostic subclasses override _request(payload). Production
+        # clients receive the original ModelRequest without encode/decode churn.
+        if (
+            "_request" in self.__dict__
+            or type(self)._request is not ModelActionPlanner._request
+        ):
+            return self._request(compatibility_payload)
+        return self._request_model(request)
+
+    def _request_model(self, request: ModelRequest) -> dict[str, Any]:
         # Transport attempts are debug evidence, not transcript turns. The
         # shared helper updates this object in place even when it ultimately
         # raises, so Runtime can persist an exhausted retry sequence.
         transport_trace: dict[str, Any] = {}
         self.last_exchange["transport"] = transport_trace
-        request = ModelRequest(
-            messages=payload["messages"],
-            tools=payload.get("tools"),
-            parameters={key: value for key, value in payload.items()
-                        if key not in {"model", "messages", "tools"}},
-        )
         return self.client.request(
             request, error_prefix="Native tool-call request failed",
             transport_trace=transport_trace,
@@ -305,7 +358,29 @@ class ModelActionPlanner:
         return path.read_text(encoding="utf-8").strip()
 
 
-def _parse_assistant_turn(message: dict[str, Any], registry: "ToolRegistry") -> AssistantTurn:
+def _canonical_request_payload(
+    model_name: str,
+    request: ModelRequest,
+) -> dict[str, Any]:
+    """Preserve the legacy planner hook without constructing provider wire data."""
+
+    payload = {
+        "model": model_name,
+        "messages": copy.deepcopy(request.messages),
+        "stream": False,
+        **copy.deepcopy(request.parameters),
+    }
+    if request.tools is not None:
+        payload["tools"] = copy.deepcopy(request.tools)
+    return payload
+
+
+def _parse_assistant_turn(
+    message: dict[str, Any],
+    registry: "ToolRegistry",
+    *,
+    output_language: str = "en",
+) -> AssistantTurn:
     raw_calls = message.get("tool_calls") or []
     if not isinstance(raw_calls, list):
         raise AgentProtocolError("assistant tool_calls must be a list")
@@ -359,7 +434,10 @@ def _parse_assistant_turn(message: dict[str, Any], registry: "ToolRegistry") -> 
         )
     public_intent_source: PublicIntentSource = "provider_content"
     if not public_intent:
-        public_intent = _fallback_public_intent(calls)
+        public_intent = _fallback_public_intent(
+            calls,
+            output_language=output_language,
+        )
         public_intent_source = "tool_arguments_fallback"
     turn_id = str(message.get("id") or f"assistant_{calls[0].tool_call_id}")
     return AssistantTurn(
@@ -370,14 +448,25 @@ def _parse_assistant_turn(message: dict[str, Any], registry: "ToolRegistry") -> 
     )
 
 
-def _fallback_public_intent(calls: list[AgentToolCall]) -> str:
+def _fallback_public_intent(
+    calls: list[AgentToolCall],
+    *,
+    output_language: str,
+) -> str:
     """Describe model-authored Tool arguments without inventing reasoning."""
 
     if len(calls) == 1:
         observation_id = calls[0].args.get("observation_id")
         if isinstance(observation_id, str) and observation_id.strip():
+            if output_language == "zh":
+                return (
+                    f"针对观测 {observation_id.strip()} 请求 "
+                    f"{calls[0].tool_name}。"
+                )
             return f"Request {calls[0].tool_name} for observation {observation_id.strip()}."
     names = ", ".join(call.tool_name for call in calls)
+    if output_language == "zh":
+        return f"请求调用工具：{names}。"
     return f"Request tool call(s): {names}."
 
 
@@ -445,17 +534,21 @@ def _request_media_label(
 ) -> dict[str, Any]:
     """Copy the adjacent model-visible image label into the audit snapshot."""
 
-    if not isinstance(request_path, list) or len(request_path) < 6:
+    if not isinstance(request_path, list) or len(request_path) < 5:
         return {}
     try:
-        messages_index = request_path.index("messages")
+        collection = "messages" if "messages" in request_path else "input"
+        messages_index = request_path.index(collection)
         message_index = int(request_path[messages_index + 1])
         content_index = int(request_path[messages_index + 3])
-        content = payload["messages"][message_index]["content"]
+        content = payload[collection][message_index]["content"]
         label = content[content_index - 1]
     except (ValueError, TypeError, KeyError, IndexError):
         return {}
-    if not isinstance(label, dict) or label.get("type") != "text":
+    if not isinstance(label, dict) or label.get("type") not in {
+        "text",
+        "input_text",
+    }:
         return {}
     text = label.get("text")
     if not isinstance(text, str):

@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import json
-import urllib.error
-import urllib.request
 from typing import Any
 
 from evaluation.benchmarks.uav_flow.cases import UavFlowCase
 from src.agent.config import ModelConfig, load_model_config
+from src.llm import ModelRequest, create_model_client
 
 LOW_NDTW_FAILURE_THRESHOLD = 0.05
 ROTATION_CLASSES = {"Turn", "Rotate"}
@@ -31,21 +30,27 @@ def judge_success(
         return {"status": "skipped", "reason": "missing_model_api_key"}
     metric_assessment = metric_success_assessment(case, trajectory_summary, ndtw_result)
     payload = _payload(case, trajectory_summary, ndtw_result, config)
-    request = urllib.request.Request(
-        config.chat_completions_url(),
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {config.api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(request, timeout=config.timeout_sec) as response:
-            data = json.loads(response.read().decode("utf-8"))
-    except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        response = create_model_client(config.to_provider_settings()).request(
+            ModelRequest(
+                messages=payload["messages"],
+                parameters={
+                    key: value
+                    for key, value in payload.items()
+                    if key not in {"model", "messages", "tools", "stream"}
+                },
+            ),
+            error_prefix="UAV-Flow SR judge request failed",
+        )
+    except Exception as exc:
         return {"status": "error", "error_type": type(exc).__name__, "error": str(exc)}
-    content = data["choices"][0]["message"]["content"]
+    content = response.text
+    if content is None:
+        return {
+            "status": "error",
+            "error_type": "InvalidModelResponse",
+            "error": "UAV-Flow SR judge response contained no text",
+        }
     try:
         result = json.loads(content)
     except json.JSONDecodeError:

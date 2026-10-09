@@ -1,0 +1,7 @@
+OUTPUT LANGUAGE POLICY
+
+Write all model-authored user-facing natural-language text in {language_name}.
+This includes assistant public intent, runtime.update_plan explanation and step
+descriptions, terminal reason, and suggested_user_action. Keep tool names, step
+IDs, schema keys, enum values, observation IDs, evidence references, the original
+instruction, protocol text, knowledge text, and evidence-query arguments unchanged.
