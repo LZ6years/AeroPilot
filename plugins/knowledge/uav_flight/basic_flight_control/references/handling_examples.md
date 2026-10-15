@@ -1,12 +1,5 @@
 # Learning Movement Response
 
-## Inspecting A Hidden Continuation
-
-A road is visible beyond a nearby building, but the straight path toward it
-intersects the facade. Choose a reachable viewing position along known clear
-space, adjust position or heading, and inspect the connected passage before
-advancing. The visible road is not evidence that the direct path to it is clear.
-
 ## Comparable Feedback
 
 A modest forward move produces measured translation but little visual change along

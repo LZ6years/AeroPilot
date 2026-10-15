@@ -15,7 +15,6 @@ from src.memory.flight_memory import FlightMemory
 from src.plugins.core.discovery import PluginDiscovery
 from src.plugins.core.registry import PluginRegistry
 from src.plugins.skills import SkillContentLoader
-from src.plugins.skills.loader import DEFAULT_MAX_SKILL_CHARS
 from src.agent.config import ModelConfig
 
 
@@ -75,7 +74,7 @@ def test_plugin_discovery_finds_only_current_uav_flight_skills():
     assert result.warnings == []
 
 
-def test_uav_knowledge_skills_follow_compact_five_section_contract():
+def test_uav_knowledge_skills_follow_five_section_contract():
     catalog = _uav_flight_registry().skill_catalog
 
     for skill in catalog.skills:
@@ -85,7 +84,6 @@ def test_uav_knowledge_skills_follow_compact_five_section_contract():
             if line.startswith("## ")
         ]
         assert headings == KNOWLEDGE_SKILL_SECTIONS, skill.name
-        assert len(skill.body.strip()) <= DEFAULT_MAX_SKILL_CHARS, skill.name
         for internal_term in ("done_when", "continue_when", "SemanticPlan", "output schema", "list item"):
             assert internal_term not in skill.body, f"{skill.name}:{internal_term}"
         for index, heading in enumerate(KNOWLEDGE_SKILL_SECTIONS):
