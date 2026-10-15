@@ -1,0 +1,7 @@
+{
+  "mode": "local",
+  "gpu_indices": [3],
+  "gpu_uuids": {"3": "GPU-3d04a954-b4ba-a198-4013-6e4392378112"},
+  "require_cuda": false,
+  "report_profile": "audit"
+}

@@ -52,13 +52,15 @@ def validate(config_paths, dataset, *, root=ROOT):
             "splits": [s.config["split"] for s in selections], "validation": [s.validation for s in selections]}
 
 
-def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None):
+def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None, execution=None):
     output = Path(output).resolve()
     if (output / "manifest.json").exists():
         raise ValueError("Campaign already prepared; run resumes its frozen selection")
     selections = load_selections(config_paths, dataset, root=root)
+    from evaluation.benchmarks.core.campaign.parallel import execution_settings
+    execution = execution_settings({"execution": execution} if execution else {})
     info = environment_diagnostics()
-    if not info["cuda_available"]:
+    if execution["require_cuda"] and not info["cuda_available"]:
         raise RuntimeError("CUDA unavailable in the required flyagent environment")
     for name, value in read_env_file(selections[0].config["env_path"]).items():
         if name.startswith("FLYAGENT_"):
@@ -80,11 +82,21 @@ def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None):
             raise ValueError("Split map catalogs use different port policies")
         policy = current_policy
         for item in catalog["maps"]:
+            airsim = item.get("airsim", {})
+            if item.get("connection", {}).get("mode") == "local" and airsim.get("settings_template"):
+                original = Path(airsim["settings_template"])
+                if not original.is_absolute():
+                    original = Path(root) / original
+                content = original.read_bytes()
+                copied = source / "configs/campaign_inputs" / (hashlib.sha256(content).hexdigest() + '.json')
+                copied.parent.mkdir(parents=True, exist_ok=True)
+                copied.write_bytes(content)
+                airsim["settings_template"] = str(copied)
             if item["map_id"] in maps and maps[item["map_id"]] != item:
                 raise ValueError("Conflicting map IDs in campaign catalogs")
             maps[item["map_id"]] = item
         config.update(output_dir=str(output / dataset / config["split"]), save_artifacts=True,
-                      generate_html_review=False, report_profile="paper_process")
+                      generate_html_review=False, report_profile=execution["report_profile"])
         for field in ("context_config_path", "observation_profile_path"):
             if config.get(field):
                 original = Path(config[field]).resolve()
@@ -105,15 +117,22 @@ def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None):
     keys = [ParallelRecoveryQueue.key(task) for task in tasks]
     if len(keys) != len(set(keys)):
         raise ValueError("Campaign task identities are duplicated")
+    if execution["mode"] == "local":
+        split_order = list(dict.fromkeys(t["split"] for t in tasks))
+        tasks.sort(key=lambda t: (split_order.index(t["split"]), int(t["scene_id"]), t["episode_id"]))
     hashes = {p.relative_to(source).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in source.rglob("*") if p.is_file()}
     manifest = {"version": 2, "dataset": dataset, "configs": configs, "primary_config_key": next(iter(configs)),
                 "tasks": tasks, "stage_splits": list(dict.fromkeys(t["split"] for t in tasks)),
                 "counts": dict(Counter(t["split"] for t in tasks)), "technical_trial": tasks[:4],
-                "strict_workers": 2, "dispatch_concurrency": 2, "terminal_provider_errors": False,
+                "strict_workers": len(execution["gpu_indices"]), "dispatch_concurrency": len(execution["gpu_indices"]),
+                "execution": execution, "terminal_provider_errors": False,
                 "model": model, "environment": info, "source_hashes": hashes, "completion_status": "campaign_complete",
                 "policy": {"episode_attempts": 3, "episode_deadline_sec": 7200, "no_progress_sec": 900},
                 "logging": {"profile": "paper_process_metrics_v1", "adapter": "compact_logging.py"},
                 "extension_files": {"compact_logging.py": str(Path(root) / "evaluation/experiments/compact_logging.py")}}
+    if execution["report_profile"] == "audit":
+        manifest["logging"] = {"profile": "full"}
+        manifest["extension_files"] = {}
     manifest["fingerprint"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     write_json(output / "manifest.json", manifest)
     write_json(output / "source_hashes.json", hashes)

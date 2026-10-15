@@ -71,8 +71,11 @@ def supervise(command, directory, *, timeout=7200, no_progress=900, stop=lambda:
 
 def cleanup_owned(run_root, map_config, descendants, *, control=None):
     """Delegate lifecycle to scene control after matching persisted ownership."""
-    control = control or RemoteSceneControl()
     packages, _ = load_map_config(map_config)
+    if packages and all(p.connection.get("mode") == "local" for p in packages):
+        from evaluation.benchmarks.core.campaign.local_execution import cleanup_local
+        return cleanup_local(run_root)
+    control = control or RemoteSceneControl()
     packages = {package.map_id: package for package in packages}
     receipts = []
     for path in Path(run_root).glob("*/state/scene_instance.json"):

@@ -610,7 +610,7 @@ def test_trial_uses_unscored_seen_and_covers_all_difficulties(tmp_path):
 
 
 def test_extension_freeze_does_not_edit_base_catalog(tmp_path, monkeypatch):
-    monkeypatch.setattr(parallel, "discover_gpu_bindings", lambda _: {"A": gpu_binding(0), "B": gpu_binding(2)})
+    monkeypatch.setattr(parallel, "discover_gpu_bindings", lambda _, execution=None: {"A": gpu_binding(0), "B": gpu_binding(2)})
     base = tmp_path / "source/maps.json"
     write(base, catalog())
     content = base.read_bytes()

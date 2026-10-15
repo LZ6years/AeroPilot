@@ -1309,6 +1309,7 @@ def _summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     keys = (
         "distance_to_goal",
         "success",
+        "success_25m",
         "oracle_success",
         "ndtw",
         "sdtw",

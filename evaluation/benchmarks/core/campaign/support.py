@@ -19,11 +19,21 @@ ROOT = Path(__file__).resolve().parents[4]
 
 def environment_diagnostics():
     """Verify the user-required interpreter and actual CUDA environment."""
-    import torch
-    info = {"sys_executable": sys.executable, "torch_version": torch.__version__,
-            "torch_cuda": torch.version.cuda, "cuda_available": torch.cuda.is_available(),
-            "dependencies": {name: importlib.metadata.version(name) for name in
-                             ("openai", "httpx2", "transformers", "numpy", "pillow", "psutil")}}
+    try:
+        import torch
+    except ModuleNotFoundError as exc:
+        if exc.name != "torch":
+            raise
+        torch = None
+    dependencies = {}
+    for name in ("openai", "httpx2", "transformers", "numpy", "pillow", "psutil"):
+        try:
+            dependencies[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            dependencies[name] = None
+    info = {"sys_executable": sys.executable, "torch_version": torch.__version__ if torch else None,
+            "torch_cuda": torch.version.cuda if torch else None,
+            "cuda_available": bool(torch and torch.cuda.is_available()), "dependencies": dependencies}
     if os.name == "nt" and Path(sys.executable).resolve() != Path("F:/conda_env/flyagent/python.exe").resolve():
         raise RuntimeError("Campaign requires the explicit flyagent interpreter")
     if info["cuda_available"]:

@@ -142,7 +142,7 @@ def test_frozen_shared_package_starts_in_a_cold_process_and_rejects_tampering(tm
     source = freeze_source(tmp_path)
     (source / "evaluation/benchmarks/aerial_vln/campaign.py").write_text("raise RuntimeError('Legacy driver imported')\n", encoding="utf-8")
     parallel.write_json(tmp_path / "maps.json", catalog())
-    monkeypatch.setattr(parallel, "discover_gpu_bindings", lambda _: {"A": gpu_binding(0), "B": gpu_binding(2)})
+    monkeypatch.setattr(parallel, "discover_gpu_bindings", lambda _, execution=None: {"A": gpu_binding(0), "B": gpu_binding(2)})
     tasks = [task("travel_uav", "test_unseen_map", "one")]
     manifest = {"version": 2, "dataset": "travel_uav", "fingerprint": "frozen", "tasks": tasks,
                 "configs": {"test_unseen_map": {"map_config_path": str(tmp_path / "maps.json")}}}

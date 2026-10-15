@@ -58,6 +58,7 @@ class LocalSceneControl:
             settings_path=settings_arg,
             log_path=str(log_path),
             settings_arg_style=package.launch.get("settings_arg_style"),
+            **({"environment": package.launch["env"]} if package.launch.get("env") else {}),
         )
         return ProcessStartResult(
             ownership="local",

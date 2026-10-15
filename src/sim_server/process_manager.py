@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import os
+import json
+import uuid
 import platform
 import shlex
 import signal
@@ -30,6 +32,7 @@ class ProcessManager:
         settings_path: str | None = None,
         log_path: str | None = None,
         settings_arg_style: str | None = None,
+        environment: dict[str, str] | None = None,
     ) -> int:
         # Launch a scene executable and remember its process handle.
         if instance_id in self._processes:
@@ -42,14 +45,26 @@ class ProcessManager:
         cwd = None if method == "wsl_bash" else str(Path(executable).resolve().parent)
         try:
             linux = platform.system() == "Linux"
+            launch_options = {}
+            token = uuid.uuid4().hex
+            if environment or linux:
+                launch_options["env"] = {**os.environ, **(environment or {})}
+                if linux:
+                    launch_options["env"]["FLYAGENT_PROCESS_OWNER"] = token
             proc = subprocess.Popen(command, stdout=stdout, stderr=subprocess.STDOUT, cwd=cwd,
-                                    start_new_session=linux)
+                                    start_new_session=linux, **launch_options)
         finally:
             if log_path is not None:
                 stdout.close()
         self._processes[instance_id] = proc
         if linux:
             self._process_groups[instance_id] = proc.pid
+            if log_path:
+                # Persist independently of scene readiness, so a supervisor can
+                # recover a launcher that died during startup as well.
+                receipt = Path(log_path).with_suffix(".process.json")
+                receipt.write_text(json.dumps({"scene": instance_id, "pgid": proc.pid,
+                    "owner_token": token, "settings_path": settings_path}), encoding="utf-8")
         return proc.pid
 
     def stop(self, instance_id: str) -> None:

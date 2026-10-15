@@ -67,6 +67,9 @@ class AerialVlnMetricSuite:
         return {
             "distance_to_goal": distance,
             "success": success,
+            # Supplemental horizontal-distance metric; official SR/SDTW stay unchanged.
+            "success_25m": bool(completed_normally and distance is not None and distance < 25.0),
+            "marginal_20_25m": bool(completed_normally and distance is not None and 20.0 < distance < 25.0),
             "oracle_success": oracle_success,
             "ndtw": ndtw,
             "sdtw": float(success) * ndtw,

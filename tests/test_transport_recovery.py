@@ -212,7 +212,7 @@ def test_reused_tunnel_pid_never_signalled_and_open_port_blocks_cleanup(tmp_path
     (root/"state/scene_instance.json").write_text(json.dumps({"scene_instance_id": "owned", "map_id": "map",
         "process_ownership": "remote_managed", "remote_process_id": 123, "control_port": 35001}))
     (root/"scenes/owned/settings.json").write_text('{"ApiServerPort":30001}')
-    monkeypatch.setattr(supervision, "load_map_config", lambda _: ([SimpleNamespace(map_id="map")], None))
+    monkeypatch.setattr(supervision, "load_map_config", lambda _: ([SimpleNamespace(map_id="map", connection={"mode": "remote"})], None))
     monkeypatch.setattr(supervision.psutil, "Process", lambda _: SimpleNamespace(create_time=lambda: 999,
         terminate=lambda: pytest.fail("must not terminate reused PID")))
     control = SimpleNamespace(status=lambda *a: {"pid": 123, "scene_instance_id": "owned"},

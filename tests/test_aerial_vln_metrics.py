@@ -100,6 +100,26 @@ def test_ndtw_uses_xyz_not_xy_only():
     ) == pytest.approx(0.6065306597)
 
 
+@pytest.mark.parametrize('distance,sr,sr25,margin', [
+    (19.999, True, True, False), (20, True, True, False),
+    (20.001, False, True, True), (24.999, False, True, True),
+    (25, False, False, False), (25.001, False, False, False),
+])
+def test_supplemental_distance_boundaries(distance, sr, sr25, margin):
+    metrics = evaluate([(distance, 0, 80)], outcome=BenchmarkExecutionOutcome(completed=True),
+                       action_count=0, goal=(0, 0, 0))
+    assert (metrics['success'], metrics['success_25m'], metrics['marginal_20_25m']) == (sr, sr25, margin)
+    assert metrics['sdtw'] == float(sr) * metrics['ndtw']
+
+
+@pytest.mark.parametrize('outcome', [BenchmarkExecutionOutcome(completed=False),
+    BenchmarkExecutionOutcome(completed=True, stopped=True),
+    BenchmarkExecutionOutcome(completed=True, error={'message': 'timeout'})])
+def test_abnormal_end_never_counts_as_supplemental_success(outcome):
+    metrics = evaluate([(22, 0, 0)], outcome=outcome, action_count=0, goal=(0, 0, 0))
+    assert not metrics['success_25m'] and not metrics['marginal_20_25m']
+
+
 def evaluate(points, *, outcome, action_count, goal):
     trace = EpisodeTrace(
         samples=tuple(
