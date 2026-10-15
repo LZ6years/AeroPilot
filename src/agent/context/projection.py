@@ -256,7 +256,9 @@ class HistoryProjector:
         selected_by_module, audit = self._selection(items)
         indices = event_indices or tuple(range(len(items)))
         selected_visual = self._selected_visual_candidates(items, indices, section)
-        selected_keys = {item.candidate.key for item in selected_visual}
+        selected_keys_by_event: dict[int, set[str]] = {}
+        for item in selected_visual:
+            selected_keys_by_event.setdefault(item.candidate.event_index, set()).add(item.candidate.key)
         audit["selected_visual_evidence_refs"] = [
             item.candidate.evidence_ref for item in selected_visual
         ]
@@ -295,6 +297,7 @@ class HistoryProjector:
                 )
         newest_observation = next(reversed(first_state_index_by_observation), None)
         seen_media: set[str] = set()
+        replayed_call_ids: set[str] = set()
         prefix_visual = (
             [
                 item.candidate
@@ -349,15 +352,17 @@ class HistoryProjector:
                     observation_id=observation_id,
                     include_media=include_media,
                     selected=selected_by_module,
-                    selected_visual=selected_keys,
+                    selected_visual=selected_keys_by_event.get(global_index, set()),
                     seen_media=seen_media,
                 )
                 timeline_role = "CURRENT" if observation_id == newest_observation else "HISTORY"
+                media_unavailable = False
                 try:
                     content = self.assembler.checkpoint_content(
                         checkpoint, model_inputs=inputs, timeline_role=timeline_role
                     )
                 except ValueError as exc:
+                    media_unavailable = True
                     content = self.assembler.checkpoint_content(
                         checkpoint, model_inputs=[], timeline_role=timeline_role
                     )
@@ -367,8 +372,8 @@ class HistoryProjector:
                 prefix = {
                     "type": "text",
                     "text": (
-                        f"STATE CHECKPOINT checkpoint_id={checkpoint.get('checkpoint_id')} "
-                        f"observation_id={observation_id}. Treat this as new chronological state."
+                        f"STATE CHECKPOINT {timeline_role} checkpoint_id={checkpoint.get('checkpoint_id')} "
+                        f"observation_id={observation_id}. Chronological observation state."
                     ),
                 }
                 body = [prefix, *content] if isinstance(content, list) else [
@@ -377,15 +382,22 @@ class HistoryProjector:
                 ]
                 image_count = sum(part.get("type") == "image_url" for part in body)
                 audit["observation_image_count"] += image_count
-                if include_media and not image_count:
-                    prefix["text"] += (
-                        " Observation image unavailable or omitted by history sampling; "
-                        "no older image substitutes CURRENT."
-                    )
+                if not image_count:
+                    published = any(part.get("type") == "image"
+                        for fragment in checkpoint.get("fragments", [])
+                        for part in fragment.get("model_inputs", []))
+                    if media_unavailable:
+                        detail = "Published image media is unavailable to this request."
+                    elif published:
+                        detail = "Published image is not attached in this request (selection or already attached)."
+                    else:
+                        detail = "No image media was published in this checkpoint; acquisition status is given by availability data."
+                    prefix["text"] += " " + detail + " No older image establishes CURRENT visibility."
                 messages.append({"role": "user", "content": body})
                 continue
             if event.kind == "assistant_turn":
                 turn: AssistantTurn = event.payload
+                replayed_call_ids.update(call.tool_call_id for call in turn.tool_calls)
                 tool_calls = [
                     {
                         "id": call.tool_call_id,
@@ -415,11 +427,12 @@ class HistoryProjector:
                     {
                         "role": "tool",
                         "tool_call_id": result.tool_call_id,
-                        "content": json.dumps(result.to_provider_dict(), ensure_ascii=False),
+                        "content": json.dumps(_model_tool_result(result,
+                            call_replayed=result.tool_call_id in replayed_call_ids), ensure_ascii=False),
                     }
                 )
                 evidence = self._tool_evidence_message(
-                    result, selected_keys=selected_keys, seen_media=seen_media
+                    result, selected_keys=selected_keys_by_event.get(global_index, set()), seen_media=seen_media
                 )
                 if evidence is not None:
                     messages.append(evidence)
@@ -428,7 +441,10 @@ class HistoryProjector:
                     )
                 continue
             if event.kind == "protocol_feedback":
-                messages.append({"role": "user", "content": event.payload["message"]})
+                feedback = event.payload["message"]
+                if event.payload.get("diagnostic") is not None:
+                    feedback += "\nDIAGNOSTIC " + json.dumps(event.payload["diagnostic"], ensure_ascii=False)
+                messages.append({"role": "user", "content": feedback})
         audit["total_image_count"] = (
             audit["observation_image_count"]
             + audit["tool_image_count"]
@@ -564,6 +580,7 @@ def _event_for_compression(
         }
     if event.kind == "tool_result":
         result: ToolResult = event.payload
+        plan_success = result.tool_name == "runtime.update_plan" and result.status == "ok"
         payload: dict[str, Any] = {
             "tool_call_id": result.tool_call_id,
             "tool_name": result.tool_name,
@@ -571,10 +588,16 @@ def _event_for_compression(
             "status": result.status,
             "message": result.message,
             "result_ref": result.result_ref,
-            "requested_args": copy.deepcopy(result.requested_args),
-            "executed_args": copy.deepcopy(result.executed_args),
+            "requested_args": _compression_call_args(
+                result.tool_name, {} if plan_success else result.requested_args
+            ),
+            "executed_args": _compression_call_args(
+                result.tool_name, {} if plan_success else result.executed_args
+            ),
             "safety_interventions": copy.deepcopy(result.safety_interventions),
         }
+        if plan_success:
+            payload["data"] = _plan_receipt(result.data)
         return {"kind": event.kind, "payload": payload}
     if event.kind == "state_checkpoint":
         payload = _payload_dict(event.payload)
@@ -590,14 +613,30 @@ def _event_for_compression(
         return {"kind": event.kind, "payload": {"message": event.payload.get("message")}}
     if event.kind == "provider_turn_rejected":
         payload = _payload_dict(event.payload)
-        return {
-            "kind": event.kind,
-            "payload": {
-                key: copy.deepcopy(payload.get(key))
-                for key in ("error", "content_present", "tool_calls")
-                if key in payload
-            },
+        rejected = {
+            key: copy.deepcopy(payload.get(key))
+            for key in ("error", "content_present", "tool_calls")
+            if key in payload
         }
+        # Rejected wire turns are also semantic history. Parsed plan arguments
+        # must not smuggle full snapshots back through this alternate path.
+        calls = rejected.get("tool_calls")
+        for call in calls if isinstance(calls, list) else []:
+            if not isinstance(call, dict):
+                continue
+            if (call.get("tool_name") != "runtime.update_plan"
+                    and call.get("wire_name") != "runtime_update_plan"):
+                continue
+            for key in ("args", "arguments"):
+                if key not in call:
+                    continue
+                if isinstance(call[key], dict):
+                    call[key] = _compression_call_args("runtime.update_plan", call[key])
+                else:
+                    # Unparseable arguments remain durable for human inspection.
+                    call.pop(key)
+                    call["arguments_omitted"] = True
+        return {"kind": event.kind, "payload": rejected}
     return None
 
 
@@ -608,6 +647,40 @@ def _tool_effect(registry: "ToolRegistry | None", tool_name: str) -> str | None:
         return registry.get(tool_name).runtime.effect
     except KeyError:
         return None
+
+
+def _model_tool_result(result: ToolResult, *, call_replayed: bool = False) -> dict[str, Any]:
+    """Compact successful plan receipts only in the request view.
+
+    Native historical calls retain their exact arguments. Durable results retain
+    both argument copies and the full applied snapshot for replay and reports.
+    Rejections remain intact so the planner can repair the rejected request.
+    """
+    payload = result.to_provider_dict()
+    if call_replayed:
+        payload.pop("requested_args", None)
+        if result.executed_args == result.requested_args:
+            payload.pop("executed_args", None)
+    if result.tool_name != "runtime.update_plan" or result.status != "ok":
+        return payload
+    payload["data"] = _plan_receipt(payload.get("data") or {})
+    payload.pop("requested_args", None)
+    payload.pop("executed_args", None)
+    return payload
+
+
+def _plan_receipt(data: dict[str, Any]) -> dict[str, Any]:
+    """Project receipt metadata without copying full plans into semantic input."""
+    plan = data.get("plan") or {}
+    receipt = {
+        key: copy.deepcopy(data[key])
+        for key in ("previous_revision", "changed_step_ids") if key in data
+    }
+    if "revision" in plan:
+        receipt["revision"] = plan["revision"]
+    if plan.get("explanation"):
+        receipt["explanation"] = plan["explanation"]
+    return receipt
 
 
 def _compression_call_args(tool_name: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -621,7 +694,7 @@ def _compression_call_args(tool_name: str, args: dict[str, Any]) -> dict[str, An
     return {
         key: copy.deepcopy(value)
         for key, value in args.items()
-        if key not in {"steps", "plan", "task_plan"}
+        if key not in {"steps", "updates", "plan", "task_plan"}
     }
 
 
@@ -845,9 +918,16 @@ def _candidate(
 def _deduplicate_visual_candidates(
     candidates: list[HistoryMediaEntry],
 ) -> list[HistoryMediaEntry]:
-    by_key: dict[str, HistoryMediaEntry] = {}
+    # The same bytes can be an old observation and a newly retrieved tool
+    # result. Keep both eligibility paths until budget selection, otherwise
+    # an explicit retrieval loses its recency to the first observation.
+    by_key: dict[tuple[str, str], HistoryMediaEntry] = {}
     for candidate in sorted(candidates, key=lambda item: item.event_index):
-        by_key.setdefault(candidate.key, candidate)
+        key = (candidate.key, candidate.source_kind)
+        if candidate.source_kind == "tool_evidence":
+            by_key[key] = candidate
+        else:
+            by_key.setdefault(key, candidate)
     return list(by_key.values())
 
 
@@ -864,14 +944,20 @@ def _select_visual_candidates(
     if not candidates:
         return ()
     budget = int(policy["max_request_images"])
-    chosen: dict[str, str] = {}
+    chosen: dict[str, _VisualSelection] = {}
 
     def choose(candidate: HistoryMediaEntry, tier: str) -> None:
         if len(chosen) < budget:
-            chosen.setdefault(candidate.key, tier)
+            chosen.setdefault(candidate.key, _VisualSelection(candidate, tier))
 
+    latest_groups: dict[str, HistoryMediaEntry] = {}
+    for item in sorted(candidates, key=lambda value: value.event_index):
+        group = item.media_ref.get("latest_group")
+        if group:
+            latest_groups[str(group)] = item
     observations = [
         item for item in candidates if item.source_kind == "observation"
+        and not item.media_ref.get("latest_group")
     ]
     # Context module order places the primary image before auxiliary visual
     # modules. Keep one representative per observation so a single checkpoint
@@ -913,10 +999,17 @@ def _select_visual_candidates(
     for item in recent_pool[-recent_count:]:
         choose(item, "recent_observation")
 
+    # Cumulative media stays current even after a nonphysical annotation turn
+    # or prefix compaction. RGB anchors retain priority; plugins own grouping.
+    for item in latest_groups.values():
+        choose(item, "latest_group")
+
     eligible_tools = [
         item
         for item in candidates
         if item.source_kind == "tool_evidence"
+        and item.key not in chosen
+        and not item.media_ref.get("latest_group")
         and (
             compacted_through is None
             or item.event_index >= compacted_through
@@ -945,11 +1038,9 @@ def _select_visual_candidates(
     for item in _log_spaced_candidates(older_observations, remaining_slots):
         choose(item, "log_history")
 
-    return tuple(
-        _VisualSelection(item, chosen[item.key])
-        for item in candidates
-        if item.key in chosen
-    )
+    # Anchors retain their first-priority source; remaining retrieved photos
+    # are emitted at their tool-result boundary. Each identity is sent once.
+    return tuple(sorted(chosen.values(), key=lambda item: item.candidate.event_index))
 
 
 def _log_spaced_candidates(

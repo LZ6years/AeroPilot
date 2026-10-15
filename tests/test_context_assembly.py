@@ -124,14 +124,13 @@ def test_normal_projection_copies_entire_history_once(monkeypatch):
 
 
 @pytest.mark.parametrize("terminal", ["completed", "blocked"])
-def test_runtime_only_copies_validated_control_prefix(tmp_path, monkeypatch, terminal):
+def test_runtime_copies_terminal_evidence_prefix_but_plan_needs_no_history(tmp_path, monkeypatch, terminal):
     import src.runtime.task.turn_executor as module
     batches = [
-        [move("mixed"), call("mixed_plan", "runtime.update_plan", steps=[])],
+        [move("mixed"), call("mixed_plan", "runtime.update_plan", operation="replace", explanation=None, steps=[])],
         [call("read", "knowledge.load", name="missing")],
-        [call("plan", "runtime.update_plan", explanation="Inspect", steps=[
-            {"id": "inspect", "description": "Inspect", "status": "in_progress",
-             "evidence_refs": []}])],
+        [call("plan", "runtime.update_plan", explanation="Inspect", operation="replace", steps=[
+            {"id": "inspect", "description": "Inspect", "status": "in_progress"}])],
         [move("move")],
         [call("terminal", f"runtime.report_{terminal}", reason="Observed", evidence_refs=["obs_0002"])],
     ]
@@ -150,7 +149,8 @@ def test_runtime_only_copies_validated_control_prefix(tmp_path, monkeypatch, ter
         return result
     original_control = module.execute_builtin_control
     def control(tool_call, state, registry, history):
-        assert history == tuple(runtime.planner.transcript.items[:-1])
+        assert history == (() if tool_call.tool_name == "runtime.update_plan"
+                           else tuple(runtime.planner.transcript.items[:-1]))
         assert runtime.planner.transcript.items[-1].kind == "assistant_turn"
         controls.append(tool_call.tool_call_id)
         return original_control(tool_call, state, registry, history)
@@ -159,7 +159,7 @@ def test_runtime_only_copies_validated_control_prefix(tmp_path, monkeypatch, ter
     monkeypatch.setattr(module, "execute_builtin_control", control)
     runtime.run_task("map", "Inspect the endpoint")
     assert controls == ["plan", "terminal"]
-    assert len(snapshots) == 5 and len(prefixes) == 2
+    assert len(snapshots) == 5 and len(prefixes) == 1
     assert all(boundary == length - 1 for boundary, length, _ in prefixes)
     results = [
         e.payload.tool_call_id

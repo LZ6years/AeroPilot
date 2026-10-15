@@ -1,0 +1,66 @@
+{
+  "call_name": "skill.place_memory.save_place",
+  "wire_name": "skill_place_memory_save_place",
+  "description": "Save useful spatial memory at an existing visited-place ID. Proactively annotate recognizable landmarks at the start or along the route, important junctions or viewpoint transitions before leaving, revisits that add or correct information, and unsuccessful searches worth remembering. Record observed features, findings and uncertainty so you can recognize the place and avoid repeating searches. Ordinary movement or unchanged views do not need another save. Consult the latest map and successful save result: an older checkpoint may still show the pre-save state. Update a saved place only when useful information changes. Returns the saved notes, annotation status and updated map immediately; no flight motion. Notes are model interpretations, not task-completion evidence or a replacement for the current plan. First save adds the place to list_places. Subsequent saves replace the entire summary, landmarks and evidence_refs; include still-useful earlier information. Empty photo_observation_ids retains existing photos. Use list_places to recover saved IDs and inspect_place for all legal photo choices.",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "place_id",
+      "summary",
+      "landmarks",
+      "evidence_refs",
+      "photo_observation_ids"
+    ],
+    "properties": {
+      "place_id": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Existing P-number of the UAV observation site on this task's map, not a building coordinate."
+      },
+      "summary": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 500,
+        "description": "One or two concise sentences describing observed features, useful search findings and uncertainty. Actual actions are already logged; do not copy a movement transcript or put future plan steps here."
+      },
+      "landmarks": {
+        "type": "array",
+        "maxItems": 8,
+        "description": "Short visual recognition clues observed from this site, such as building appearance, a junction or an entrance; preserve uncertain identifications.",
+        "items": {
+          "type": "string",
+          "maxLength": 120
+        }
+      },
+      "evidence_refs": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 8,
+        "uniqueItems": true,
+        "description": "Existing environmental observation or action references from this task supporting the notes. Cross-place evidence may support comparisons; selected photos must belong to this place. Saved notes and inspect results are not new environmental evidence.",
+        "items": {
+          "type": "string"
+        }
+      },
+      "photo_observation_ids": {
+        "type": "array",
+        "maxItems": 2,
+        "uniqueItems": true,
+        "description": "Up to two original RGB observation IDs from this site's visits. Use representative views; an empty array keeps the existing representative photos. Images are referenced, not copied.",
+        "items": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "runtime": {
+    "effect": "runtime_control",
+    "result_timing": "immediate",
+    "batching": "single",
+    "model_exposed": true
+  },
+  "handler": "scripts/handler.py",
+  "mock": false,
+  "settings": {}
+}

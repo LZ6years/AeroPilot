@@ -1,7 +1,7 @@
 {
   "call_name": "skill.visual_grounding.measure_visible_depth",
   "wire_name": "skill_visual_grounding_measure_visible_depth",
-  "description": "Measure camera-to-visible-surface depth for a candidate selected from the CURRENT RGB when range can affect the next decision. The query describes that candidate's visible category and appearance. Returns candidate locations, annotated evidence and distance validity. Identity, route interpretation and task completion remain model judgments. Distance is camera-to-visible-surface depth rather than horizontal or target-center distance. An empty candidate list or failed call means that no measurement was produced. inconsistent_depth_surfaces invalidates the scalar distance; metric_depth_unavailable means metric depth could not be used.",
+  "description": "Measure camera-to-visible-surface depth for a candidate selected from the CURRENT RGB when range can affect the next decision. The query describes visible category and appearance; spatial words do not constrain an image region. Verify returned boxes and appearance against the intended candidate. Returns candidate locations, annotated evidence, measurement_status and valid_distance_count. Identity, route interpretation and task completion remain model judgments. Distance is camera-to-visible-surface depth rather than horizontal or target-center distance. An empty candidate list or failed call means that no measurement was produced. inconsistent_depth_surfaces invalidates the scalar distance; metric_depth_unavailable means metric depth could not be used.",
   "input_schema": {
     "type": "object",
     "required": [
@@ -19,7 +19,7 @@
         "type": "string",
         "minLength": 1,
         "maxLength": 256,
-        "description": "Concise visible category and appearance of the candidate selected from CURRENT RGB, e.g. brown-walled building or beige flat roof."
+        "description": "Concise visible category and appearance, e.g. brown-walled building. Spatial words are not enforced region constraints; verify candidate boxes."
       }
     }
   },

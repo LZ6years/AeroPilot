@@ -63,8 +63,21 @@ class ContextWindowManager:
         task_state = copy.deepcopy(current_task_state or {})
         # Standalone callers intentionally remain stateless and preserve full
         # history. Production supplies both objects from its TaskSession.
-        if state is None or not self.config.enabled:
+        if state is None:
             return self.projector.project(transcript, registry)
+
+        if not self.config.enabled:
+            # Measurement uses the same task-local estimator and subsequent
+            # usage calibration as compression. It never schedules summaries
+            # or changes the full-history request; later experiments can prove
+            # whether a prefetch threshold was reached on this trajectory.
+            result = self.projector.project(transcript, registry)
+            estimate = self._estimate(fixed_messages, result.messages, tools, parameters, state)
+            state.last_estimated_tokens = estimate
+            result.audit.update(estimated_input_tokens=estimate,
+                                token_calibration_ratio=state.calibration_ratio,
+                                compression_enabled=False, compaction_status="disabled")
+            return result
 
         transition: dict[str, Any] = {}
         if coordinator is not None:

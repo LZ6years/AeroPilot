@@ -1,0 +1,35 @@
+{
+  "call_name": "skill.place_memory.list_places",
+  "wire_name": "skill_place_memory_list_places",
+  "description": "List only actively saved places in this task to recover a forgotten P-ID or find earlier landmarks and search findings. Returns IDs and complete saved short notes in numeric P order, total and next_offset; follow next_offset for more. Automatic unannotated observation sites are excluded. After choosing an ID, use inspect_place in a later turn for historical photos and details. Notes retain model interpretations and uncertainty; this is task-local historical memory, not a new observation. Reads the latest saved state without images or movement.",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "offset",
+      "limit"
+    ],
+    "properties": {
+      "offset": {
+        "type": "integer",
+        "minimum": 0,
+        "description": "Zero-based offset into saved places; start at 0 and use returned next_offset to continue."
+      },
+      "limit": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "description": "Maximum number of saved entries to return (1 to 20)."
+      }
+    }
+  },
+  "runtime": {
+    "effect": "read_only",
+    "result_timing": "immediate",
+    "batching": "parallel_safe",
+    "model_exposed": true
+  },
+  "handler": "scripts/handler.py",
+  "mock": false,
+  "settings": {}
+}

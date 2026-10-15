@@ -1,0 +1,7 @@
+{
+  "plugins":{"roots":["plugins/knowledge","plugins/research","plugins/capabilities"],
+    "enabled":["knowledge.uav_flight","capabilities.pixel_depth","capabilities.place_memory"],
+    "disabled":["capabilities.visual_grounding","capabilities.flight_experience"]},
+  "context_modules":{"skills":"default","image":"default","pose":"default","motion":"default","map":"capabilities.place_memory"},
+  "context_options":{"image":{"include_current_depth":false},"map":{"merge_horizontal_m":10.0,"merge_vertical_m":5.0,"max_photos":2}}
+}

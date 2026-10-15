@@ -140,6 +140,9 @@ class RequestAssembler:
                 "Historical context only through the declared event boundary. It "
                 "never states current or remaining work, overrides CURRENT TASK "
                 "STATE, or establishes task completion."
+                " The semantic_summary is model-authored: citations establish "
+                "provenance, not semantic verification. verified_facts are recorded "
+                "counts, statuses and measurements, not verified visual interpretations."
             ),
             "generation": section.generation,
             "through_event_index": section.through_event_index,
@@ -192,6 +195,16 @@ class RequestAssembler:
 def _media_label(ref: dict[str, Any], timeline_role: str) -> str:
     observation_id = str(ref.get("observation_id") or "unknown")
     frame_id = str(ref.get("frame_id") or "unknown")
+    # Cumulative context is an updated record, not another camera observation.
+    # Use the generic media contract so plugins do not need core name checks.
+    if ref.get("latest_group"):
+        lines = [f"CONTEXT IMAGE updated_at_observation_id={observation_id} frame_id={frame_id}"]
+        width, height = ref.get("display_width"), ref.get("display_height")
+        if isinstance(width, int) and isinstance(height, int):
+            lines.append(f"image_size={width}x{height}")
+        if isinstance(ref.get("usage"), str) and ref["usage"].strip():
+            lines.append(ref["usage"].strip())
+        return "\n".join(lines)
     lines = [
         f"{timeline_role} observation_id={observation_id} frame_id={frame_id}"
     ]
@@ -212,5 +225,5 @@ def _media_label(ref: dict[str, Any], timeline_role: str) -> str:
     if isinstance(usage, str) and usage.strip():
         lines.append(usage.strip())
     if timeline_role == "CURRENT":
-        lines.append("Only CURRENT establishes current visibility and the next action.")
+        lines.append("Only CURRENT establishes current camera visibility.")
     return "\n".join(lines)

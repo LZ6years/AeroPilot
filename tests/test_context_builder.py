@@ -104,10 +104,10 @@ def test_instruction_envelope_owns_static_content_without_raw_instruction(tmp_pa
 def test_checkpoint_contains_only_dynamic_model_fields_and_separate_audit(tmp_path):
     state = _state()
     state.task_plan = TaskPlan().updated(
-        {
+        {"operation": "replace",
             "explanation": "inspect safely",
             "steps": [{"id": "look", "description": "Look", "status": "in_progress",
-                       "evidence_refs": []}],
+            }],
         }
     )
     state.loaded_knowledge = [{"name": "guide", "version": "1"}]
@@ -131,7 +131,7 @@ def test_checkpoint_contains_only_dynamic_model_fields_and_separate_audit(tmp_pa
     assert "data:image/" not in json.dumps(payload)
 
 
-def test_motion_fragment_keeps_safety_internal_and_observation_policy_visible(tmp_path):
+def test_motion_fragment_keeps_fixed_semantics_and_acquisition_policy_out_of_measurements(tmp_path):
     state = _state()
     state.observation_modalities = ("rgb", "pose")
     state.yaw_scan_extent_deg = 15.0
@@ -145,7 +145,14 @@ def test_motion_fragment_keeps_safety_internal_and_observation_policy_visible(tm
     motion = next(item for item in checkpoint.fragments if item.name == "motion")
     motion_audit = next(item for item in audits if item["name"] == "motion")
 
-    assert motion.content["observation_policy"]["modalities"] == ["rgb", "pose"]
+    assert set(motion.content) == {"instruction_start_relative_uav_motion", "last_window_uav_motion"}
+    assert motion_audit["metadata"]["observation_policy"]["modalities"] == ["rgb", "pose"]
+    fields = builder.build_instruction_envelope(state, memory).to_dict()["static_module_guidance"]
+    motion_fields = next(item["model_fields"] for item in fields if item["name"] == "motion")
+    assert "instruction-start body frame" in motion_fields["instruction_start_relative_uav_motion"]
+    assert "starting body frame" in motion_fields["last_window_uav_motion"]
+    assert "not target distance" in motion_fields["last_window_uav_motion"]
+    assert next(item for item in checkpoint.fragments if item.name == "pose").content == {"agl_m": 2.5}
     assert "safety_constraints" not in motion.content
     assert motion_audit["metadata"]["safety_constraints"]["yaw_scan_remaining_deg"] == 30.0
     assert "yaw_scan_remaining_deg" not in json.dumps(checkpoint.to_dict())
@@ -154,6 +161,29 @@ def test_motion_fragment_keeps_safety_internal_and_observation_policy_visible(tm
     )
     assert "yaw_scan_remaining_deg" not in provider_content
     assert "max_yaw_scan_extent_deg" not in provider_content
+
+
+def test_fixed_motion_and_agl_meanings_are_sent_once_across_checkpoints(tmp_path):
+    from src.agent.context.projection import HistoryProjector
+    from src.agent.transcript import AgentTranscript
+    from src.tools.registry import default_registry
+    state = _state()
+    memory, writer = _memory(tmp_path, state)
+    builder = _builder()
+    transcript = AgentTranscript(writer)
+    transcript.start_instruction(state.user_instruction, memory.active_instruction_id,
+                                 builder.build_instruction_envelope(state, memory))
+    for index in range(1, 4):
+        _record_observation(writer, memory, state)
+        checkpoint, _ = builder.build_checkpoint(state, memory,
+                                                checkpoint_id=f"checkpoint_{index:04d}",
+                                                reason="instruction_start" if index == 1 else "physical_window_completed")
+        transcript.append_state(checkpoint)
+    messages = HistoryProjector().project(transcript, default_registry()).messages
+    request = json.dumps(messages)
+    assert request.count("instruction-start body frame") == 1
+    assert request.count("smaller means closer to ground") == 1
+    assert "field_semantics" not in request and "observation_policy" not in request
 
 
 def test_image_fragment_is_media_ref_and_does_not_embed_base64(tmp_path):

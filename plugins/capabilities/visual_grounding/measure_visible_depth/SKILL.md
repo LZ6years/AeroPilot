@@ -9,7 +9,10 @@ Use `skill.visual_grounding.measure_visible_depth(observation_id, query)` when d
 candidate already observed in the current RGB can inform a decision. Supply the
 CURRENT observation ID and a concise visible category and appearance. Candidate
 discovery and identity remain visual judgments; this capability supplies locations,
-an annotated image and visible-surface depth for the selected candidate.
+an annotated image and attempted visible-surface depth for matching candidates.
+Spatial words in query do not constrain an image region. Compare returned boxes
+and appearance with the intended candidate; a location conflict means identity
+is unresolved, even if a returned distance is valid.
 
 The service locates candidates and attempts metric depth for each. Use the associated
 annotated evidence to determine which candidate was measured. Multiple candidates
@@ -28,3 +31,6 @@ means metric depth could not be used; `inconsistent_depth_surfaces` means the
 candidate region cannot support a reliable scalar depth, including extended or
 sloped surfaces. Other invalid-distance statuses retain their stated reason.
 Execution success and measurement validity remain separate result fields.
+`measurement_status` is `no_candidates`, `no_valid_distance` or `distance_available`;
+`valid_distance_count` counts only candidates with valid scalar depth. A zero count
+does not establish object absence or justify a numeric distance claim.

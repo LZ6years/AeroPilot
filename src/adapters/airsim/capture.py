@@ -113,6 +113,8 @@ class AirSimCapture:
         floats = response.image_data_float
         metadata = {
             "width": width, "height": height, "capture_source": capture_source,
+            "camera_name": self.camera_name,
+            "capture_timestamp_ns": getattr(response, "time_stamp", None),
             "image_type": spec.image_type_attribute, "pixels_as_float": spec.pixels_as_float,
             "compressed": spec.compress, "bytes": len(raw),
             "float_count": len(floats) if floats is not None else 0,
@@ -123,6 +125,10 @@ class AirSimCapture:
             if remainder or channels not in {3, 4}:
                 raise ValueError(f"{capture_source} raw payload has {len(raw)} bytes for {width}x{height}; expected 3 or 4 channels")
             pixels = np.frombuffer(raw, dtype=np.uint8).reshape(height, width, channels)
+            # Unreal's uncompressed RenderRequest packs B,G,R[,A]. PNG decode
+            # already returns RGB; reorder only the raw transport, retaining alpha.
+            pixels = pixels[:, :, [2, 1, 0] if channels == 3 else [2, 1, 0, 3]]
+            metadata["color_order"] = "RGB" if channels == 3 else "RGBA"
             buffer = BytesIO()
             Image.fromarray(pixels).save(buffer, format="PNG")
             payload, suffix = buffer.getvalue(), "png"

@@ -58,8 +58,10 @@ class DefaultPoseContextModule(ContextModule):
                 "UAV ground clearance when calibrated; self-state, not target-relative geometry."
             ],
             "model_fields": {
-                "agl_m": "Optional vertical clearance above the configured local landing reference, in meters.",
-                "field_semantics": "Compact meaning and evidence boundary for agl_m.",
+                "agl_m": (
+                    "Optional UAV vertical clearance above the configured local landing reference, "
+                    "in meters; smaller means closer to ground. UAV self-state, not target distance."
+                ),
             },
             "audit_fields": {
                 "pose_history_count": "Number of recent pose refs considered before compacting the planner-facing pose context.",
@@ -79,13 +81,4 @@ def _model_pose_content(latest_pose: dict[str, Any]) -> dict[str, Any]:
         return {}
     if not math.isfinite(agl_m):
         return {}
-    return {
-        "agl_m": agl_m,
-        "field_semantics": {
-            "agl_m": (
-                "UAV vertical clearance above the configured local landing "
-                "reference, in meters; smaller means closer to ground. This "
-                "is UAV self-state, not target distance."
-            )
-        },
-    }
+    return {"agl_m": agl_m}

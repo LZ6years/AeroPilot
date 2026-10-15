@@ -472,11 +472,10 @@ def test_checkpoint_fingerprint_ignores_task_state_changes(tmp_path):
         reason="instruction_start",
     )
     state.task_plan = TaskPlan().updated(
-        {
+        {"operation": "replace",
             "explanation": "Inspect the current scene",
             "steps": [
-                {"id": "inspect", "description": "Inspect", "status": "in_progress",
-                 "evidence_refs": []}
+                {"id": "inspect", "description": "Inspect", "status": "in_progress"}
             ]
         }
     )

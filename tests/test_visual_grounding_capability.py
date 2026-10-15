@@ -146,6 +146,25 @@ def test_empty_detection_handler_reports_uncertainty(monkeypatch, tmp_path):
     assert "not a search result" in result.message
     assert "include_distance" not in result.data
     assert result.data["candidates"] == []
+    assert result.data["measurement_status"] == "no_candidates"
+    assert result.data["valid_distance_count"] == 0
+
+
+def test_partial_valid_measurements_do_not_resolve_candidate_identity(monkeypatch):
+    from types import SimpleNamespace
+    from plugins.capabilities.visual_grounding.measure_visible_depth.scripts import handler
+    candidates = [
+        {"candidate_id": "left", "box_normalized": [0.0, 0.2, 0.1, 0.9], "distance_status": "ok", "distance_m": 8.0},
+        {"candidate_id": "right", "box_normalized": [0.6, 0.3, 0.9, 0.9], "distance_status": "inconsistent_depth_surfaces", "distance_m": None},
+    ]
+    service = SimpleNamespace(measure_visible_depth=lambda **kwargs: {
+        "data": {"candidates": candidates}, "artifact_refs": [], "model_inputs": []})
+    monkeypatch.setattr(handler, "service_from_settings", lambda _: service)
+    result = handler.handle({"args": {"query": "white building on the right"}})
+    assert result.data["measurement_status"] == "distance_available"
+    assert result.data["valid_distance_count"] == 1
+    assert result.data["candidates"] == candidates
+    assert "valid depth does not establish target identity" in result.message
 
 
 def test_missing_depth_retains_candidate_with_unavailable_distance(tmp_path):
@@ -254,7 +273,9 @@ def test_multiple_depth_surfaces_return_unavailable_instead_of_a_number(tmp_path
     public = handler.handle({"args": {"observation_id": "obs_0001", "query": "person"},
                              "runtime_context": {"latest_observation": _observation(tmp_path, depth)}})
     assert "0 valid distance estimate(s)" in public.message
-    assert "execution success is not measurement validity" in public.message
+    assert "No reliable scalar depth was produced" in public.message
+    assert public.data["measurement_status"] == "no_valid_distance"
+    assert public.data["valid_distance_count"] == 0
 
 
 def test_empty_candidates_and_stale_observation_are_explicit(tmp_path):

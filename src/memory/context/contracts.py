@@ -93,6 +93,9 @@ class MediaRef:
     display_height: int | None = None
     color_bar_height: int = 0
     source_frame_ids: tuple[str, ...] = ()
+    # Optional cumulative media identity: the request view retains its newest
+    # snapshot across checkpoints and ToolResults, without rewriting history.
+    latest_group: str | None = None
 
     def __post_init__(self) -> None:
         digest = self.sha256.strip().lower()
@@ -121,6 +124,8 @@ class MediaRef:
                 data[key] = value
         if self.source_frame_ids:
             data["source_frame_ids"] = list(self.source_frame_ids)
+        if self.latest_group is not None:
+            data["latest_group"] = self.latest_group
         return data
 
     def to_model_input(self) -> dict[str, Any]:

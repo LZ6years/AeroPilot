@@ -1,0 +1,19 @@
+{
+  "call_name": "skill.pixel_depth.measure_pixel_depth",
+  "wire_name": "skill_pixel_depth_measure_pixel_depth",
+  "description": "Read metric sensor depth at a point you select inside a visible surface in CURRENT original RGB. Uses no detector or segmentation model. Returns the sampled pixel, depth validity and a marked evidence image. Coordinates use the original scene bounds, not a resized preview or a map image. Sensor depth is not horizontal distance or target-center distance; target identity and completion remain visual judgments.",
+  "input_schema": {
+    "type": "object",
+    "required": ["observation_id", "pixel_x", "pixel_y"],
+    "additionalProperties": false,
+    "properties": {
+      "observation_id": {"type": "string", "minLength": 1, "description": "Exact observation_id on CURRENT RGB."},
+      "pixel_x": {"type": "integer", "minimum": 0, "description": "Zero-based column in the original RGB, increasing to the right; must be less than scene width."},
+      "pixel_y": {"type": "integer", "minimum": 0, "description": "Zero-based row in the original RGB, increasing downward; must be less than scene height."}
+    }
+  },
+  "runtime": {"effect": "read_only", "result_timing": "immediate", "batching": "parallel_safe", "model_exposed": true, "max_calls_per_observation": 2},
+  "handler": "scripts/handler.py",
+  "mock": false,
+  "settings": {}
+}

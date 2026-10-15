@@ -31,12 +31,6 @@ class DefaultMotionContextModule(ContextModule):
                 key: _optional_float(summary.get("last_window", {}).get(key))
                 for key in ("forward_m", "right_m", "up_m", "planar_m", "yaw_delta_deg")
             },
-            "field_semantics": (
-                "Measured UAV self-motion, not target distance. Cumulative motion is in the "
-                "instruction-start body frame; last-window motion uses that batch's starting "
-                "body frame. Unknown measurements remain null."
-            ),
-            "observation_policy": dict(stage_context.observation_policy),
         }
         return ContextModuleResult(
             ContextFragment(self.name, content),
@@ -47,6 +41,8 @@ class DefaultMotionContextModule(ContextModule):
                 metadata={
                     "physical_window_count": stage_context.metadata.get("physical_window_count"),
                     "safety_constraints": dict(stage_context.safety_constraints),
+                    # Acquisition modalities do not imply model-visible images.
+                    "observation_policy": dict(stage_context.observation_policy),
                 },
             ),
         )
@@ -58,14 +54,23 @@ class DefaultMotionContextModule(ContextModule):
                 "Measured instruction-relative UAV self-motion, not distance to a target."
             ],
             "model_fields": {
-                "instruction_start_relative_uav_motion": "Cumulative measured motion from instruction origin.",
-                "last_window_uav_motion": "Measured motion across the latest physical batch.",
-                "field_semantics": "Self-motion is not target-relative distance.",
-                "observation_policy": "Automatic observation timing and requested modalities.",
+                "instruction_start_relative_uav_motion": (
+                    "Net measured UAV self-motion in the instruction-start body frame, "
+                    "not target distance; distances in meters, yaw_delta_deg in degrees. "
+                    "planar_m is net horizontal displacement, not travelled path length; "
+                    "yaw_delta_deg is heading difference, not accumulated turning. "
+                    "Unknown measurements remain null."
+                ),
+                "last_window_uav_motion": (
+                    "Measured UAV self-motion across the latest single-action window in that window's "
+                    "starting body frame, not target distance; distances in meters, "
+                    "yaw_delta_deg in degrees. Unknown measurements remain null."
+                ),
             },
             "audit_fields": {
                 "physical_window_count": "Number of completed physical windows.",
                 "safety_constraints": "Runtime-only dynamic flight and stationary-scan diagnostics.",
+                "observation_policy": "Acquisition timing and modalities, not a declaration of attached model inputs.",
             },
         }
 

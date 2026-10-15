@@ -95,6 +95,48 @@ class StubCompactor:
         return max(1, len(request.windows) * self.tokens_per_window)
 
 
+@pytest.mark.parametrize("status", ["ok", "rejected"])
+@pytest.mark.parametrize("mode", ["steps", "updates"])
+def test_compression_removes_plan_bodies_from_calls_and_result_argument_copies(status, mode):
+    from src.agent.context.projection import _event_for_compression
+    args = {"explanation": "Correct recorded progress", mode: [
+        {"id": "gate", "description": "UNIQUE_LARGE_PLAN_BODY", "status": "completed"}
+    ]}
+    call = AgentToolCall("plan", "runtime.update_plan", args)
+    result = ToolResult("plan", "runtime.update_plan", status, "Saved" if status == "ok" else "Unknown step",
+                        requested_args=copy.deepcopy(args), executed_args=copy.deepcopy(args),
+                        data={"previous_revision": 1, "changed_step_ids": ["gate"],
+                              "plan": {"revision": 2, "explanation": "Correct recorded progress", "steps": args[mode]}})
+    original = result.to_dict()
+    registry = default_registry()
+    projected = [
+        _event_for_compression(TranscriptEvent("assistant_turn", AssistantTurn("turn", "Correct", [call])), registry),
+        _event_for_compression(TranscriptEvent("tool_result", result), registry),
+    ]
+    assert "UNIQUE_LARGE_PLAN_BODY" not in json.dumps(projected)
+    assert projected[0]["payload"]["tool_calls"][0]["args"] == {"explanation": "Correct recorded progress"}
+    if status == "ok":
+        assert projected[1]["payload"]["data"]["revision"] == 2
+    assert result.to_dict() == original
+
+
+@pytest.mark.parametrize("wire", [False, True, "invalid"])
+def test_rejected_provider_plan_arguments_do_not_leak_snapshots_into_compression(wire):
+    from src.agent.context.projection import _event_for_compression
+    args = {"operation": "replace", "explanation": None, "steps": [{"id": "gate", "description": "UNIQUE_REJECTED_PLAN_BODY", "status": "pending"}]}
+    call = {"tool_call_id": "rejected_plan"}
+    if wire:
+        call.update(wire_name="runtime_update_plan", arguments=args if wire is True else "UNIQUE_REJECTED_PLAN_BODY{")
+    else:
+        call.update(tool_name="runtime.update_plan", args=args)
+    payload = {"error": "invalid turn", "tool_calls": [call]}
+    original = copy.deepcopy(payload)
+    projected = _event_for_compression(TranscriptEvent("provider_turn_rejected", payload), default_registry())
+    assert "UNIQUE_REJECTED_PLAN_BODY" not in json.dumps(projected)
+    assert projected["payload"]["tool_calls"][0]["tool_call_id"] == "rejected_plan"
+    assert payload == original
+
+
 def _image_ref(tmp_path, index: int, observation_id: str) -> MediaRef:
     output = BytesIO()
     Image.new("RGB", (2, 2), (index, 0, 0)).save(output, format="PNG")
@@ -238,7 +280,6 @@ def _project(
                 "id": "inspect",
                 "description": "Inspect the route",
                 "status": "in_progress",
-                "evidence_refs": ["obs_0001"],
             }],
         },
         "loaded_knowledge": [{"name": "flight", "version": "1"}],
@@ -327,7 +368,6 @@ def test_prefetch_uses_all_eligible_windows_and_image_free_semantic_view(tmp_pat
                 "id": "inspect",
                 "description": "Inspect the route",
                 "status": "in_progress",
-                "evidence_refs": ["obs_0001"],
             }],
         },
         "loaded_knowledge": [{"name": "flight", "version": "1"}],

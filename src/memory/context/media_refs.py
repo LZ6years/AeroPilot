@@ -41,6 +41,7 @@ def image_media_ref(
     usage: str = "",
     scene_width: int | None = None,
     scene_height: int | None = None,
+    latest_group: str | None = None,
 ) -> MediaRef:
     """Read one selected artifact once to establish identity and a durable ref.
 
@@ -73,4 +74,5 @@ def image_media_ref(
         height=scene_height or height,
         display_width=width,
         display_height=height,
+        latest_group=latest_group,
     )

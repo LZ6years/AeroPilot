@@ -20,5 +20,12 @@ Do not emit current work, next steps, remaining work, current plans or current-s
 claims. Do not declare the task complete, emit tool calls, expose hidden reasoning,
 or add fields outside the required schema.
 
+This input contains text records, not the observation pixels. An observation
+reference proves the record exists, not that you inspected its image. Attribute
+visual interpretations and arrival claims to the assistant that made them;
+successful tool execution alone does not prove landmark identity, passage or
+arrival. Preserve uncertainty, contradictory outcomes and later corrections
+instead of upgrading an earlier hypothesis into an environmental fact.
+
 Produce the compact JSON directly. Do not spend output on a step-by-step
 analysis before the JSON.
