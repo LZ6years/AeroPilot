@@ -49,7 +49,7 @@ for index,gpu in enumerate(ET.fromstring(result.stdout).findall('gpu')):
   pid=int(process.findtext('pid'))
   try: group=os.getpgid(pid)
   except ProcessLookupError: continue
-  processes.append({'pid':pid,'pgid':group,'type':process.findtext('type')})
+  processes.append({'pid':pid,'pgid':group,'type':process.findtext('type'),'name':process.findtext('process_name')})
  gpus.append({'index':index,'name':gpu.findtext('product_name'),'uuid':gpu.findtext('uuid'),
               'memory_used':gpu.findtext('fb_memory_usage/used'),'processes':processes})
 owned=[]
@@ -431,7 +431,11 @@ def local_gpu_idle(execution):
     response = subprocess.run([sys.executable, '-c', REMOTE_GPU_INSPECTION, '[]'],
                               capture_output=True, text=True, timeout=15, check=True)
     gpu = next(g for g in json.loads(response.stdout)['gpus'] if g['index'] == policy['gpu_indices'][0])
-    return not gpu['processes'] and int(gpu['memory_used'].split()[0]) < 2048
+    # The system display server appears on all cards with a few MiB even when
+    # no experiment is running. Other graphics/compute owners block dispatch.
+    desktop_only = all(Path(p.get('name') or '').name in {'Xorg', 'Xwayland'} and p['type'] == 'G'
+                       for p in gpu['processes'])
+    return desktop_only and int(gpu['memory_used'].split()[0]) < 512
 
 
 def lane_catalog(catalog, lane, binding, execution=None):
