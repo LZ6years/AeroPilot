@@ -1,0 +1,46 @@
+{
+  "maps": [
+    {
+      "map_id": "aerial_vln_linux_local_smoke",
+      "provider": "packaged_unreal",
+      "scene_id": "3",
+      "root": "/home/Newdisk/wzq/data/airvln/ENVs/env_3/env_3/LinuxNoEditor",
+      "connection": {
+        "mode": "local",
+        "data_transport": "direct",
+        "machine_id": "linux_local"
+      },
+      "launch": {
+        "method": "linux_bash",
+        "args": [
+          "-RenderOffscreen",
+          "-NoSound",
+          "-NoVSync",
+          "-GraphicsAdapter=3"
+        ],
+        "settings_arg_style": "double_dash",
+        "existing_process_policy": "reject",
+        "ready_timeout_sec": 120,
+        "post_launch_wait_sec": 5,
+        "linux": "AirVLN.sh"
+      },
+      "control": {
+        "protocol": "airsim"
+      },
+      "airsim": {
+        "port": 39131,
+        "mode": "ComputerVision",
+        "control_strategy": "pose_kinematic",
+        "settings_template_source": "local",
+        "settings_template": "/home/Newdisk/wzq/data/airvln/AirVLN/airsim_plugin/settings/3/settings.json",
+        "vehicle_name": "Drone_1",
+        "camera_name": "front_0",
+        "host": "127.0.0.1"
+      }
+    }
+  ],
+  "port_policy": {
+    "control_port_start": 39131,
+    "max_scene_num": 1
+  }
+}

@@ -49,8 +49,10 @@ instructions; do not copy them into the UAV agent's model-facing memory/prompts.
   the feedback loop. `tool_user_system.txt` explains only generic call grouping
   and result semantics without duplicating JSON Schema or permanent examples.
   Tool descriptions own applicability and exact argument semantics. Plans are
-  optional state for retaining ordered outcomes and constraints; tasks may act
-  directly when a plan would not improve continuity.
+  optional state for retaining ordered outcomes and constraints. Tool descriptions
+  own when a plan is useful; prompts remind the model to keep recorded stages
+  aligned with changed progress. No plan is a Runtime prerequisite, and no extra
+  action-confirmation field is required; Runtime never infers milestone completion.
 - Model-visible descriptions follow purpose, applicable need, returned content,
   and capability limits. Parameter prose explains meaning, units and effects,
   not tool-selection priority. Descriptions must not introduce an unrelated
@@ -118,7 +120,13 @@ knowledge loading and MissionState retains only its synchronized lightweight ind
 Before every planner request Runtime builds one transient `CURRENT TASK STATE` after
 history and before any periodic reminder. It is never persisted as a checkpoint or
 Transcript event. Successful `runtime.update_plan` and `knowledge.load` ToolResults
-retain change history; only knowledge ToolResults retain full loaded bodies.
+retain complete application receipts in durable history; only knowledge ToolResults
+retain full loaded bodies. The plan request view removes duplicate snapshots and
+argument copies from successful results, keeping revision/change receipts instead.
+Historical native ToolCalls retain exact submitted arguments; rejections retain
+repair information. Fixed motion/AGL field meanings belong in static module
+guidance, while acquisition policy belongs in FragmentAudit rather than sensory
+fragments. Acquired modalities do not imply images attached to a model request.
 
 The durable transcript retains every checkpoint and assistant/tool event in
 chronological order. Its provider request view may replace an oldest contiguous
@@ -200,8 +208,9 @@ grounding distance tools. Historical captured inputs must never be regenerated
 as if a new image mode had been used in an old request.
 
 The optional fused color bar supports qualitative range only. Precise target-relative
-evidence comes from an enabled callable capability rather than model-authored
-pixel coordinates. The default `skill.visual_grounding.measure_visible_depth` capability is
+evidence comes from an enabled callable capability under its geometry contract;
+a pixel capability may read metric depth at a model-selected original RGB point.
+The default `skill.visual_grounding.measure_visible_depth` capability is
 selected through `configs/plugins.json`; its ToolSpec and private detector,
 segmenter, depth, and threshold settings live in the capability's own JSON.
 Runtime and plugin discovery must not hardcode that plugin ID or its model.
@@ -252,10 +261,19 @@ Plugin discovery and registry composition happen only in `RuntimeFactory`.
 TaskRuntime.run_task accepts raw instructions and optional protocol_context.
 No parser, automatic skill selector, fixed Phase, commit or semantic updater runs.
 MissionState owns one optional plan with stable IDs and revisions. Every plan step
-retains `evidence_refs`; completed steps require references that existed before the
-submitting turn. Runtime validates provenance, not whether the evidence semantically
-proves the step. Plans are not environmental evidence and cannot automatically
-complete an instruction.
+contains only `id`, `description` and `status`; `completed` records the model's
+progress judgment, not environmental proof. `runtime.update_plan` accepts exactly
+`operation=replace/patch` and a single `steps` array, exported with `strict:true`.
+All top-level and step fields are required. `explanation=null` preserves its value;
+patch description/status may be null to retain fields (at least one must change).
+Replace requires non-null descriptions/statuses and preserves existing IDs. Merge every patch before
+validating the resulting snapshot; at most one step may be `in_progress`.
+Existing IDs cannot disappear from full replacements; cancel superseded steps.
+Successful updates increment revision and persist the complete applied snapshot
+plus `changed_step_ids`; invalid updates do not mutate state. Plan evidence fields
+are rejected by the live contract. Historical evidence-bearing plans may be adapted
+only by offline report/audit readers, preserving raw records and legacy proof checks.
+Plans cannot automatically complete an instruction.
 
 KnowledgeService snapshots enabled knowledge per instruction. knowledge.load
 returns full body and requested declared references incrementally as ToolResults.
@@ -267,12 +285,16 @@ register capabilities, or extend permissions. Invalid paths fail without mutatio
 build current state; Transcript retains full append-only intent/results. No
 transport, task semantics or history selection policy belongs in knowledge.
 
-Physical turns contain 1–3 ordered calls and read-only turns follow ToolSpec batching.
+Physical turns contain exactly one call with single batching; multiple physical
+calls reject the entire turn before execution, without splitting or running a prefix.
+Read-only turns follow ToolSpec batching.
 Terminal controls are exclusive. One `runtime.update_plan` may share a turn with
 independent `parallel_safe` read-only calls: the whole turn is prevalidated, the plan
-uses only pre-turn evidence and commits first, and ToolResults retain submission order.
+is structurally validated and commits first, and ToolResults retain submission order.
 Safety reviews actual arguments. Each physical
-batch has one automatic after observation; terminal refreshes are separate.
+window has one automatic after observation; terminal refreshes are separate.
+Stored ordered_steps and after_batch_observation identifiers remain readable for
+historical multi-action windows; they do not enable live batching.
 The instruction limit is 300 physical windows, with 10 nonphysical rounds and
 6 consecutive protocol rejections by default. Plan changes cannot reset limits.
 
@@ -299,6 +321,16 @@ and does not parse or route sections independently.
 
 Keep core knowledge concise; long examples and optional detail belong in declared
 references. KnowledgeService returns complete requested text without truncation.
+
+Organize UAV knowledge by pilot capabilities: basic flight control, observation
+and situational awareness, route navigation, approach/standoff/completion,
+abnormal recovery, and specialist maneuvers (currently orbit). Teach physical
+principles, evidence-based choices, expected changes, outcome checks and correction,
+with one short worked example in each core. Catalog descriptions name the active
+decision question. Vertical control belongs in basic handling, viewpoint height
+in observation, and landing judgment in approach/completion. Do not create a
+universal navigation entry or impose a knowledge-load count. Examples illustrate
+reasoning, not default distances, angles or retry quotas.
 
 When two knowledge files describe one continuous reasoning chain, prefer one
 primary skill plus optional references over multiple overlapping skills. For

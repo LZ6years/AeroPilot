@@ -1,0 +1,25 @@
+{
+  "index_path": "/home/Newdisk/wzq/data/traveluav/.flyagent_probe/travel_uav_index_20260920.json",
+  "split": "test_seen",
+  "case_ids": [
+    "NYCEnvironmentMegapa__0386165f-ef66-44ba-aeab-8d0d220b5422"
+  ],
+  "limit_per_difficulty": null,
+  "scene_map": {
+    "NYCEnvironmentMegapa": "travel_uav_linux_local_smoke"
+  },
+  "map_config_path": "configs/maps/travel_uav_linux_local.example.json",
+  "execution_mode": "managed",
+  "env_path": ".env",
+  "headless": true,
+  "save_artifacts": true,
+  "generate_html_review": true,
+  "enable_action_planner_debug": true,
+  "abort_on_infrastructure_error": true,
+  "run_root": "runs/linux_local_smoke/travel_uav",
+  "output_dir": "runs/linux_local_smoke/travel_uav_evaluation",
+  "context_config_path": "configs/context.json",
+  "runtime_loop_guard_windows": 300,
+  "dataset_version": "traveluav-official-remote-20260920",
+  "expected_index_sha256": "8a2dbe59a182774f147869269a4a612546031498d5e40fac0697227412152e87"
+}

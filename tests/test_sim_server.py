@@ -137,6 +137,26 @@ def test_start_scene_creates_scene_instance_and_settings(tmp_path):
     assert (tmp_path / "scenes" / scene.scene_instance_id / "settings.json").exists()
 
 
+def test_local_start_failure_rolls_back_and_reports_cleanup_error(tmp_path, monkeypatch):
+    """Startup failure must not hide a failure to stop the owned process group."""
+    package = make_package()
+    package.launch['manual'] = False
+    server = SimulationServer([package], run_dir=tmp_path)
+    def failed_start(*args, **kwargs):
+        raise RuntimeError('start failed')
+    def failed_stop(*args, **kwargs):
+        raise RuntimeError('owned group still alive')
+    monkeypatch.setattr(server.local_scene_control, 'start', failed_start)
+    monkeypatch.setattr(server.local_scene_control, 'stop', failed_stop)
+    with pytest.raises(server_module.SceneLifecycleError) as error:
+        server.start_scene(package.map_id)
+    assert 'owned group still alive' in str(error.value)
+    assert list(server._owned.values()) == ['local']
+    logs = list(tmp_path.glob('scenes/*/lifecycle.jsonl'))
+    records = [json.loads(line) for line in logs[0].read_text().splitlines()]
+    assert any(r['stage'] == 'owned_process_stopped' and r['status'] == 'error' for r in records)
+
+
 def test_get_or_start_scene_reuses_running_scene(tmp_path):
     server = SimulationServer(
         [make_package()],
@@ -360,8 +380,9 @@ def test_windows_path_to_wsl_converts_drive_paths():
     assert windows_path_to_wsl(r"C:\Users\HP\run.json") == "/mnt/c/Users/HP/run.json"
 
 
-def test_wsl_launch_command_includes_settings(tmp_path):
+def test_wsl_launch_command_includes_settings(tmp_path, monkeypatch):
     # Verify WSL launch commands pass the generated settings path.
+    monkeypatch.setattr('platform.system', lambda: 'Windows')
     package = make_launch_package(tmp_path)
     executable = str(tmp_path / "env_1" / "LinuxNoEditor" / "AirVLN.sh")
     settings = str(tmp_path / "runs" / "scene_1" / "settings.json")

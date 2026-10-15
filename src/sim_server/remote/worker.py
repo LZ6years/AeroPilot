@@ -15,6 +15,7 @@ import socket
 import subprocess
 import sys
 import time
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -26,10 +27,12 @@ def _read_json(path: str | Path) -> dict[str, Any]:
 def _write_json(path: str | Path, data: dict[str, Any]) -> None:
     target = Path(path).expanduser()
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
+    temporary = target.with_name(target.name + f".tmp-{os.getpid()}")
+    temporary.write_text(
         json.dumps(data, indent=2, ensure_ascii=False),
         encoding="utf-8",
     )
+    os.replace(temporary, target)
 
 
 def _process_start_ticks(pid: int) -> int | None:
@@ -99,6 +102,17 @@ def _verified_group(registry: dict[str, Any]) -> list[int]:
 
 
 def start_scene(spec_path: str) -> dict[str, Any]:
+    """Serialize same-scene starts across lost SSH replies and concurrent retries."""
+    import fcntl
+    spec = _read_json(spec_path)
+    registry = Path(str(spec["registry_path"])).expanduser()
+    registry.parent.mkdir(parents=True, exist_ok=True)
+    with registry.with_suffix(".lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return _start_scene_locked(spec_path)
+
+
+def _start_scene_locked(spec_path: str) -> dict[str, Any]:
     spec = _read_json(spec_path)
     executable = Path(str(spec["executable"])).expanduser().resolve()
     settings_value = spec.get("settings_path")
@@ -113,11 +127,17 @@ def start_scene(spec_path: str) -> dict[str, Any]:
         raise FileNotFoundError(f"UE executable not found: {executable}")
     if settings_path is not None and not settings_path.is_file():
         raise FileNotFoundError(f"AirSim settings not found: {settings_path}")
+    digest = hashlib.sha256(json.dumps(spec, sort_keys=True).encode() +
+                            (settings_path.read_bytes() if settings_path else b"")).hexdigest()
 
     if registry_path.exists():
         registry = _read_json(registry_path)
         if registry.get("status") == "running" and _identity_matches(registry):
+            if registry.get("spec_sha256") != digest:
+                raise RuntimeError("Refusing to adopt scene with mismatched spec")
             return {"ok": True, **registry, "reused": True}
+        if _live_group_members(int(registry.get("pgid", 0))) if registry.get("pgid") else False:
+            raise RuntimeError("Scene ownership is uncertain; refuse duplicate start")
 
     args = [str(value) for value in spec.get("args", [])]
     style = str(spec.get("settings_arg_style", "double_dash"))
@@ -169,6 +189,7 @@ def start_scene(spec_path: str) -> dict[str, Any]:
         process.wait(timeout=5)
         raise RuntimeError(f"Could not read identity for started process {process.pid}")
     registry = {
+        "spec_sha256": digest,
         "scene_instance_id": str(spec["scene_instance_id"]),
         "pid": process.pid,
         "pgid": os.getpgid(process.pid),

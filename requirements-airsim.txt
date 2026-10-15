@@ -7,4 +7,7 @@
 #   pip install -r requirements.txt
 #   pip install --no-build-isolation -r requirements-airsim.txt
 
+# AirSim's unconstrained opencv-contrib dependency must not upgrade the shared
+# NumPy version behind the core runtime's back during this second install step.
+-c requirements.txt
 airsim==1.8.1

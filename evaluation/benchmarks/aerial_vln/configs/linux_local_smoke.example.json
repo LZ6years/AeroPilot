@@ -1,0 +1,28 @@
+{
+  "dataset_root": "/home/Newdisk/wzq/data/airvln/DATA/data/aerialvln-s",
+  "dataset_family": "aerialvln-s",
+  "split": "val_seen",
+  "episode_ids": [
+    "39OWYR0EPTP8S0UVO2ERQR5AHEQFYA"
+  ],
+  "limit_per_difficulty": null,
+  "scene_map": {
+    "3": "aerial_vln_linux_local_smoke"
+  },
+  "map_config_path": "configs/maps/aerial_vln_linux_local.example.json",
+  "stmr_mode": "off",
+  "execution_mode": "managed",
+  "env_path": ".env",
+  "headless": true,
+  "save_artifacts": true,
+  "generate_html_review": true,
+  "enable_action_planner_debug": true,
+  "report_profile": "audit",
+  "abort_on_infrastructure_error": true,
+  "run_root": "runs/linux_local_smoke/aerial_vln",
+  "output_dir": "runs/linux_local_smoke/aerial_vln_evaluation",
+  "context_config_path": "configs/context.json",
+  "runtime_loop_guard_windows": 300,
+  "dataset_version": "server-aerialvln-s-val-seen-20261014",
+  "expected_split_sha256": "29b52c9b7a5554376410f5d1d0631f563b29df730c20fb1b7adc23f36c004ac3"
+}

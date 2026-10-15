@@ -57,6 +57,7 @@ class LocalSceneControl:
             method=method,
             settings_path=settings_arg,
             log_path=str(log_path),
+            settings_arg_style=package.launch.get("settings_arg_style"),
         )
         return ProcessStartResult(
             ownership="local",
@@ -72,7 +73,11 @@ class LocalSceneControl:
         import platform
 
         system = platform.system().lower()
-        key = "windows" if system == "windows" else "linux"
+        if system not in {"windows", "linux"}:
+            raise ValueError(f"Unsupported local simulator platform: {system}")
+        if package.launch.get("method") == "wsl_bash" and system != "windows":
+            raise ValueError("wsl_bash requires Windows; use linux_bash on Linux")
+        key = system
         executable = package.launch.get(key) or package.launch.get(f"{key}_script")
         if executable is None and package.launch.get("method") == "wsl_bash":
             executable = package.launch.get("linux")

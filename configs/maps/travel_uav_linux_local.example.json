@@ -1,0 +1,46 @@
+{
+  "maps": [
+    {
+      "map_id": "travel_uav_linux_local_smoke",
+      "provider": "packaged_unreal",
+      "scene_id": "NYCEnvironmentMegapa",
+      "root": "/home/Newdisk/wzq/data/traveluav/ENVs/closeloop_envs",
+      "connection": {
+        "mode": "local",
+        "data_transport": "direct",
+        "machine_id": "linux_local"
+      },
+      "launch": {
+        "method": "linux_bash",
+        "args": [
+          "-RenderOffscreen",
+          "-NoSound",
+          "-NoVSync",
+          "-GraphicsAdapter=3"
+        ],
+        "settings_arg_style": "single_dash_equals",
+        "existing_process_policy": "reject",
+        "ready_timeout_sec": 120,
+        "post_launch_wait_sec": 5,
+        "linux": "NYCEnvironmentMegapa.sh"
+      },
+      "control": {
+        "protocol": "airsim"
+      },
+      "airsim": {
+        "port": 39141,
+        "mode": "Multirotor",
+        "control_strategy": "paused_multirotor",
+        "settings_template_source": "local",
+        "settings_template": "configs/airsim/travel_uav_official.settings.example.json",
+        "vehicle_name": "Drone_1",
+        "camera_name": "FrontCamera",
+        "host": "127.0.0.1"
+      }
+    }
+  ],
+  "port_policy": {
+    "control_port_start": 39141,
+    "max_scene_num": 1
+  }
+}

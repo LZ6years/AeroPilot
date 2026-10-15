@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import os
 import subprocess
 import time
 from dataclasses import dataclass
@@ -57,6 +58,7 @@ class SshTunnel:
             process = subprocess.Popen(
                 command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=log_file,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
             )
         except Exception:
             log_file.close()
