@@ -467,15 +467,20 @@ def test_stream_completion_requires_terminal_choice_and_complete_tool_call():
             b'data: {"model":"test","choices":[],"usage":{"total_tokens":1}}\n\ndata: [DONE]\n\n',
             "no choices",
         ),
-        (
-            b'data: {"error":{"message":"upstream unavailable"}}\n\n',
-            "upstream unavailable",
-        ),
     ],
 )
 def test_stream_decoder_rejects_incomplete_or_error_streams(body, match):
     with pytest.raises(ValueError, match=match):
         decode_response(body, stream=True)
+
+
+def test_stream_decoder_preserves_provider_errors():
+    from src.llm.contracts import ProviderRequestError
+
+    with pytest.raises(ProviderRequestError, match="upstream unavailable") as caught:
+        decode_response(b'data: {"error":{"message":"upstream unavailable"}}\n\n', stream=True)
+    assert caught.value.category == "provider_error"
+    assert caught.value.retryable is False
 
 
 def test_stream_protocol_error_marks_transport_trace_invalid():

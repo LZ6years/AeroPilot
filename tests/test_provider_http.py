@@ -342,6 +342,33 @@ def test_timeout_and_connection_budgets_are_independent(clock):
     assert clock.sleeps == [1, 1]
 
 
+def test_exhausted_failure_keeps_attempt_details_separate_from_error_counter(clock):
+    sdk = _FakeSdk()
+    def create(**kwargs):
+        clock.now += 2
+        raise TimeoutError("slow")
+    sdk.chat.completions.create = create
+    trace = {}
+    with pytest.raises(ProviderRequestError):
+        DefaultModelClient(ProviderSettings(provider_timeout_retries=1), sdk_client=sdk).request(ModelRequest([]), transport_trace=trace)
+    assert trace["error_attempt_count"] == trace["attempt_count"] == 2
+    assert len(trace["attempts"]) == 2
+    assert [a["elapsed_seconds"] for a in trace["attempts"]] == [2, 2]
+    assert trace["attempts"][0]["backoff_seconds"] == 1
+    assert trace["elapsed_seconds"] == 5
+
+
+def test_overshot_backoff_deadline_also_preserves_attempt_details(clock, monkeypatch):
+    sdk = _FakeSdk()
+    sdk.chat.completions.create = _Create(error=ConnectionError("offline")).create
+    monkeypatch.setattr("src.llm.client.time.sleep", lambda _: setattr(clock, "now", 3))
+    trace = {}
+    with pytest.raises(ProviderRequestError) as raised:
+        DefaultModelClient(ProviderSettings(retry_deadline_sec=2), sdk_client=sdk).request(ModelRequest([]), transport_trace=trace)
+    assert raised.value.exhaustion_reason == "deadline"
+    assert trace["error_attempt_count"] == 1 and len(trace["attempts"]) == 1
+
+
 def test_compactor_timeout_is_not_retried(clock):
     sdk = _FakeSdk()
     sdk.chat.completions.create = _Create(error=TimeoutError("slow")).create

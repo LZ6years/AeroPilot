@@ -4,6 +4,7 @@ from __future__ import annotations
 from copy import deepcopy
 from collections.abc import Callable
 import ssl
+import random
 import time
 from typing import Any
 
@@ -12,6 +13,7 @@ import httpx2
 from openai import OpenAI
 
 from src.llm.audit import snapshot_request
+from src.llm.recovery import CURRENT_RECOVERY, RequestGuard, retry_after_seconds
 from src.llm.contracts import (
     DEFAULT_ERROR_PREFIX,
     ModelRequest,
@@ -104,35 +106,44 @@ class DefaultModelClient:
             final_status="pending",
         )
         started = self._clock()
-        deadline = started + self.settings.retry_deadline_sec
+        policy = CURRENT_RECOVERY.get()
+        deadline = started + min(self.settings.retry_deadline_sec, policy.deadline_sec) if policy else started + self.settings.retry_deadline_sec
+        if policy:
+            trace.update(retry_deadline_sec=deadline-started, max_http_attempts=policy.max_attempts)
         used = {"timeout": 0, "connection": 0}
         try:
             while True:
                 timeout = min(self.settings.timeout_sec, max(0.001, deadline - self._clock()))
                 attempt_started = self._clock()
-                attempt = {"number": trace["attempt_count"] + 1, "timeout_sec": timeout}
+                attempt = {"number": trace["attempt_count"] + 1, "timeout_sec": timeout,
+                           "response_headers_at": None, "first_chunk_at": None,
+                           "last_chunk_at": None, "response_bytes": 0}
                 trace["attempts"].append(attempt)
                 trace["attempt_count"] += 1
+                guard = RequestGuard(policy, deadline, self._clock) if policy else None
                 try:
                     sdk = self._client()
                     options = getattr(sdk, "with_options", None)
                     if callable(options):
                         sdk = options(max_retries=0, timeout=timeout)
-                    if responses_api:
-                        raw_response, request_id = self._request_responses(payload, sdk)
-                        data = normalize_responses_response(raw_response)
-                    elif self.settings.stream:
-                        data, request_id, recovered = self._request_chat_stream(payload, sdk, deadline)
-                        if recovered:
-                            trace["recovered_complete_stream"] = True
-                    else:
-                        data, request_id = self._request_chat(payload, sdk)
+                    def exchange():
+                        if responses_api:
+                            raw_response, request_id = self._request_responses(payload, sdk)
+                            return normalize_responses_response(raw_response), request_id
+                        if self.settings.stream:
+                            data, request_id, recovered = self._request_chat_stream(payload, sdk, deadline, attempt, guard)
+                            if recovered:
+                                trace["recovered_complete_stream"] = True
+                            return data, request_id
+                        return self._request_chat(payload, sdk)
+                    data, request_id = guard.run(exchange, sdk.close) if guard else exchange()
                     if request_id:
                         trace["request_id"] = request_id
                     attempt.update(status="success", elapsed_seconds=self._clock() - attempt_started)
                     break
                 except (ValueError, UnicodeDecodeError, TypeError):
-                    attempt.update(status="failed", category="invalid_response")
+                    attempt.update(status="failed", category="invalid_response",
+                                   elapsed_seconds=self._clock() - attempt_started)
                     trace.update(final_status="failed", failure_category="invalid_response")
                     raise
                 except Exception as exc:
@@ -140,6 +151,7 @@ class DefaultModelClient:
                     error.attempts = trace["attempt_count"] if error.attempts else 0
                     error.elapsed_seconds = self._clock() - started
                     attempt.update(status="failed", **error.to_dict())
+                    attempt["exception_chain"] = [type(e).__name__ for e in _exception_chain(exc)]
                     attempt["elapsed_seconds"] = self._clock() - attempt_started
                     request_id = getattr(exc, "request_id", None)
                     if request_id:
@@ -148,28 +160,52 @@ class DefaultModelClient:
                     limit = (self.settings.provider_timeout_retries if bucket == "timeout"
                              else self.settings.provider_connection_retries)
                     delay = (1, 2, 4, 8, 16, 30)[min(used[bucket], 5)]
+                    if policy:
+                        delay = retry_after_seconds(exc)
+                        if delay is None:
+                            delay = (5, 15, 30, 60, 60)[min(trace["attempt_count"]-1, 4)] * random.uniform(.8, 1.2)
                     remaining = deadline - self._clock()
                     reason = ("non_retryable" if not error.retryable else
-                              "retry_count" if used[bucket] >= limit else
-                              "deadline" if remaining <= delay else None)
+                              "retry_count" if (trace["attempt_count"] >= policy.max_attempts if policy else used[bucket] >= limit) else
+                              "deadline" if remaining <= (0 if policy else delay) else None)
+                    # Waiting consumes the remaining deadline, never exceeds it.
+                    delay = min(delay, max(0, remaining))
                     self._close_failed_response(exc)
                     if reason is not None:
                         error.retry_exhausted = error.retryable
-                        error.exhaustion_reason = reason
-                        trace.update(final_status="failed", failure_category=error.category,
-                                     **error.to_dict())
+                        error.exhaustion_reason = error.exhaustion_reason or reason
+                        fields = error.to_dict()
+                        fields["error_attempt_count"] = fields.pop("attempts", 0)
+                        trace.update(final_status="failed", failure_category=error.category, **fields)
                         raise error from exc
                     used[bucket] += 1
                     attempt["backoff_seconds"] = delay
-                    self._reset_connection()
-                    self._sleep(delay)
+                    if not guard:
+                        self._reset_connection()
+                    elif self._owns_client:
+                        # Guard closes the old SDK outside the foreground thread.
+                        self._sdk_client = None
+                    backoff_started = self._clock()
+                    if guard:
+                        try:
+                            guard.sleep(delay, self._sleep)
+                        except ProviderRequestError as cancelled:
+                            cancelled.attempts = trace["attempt_count"]
+                            trace.update(final_status="failed", failure_category=cancelled.category,
+                                         exhaustion_reason=cancelled.exhaustion_reason)
+                            raise
+                        finally:
+                            attempt["backoff_elapsed_seconds"] = self._clock()-backoff_started
+                    else:
+                        self._sleep(delay)
                     # A simulated or interrupted scheduler can overshoot its sleep.
                     if self._clock() >= deadline:
                         error.retry_exhausted = True
                         error.exhaustion_reason = "deadline"
                         error.elapsed_seconds = self._clock() - started
-                        trace.update(final_status="failed", failure_category=error.category,
-                                     **error.to_dict())
+                        fields = error.to_dict()
+                        fields["error_attempt_count"] = fields.pop("attempts", 0)
+                        trace.update(final_status="failed", failure_category=error.category, **fields)
                         raise error from exc
         finally:
             trace["elapsed_seconds"] = self._clock() - started
@@ -226,6 +262,8 @@ class DefaultModelClient:
         payload: dict[str, Any],
         sdk: Any,
         deadline: float | None = None,
+        attempt: dict | None = None,
+        guard: RequestGuard | None = None,
     ) -> tuple[dict[str, Any], str | None, bool]:
         parts: list[bytes] = []
         recovered = False
@@ -233,8 +271,20 @@ class DefaultModelClient:
         request_id = None
         try:
             with sdk.chat.completions.with_streaming_response.create(**kwargs) as response:
+                if guard:
+                    guard.bind(response)
                 request_id = _header_request_id(response)
+                if attempt is not None:
+                    attempt.update(response_headers_at=self._clock(), request_id=request_id,
+                                   first_chunk_at=None, last_chunk_at=None, response_bytes=0)
                 for part in response.iter_bytes():
+                    if guard and guard.abandoned.is_set():
+                        raise TimeoutError("Discarded cancelled stream")
+                    if attempt is not None:
+                        now = self._clock()
+                        if attempt["first_chunk_at"] is None:
+                            attempt["first_chunk_at"] = now
+                        attempt.update(last_chunk_at=now, response_bytes=attempt["response_bytes"]+len(part))
                     parts.append(bytes(part))
                     if deadline is not None and self._clock() >= deadline:
                         raise TimeoutError("request recovery deadline reached while streaming")

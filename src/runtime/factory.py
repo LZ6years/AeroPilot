@@ -34,6 +34,7 @@ from src.agent.config import (
 from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
 from src.runtime.configs.stabilization_config import UavStabilizationConfig
 from src.runtime.context.media_store import ModelMediaStore
+from src.runtime.logging.model_call_audit import ModelCallAuditWriter
 from src.tools.registry import default_registry
 from src.tools.dispatcher import ToolDispatcher
 from src.uav.config import UavSafetyConfig
@@ -216,6 +217,7 @@ class RuntimeFactory:
                 structured_output_format=(
                     planner.provider_config.structured_output_format
                 ),
+                audit_sink=ModelCallAuditWriter(recorder.run_dir),
             )
             planner.history_projector = projector
             planner.context_window_manager = ContextWindowManager(

@@ -109,7 +109,8 @@ def _decode_sse_chat_response(body: bytes) -> dict[str, Any]:
             raise TypeError("SSE data must contain a JSON object")
         if isinstance(value.get("error"), dict):
             message = value["error"].get("message") or "unknown provider error"
-            raise ValueError(f"model provider SSE error: {message}")
+            from src.llm.recovery import service_error
+            raise service_error(message, status_code=value["error"].get("status_code"))
         chunks.append(value)
     if not chunks:
         raise ValueError("model provider SSE response contained no JSON chunks")

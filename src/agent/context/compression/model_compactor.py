@@ -7,7 +7,8 @@ import json
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+from uuid import uuid4
 
 from src.agent.context.compression.contracts import (
     CompactionCallResult,
@@ -35,6 +36,7 @@ class ModelHistoryCompactor:
         prompt_path: str | Path | None = None,
         thinking_parameters: dict[str, Any] | None = None,
         structured_output_format: str = "json_schema",
+        audit_sink: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         self.client = client
         self.summary_max_tokens = summary_max_tokens
@@ -56,30 +58,66 @@ class ModelHistoryCompactor:
                 "structured_output_format must be json_schema or json_object"
             )
         self.structured_output_format = structured_output_format
+        # Persistence belongs to the caller. The sink must remain usable after
+        # a task abandons its background job; no model text is sent to it.
+        self.audit_sink = audit_sink
 
     def compact(self, request: CompressionRequest) -> CompactionCallResult:
         model_request = self._model_request(request)
         started = time.monotonic()
-        response = self.client.request(
-            model_request,
-            error_prefix="History compaction request failed",
-        )
-        elapsed = time.monotonic() - started
-        choices = response.data.get("choices")
-        first = choices[0] if isinstance(choices, list) and choices else {}
-        finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
-        if finish_reason == "length":
-            raise ValueError("history compactor output was truncated")
-        if response.text is None:
-            raise ValueError("history compactor response must contain text")
-        draft = CompressionDraft.from_dict(_decode_json_object(response.text))
-        return CompactionCallResult(
-            draft=draft,
-            usage=response.usage,
-            transport_trace=response.transport_trace,
-            finish_reason=finish_reason if isinstance(finish_reason, str) else None,
-            elapsed_seconds=elapsed,
-        )
+        audit: dict[str, Any] = {
+            "schema_version": "history_compaction_call_v1",
+            "call_id": uuid4().hex,
+            "source_digest": request.source_digest,
+            "purpose": "history_compaction",
+            "status": "started",
+            "usage": None,
+        }
+        if self.audit_sink is not None:
+            self.audit_sink(deepcopy(audit))
+        primary_error: Exception | None = None
+        try:
+            response = self.client.request(
+                model_request,
+                error_prefix="History compaction request failed",
+            )
+            elapsed = time.monotonic() - started
+            # Capture billable usage before parsing. Invalid/truncated output
+            # and later validator rejection still incurred this model call.
+            audit.update(usage=response.usage, transport_trace=response.transport_trace)
+            choices = response.data.get("choices")
+            first = choices[0] if isinstance(choices, list) and choices else {}
+            finish_reason = first.get("finish_reason") if isinstance(first, dict) else None
+            audit["finish_reason"] = finish_reason
+            if finish_reason == "length":
+                raise ValueError("history compactor output was truncated")
+            if response.text is None:
+                raise ValueError("history compactor response must contain text")
+            draft = CompressionDraft.from_dict(_decode_json_object(response.text))
+            audit["status"] = "parsed"
+            return CompactionCallResult(
+                draft=draft,
+                usage=response.usage,
+                transport_trace=response.transport_trace,
+                finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+                elapsed_seconds=elapsed,
+            )
+        except Exception as exc:
+            primary_error = exc
+            audit.update(status="error", error_type=type(exc).__name__, error=str(exc))
+            trace = getattr(exc, "transport_trace", None)
+            if isinstance(trace, dict):
+                audit["transport_trace"] = deepcopy(trace)
+            raise
+        finally:
+            audit["elapsed_seconds"] = time.monotonic() - started
+            if self.audit_sink is not None:
+                try:
+                    self.audit_sink(deepcopy(audit))
+                except Exception as audit_error:
+                    if primary_error is None:
+                        raise
+                    primary_error.add_note(f"Compaction audit failed: {audit_error}")
 
     def estimate_input_tokens(self, request: CompressionRequest) -> int:
         """Estimate the complete binary-free compactor request conservatively."""
