@@ -60,4 +60,3 @@ def test_probe_distinguishes_missing_call_extra_call_and_wrong_toggle():
     metrics = probe.selection_metrics(case, turn)
     assert metrics["omitted_expected_call"]
     assert metrics["unnecessary_calls"] == ["runtime.update_plan"]
-
