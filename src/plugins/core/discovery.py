@@ -73,7 +73,7 @@ class PluginDiscovery:
 def _discover_skills(plugin_dir: Path, plugin_id: str) -> tuple[list[Skill], list[str]]:
     skills: list[Skill] = []
     warnings: list[str] = []
-    for skill_dir in sorted(item for item in plugin_dir.iterdir() if item.is_dir() and item.name != "context_modules"):
+    for skill_dir in sorted(item for item in plugin_dir.iterdir() if item.is_dir() and item.name not in {"context_modules", "__pycache__"}):
         path = skill_dir / "SKILL.md"
         if not path.exists():
             warnings.append(f"Skill folder missing SKILL.md: {skill_dir}")

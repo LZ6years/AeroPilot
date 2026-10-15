@@ -42,7 +42,7 @@ class MissionState:
     connected: bool = False
     airborne: bool = False
     observation_modalities: tuple[str, ...] = ("rgb", "depth", "pose")
-    errors: list[dict[str, str]] = field(default_factory=list)
+    errors: list[dict[str, Any]] = field(default_factory=list)
     hover_required: bool = False
     yaw_scan_offset_deg: float = 0.0
     yaw_scan_extent_deg: float = 0.0
@@ -109,8 +109,12 @@ class MissionState:
     def recharge_yaw_scan(self) -> dict[str, Any]:
         return _recharge_yaw_scan(self)
 
-    def record_error(self, error_type: str, message: str) -> None:
-        self.errors.append({"error_type": error_type, "message": message})
+    def record_error(self, error_type: str, message: str, diagnostic: dict[str, Any] | None = None) -> None:
+        error = {"error_type": error_type, "message": message}
+        if diagnostic is not None:
+            from src.tools.diagnostics import Diagnostic
+            error["diagnostic"] = Diagnostic(**diagnostic).to_dict()
+        self.errors.append(error)
         self.hover_required = True
 
     def to_dict(self) -> dict[str, Any]:

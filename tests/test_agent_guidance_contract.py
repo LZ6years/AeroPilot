@@ -3,6 +3,7 @@ import copy
 import json
 
 import pytest
+from pathlib import Path
 
 from src.plugins import PluginRegistry
 from src.tools.registry import default_registry
@@ -26,7 +27,7 @@ def test_revised_request_changes_guidance_not_original_history_or_pixels():
     context = json.loads(changed["messages"][2]["content"][0]["text"])
     assert context["instruction"] == "Turn right 79 degrees"
     assert "instruction start" in context["protocol_context"]
-    assert len(context["knowledge_catalog"]) == 5
+    assert len(context["knowledge_catalog"]) == 6
     assert "actual displacement" in changed["messages"][0]["content"]
     assert "inconsistent_depth_surfaces" in str(changed["tools"])
 
@@ -34,3 +35,29 @@ def test_revised_request_changes_guidance_not_original_history_or_pixels():
 def test_probe_refuses_unrecognized_prompt_instead_of_silently_partial_rewrite():
     with pytest.raises(ValueError, match="mission prompt"):
         revised_request({"tools": [], "messages": []})
+
+
+def test_saved_envelope_header_gets_current_catalog_and_single_action_prompt():
+    payload = {"tools": [], "messages": [
+        {"role": "system", "content": "You are FlyAgent's mission tool-loop agent. old"},
+        {"role": "system", "content": "Use only tools declared in this request. old batching"},
+        {"role": "user", "content": 'INSTRUCTION CONTEXT\n{"knowledge_catalog":[],"instruction":"Original task"}'}]}
+    result = revised_request(payload)
+    envelope = json.loads(result["messages"][2]["content"].split("\n", 1)[1])
+    assert len(envelope["knowledge_catalog"]) == 6 and envelope["instruction"] == "Original task"
+    assert "exactly one physical call" in result["messages"][1]["content"]
+    assert payload["messages"][2]["content"].startswith('INSTRUCTION CONTEXT\n{"knowledge_catalog":[]')
+
+
+def test_revised_guidance_keeps_feedback_resident_and_knowledge_on_demand():
+    original = {"tools": [], "messages": [
+        {"role": "system", "content": "You are FlyAgent's mission tool-loop agent. old"},
+        {"role": "user", "content": 'INSTRUCTION CONTEXT\n{"knowledge_catalog":[],"instruction":"Observe the road"}'}]}
+    result = revised_request(original)
+    prompt = result["messages"][0]["content"]
+    assert "principles below apply to every physical decision" in prompt
+    assert "Load full basic-control guidance when parameter choice" in prompt
+    assert "reuse loaded text without loading it again each turn" in prompt
+    assert "When provided, CONTEXT IMAGE" in prompt
+    assert not any(message["role"] == "tool" for message in result["messages"])
+    assert all("Worked example:" not in str(message["content"]) for message in result["messages"])

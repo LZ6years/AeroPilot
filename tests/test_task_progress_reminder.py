@@ -59,7 +59,7 @@ def test_config_default_env_summary_and_transport_boundary():
     assert "task_progress_reminder_interval" not in asdict(config.to_provider_settings())
 
 
-def test_reminder_is_neutral_without_action_menu_or_plan_pressure():
+def test_reminder_keeps_observation_guidance_and_only_checks_existing_plans():
     planner = StubPlanner(
         response_with_calls(("turn", "uav_turn_relative", {"yaw_deg": 10}))
     )
@@ -68,6 +68,9 @@ def test_reminder_is_neutral_without_action_menu_or_plan_pressure():
         "next useful observation position",
         "previous window's actual motion and visual",
         "Temporary non-visibility by itself is not a blocker",
+        "If a plan exists",
+        "recorded stage matches observed progress",
+        "unchanged progress needs no update",
     ):
         assert phrase in reminder
     for retired in (
@@ -79,6 +82,8 @@ def test_reminder_is_neutral_without_action_menu_or_plan_pressure():
         "rise",
         "laterally",
         "move forward",
+        "Create a plan",
+        "multiple ordered landmark",
     ):
         assert retired not in reminder
 
@@ -171,7 +176,10 @@ def test_simulation_baseline_preserves_actual_safety_bounds_and_original_registr
     planner.plan_turn(make_transcript(tmp_path), registry, decision_index=6)
     saved = json.loads(GUIDANCE_BASELINE.read_text(encoding="utf-8"))
     actual = planner.last_request["tools"]
-    assert [t["function"]["description"] for t in actual] == [t["function"]["description"] for t in saved["tools"]]
+    # Historical prose remains fixed; execution attributes are generated from
+    # today's registry, including the single-action window constraint.
+    assert [t["function"]["description"].split("\nExecution:")[0] for t in actual] == [
+        t["function"]["description"].split("\nExecution:")[0] for t in saved["tools"]]
     assert [t["function"]["parameters"] for t in actual] == [t["function"]["parameters"] for t in before]
     assert before == [s.to_provider_tool() for s in registry.model_specs()]
     assert planner.last_request["messages"][-1]["content"].startswith("CURRENT TASK STATE\n")

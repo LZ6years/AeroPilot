@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.agent.planning.model_action_planner import AgentProtocolError
 from src.runtime.task.session import TaskSession
 from src.runtime.task.turn_executor import TurnExecutor
+from src.tools.diagnostics import Diagnostic, exception_diagnostic
 
 
 class TaskLoop:
@@ -73,15 +74,20 @@ class TaskLoop:
                     session.transcript.append_provider_rejection(
                         exc.rejected_turn
                     )
-                session.transcript.append_protocol_feedback(str(exc))
+                diagnostic = exception_diagnostic(exc, code="provider_turn_invalid",
+                    phase="provider_protocol", execution="not_started", scope="turn")
+                session.transcript.append_protocol_feedback(str(exc), diagnostic)
                 state.record_nonphysical_round()
                 session.consecutive_rejections += 1
                 self.journal.write_turn(
                     "tool_turn_rejected",
-                    {"decision_id": decision_id, "error": str(exc)},
+                    {"decision_id": decision_id, "error": str(exc), "diagnostic": diagnostic},
                 )
                 continue
             except Exception as exc:
+                # LLM exceptions remain provider-owned; Runtime adds context.
+                exc.diagnostic = exception_diagnostic(exc, code="model_request_failed",
+                    phase="model_request", execution="not_started", scope="turn")
                 self.journal.capture_provider_exchange(
                     self.planner,
                     session,
@@ -114,7 +120,9 @@ class TaskLoop:
                     }
                 )
                 session.transcript.append_protocol_feedback(
-                    "Use fresh non-empty tool_call_ids for every call."
+                    "Use fresh non-empty tool_call_ids for every call.",
+                    Diagnostic("duplicate_call_id", "validation", scope="turn",
+                                 execution="not_started").to_dict()
                 )
                 state.record_nonphysical_round()
                 session.consecutive_rejections += 1

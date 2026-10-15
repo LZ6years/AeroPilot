@@ -51,6 +51,8 @@ def environmental_evidence_refs(
                 continue
             if spec.runtime.effect not in {"physical", "read_only"} or spec.kind == "knowledge":
                 continue
+            if result.data.get("evidence_origin") == "historical_memory":
+                continue
             refs.add(result.tool_call_id)
             if result.result_ref:
                 refs.add(result.result_ref)

@@ -10,10 +10,10 @@ future layer direct access to model-call details.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
 from typing import Any, NoReturn, TYPE_CHECKING
 
 from src.agent.transcript import AssistantTurn
+from src.tools.diagnostics import Diagnostic
 from src.tools.validation import ToolArgumentError, validate_tool_args, validate_runtime_bound_tool_args
 
 if TYPE_CHECKING:
@@ -26,15 +26,9 @@ class NativeTurnValidationError(ValueError):
     def __init__(self, message: str, *, code: str, call_id: str | None = None,
                  path: str | None = None) -> None:
         super().__init__(message)
-        self.diagnostic = {"code": code, "scope": "call" if call_id else "turn"}
-        if call_id is not None:
-            self.diagnostic["source_tool_call_id"] = call_id
-        if path is not None:
-            self.diagnostic["parameter_path"] = path
-
-
-def read_call_signature(observation_id: str, tool_name: str, args: dict[str, Any]) -> tuple[str, str, str]:
-    return observation_id, tool_name, json.dumps(args, sort_keys=True, ensure_ascii=False, allow_nan=False)
+        self.diagnostic = Diagnostic(code, "validation", reason=message,
+            scope="call" if call_id else "turn", source_tool_call_id=call_id,
+            parameter_path=path, execution="not_started").to_dict()
 
 
 def validate_native_turn(
@@ -44,7 +38,7 @@ def validate_native_turn(
     allowed_names: set[str],
     latest_observation: dict[str, Any],
     prior_call_ids: set[str] | frozenset[str] = frozenset(),
-    executed_read_signatures: set[tuple[str, str, str]] | frozenset[tuple[str, str, str]] = frozenset(),
+    executed_read_counts: dict[tuple[str, str], int] | None = None,
 ) -> str:
     """Validate an entire turn before any mutation, returning its effect.
 
@@ -101,7 +95,7 @@ def validate_native_turn(
         _validate_read_calls(
             reads,
             latest_observation=latest_observation,
-            executed_read_signatures=executed_read_signatures,
+            executed_read_counts=executed_read_counts,
         )
         return "plan_read_only"
     if len(effects) != 1:
@@ -109,8 +103,8 @@ def validate_native_turn(
                                         code="mixed_effects")
     effect = specs[0].runtime.effect
     if effect == "physical":
-        if len(specs) > 3 or any(spec.runtime.batching != "ordered" for spec in specs):
-            raise NativeTurnValidationError("physical turns require 1–3 ordered calls",
+        if len(specs) != 1 or specs[0].runtime.batching != "single":
+            raise NativeTurnValidationError("physical turns require exactly one single physical call; observe before the next action",
                                             code="physical_batch_invalid")
         if any(spec.runtime.result_timing != "after_batch_observation" for spec in specs):
             raise NativeTurnValidationError("unsupported physical result timing", code="unsupported_timing")
@@ -127,7 +121,7 @@ def validate_native_turn(
         _validate_read_calls(
             list(zip(turn.tool_calls, specs)),
             latest_observation=latest_observation,
-            executed_read_signatures=executed_read_signatures,
+            executed_read_counts=executed_read_counts,
         )
     else:
         raise NativeTurnValidationError("non-executable tool effect", code="unsupported_effect")
@@ -138,8 +132,7 @@ def _validate_read_calls(
     calls_and_specs: list[tuple[Any, Any]],
     *,
     latest_observation: dict[str, Any],
-    executed_read_signatures: set[tuple[str, str, str]]
-    | frozenset[tuple[str, str, str]],
+    executed_read_counts: dict[tuple[str, str], int] | None,
 ) -> None:
     """Validate one read subset without consuming its observation quota."""
 
@@ -163,22 +156,16 @@ def _validate_read_calls(
             "independent read-only batching requires parallel_safe",
             code="read_batch_invalid",
         )
-    signatures = set(executed_read_signatures)
+    counts = dict(executed_read_counts or {})
     observation_id = str(latest_observation.get("observation_id") or "")
     for call, spec in calls_and_specs:
-        signature = read_call_signature(observation_id, call.tool_name, call.args)
-        if signature in signatures:
-            raise NativeTurnValidationError(
-                "reuse the existing result for this identical observation-scoped call",
-                code="duplicate_read_call",
-                call_id=call.tool_call_id,
-            )
+        key = (observation_id, call.tool_name)
         limit = spec.runtime.max_calls_per_observation
-        count = sum(item[:2] == signature[:2] for item in signatures)
+        count = counts.get(key, 0)
         if limit is not None and count >= limit:
             raise NativeTurnValidationError(
                 "per-observation call limit reached",
                 code="observation_call_limit",
                 call_id=call.tool_call_id,
             )
-        signatures.add(signature)
+        counts[key] = count + 1

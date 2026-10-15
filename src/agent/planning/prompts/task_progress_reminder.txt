@@ -1,3 +1,5 @@
 Progress checkpoint: choose the next useful observation position from the current
 task state, latest observation, and the previous window's actual motion and visual
 change. Temporary non-visibility by itself is not a blocker.
+If a plan exists, check whether its recorded stage matches observed progress.
+Update only for changed progress or approach; unchanged progress needs no update.

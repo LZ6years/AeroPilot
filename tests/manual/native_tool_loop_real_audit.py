@@ -623,8 +623,11 @@ def _audit_transcript(
                 name = call.get("tool_name")
                 if name == "runtime.update_plan":
                     paired = results.get(_string(call.get("tool_call_id")), [])
-                    if len(paired) == 1 and paired[0][1].get("status") == "ok":
-                        known_refs = _prior_plan_evidence_refs(
+                    if (len(paired) == 1 and paired[0][1].get("status") == "ok"
+                            and _uses_legacy_plan_evidence(_object(call.get("args")))):
+                        # Historical provenance belongs only to the old recorded
+                        # contract. Live plans no longer accept evidence_refs.
+                        known_refs = _prior_legacy_plan_evidence_refs(
                             records, assistant_index, registry
                         )
                         for step in _dict_items(_object(call.get("args")).get("steps")):
@@ -669,11 +672,14 @@ def _audit_transcript(
             continue
         if len(physical_calls) != len(turn_calls) or not 1 <= len(physical_calls) <= 3:
             violations.append(Violation("physical_batch_size_invalid", "physical turn requires 1-3 physical calls only", case_id, transcript_id))
-        if any(spec.runtime.batching != "ordered" for _, spec in physical_calls):
+        # Offline compatibility: closed historical windows used ordered 1–3
+        # calls. Current Runtime accepts single calls only; do not reinterpret
+        # old records using its newly registered policy or relax live validation.
+        if any(spec.runtime.batching not in {"single", "ordered"} for _, spec in physical_calls):
             violations.append(
                 Violation(
                     "physical_batching_invalid",
-                    "every physical call in a physical window must use ordered batching",
+                    "physical records must have a single or historical ordered contract",
                     case_id,
                     transcript_id,
                 )
@@ -1122,8 +1128,8 @@ def _prior_evidence_refs(records, assistant_index, registry) -> set[str]:
     return refs
 
 
-def _prior_plan_evidence_refs(records, assistant_index, registry) -> set[str]:
-    """Observations and successful environmental/read results before a plan turn."""
+def _prior_legacy_plan_evidence_refs(records, assistant_index, registry) -> set[str]:
+    """Read-only provenance audit for historical evidence-bearing plan steps."""
 
     refs = set()
     for item in records[:assistant_index]:
@@ -1357,6 +1363,45 @@ def _audit_checkpoint_image_contract(
         )
 
 
+def _uses_legacy_plan_evidence(args):
+    """Identify the historical plan shape without relaxing the live interface."""
+    return any("evidence_refs" in step for step in _dict_items(args.get("steps")))
+
+
+def _legacy_plan_request(args):
+    """Normalize a copied old request for pure replay; preserve raw receipts.
+
+    This adapter is offline-only. Old required fields and proof structure still
+    get checked here; prior-reference provenance is checked by the turn auditor.
+    """
+    if not _uses_legacy_plan_evidence(args):
+        if "operation" in args:
+            return args
+        if set(args) - {"explanation", "steps", "updates"} or ("steps" in args) == ("updates" in args):
+            raise ValueError("legacy plan requires exactly one of steps or updates")
+        patch = "updates" in args
+        items = args["updates" if patch else "steps"]
+        if not isinstance(items, list):
+            raise ValueError("legacy plan steps must be an array")
+        return {"operation": "patch" if patch else "replace", "explanation": args.get("explanation"),
+                "steps": [({"description": None, "status": None, **item} if patch else dict(item))
+                          for item in items]}
+    if set(args) != {"explanation", "steps"}:
+        raise ValueError("legacy plan requires explanation and steps only")
+    steps = []
+    for step in args["steps"]:
+        if not isinstance(step, dict) or set(step) != {"id", "description", "status", "evidence_refs"}:
+            raise ValueError("legacy plan step has invalid fields")
+        refs = step["evidence_refs"]
+        if (not isinstance(refs, list)
+                or any(not isinstance(ref, str) or not ref.strip() for ref in refs)
+                or len(set(refs)) != len(refs)
+                or (step["status"] == "completed" and not refs)):
+            raise ValueError("legacy plan step has invalid evidence_refs")
+        steps.append({key: value for key, value in step.items() if key != "evidence_refs"})
+    return {"operation": "replace", "explanation": args["explanation"], "steps": steps}
+
+
 def _audit_advisory_state(records, violations, case_id):
     """Replay only pure advisory contracts, never execute Runtime or plugins.
 
@@ -1367,6 +1412,7 @@ def _audit_advisory_state(records, violations, case_id):
     from src.agent.planning.task_plan import TaskPlan
 
     plan = None
+    plan_snapshot = None
     calls = {}
     knowledge = {}
     for record in records:
@@ -1379,7 +1425,7 @@ def _audit_advisory_state(records, violations, case_id):
                 if isinstance(call.get("tool_call_id"), str):
                     calls[call["tool_call_id"]] = call
         elif kind == "state_checkpoint":
-            if "task_plan" in payload and not _json_equal(payload["task_plan"], plan.to_dict() if plan else None):
+            if "task_plan" in payload and not _json_equal(payload["task_plan"], plan_snapshot):
                 fail("checkpoint_plan_mismatch", "checkpoint plan differs from successfully applied updates")
         elif kind == "tool_result":
             call = calls.get(_string(payload.get("tool_call_id")))
@@ -1394,14 +1440,23 @@ def _audit_advisory_state(records, violations, case_id):
             if name == "runtime.update_plan":
                 previous = plan or TaskPlan()
                 try:
-                    expected = previous.updated(args)
+                    expected = previous.updated(_legacy_plan_request(args))
                 except ValueError as exc:
                     fail("applied_plan_invalid", str(exc))
                     continue
+                expected_snapshot = expected.to_dict()
+                if _uses_legacy_plan_evidence(args):
+                    # Compare the historical proof payload too, rather than
+                    # accepting a receipt whose evidence changed during replay.
+                    old_refs = {step["id"].strip(): step["evidence_refs"] for step in args["steps"]}
+                    for step in expected_snapshot["steps"]:
+                        step["evidence_refs"] = [ref.strip() for ref in old_refs[step["id"]]]
                 if (data.get("previous_revision") != previous.revision
-                        or not _json_equal(data.get("plan"), expected.to_dict())):
+                        or not _json_equal(data.get("plan"), expected_snapshot)
+                        or ("changed_step_ids" in data and data["changed_step_ids"] != expected.changed_step_ids(previous))):
                     fail("plan_application_mismatch", "plan receipt differs from requested update or revision")
                 plan = expected
+                plan_snapshot = expected_snapshot
             elif name == "knowledge.load":
                 entry = args.get("name")
                 version = data.get("version")

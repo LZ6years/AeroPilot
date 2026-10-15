@@ -241,7 +241,7 @@ def test_planner_boundary_does_not_require_commit_tool(tmp_path):
     registry = ToolRegistry()
     for spec in builtin_tools():
         registry.register(spec)
-    planner = StubPlanner(response_with_calls(("plan1", "runtime_update_plan", {
+    planner = StubPlanner(response_with_calls(("plan1", "runtime_update_plan", {"operation": "replace",
         "explanation": "Simple task", "steps": []}), content=None))
     turn = planner.plan_turn(make_transcript(tmp_path), registry)
     assert turn.tool_calls[0].tool_name == "runtime.update_plan"
@@ -266,11 +266,15 @@ def test_tool_selection_prompt_and_descriptions_do_not_force_a_control_call(tmp_
     assert transcript.provider_messages(registry) == history_before
     assert request["tools"] == [spec.to_provider_tool() for spec in registry.model_specs()]
     plan = registry.get("runtime.update_plan")
-    assert "long or difficult route" in plan.description
+    assert "multiple ordered stages" in plan.description
+    assert "optional execution plan" in plan.description
+    assert "before the first physical action" not in plan.description
     assert "next intended objective" in plan.description
     system_text = "\n".join(message["content"] for message in request["messages"] if message["role"] == "system")
     assert "Use runtime.update_plan when retaining ordered outcomes" not in system_text
     assert "before the first physical action" not in system_text
+    assert "When a plan is useful" in system_text
+    assert "Before every physical call, if a plan exists" not in system_text
     assert "completed step cites prior" not in system_text
     assert "evidence from before that turn" not in plan.description
     provider_plan = next(
@@ -302,9 +306,9 @@ def test_plan_descriptions_and_updated_prompt_reach_provider_unchanged(tmp_path,
     from src.tools.validation import validate_tool_args
 
     steps = [{"id": str(i), "description": description,
-              "status": "in_progress" if i == 0 else "pending", "evidence_refs": []}
+              "status": "in_progress" if i == 0 else "pending"}
              for i, description in enumerate(stages)]
-    args = {"explanation": "Current evidence", "steps": steps}
+    args = {"operation": "replace", "explanation": "Current evidence", "steps": steps}
     planner = StubPlanner(response_with_calls(
         ("strategy_call", "runtime_update_plan", args)))
     transcript = make_transcript(tmp_path)
@@ -530,7 +534,7 @@ def test_native_planner_localizes_null_content_fallback_to_chinese(tmp_path):
 
 
 @pytest.mark.parametrize("name,args", [
-    ("runtime_update_plan", {"explanation": "Route", "steps": []}),
+    ("runtime_update_plan", {"operation": "replace", "explanation": "Route", "steps": []}),
     ("runtime_report_completed", {"reason": "arrived", "evidence_refs": ["obs_0001"]}),
     ("uav_move_body", {"vx": 1, "vy": 0, "vz": 0, "duration": 1}),
 ])

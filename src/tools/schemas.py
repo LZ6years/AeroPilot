@@ -154,8 +154,11 @@ class ToolSpec:
     metadata: dict[str, Any] = field(default_factory=dict)
     schema_options: dict[str, Any] = field(default_factory=lambda: {"additionalProperties": False})
     input_examples: tuple[dict[str, Any], ...] = ()
+    strict: bool | None = None
 
     def __post_init__(self) -> None:
+        if self.strict is not None and not isinstance(self.strict, bool):
+            raise ValueError("tool strict must be a boolean or None")
         if any(not isinstance(item, ToolParameter) for item in self.parameters):
             raise TypeError("parameters must contain ToolParameter instances")
         names = [item.name for item in self.parameters]
@@ -200,7 +203,7 @@ class ToolSpec:
         description = self.description + "\nExecution: " + self._execution_description()
         if self.input_examples:
             description += "\nExample arguments: " + json.dumps(self.input_examples, ensure_ascii=False)
-        return {
+        result = {
             "type": "function",
             "function": {
                 "name": self.wire_name,
@@ -208,6 +211,9 @@ class ToolSpec:
                 "parameters": _provider_schema(self.input_schema),
             },
         }
+        if self.strict is not None:
+            result["function"]["strict"] = self.strict
+        return result
 
     def _execution_description(self) -> str:
         """Project public execution rules, never private plugin metadata.

@@ -45,7 +45,7 @@ class TaskSession:
     )
     decision_index: int = 0
     seen_call_ids: set[str] = field(default_factory=set)
-    executed_read_signatures: set[tuple[str, str, str]] = field(default_factory=set)
+    executed_read_counts: dict[tuple[str, str], int] = field(default_factory=dict)
     consecutive_rejections: int = 0
 
     def next_decision_id(self) -> str:

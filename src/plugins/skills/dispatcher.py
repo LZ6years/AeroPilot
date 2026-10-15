@@ -9,6 +9,7 @@ from typing import Any
 
 from src.env_client.schemas import ActionResult
 from src.plugins import PluginRegistry
+from src.tools.diagnostics import ACTION_DIAGNOSTIC_KEY, Diagnostic, exception_diagnostic
 from src.plugins.contracts.skill import (
     SKILL_ARTIFACT_REFS_KEY,
     SKILL_MODEL_INPUTS_KEY,
@@ -35,7 +36,8 @@ class SkillCapabilityDispatcher:
                 ok=False,
                 action=tool_name,
                 message=f"Skill capability is not enabled: {tool_name}",
-                data={"tool": tool_name},
+                data={"tool": tool_name, ACTION_DIAGNOSTIC_KEY: Diagnostic(
+                    "capability_not_enabled", "dispatch", execution="not_started").to_dict()},
             )
         skill, capability = match
         try:
@@ -87,9 +89,9 @@ class SkillCapabilityDispatcher:
         except SkillCapabilityFailure as exc:
             data = {
                 "tool": tool_name,
-                "error_type": type(exc).__name__,
-                "error": str(exc),
                 **exc.data,
+                ACTION_DIAGNOSTIC_KEY: exception_diagnostic(exc, code="capability_failed",
+                    phase="capability_execution", execution="unknown"),
             }
             if exc.artifact_refs:
                 data[SKILL_ARTIFACT_REFS_KEY] = list(exc.artifact_refs)
@@ -108,7 +110,8 @@ class SkillCapabilityDispatcher:
                 ok=False,
                 action=tool_name,
                 message=f"Skill capability failed: {type(exc).__name__}: {exc}",
-                data={"tool": tool_name, "error_type": type(exc).__name__, "error": str(exc)},
+                data={"tool": tool_name, ACTION_DIAGNOSTIC_KEY: exception_diagnostic(
+                    exc, code="capability_failed", phase="capability_execution", execution="unknown")},
             )
 
 

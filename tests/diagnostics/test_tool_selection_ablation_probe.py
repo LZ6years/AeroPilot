@@ -100,7 +100,7 @@ def test_validate_only_does_not_create_client_or_read_credentials(tmp_path,monke
     def forbidden(*args,**kwargs):
         raise AssertionError('Provider/config must not run during validation')
     monkeypatch.setattr(probe,'load_model_config',forbidden)
-    monkeypatch.setattr(probe,'DefaultModelClient',forbidden)
+    monkeypatch.setattr(probe,'create_model_client',forbidden)
     result = probe.run([case],tmp_path/'out',validate_only=True)
     assert result == {'status':'validated_only','planned_requests':36}
     assert probe.read_json(tmp_path/'out/results.json')['results']==[]

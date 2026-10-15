@@ -97,6 +97,13 @@ def test_treatment_replaces_exactly_one_planning_paragraph():
     assert "Before any physical action" in treatment
 
 
+def test_legacy_treatment_accepts_the_restored_optional_paragraph_only():
+    original = probe.PRODUCTION_PROMPT.read_text(encoding="utf-8")
+    assert "Before every physical call, if a plan exists" not in original
+    assert original.count(probe.CONTROL_PLANNING_PARAGRAPH) == 1
+    assert probe.build_treatment_prompt(original).count(probe.TREATMENT_PLANNING_PARAGRAPH) == 1
+
+
 def test_treatment_rejects_missing_duplicate_or_existing_contract():
     with pytest.raises(ValueError, match="one expected Planning paragraph"):
         probe.build_treatment_prompt("no planning paragraph")
@@ -396,19 +403,18 @@ def test_condition_admission_validates_native_plan_arguments(
     monkeypatch: pytest.MonkeyPatch,
 ):
     arguments = {
+        "operation": "replace",
         "explanation": "retain sequence",
         "steps": [
             {
                 "id": "inspect",
                 "description": "inspect target",
                 "status": "pending",
-                "evidence_refs": [],
             },
             {
                 "id": "finish",
                 "description": "finish task",
                 "status": "pending",
-                "evidence_refs": [],
             },
         ],
     }
@@ -436,23 +442,20 @@ def test_condition_admission_validates_native_plan_arguments(
     schema = {
         "type": "object",
         "additionalProperties": False,
-        "required": ["explanation", "steps"],
+        "required": ["operation", "explanation", "steps"],
         "properties": {
+            "operation": {"type": "string", "enum": ["replace", "patch"]},
             "explanation": {"type": "string"},
             "steps": {
                 "type": "array",
                 "items": {
                     "type": "object",
                     "additionalProperties": False,
-                    "required": ["id", "description", "status", "evidence_refs"],
+                    "required": ["id", "description", "status"],
                     "properties": {
                         "id": {"type": "string"},
                         "description": {"type": "string"},
                         "status": {"type": "string"},
-                        "evidence_refs": {
-                            "type": "array",
-                            "items": {"type": "string"},
-                        },
                     },
                 },
             },

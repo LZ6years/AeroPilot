@@ -56,9 +56,9 @@ def test_batch_observation_audit_does_not_count_terminal_refresh():
 
 def test_advisory_audit_checks_applied_revision_and_rejected_updates():
     from src.agent.planning.task_plan import TaskPlan
-    args = {"explanation": "Reach endpoint", "steps": [
+    args = {"operation": "replace", "explanation": "Reach endpoint", "steps": [
         {"id": "go", "description": "Move to endpoint", "status": "in_progress",
-         "evidence_refs": []}]}
+         }]}
     plan = TaskPlan().updated(args).to_dict()
     records = [
         {"kind": "assistant_turn", "payload": {"tool_calls": [
@@ -92,6 +92,52 @@ def test_advisory_audit_checks_incremental_knowledge_and_version():
     records[-1]["payload"]["data"]["version"] = "changed"
     MODULE._audit_advisory_state(records, violations, "case")
     assert {v.code for v in violations} == {"knowledge_delivery_mismatch"}
+
+
+def test_advisory_audit_reads_legacy_proofs_without_mutating_records():
+    import copy
+    args = {"explanation": "Observed gate", "steps": [
+        {"id": "gate", "description": "Reach gate", "status": "completed", "evidence_refs": ["obs_1"]}]}
+    snapshot = {"revision": 1, **copy.deepcopy(args)}
+    records = [
+        {"kind": "assistant_turn", "payload": {"tool_calls": [
+            {"tool_call_id": "p", "tool_name": "runtime.update_plan", "args": args}]}},
+        {"kind": "tool_result", "payload": {"tool_call_id": "p", "status": "ok",
+            "data": {"previous_revision": 0, "plan": snapshot}}},
+        {"kind": "state_checkpoint", "payload": {"task_plan": copy.deepcopy(snapshot)}},
+    ]
+    before = copy.deepcopy(records)
+    violations = []
+    MODULE._audit_advisory_state(records, violations, "case")
+    assert not violations and records == before
+    records[1]["payload"]["data"]["plan"]["steps"][0]["evidence_refs"] = ["different"]
+    MODULE._audit_advisory_state(records, violations, "case")
+    assert [v.code for v in violations] == ["plan_application_mismatch"]
+
+
+def test_advisory_audit_replays_incremental_plan_receipts():
+    from src.agent.planning.task_plan import TaskPlan
+    plan = TaskPlan()
+    records = []
+    for identity, args in [
+        ("create", {"operation": "replace", "explanation": None, "steps": [{"id": "gate", "description": "Reach gate", "status": "in_progress"}]}),
+        ("advance", {"operation": "patch", "explanation": None, "steps": [{"description": None, "id": "gate", "status": "completed"}]}),
+    ]:
+        previous = plan
+        plan = plan.updated(args)
+        records.extend([
+            {"kind": "assistant_turn", "payload": {"tool_calls": [
+                {"tool_call_id": identity, "tool_name": "runtime.update_plan", "args": args}]}},
+            {"kind": "tool_result", "payload": {"tool_call_id": identity, "status": "ok",
+                "data": {"previous_revision": previous.revision, "plan": plan.to_dict(),
+                         "changed_step_ids": plan.changed_step_ids(previous)}}},
+        ])
+    violations = []
+    MODULE._audit_advisory_state(records, violations, "case")
+    assert not violations
+    records[-1]["payload"]["data"]["changed_step_ids"] = []
+    MODULE._audit_advisory_state(records, violations, "case")
+    assert [v.code for v in violations] == ["plan_application_mismatch"]
 
 
 def test_compact_report_uses_timeline_and_durable_audit(tmp_path):

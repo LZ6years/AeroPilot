@@ -12,7 +12,7 @@ from src.tools.registry import default_registry
 
 @pytest.mark.parametrize("tool,args", [
     ("runtime.unknown", {}), ("uav.hover", {}),
-    ("runtime.update_plan", {"steps": []}),
+    ("runtime.update_plan", {"steps": [], "updates": []}),
     ("runtime.report_completed", {"reason": "done", "evidence_refs": ["future"]}),
 ])
 def test_control_rejection_is_closed_without_state_mutation(tool, args):

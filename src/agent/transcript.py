@@ -10,6 +10,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
+from src.tools.diagnostics import Diagnostic
 
 from src.memory.context.contracts import (
     InstructionEnvelope,
@@ -78,8 +79,14 @@ class ToolResult:
     executed_args: dict[str, Any] = field(default_factory=dict)
     safety_interventions: list[dict[str, Any]] = field(default_factory=list)
     model_inputs: list[dict[str, Any]] = field(default_factory=list)
+    diagnostic: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
+        if self.diagnostic is not None:
+            validated = Diagnostic(**self.diagnostic)
+            if validated.execution is None:
+                raise ValueError("tool-call diagnostic requires execution")
+            object.__setattr__(self, "diagnostic", validated.to_dict())
         assert_binary_free(self.model_inputs)
         for item in self.model_inputs:
             if item.get("type") != "image":
@@ -103,6 +110,8 @@ class ToolResult:
         }
         if self.result_ref:
             data["result_ref"] = self.result_ref
+        if self.diagnostic is not None:
+            data["diagnostic"] = dict(self.diagnostic)
         if self.model_inputs:
             data["model_inputs"] = [dict(item) for item in self.model_inputs]
         return data
@@ -163,8 +172,11 @@ class AgentTranscript:
         assert_binary_free(result.to_dict())
         self._append("tool_result", result)
 
-    def append_protocol_feedback(self, message: str) -> None:
-        self._append("protocol_feedback", {"message": message})
+    def append_protocol_feedback(self, message: str, diagnostic: dict[str, Any] | None = None) -> None:
+        payload = {"message": message}
+        if diagnostic is not None:
+            payload["diagnostic"] = Diagnostic(**diagnostic).to_dict()
+        self._append("protocol_feedback", payload)
 
     def append_provider_rejection(self, rejected_turn: dict[str, Any]) -> None:
         """Persist an unexecutable provider turn for audit, never replay."""

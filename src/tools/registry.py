@@ -63,8 +63,10 @@ def default_registry(capability_source=None,
     registry = ToolRegistry()
     lifecycle = ToolRuntimePolicy("lifecycle", "immediate", "single", False)
     read_internal = ToolRuntimePolicy("read_only", "immediate", "single", False)
-    physical = ToolRuntimePolicy("physical", "after_batch_observation", "ordered", True)
-    internal_hold = ToolRuntimePolicy("physical", "after_batch_observation", "ordered", False)
+    # Keep the feedback-timing identifier for stored contracts; every new window
+    # contains one action and therefore observes before any dependent action.
+    physical = ToolRuntimePolicy("physical", "after_batch_observation", "single", True)
+    internal_hold = ToolRuntimePolicy("physical", "after_batch_observation", "single", False)
 
     for action, description, policy in (
         ("connect", "Connect the vehicle control interface during Runtime preflight.", lifecycle),

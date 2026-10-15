@@ -16,6 +16,7 @@ from src.runtime.configs import TaskExecutionOptions
 from src.runtime.runners.task_runtime import TaskRuntime
 from src.runtime.control.runtime_control import RuntimeControl
 from src.uav import pose_delta, pose_from_observation
+from src.tools.diagnostics import exception_diagnostic
 
 
 class InteractiveTaskSession:
@@ -215,6 +216,7 @@ def build_error_summary(
         "agent_transcript_ref": "memory/agent_transcript.jsonl",
         "error_type": type(exc).__name__,
         "error": str(exc),
+        "diagnostic": exception_diagnostic(exc, code="runtime_failed", phase="runtime", scope="task"),
     }
 
 

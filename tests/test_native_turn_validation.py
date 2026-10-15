@@ -28,9 +28,8 @@ def test_invalid_native_call_has_source_diagnostic(name, args):
 
 def test_native_physical_turn_needs_neither_phase_nor_commit():
     registry = default_registry()
-    turn = AssistantTurn("turn", "Turn then move", [
+    turn = AssistantTurn("turn", "Turn and observe", [
         AgentToolCall("turn1", "uav.turn_relative", {"yaw_deg": -15}),
-        AgentToolCall("move1", "uav.move_body", {"vx": 1, "vy": 0, "vz": 0, "duration": 1.5}),
     ])
     assert validate_native_turn(turn, registry, allowed_names=set(registry.names()),
                                 latest_observation={"observation_id": "obs1"}) == "physical"

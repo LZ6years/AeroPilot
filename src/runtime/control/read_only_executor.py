@@ -16,6 +16,7 @@ from typing import Callable
 from src.env_client import ActionResult
 from src.runtime.configs.read_only_execution_config import ReadOnlyExecutionConfig
 from src.tools.schemas import ReadExecutionHints
+from src.tools.diagnostics import ACTION_DIAGNOSTIC_KEY, exception_diagnostic
 
 
 @dataclass(frozen=True)
@@ -44,7 +45,9 @@ class ReadOnlyBatchExecutor:
             result = job.invoke()
         except Exception as exc:
             result = ActionResult(ok=False, action=job.tool_name, message=str(exc),
-                                  data={"error_type": type(exc).__name__})
+                                  data={ACTION_DIAGNOSTIC_KEY: exception_diagnostic(
+                                      exc, phase="read_execution", execution="unknown",
+                                      source_tool_call_id=job.call_id, scope="call")})
         except BaseException as exc:
             self._event("read_call_failed", job, error_type=type(exc).__name__, fatal=True)
             raise

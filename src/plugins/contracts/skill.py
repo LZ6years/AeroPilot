@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from src.tools.schemas import ToolRuntimePolicy
+from src.tools.diagnostics import Diagnostic
 
 SKILL_ARTIFACT_REFS_KEY = "_flyagent_artifact_refs"
 SKILL_MODEL_INPUTS_KEY = "_flyagent_model_inputs"
@@ -32,11 +33,13 @@ class SkillCapabilityFailure(Exception):
         data: dict[str, Any] | None = None,
         artifact_refs: tuple[str, ...] = (),
         model_inputs: tuple[dict[str, Any], ...] = (),
+        diagnostic: dict[str, Any] | None = None,
     ) -> None:
         super().__init__(message)
         self.data = dict(data or {})
         self.artifact_refs = tuple(artifact_refs)
         self.model_inputs = tuple(dict(item) for item in model_inputs)
+        self.diagnostic = Diagnostic(**diagnostic).to_dict() if diagnostic is not None else None
 
 
 @dataclass(frozen=True)

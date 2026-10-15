@@ -6,10 +6,10 @@ from __future__ import annotations
 from src.agent.transcript import AgentToolCall, ToolResult, TranscriptEvent
 from src.tools.registry import ToolRegistry
 from src.tools.validation import validate_tool_args
+from src.tools.diagnostics import exception_diagnostic
 from src.runtime.control.actions.task_plan import (
     PlanState,
     apply_plan_update,
-    plan_evidence_refs,
 )
 from src.runtime.control.actions.terminal import (
     TerminalState, apply_terminal, environmental_evidence_refs,
@@ -40,11 +40,7 @@ def execute_builtin_control(
             raise ValueError("tool is not an exposed immediate control")
         validate_tool_args(call.args, spec.input_schema)
         if call.tool_name == "runtime.update_plan":
-            data = apply_plan_update(
-                state,
-                call.args,
-                available_evidence=plan_evidence_refs(history, registry),
-            )
+            data = apply_plan_update(state, call.args)
         elif call.tool_name in {"runtime.report_completed", "runtime.report_blocked"}:
             data = apply_terminal(
                 state, call.args, completed=call.tool_name == "runtime.report_completed",
@@ -55,8 +51,8 @@ def execute_builtin_control(
     except (KeyError, ValueError) as exc:
         return ToolResult(
             call.tool_call_id, call.tool_name, "rejected", str(exc),
-            data={"rejection": {"code": "control_rejected", "scope": "call",
-                                "source_tool_call_id": call.tool_call_id}},
+            diagnostic=exception_diagnostic(exc, code="control_rejected", phase="validation",
+                execution="not_started", scope="call", source_tool_call_id=call.tool_call_id),
             requested_args=dict(call.args),
         )
     return ToolResult(call.tool_call_id, call.tool_name, "ok", "Control applied.", data=data,

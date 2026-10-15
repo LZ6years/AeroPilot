@@ -94,6 +94,23 @@ def _validate(value: Any, schema: dict[str, Any], path: str) -> None:
 
 def _validate_at_path(value: Any, schema: dict[str, Any], path: str) -> None:
     expected = schema.get("type")
+    if isinstance(expected, list):
+        # Select by JSON type, then apply the same constraints recursively.
+        # A union must never bypass object, array or nullable validation.
+        matches = {
+            "null": value is None,
+            "object": isinstance(value, dict),
+            "array": isinstance(value, list),
+            "string": isinstance(value, str),
+            "boolean": isinstance(value, bool),
+            "integer": isinstance(value, int) and not isinstance(value, bool),
+            "number": isinstance(value, (int, float)) and not isinstance(value, bool),
+        }
+        selected = next((kind for kind in expected if matches.get(kind, False)), None)
+        if selected is None:
+            raise ToolArgumentError(f"{path} must have a type in {expected}")
+        _validate_at_path(value, {**schema, "type": selected}, path)
+        return
     if expected == "object":
         if not isinstance(value, dict):
             raise ToolArgumentError(f"{path} must be an object")
@@ -143,6 +160,8 @@ def _validate_at_path(value: Any, schema: dict[str, Any], path: str) -> None:
         raise ToolArgumentError(f"{path} must be an integer")
     elif expected == "boolean" and not isinstance(value, bool):
         raise ToolArgumentError(f"{path} must be a boolean")
+    elif expected == "null" and value is not None:
+        raise ToolArgumentError(f"{path} must be null")
 
     enum = schema.get("enum")
     if isinstance(enum, list) and value not in enum:

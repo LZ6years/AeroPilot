@@ -1,4 +1,10 @@
-"""Run a frozen paired TaskPlan A/B experiment for ``gpt-6.1-sol``.
+"""Legacy single-paragraph TaskPlan A/B experiment for ``gpt-6.1-sol``.
+
+This probe requires the original optional-planning paragraph and refuses newer
+guidance whose applicability lives in the tool description. It remains usable
+with its historical prompt contract; do not reinterpret it as the newer plan
+stage experiment. Use plan_stage_behavior_probe.py for current saved-context
+checks and aerial_vln_plan_context_probe.py for current navigation.
 
 This evaluation-only orchestrator runs the same five AerialVLN and five
 TravelUAV cases twice on the current executable source. The control condition
@@ -65,19 +71,15 @@ PRODUCTION_PROMPT = ROOT / (
     "src/agent/planning/prompts/agent_tool_loop_system.txt"
 )
 
-CONTROL_PLANNING_PARAGRAPH = """Use runtime.update_plan when retaining ordered outcomes or constraints across
-observations is useful; a task may also act directly. Plan steps describe requested
-outcomes and retain stable IDs. Update a plan when progress or the approach changes.
-Each step includes evidence_refs, and a completed step cites prior observations or
-successful ToolResults applicable to that step. Completing an explicit movement does
-not by itself complete a separate landmark, route-relation or arrival requirement."""
+# Only this production preference changes in the experimental treatment. Exact
+# argument semantics stay in the shared ToolSpec rather than a copied prompt.
+CONTROL_PLANNING_PARAGRAPH = "When a plan is useful, keep its recorded stage aligned with observed progress."
 
 TREATMENT_PLANNING_PARAGRAPH = """Before any physical action in a navigation task, call runtime.update_plan once
 to establish a concise, outcome-focused plan with stable step IDs. Use pending
-or in_progress steps with empty evidence_refs until prior evidence exists. Do
-not invent evidence or movement parameters for unseen areas. Revise the plan
-only when observed progress or the approach changes. Each completed step must
-cite prior observations or successful ToolResults applicable to that step.
+or in_progress steps containing only id, description and status. Do
+not invent environmental facts or movement parameters for unseen areas. Revise the plan
+only when observed progress or the approach changes, using operation=patch and steps for existing IDs.
 Completing an explicit movement does not by itself complete a separate landmark,
 route-relation or arrival requirement."""
 
@@ -558,8 +560,8 @@ def _condition_admission(
                     "role": "user",
                     "content": (
                         "No flight will be executed. Call runtime_update_plan exactly once "
-                        "with a concise two-step inspection plan, both steps pending with "
-                        "empty evidence_refs. Do not call any other function."
+                        "with operation=replace, explanation=null and a concise two-step inspection plan, both steps pending and "
+                        "containing only id, description and status. Do not call any other function."
                     ),
                 },
             ],
@@ -583,6 +585,8 @@ def _condition_admission(
                 if item["function"]["name"] == "runtime_update_plan"
             )
             validate_tool_args(arguments, schema)
+            from src.agent.planning.task_plan import TaskPlan
+            TaskPlan().updated(arguments)
         except Exception as exc:
             errors.append(f"invalid plan arguments: {type(exc).__name__}: {exc}")
     public_instructions = response.data.get("instructions")

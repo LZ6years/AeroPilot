@@ -10,7 +10,6 @@ from typing import Any
 from src.agent.planning.schemas import PlannedStep
 from src.agent.planning.tool_contract_validator import (
     NativeTurnValidationError,
-    read_call_signature,
     validate_native_turn,
 )
 from src.agent.transcript import AgentToolCall, AssistantTurn, ToolResult
@@ -20,15 +19,14 @@ from src.plugins.contracts.skill import (
     SKILL_MODEL_INPUTS_KEY,
 )
 from src.runtime.control.executor import execute_builtin_control
-from src.runtime.control.actions.task_plan import (
-    plan_evidence_refs,
-    validate_plan_update,
-)
+from src.runtime.control.actions.terminal import environmental_evidence_refs
+from src.runtime.control.actions.task_plan import validate_plan_update
 from src.runtime.control.read_only_executor import ReadJob, ReadOnlyBatchExecutor
 from src.runtime.task.outcomes import TurnOutcome
 from src.runtime.task.physical_window import PhysicalWindowExecutor
 from src.runtime.task.session import TaskSession
 from src.tools.registry import ToolRegistry
+from src.tools.diagnostics import Diagnostic, action_diagnostic
 
 
 class TurnExecutor:
@@ -89,7 +87,6 @@ class TurnExecutor:
     ) -> TurnOutcome:
         state = session.state
         ids = [call.tool_call_id for call in turn.tool_calls]
-        prior_history: tuple[Any, ...] | None = None
         try:
             effect = validate_native_turn(
                 turn,
@@ -97,7 +94,7 @@ class TurnExecutor:
                 allowed_names=allowed_tools,
                 latest_observation=state.latest_observation,
                 prior_call_ids=session.seen_call_ids,
-                executed_read_signatures=session.executed_read_signatures,
+                executed_read_counts=session.executed_read_counts,
             )
             plan_call = next(
                 (
@@ -108,20 +105,17 @@ class TurnExecutor:
                 None,
             )
             if plan_call is not None:
-                prior_history = session.transcript.snapshot_before(history_boundary)
                 try:
                     validate_plan_update(
                         state,
                         plan_call.args,
-                        available_evidence=plan_evidence_refs(
-                            prior_history, self.tools.registry
-                        ),
                     )
                 except ValueError as exc:
                     raise NativeTurnValidationError(
                         str(exc),
                         code="plan_update_invalid",
                         call_id=plan_call.tool_call_id,
+                        path=getattr(exc, "path", None),
                     ) from exc
         except NativeTurnValidationError as exc:
             session.seen_call_ids.update(ids)
@@ -135,11 +129,12 @@ class TurnExecutor:
                         "rejected",
                         str(exc),
                         data=record["data"],
+                        diagnostic=record["diagnostic"],
                         requested_args=record["requested_args"],
                     )
                 )
             session.transcript.append_protocol_feedback(
-                str(exc) + ". No call in this turn executed."
+                str(exc) + ". No call in this turn executed.", exc.diagnostic
             )
             state.record_nonphysical_round()
             session.consecutive_rejections += 1
@@ -152,7 +147,6 @@ class TurnExecutor:
                 turn,
                 decision_id,
                 history_boundary,
-                prior_history=prior_history,
             )
         if effect == "read_only":
             return self._execute_read_only(session, turn, decision_id)
@@ -161,7 +155,6 @@ class TurnExecutor:
                 session,
                 turn,
                 decision_id,
-                prior_history or (),
             )
         return self._execute_physical(session, turn, decision_id)
 
@@ -171,28 +164,34 @@ class TurnExecutor:
         turn: AssistantTurn,
         decision_id: str,
         history_boundary: int,
-        *,
-        prior_history: tuple[Any, ...] | None = None,
     ) -> TurnOutcome:
         state = session.state
         state.record_nonphysical_round()
-        result = execute_builtin_control(
-            turn.tool_calls[0],
-            state,
-            self.tools.registry,
-            (
-                prior_history
-                if prior_history is not None
-                else session.transcript.snapshot_before(history_boundary)
-            ),
-        )
-        session.transcript.append_tool_result(result)
+        call = turn.tool_calls[0]
+        # Plans validate against their latest immutable state, not full history.
+        # Terminals and plugin controls still receive their pre-turn evidence.
+        history = () if call.tool_name == "runtime.update_plan" else session.transcript.snapshot_before(history_boundary)
+        if self.tools.registry.get(call.tool_name).kind == "skill_capability":
+            # Plugin-owned local writes use the same dispatcher/evidence path
+            # as reads; only built-in controls may mutate MissionState.
+            action = self.tools.call(
+                session.scene.scene_instance_id, session.agent_id, call.tool_name,
+                copy.deepcopy(call.args),
+                runtime_context=self._capability_context(session, turn.public_intent, call, history),
+            )
+            self.evidence.write_tool_completion(session, decision_id=decision_id,
+                call_index=0, tool_call_id=call.tool_call_id, tool_name=call.tool_name,
+                args=call.args, result=action.to_dict())
+            result = ToolResult(**self._commit_native_read_result(session, call, action))
+        else:
+            result = execute_builtin_control(call, state, self.tools.registry, history)
+            session.transcript.append_tool_result(result)
         self.journal.write_turn(
             "task_control_recorded",
             {"decision_id": decision_id, "tool_result": result.to_dict()},
         )
         if result.status == "rejected":
-            session.transcript.append_protocol_feedback(result.message)
+            session.transcript.append_protocol_feedback(result.message, result.diagnostic)
             session.consecutive_rejections += 1
         else:
             session.consecutive_rejections = 0
@@ -209,11 +208,6 @@ class TurnExecutor:
     ) -> TurnOutcome:
         state = session.state
         state.record_nonphysical_round()
-        observation_id = str(state.latest_observation.get("observation_id") or "")
-        for call in turn.tool_calls:
-            session.executed_read_signatures.add(
-                read_call_signature(observation_id, call.tool_name, call.args)
-            )
         results = self._execute_native_read_calls(
             session, turn.public_intent, turn.tool_calls, decision_id
         )
@@ -235,7 +229,6 @@ class TurnExecutor:
         session: TaskSession,
         turn: AssistantTurn,
         decision_id: str,
-        prior_history: tuple[Any, ...],
     ) -> TurnOutcome:
         """Commit one prevalidated plan, then execute its independent reads."""
 
@@ -255,18 +248,13 @@ class TurnExecutor:
             plan_call,
             state,
             self.tools.registry,
-            prior_history,
+            (),
         )
         if plan_result.status != "ok":  # defensive: prevalidation must agree
             raise RuntimeError(
                 f"prevalidated plan update was not applied: {plan_result.message}"
             )
 
-        observation_id = str(state.latest_observation.get("observation_id") or "")
-        for call in read_calls:
-            session.executed_read_signatures.add(
-                read_call_signature(observation_id, call.tool_name, call.args)
-            )
         read_results = self._execute_native_read_calls(
             session,
             turn.public_intent,
@@ -359,7 +347,8 @@ class TurnExecutor:
         rejection: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         diagnosis = dict(
-            rejection or {"code": "invalid_turn_combination", "scope": "turn"}
+            rejection or Diagnostic("invalid_turn_combination", "validation", reason=reason,
+                                    scope="turn", execution="not_started").to_dict()
         )
         source = diagnosis.get("source_tool_call_id")
         return [
@@ -368,16 +357,13 @@ class TurnExecutor:
                 tool_name=call.tool_name,
                 status="rejected",
                 message=reason,
-                data={
-                    "rejection": {
+                diagnostic={
                         **diagnosis,
                         "role": (
                             ("source" if call.tool_call_id == source else "affected")
                             if source
                             else "turn_member"
                         ),
-                        "executed": False,
-                    }
                 },
                 requested_args=dict(call.args),
             ).to_dict()
@@ -394,16 +380,12 @@ class TurnExecutor:
         append_to_transcript: bool = True,
     ) -> list[dict[str, Any]]:
         jobs: list[ReadJob] = []
+        history = session.transcript.snapshot() if any(
+            self.tools.registry.get(call.tool_name).kind == "skill_capability" for call in calls
+        ) else ()
         for call in calls:
             args = copy.deepcopy(call.args)
-            context = {
-                "latest_observation": copy.deepcopy(
-                    session.state.latest_observation
-                ),
-                "run_dir": str(self.recorder.run_dir),
-                "public_intent": public_intent,
-                "tool_call_id": call.tool_call_id,
-            }
+            context = self._capability_context(session, public_intent, call, history)
 
             def invoke(tool=call.tool_name, args=args, context=context):
                 return self.tools.call(
@@ -434,6 +416,9 @@ class TurnExecutor:
         def completed(index: int, result: Any) -> None:
             began = time.perf_counter()
             call = calls[index]
+            # Completed attempts consume quota, including handler failures.
+            key = (str(session.state.latest_observation.get("observation_id") or ""), call.tool_name)
+            session.executed_read_counts[key] = session.executed_read_counts.get(key, 0) + 1
             self.tool_telemetry.read_result_event(
                 "read_result_received", decision_id, call.tool_call_id
             )
@@ -479,6 +464,17 @@ class TurnExecutor:
         executor.execute(jobs, on_completed=completed)
         return recorded_results
 
+    def _capability_context(self, session, public_intent, call, history):
+        """Supply immutable task-scoped inputs, never a Runtime/State handle."""
+        return {
+            "latest_observation": copy.deepcopy(session.state.latest_observation),
+            "run_dir": str(self.recorder.run_dir),
+            "instruction_id": session.transcript.instruction_id,
+            "public_intent": public_intent,
+            "tool_call_id": call.tool_call_id,
+            "evidence_refs": sorted(environmental_evidence_refs(history, self.tools.registry)),
+        }
+
     def _commit_native_read_result(
         self,
         session: TaskSession,
@@ -487,7 +483,8 @@ class TurnExecutor:
         *,
         append_to_transcript: bool = True,
     ) -> dict[str, Any]:
-        result_data = dict(result.data)
+        result_data, diagnostic = action_diagnostic(result.data, call_id=call.tool_call_id,
+            ok=result.ok, phase="read_execution", execution="unknown", reason=result.message)
         capability_artifact_refs = _pop_string_list(
             result_data, SKILL_ARTIFACT_REFS_KEY
         )
@@ -517,6 +514,7 @@ class TurnExecutor:
             requested_args=dict(call.args),
             executed_args=dict(call.args),
             model_inputs=capability_model_inputs,
+            diagnostic=diagnostic,
         )
         if append_to_transcript:
             session.transcript.append_tool_result(transcript_result)
@@ -605,4 +603,5 @@ def _tool_result_from_dict(value: dict[str, Any]) -> ToolResult:
         executed_args=dict(value.get("executed_args") or {}),
         safety_interventions=list(value.get("safety_interventions") or []),
         model_inputs=list(value.get("model_inputs") or []),
+        diagnostic=value.get("diagnostic"),
     )

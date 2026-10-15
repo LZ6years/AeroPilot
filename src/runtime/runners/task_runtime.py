@@ -33,6 +33,7 @@ from src.runtime.task.scene_lifecycle import SceneLifecycleService
 from src.runtime.task.session import TaskSession
 from src.runtime.task.turn_executor import TurnExecutor
 from src.tools.dispatcher import ToolDispatcher
+from src.tools.diagnostics import exception_diagnostic
 
 
 class TaskRuntimeBusyError(RuntimeError):
@@ -299,15 +300,16 @@ class TaskRuntime:
             return state
         except Exception as exc:
             primary_error = exc
+            diagnostic = exception_diagnostic(exc, code="runtime_failed", phase="runtime", scope="task")
             if isinstance(exc, SceneRecoveryRequired) and scene is not None:
                 self._scenes.mark_unusable(scene)
-            state.record_error(type(exc).__name__, str(exc))
+            state.record_error(type(exc).__name__, str(exc), diagnostic)
             if session is not None:
                 try:
                     self._evidence.write_state(session)
                     self._journal.event(
                         "instruction_failed",
-                        {"error_type": type(exc).__name__, "error": str(exc)},
+                        {"error_type": type(exc).__name__, "error": str(exc), "diagnostic": diagnostic},
                     )
                 except Exception as audit_error:
                     _attach_cleanup_error(exc, audit_error, "failure_audit")

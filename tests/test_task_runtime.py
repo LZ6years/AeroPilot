@@ -117,7 +117,12 @@ def test_task_runtime_applies_initial_pose_before_first_configured_observation(t
         fragment for fragment in latest_checkpoint["fragments"]
         if fragment["name"] == "motion"
     )
-    assert motion["content"]["observation_policy"]["modalities"] == ["rgb", "pose"]
+    assert "observation_policy" not in motion["content"]
+    checkpoint_audit = json.loads(
+        (run_dir / "debug/context_checkpoints" / f"{latest_checkpoint['checkpoint_id']}.json").read_text(encoding="utf-8")
+    )
+    motion_audit = next(item for item in checkpoint_audit["fragment_audits"] if item["name"] == "motion")
+    assert motion_audit["metadata"]["observation_policy"]["modalities"] == ["rgb", "pose"]
     assert "uav.set_pose" not in actions_text
     assert flight_memory["reset_epoch"] == 1
 

@@ -231,18 +231,17 @@ def test_tls_stream_recovery_keeps_current_decision_and_executes_move_once(tmp_p
     assert len(traces) == 2
 
 
-def test_public_runtime_loads_knowledge_then_optional_plan_then_batch(tmp_path):
+def test_public_runtime_loads_knowledge_then_plan_then_single_windows(tmp_path):
     skill = Skill("knowledge.test", "guide", "Guide", "summary", tmp_path,
                   tmp_path / "SKILL.md", body="Use current evidence.")
     runtime, backend = public_runtime(tmp_path, [
         [call("read", "knowledge.load", name="guide")],
-            [call("plan", "runtime.update_plan", explanation="Reach endpoint", steps=[
-                {"id": "reach", "description": "Reach requested endpoint", "status": "in_progress",
-                 "evidence_refs": []}])],
-        [move("m1"), move("m2")], [done()],
+        [call("plan", "runtime.update_plan", explanation="Reach endpoint", operation="replace", steps=[
+            {"id": "reach", "description": "Reach requested endpoint", "status": "in_progress"}])],
+        [move("m1")], [move("m2")], [done(observation="obs_0003")],
     ], plugins=PluginRegistry(skill_catalog=SkillCatalog([skill])))
     state = runtime.run_task("map", "Move four meters")
-    assert state.completed and state.physical_window_count == 1
+    assert state.completed and state.physical_window_count == 2
     assert state.loaded_knowledge[0]["name"] == "guide"
     assert state.task_plan.steps[0].status == "in_progress"
     assert backend.pose["x"] == 4
@@ -345,7 +344,7 @@ def test_public_runtime_preserves_provider_error_when_scene_cleanup_also_fails(t
 
 def test_public_runtime_reused_scene_starts_fresh_instruction_state(tmp_path):
     runtime, backend = public_runtime(tmp_path, [
-        [call("plan", "runtime.update_plan", explanation="First task only", steps=[])],
+        [call("plan", "runtime.update_plan", explanation="First task only", operation="replace", steps=[])],
         [done(observation="obs_0001")],
         [done(observation="obs_0003")],
     ])
@@ -552,17 +551,16 @@ def run_loop(runtime, state, scene):
     runtime.task_loop.run(runtime.session)
 
 
-def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
+def test_knowledge_plan_separate_physical_windows_and_terminal_without_phase(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [
         [call("knowledge", "knowledge.load", name="guide")],
-        [call("plan", "runtime.update_plan", explanation="Two short movements", steps=[
-            {"id": "go", "description": "Reach the endpoint", "status": "in_progress",
-             "evidence_refs": []}])],
-        [move("m1"), move("m2")], [done()],
+        [call("plan", "runtime.update_plan", explanation="Two short movements", operation="replace", steps=[
+            {"id": "go", "description": "Reach the endpoint", "status": "in_progress"}])],
+        [move("m1")], [move("m2")], [done(observation="obs_0003")],
     ])
     run_loop(runtime, state, scene)
     assert state.completed and not state.stopped
-    assert state.physical_window_count == 1 and backend.observations == 2
+    assert state.physical_window_count == 2 and backend.observations == 3
     assert state.latest_pose["x"] == 4
     assert state.task_plan.steps[0].status == "in_progress"  # task terminal is independent
     assert state.loaded_knowledge[0]["name"] == "guide"
@@ -570,10 +568,13 @@ def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
     assert [r.tool_call_id for r in results] == ["knowledge", "plan", "m1", "m2", "done"]
     assert all(r.status == "ok" for r in results)
     windows = [payload for name, payload in runtime.recorder.events if name == "physical_window_recorded"]
-    assert len(windows) == 1 and windows[0]["phase_key"] is None
+    assert len(windows) == 2 and windows[0]["phase_key"] is None
     assert windows[0]["observation_before_id"] == "obs_0001"
     assert windows[0]["observation_after_id"] == "obs_0002"
-    assert [s["tool_call_id"] for s in windows[0]["ordered_steps"]] == ["m1", "m2"]
+    assert [s["tool_call_id"] for s in windows[0]["ordered_steps"]] == ["m1"]
+    assert windows[1]["observation_before_id"] == "obs_0002"
+    assert windows[1]["observation_after_id"] == "obs_0003"
+    assert [s["tool_call_id"] for s in windows[1]["ordered_steps"]] == ["m2"]
     for context in runtime.planner.contexts:
         checkpoint = context["checkpoint"]
         assert not {"current_phase", "phase_strategy", "semantic_plan"} & checkpoint.keys()
@@ -594,8 +595,8 @@ def test_knowledge_plan_physical_batch_and_terminal_without_phase(tmp_path):
         event.payload.reason
         for event in runtime.agent_transcript.items
         if event.kind == "state_checkpoint"
-    ] == ["instruction_start", "physical_window_completed"]
-    assert len([k for k in runtime.recorder.artifacts if k.startswith("debug/tool_loop/")]) == 4
+    ] == ["instruction_start", "physical_window_completed", "physical_window_completed"]
+    assert len([k for k in runtime.recorder.artifacts if k.startswith("debug/tool_loop/")]) == 5
 
 
 def test_simple_task_can_move_and_finish_without_plan(tmp_path):
@@ -603,6 +604,35 @@ def test_simple_task_can_move_and_finish_without_plan(tmp_path):
     run_loop(runtime, state, scene)
     assert state.completed and state.task_plan is None
     assert backend.observations == 2
+
+
+@pytest.mark.parametrize("count", [2, 3, 4])
+def test_multiple_physical_calls_reject_without_prefix_and_can_be_resubmitted(tmp_path, count):
+    runtime, state, scene, backend = harness(tmp_path, [
+        [move(f"rejected_{index}") for index in range(count)],
+        [move("accepted")], [done()],
+    ])
+    run_loop(runtime, state, scene)
+    results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
+    assert [r.status for r in results] == ["rejected"] * count + ["ok", "ok"]
+    assert all(r.diagnostic["execution"] == "not_started" for r in results[:count])
+    assert all(r.diagnostic["code"] == "physical_batch_invalid" for r in results[:count])
+    assert [action for action, _ in backend.actions] == ["move_body"]
+    assert backend.observations == 2 and state.physical_window_count == 1
+    assert state.latest_pose["x"] == 2
+
+
+def test_executor_rejects_multiple_steps_before_backend_or_evidence(tmp_path):
+    from src.agent.planning.schemas import PlannedStep
+
+    runtime, state, scene, backend = harness(tmp_path, [])
+    steps = [PlannedStep(kind="tool", tool="uav.move_body", args=move("unused").args)] * 2
+    with pytest.raises(ValueError, match="exactly one step"):
+        runtime.turn_executor.physical_windows.execute(runtime.session, steps=steps,
+            interventions=[], native_meta={}, observation_before=state.latest_observation,
+            decision_id="unused", physical_window_index=1, window_index=1)
+    assert backend.actions == [] and backend.observations == 1
+    assert state.physical_window_count == 0
 
 
 @pytest.mark.parametrize("workers", [1, 4])
@@ -624,9 +654,9 @@ def test_plan_and_knowledge_share_turn_and_preserve_submission_order(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [
         [
             call("knowledge", "knowledge.load", name="guide"),
-            call("plan", "runtime.update_plan", explanation="Use the guide", steps=[{
+            call("plan", "runtime.update_plan", explanation="Use the guide", operation="replace", steps=[{
                 "id": "reach", "description": "Reach the endpoint",
-                "status": "in_progress", "evidence_refs": [],
+                "status": "in_progress",
             }]),
         ],
         [done(observation="obs_0001")],
@@ -650,18 +680,17 @@ def test_plan_and_knowledge_share_turn_and_preserve_submission_order(tmp_path):
     )
 
 
-def test_invalid_plan_rejects_same_turn_reads_before_execution(tmp_path):
+def test_retired_plan_evidence_rejects_same_turn_reads_before_execution(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [
         [
             call("knowledge", "knowledge.load", name="guide"),
-            call("bad_plan", "runtime.update_plan", explanation="Claim future read", steps=[{
+            call("bad_plan", "runtime.update_plan", explanation="Submit obsolete proof field", operation="replace", steps=[{
                 "id": "guide", "description": "Load the guide", "status": "completed",
                 "evidence_refs": ["knowledge"],
             }]),
         ],
-        [call("good_plan", "runtime.update_plan", explanation="Wait for evidence", steps=[{
+        [call("good_plan", "runtime.update_plan", explanation="Track the stage", operation="replace", steps=[{
             "id": "guide", "description": "Load the guide", "status": "in_progress",
-            "evidence_refs": [],
         }])],
         [done(observation="obs_0001")],
     ])
@@ -682,9 +711,9 @@ def test_partial_read_failure_does_not_rollback_mixed_turn_plan(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [
         [
             call("read_ok", "test.read_ok"),
-            call("plan", "runtime.update_plan", explanation="Inspect", steps=[{
+            call("plan", "runtime.update_plan", explanation="Inspect", operation="replace", steps=[{
                 "id": "inspect", "description": "Inspect the route",
-                "status": "in_progress", "evidence_refs": [],
+                "status": "in_progress",
             }]),
             call("read_failed", "test.read_failed"),
         ],
@@ -722,8 +751,35 @@ def test_partial_read_failure_does_not_rollback_mixed_turn_plan(tmp_path):
     assert state.task_plan.revision == 1
 
 
+@pytest.mark.parametrize("with_plan", [False, True])
+def test_repeated_reads_execute_and_failed_attempts_consume_quota(tmp_path, with_plan):
+    first = [call("first", "test.repeat")]
+    if with_plan:
+        first.append(call("plan", "runtime.update_plan", operation="replace", explanation=None, steps=[]))
+    runtime, state, scene, backend = harness(tmp_path, [
+        first, [call("second", "test.repeat")], [call("over_limit", "test.repeat")],
+        [done(observation="obs_0001")],
+    ])
+    runtime.tools.registry.register(ToolSpec.from_input_schema(
+        "test.repeat", "test_repeat", "skill_capability", "repeat read", {},
+        ToolRuntimePolicy("read_only", "immediate", "parallel_safe", True, max_calls_per_observation=2)))
+    invoked = []
+
+    def read_call(_scene, _agent, tool, _args, **_kwargs):
+        invoked.append(tool)
+        return ActionResult(ok=len(invoked) != 1, action=tool, message="attempt")
+
+    runtime.tools.call = read_call
+    run_loop(runtime, state, scene)
+    results = {e.payload.tool_call_id: e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"}
+    assert invoked == ["test.repeat", "test.repeat"]
+    assert results["first"].status == "error" and results["second"].status == "ok"
+    assert results["over_limit"].diagnostic["code"] == "observation_call_limit"
+    assert runtime.session.executed_read_counts[("obs_0001", "test.repeat")] == 2
+
+
 def test_plan_changes_cannot_reset_nonphysical_guard(tmp_path):
-    plans = [[call(f"plan{i}", "runtime.update_plan", explanation=f"revision {i}", steps=[])]
+    plans = [[call(f"plan{i}", "runtime.update_plan", explanation=f"revision {i}", operation="replace", steps=[])]
              for i in range(2)]
     runtime, state, scene, backend = harness(tmp_path, plans)
     state.max_nonphysical_rounds = 2
@@ -733,16 +789,52 @@ def test_plan_changes_cannot_reset_nonphysical_guard(tmp_path):
     assert backend.actions == [] and backend.observations == 1
 
 
-def test_failed_first_physical_call_closes_remaining_as_skipped(tmp_path):
+def test_invalid_incremental_plan_rejects_independent_reads_before_mutation(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [
-        [move("failed"), move("skipped")],
+        [call("create", "runtime.update_plan", operation="replace", explanation=None, steps=[
+            {"id": "gate", "description": "Reach gate", "status": "in_progress"}])],
+        [call("knowledge", "knowledge.load", name="guide"),
+         call("invalid", "runtime.update_plan", operation="patch", explanation=None, steps=[
+             {"description": None, "id": "gate", "status": "completed"},
+             {"description": None, "id": "missing", "status": "in_progress"}])],
+        [done(observation="obs_0001")],
+    ])
+    run_loop(runtime, state, scene)
+    results = [event.payload for event in runtime.agent_transcript.items if event.kind == "tool_result"]
+    assert [(r.tool_call_id, r.status) for r in results] == [
+        ("create", "ok"), ("knowledge", "rejected"), ("invalid", "rejected"), ("done", "ok")]
+    assert state.task_plan.revision == 1 and state.task_plan.steps[0].status == "in_progress"
+    assert state.loaded_knowledge == [] and backend.observations == 1
+
+
+def test_incremental_plan_progress_reaches_next_request_without_new_checkpoint(tmp_path):
+    runtime, state, scene, backend = harness(tmp_path, [
+        [call("create", "runtime.update_plan", operation="replace", explanation=None, steps=[
+            {"id": "gate", "description": "Reach gate", "status": "in_progress"},
+            {"id": "pass", "description": "Pass gate", "status": "pending"}])],
+        [move("approach")],
+        [call("advance", "runtime.update_plan", operation="patch", explanation=None, steps=[
+            {"description": None, "id": "pass", "status": "in_progress"}, {"description": None, "id": "gate", "status": "completed"}])],
+        [done()],
+    ])
+    run_loop(runtime, state, scene)
+    plan = runtime.planner.contexts[3]["current_task_state"]["task_plan"]
+    assert plan["revision"] == 2
+    assert [s["status"] for s in plan["steps"]] == ["completed", "in_progress"]
+    assert "task_plan" not in runtime.planner.contexts[3]["checkpoint"]
+    assert backend.observations == 2 and state.physical_window_count == 1
+
+
+def test_failed_single_physical_call_observes_and_allows_blocked_report(tmp_path):
+    runtime, state, scene, backend = harness(tmp_path, [
+        [move("failed")],
         [call("blocked", "runtime.report_blocked",
               reason="Motion unavailable", evidence_refs=["obs_0002"])],
     ])
     backend.fail_move = True
     run_loop(runtime, state, scene)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
-    assert [r.status for r in results] == ["error", "skipped", "ok"]
+    assert [r.status for r in results] == ["error", "ok"]
     assert backend.observations == 2 and state.stopped and not state.completed
     assert [action for action, _ in backend.actions] == ["move_body", "hover"]
 
@@ -750,7 +842,7 @@ def test_failed_first_physical_call_closes_remaining_as_skipped(tmp_path):
 def test_collision_interrupts_window_observes_and_returns_to_planner(tmp_path):
     runtime, state, scene, backend = harness(
         tmp_path,
-        [[move("collision"), move("skipped")], [done()]],
+        [[move("collision")], [done()]],
     )
     backend.collide_move = True
 
@@ -761,7 +853,7 @@ def test_collision_interrupts_window_observes_and_returns_to_planner(tmp_path):
         for event in runtime.agent_transcript.items
         if event.kind == "tool_result"
     ]
-    assert [result.status for result in results] == ["collision", "skipped", "ok"]
+    assert [result.status for result in results] == ["collision", "ok"]
     assert results[0].data["collision"]["kind"] == "blocked"
     assert backend.observations == 2
     assert [action for action, _ in backend.actions] == ["move_body"]
@@ -773,7 +865,6 @@ def test_collision_interrupts_window_observes_and_returns_to_planner(tmp_path):
     assert len(windows) == 1 and windows[0]["status"] == "collision"
     assert [step["status"] for step in windows[0]["ordered_steps"]] == [
         "collision",
-        "skipped",
     ]
     checkpoint_reasons = [
         event.payload.reason
@@ -792,7 +883,7 @@ def test_collision_interrupts_window_observes_and_returns_to_planner(tmp_path):
 @pytest.mark.parametrize("reuse_scene", [False, True])
 def test_scene_recovery_stops_public_runtime_and_pairs_calls(tmp_path, reuse_scene):
     from src.env_client.errors import SceneRecoveryRequired
-    runtime, backend = public_runtime(tmp_path, [[move("fatal"), move("cancelled")], [done()]])
+    runtime, backend = public_runtime(tmp_path, [[move("fatal")], [done()]])
     original = backend.execute_action
     def execute(scene, agent, action, args):
         if action == "move_body" and args.get("vx"):
@@ -805,7 +896,7 @@ def test_scene_recovery_stops_public_runtime_and_pairs_calls(tmp_path, reuse_sce
         runtime.run_task("map", "Move", scene_policy="reuse_running" if reuse_scene else "isolated",
                          stop_scene_on_finish=not reuse_scene)
     results = [e.payload for e in runtime.planner.transcript.items if e.kind == "tool_result"]
-    assert [(r.tool_call_id, r.status) for r in results] == [("fatal", "error"), ("cancelled", "skipped")]
+    assert [(r.tool_call_id, r.status) for r in results] == [("fatal", "error")]
     assert "action_diagnostics" not in results[0].data
     assert len(runtime.planner.contexts) == 1
     assert backend.actions[-1][0] == "move_body"
@@ -831,7 +922,7 @@ def test_instruction_motion_and_plan_updates_preserve_origins_and_last_window():
     after = {"observation_id": "obs2", "pose": {"x": 2, "y": 0, "z": 0, "yaw": 0}}
     state.finish_physical_window(after, pose_measurements(before["pose"], after["pose"]))
     state.record_observation(after)
-    apply_plan_update(state, {"explanation": "new route", "steps": []})
+    apply_plan_update(state, {"operation": "replace", "explanation": "new route", "steps": []})
     assert state.motion_summary["last_window"]["forward_m"] == 2
     assert state.instruction_origin_observation_id == "obs1"
     assert state.before_last_action_window_id == "obs1"
@@ -881,10 +972,10 @@ def test_instruction_guard_keeps_final_after_checkpoint(tmp_path):
     assert runtime.agent_transcript.latest_observation_id() == "obs_0003"
 
 
-def test_safety_modification_is_associated_with_its_own_batch_step(tmp_path):
+def test_safety_modification_is_associated_with_its_own_window(tmp_path):
     runtime, state, scene, backend = harness(tmp_path, [
-        [move("clipped"), call("unchanged", "uav.move_body", vx=0.2, vy=0, vz=0, duration=2)],
-        [done()],
+        [move("clipped")], [call("unchanged", "uav.move_body", vx=0.2, vy=0, vz=0, duration=2)],
+        [done(observation="obs_0003")],
     ])
     runtime.safety = SafetySupervisor(UavSafetyConfig(max_linear_velocity_mps=0.5))
     runtime.turn_executor.safety = runtime.safety
@@ -908,8 +999,8 @@ def test_unknown_knowledge_returns_error_and_can_be_corrected(tmp_path):
 
 
 @pytest.mark.parametrize("camera_fails", [False, True])
-def test_stabilization_failure_closes_batch_and_preserves_original_error(tmp_path, camera_fails):
-    runtime, state, scene, backend = harness(tmp_path, [[move("ack"), move("not_run")]])
+def test_stabilization_failure_closes_window_and_preserves_original_error(tmp_path, camera_fails):
+    runtime, state, scene, backend = harness(tmp_path, [[move("ack")]])
     original = TimeoutError("stabilization connection lost")
 
     def fail_stabilization(*args, **kwargs):
@@ -924,7 +1015,7 @@ def test_stabilization_failure_closes_batch_and_preserves_original_error(tmp_pat
         run_loop(runtime, state, scene)
     assert failure.value is original
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
-    assert [(r.tool_call_id, r.status) for r in results] == [("ack", "ok"), ("not_run", "skipped")]
+    assert [(r.tool_call_id, r.status) for r in results] == [("ack", "ok")]
     assert len([a for a, _ in backend.actions if a == "move_body"]) == 1
     windows = [p for name, p in runtime.recorder.events if name == "physical_window_recorded"]
     assert len(windows) == 1 and windows[0]["status"] == "error"
@@ -935,7 +1026,7 @@ def test_stabilization_failure_closes_batch_and_preserves_original_error(tmp_pat
 
 
 def test_after_camera_failure_preserves_action_results_without_fake_observation(tmp_path):
-    runtime, state, scene, backend = harness(tmp_path, [[move("ack1"), move("ack2")]])
+    runtime, state, scene, backend = harness(tmp_path, [[move("ack1")]])
 
     def fail_camera(*args, **kwargs):
         raise OSError("camera unavailable")
@@ -944,7 +1035,7 @@ def test_after_camera_failure_preserves_action_results_without_fake_observation(
     with pytest.raises(OSError, match="camera unavailable"):
         run_loop(runtime, state, scene)
     results = [e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"]
-    assert [(r.tool_call_id, r.status) for r in results] == [("ack1", "ok"), ("ack2", "ok")]
+    assert [(r.tool_call_id, r.status) for r in results] == [("ack1", "ok")]
     windows = [p for name, p in runtime.recorder.events if name == "physical_window_recorded"]
     assert len(windows) == 1
     assert windows[0]["observation_before_id"] == "obs_0001"
@@ -1035,16 +1126,21 @@ def test_existing_reused_scene_is_not_stopped_by_audit_failure(tmp_path):
     assert backend.stops == []
 
 
-def test_public_turn_move_batch_uses_canonical_yaw_and_one_after(tmp_path):
+def test_public_turn_observes_before_move_and_uses_canonical_yaw(tmp_path):
     runtime, backend = public_runtime(tmp_path, [
-        [call("turn", "uav.turn_relative", yaw_deg=30), move("move")], [done()],
+        [call("turn", "uav.turn_relative", yaw_deg=30)], [move("move")],
+        [done(observation="obs_0003")],
     ])
     state = runtime.run_task("map", "Turn and move")
     assert state.completed
     windows = [p for name, p in runtime.recorder.events if name == "physical_window_recorded"]
-    assert len(windows) == 1
+    assert len(windows) == 2
     expected = body_velocity_to_world_delta(1, 0, 0, 2, 30)
     assert state.latest_pose["x"] == pytest.approx(expected["dx"])
     assert state.latest_pose["y"] == pytest.approx(expected["dy"])
     assert state.latest_pose["yaw_deg"] == 30
-    assert backend.observations == 3  # initial, one batch after, terminal refresh
+    assert backend.observations == 4  # initial, after each action, terminal refresh
+    assert runtime.planner.contexts[1]["checkpoint"]["observation_id"] == "obs_0002"
+    history = runtime.planner.histories[1]
+    assert [e.payload.tool_call_id for e in history if e.kind == "tool_result"] == ["turn"]
+    assert history[-1].kind == "state_checkpoint"

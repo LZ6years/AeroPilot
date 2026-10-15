@@ -55,8 +55,8 @@ def test_stop_received_during_provider_discards_returned_action(tmp_path):
     assert not any(item.kind == "assistant_turn" for item in runtime.planner.transcript.items)
 
 
-def test_pause_finishes_entire_batch_and_after_observation(tmp_path):
-    runtime, backend = public_runtime(tmp_path, [[move("first"),move("second")],[done()]])
+def test_pause_finishes_single_action_and_observation_before_next_decision(tmp_path):
+    runtime, backend = public_runtime(tmp_path, [[move("first")], [move("second")], [done(observation="obs_0003")]])
     control = RuntimeControl()
     execute = backend.execute_action
     def action(scene, agent, name, args):
@@ -68,10 +68,10 @@ def test_pause_finishes_entire_batch_and_after_observation(tmp_path):
     with ThreadPoolExecutor(1) as executor:
         future = executor.submit(runtime.run_task, "map", "Move", control=control)
         until(lambda: control.snapshot()["status"] == "paused")
-        assert backend.pose["x"] == 4
+        assert backend.pose["x"] == 2
         windows = [payload for name,payload in runtime.recorder.events if name=="physical_window_recorded"]
         assert len(windows)==1 and windows[0]["observation_after_id"]
-        assert len(windows[0]["ordered_steps"])==2
+        assert len(windows[0]["ordered_steps"])==1
         control.request("stop")
         state = future.result(5)
     assert state.stopped

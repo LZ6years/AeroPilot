@@ -61,6 +61,8 @@ def revised_request(original: dict) -> dict:
         if message["role"] == "system" and isinstance(content, str) and content.startswith("You are FlyAgent's mission tool-loop agent."):
             message["content"] = (ROOT / "src/agent/planning/prompts/agent_tool_loop_system.txt").read_text(encoding="utf-8")
             replaced += 1
+        elif message["role"] == "system" and isinstance(content, str) and content.startswith("Use only tools declared in this request."):
+            message["content"] = (ROOT / "src/agent/planning/prompts/tool_user_system.txt").read_text(encoding="utf-8")
         if message["role"] != "user":
             continue
         parts = content if isinstance(content, list) else [{"type": "text", "text": content}]
@@ -68,10 +70,12 @@ def revised_request(original: dict) -> dict:
             if part.get("type") != "text" or not isinstance(part.get("text"), str):
                 continue
             try:
-                parsed = json.loads(part["text"])
+                text = part["text"]
+                prefix = "INSTRUCTION CONTEXT\n" if text.startswith("INSTRUCTION CONTEXT\n") else ""
+                parsed = json.loads(text[len(prefix):])
             except json.JSONDecodeError:
                 continue
-            part["text"] = json.dumps(update_context(parsed), ensure_ascii=False)
+            part["text"] = prefix + json.dumps(update_context(parsed), ensure_ascii=False)
         message["content"] = parts if isinstance(content, list) else parts[0]["text"]
     if replaced != 1:
         raise ValueError("Expected exactly one captured mission prompt")

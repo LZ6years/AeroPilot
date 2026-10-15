@@ -47,10 +47,16 @@ def run_replay(output: Path, rgb: Path | None = None) -> dict:
     recorder = AsyncRunLogger(output / "run")
     planner = ScriptedPlanner([
         [call("knowledge", "knowledge.load", name="offline_guide")],
-        [call("plan", "runtime.update_plan", explanation="Scripted replay only", steps=[
-            {"id": "move", "description": "Exercise one ordered motion batch", "status": "in_progress",
-             "evidence_refs": []}])],
-        [move("move1"), move("move2")], [done()],
+        [call("plan", "runtime.update_plan", explanation="Scripted replay only", operation="replace", steps=[
+            {"id": "move", "description": "Exercise two separately observed actions", "status": "in_progress"},
+            {"id": "confirm", "description": "Confirm the recorded outcome", "status": "pending"}])],
+        [move("move1")], [move("move2")],
+        [call("advance", "runtime.update_plan", operation="patch", explanation=None, steps=[
+            {"description": None, "id": "move", "status": "completed"}, {"description": None, "id": "confirm", "status": "in_progress"}])],
+        [call("correct", "runtime.update_plan", explanation="Clarify the recorded result", operation="patch", steps=[
+            {"status": None, "id": "confirm", "description": "Check measured two-move result"}])],
+        [call("finish_plan", "runtime.update_plan", operation="patch", explanation=None, steps=[{"description": None, "id": "confirm", "status": "completed"}])],
+        [done(observation="obs_0003")],
     ])
     plugins = PluginRegistry(skill_catalog=SkillCatalog([
             Skill(plugin_id="knowledge.offline_fixture", name="offline_guide",
@@ -103,6 +109,7 @@ def run_replay(output: Path, rgb: Path | None = None) -> dict:
     _audit_physical_trace(case_data, list(audit.agent_transcript), audit_payload,
                           runtime.tools.registry, violations, "replay")
     report = {"mode": "scripted_offline_replay", "real_provider_called": False,
+              "task_plan": state.task_plan.to_dict() if state.task_plan else None,
               "trace_integrity": trace.trace_integrity, "tracking": tracking, "coverage": coverage,
               "violations": [item.to_dict() for item in violations], **paths}
     (output / "replay_report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

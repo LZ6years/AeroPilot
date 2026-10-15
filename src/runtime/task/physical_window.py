@@ -11,6 +11,7 @@ from src.env_client.errors import SceneRecoveryRequired
 from src.runtime.task.outcomes import PhysicalWindowOutcome
 from src.runtime.task.session import TaskSession
 from src.uav import pose_measurements
+from src.tools.diagnostics import ACTION_DIAGNOSTIC_KEY, action_diagnostic, exception_diagnostic
 
 
 PHYSICAL_TRACE_SCHEMA_VERSION = "physical_window_v2"
@@ -72,12 +73,15 @@ class PhysicalWindowExecutor:
             payload["measurements"] = measurements
         if error is not None:
             payload.update(error_type=type(error).__name__, error=str(error))
+            payload["diagnostic"] = exception_diagnostic(error, phase="physical_execution",
+                                                        execution="unknown", scope="turn")
         if stabilization is not None:
             payload["stabilization"] = stabilization
         if observation_error is not None:
             payload["observation_error"] = {
                 "error_type": type(observation_error).__name__,
                 "error": str(observation_error),
+                "diagnostic": exception_diagnostic(observation_error, phase="observation", scope="turn"),
             }
         elif error is not None:
             payload["observation_error"] = None
@@ -95,20 +99,24 @@ class PhysicalWindowExecutor:
         physical_window_index: int,
         window_index: int,
     ) -> PhysicalWindowOutcome:
-        """Execute a 1–3 call physical batch and take one after-observation."""
+        """Execute one physical call and capture its after-observation.
+
+        The list envelope and ordered_steps journal format remain compatible
+        with historical recordings; they no longer permit multiple actions.
+        """
 
         scene = session.scene
         state = session.state
-        if not 1 <= len(steps) <= 3:
-            raise ValueError("physical batch requires 1–3 steps")
+        if len(steps) != 1:
+            raise ValueError("physical window requires exactly one step")
         submitted_calls = native_meta.get("physical_calls", [])
         if submitted_calls and len(submitted_calls) != len(steps):
             raise ValueError("physical calls and Safety-reviewed steps must match")
         for step in steps:
             if step.kind != "tool" or not step.tool:
-                raise ValueError("physical batches accept only tool steps")
+                raise ValueError("physical windows accept only tool steps")
             if self.tools.registry.get(step.tool).runtime.effect != "physical":
-                raise ValueError("non-physical step in a physical batch")
+                raise ValueError("non-physical step in a physical window")
             self._validate_step_capability(scene, step.tool)
 
         self.evidence.mark_before_last_action_window(session, observation_before)
@@ -150,7 +158,8 @@ class PhysicalWindowExecutor:
                     ok=False,
                     action=step.tool,
                     message=f"{type(exc).__name__}: {exc}",
-                    data={"error_type": type(exc).__name__, "error": str(exc)},
+                    data={ACTION_DIAGNOSTIC_KEY: exception_diagnostic(exc,
+                        phase="physical_execution", execution="unknown")},
                 )
             result_data = result.to_dict()
             result_status = result.outcome
@@ -173,12 +182,15 @@ class PhysicalWindowExecutor:
                 "safety_interventions": relevant_interventions,
             }
             if native_call is not None:
+                clean_data, diagnostic = action_diagnostic(result.data, call_id=native_call.tool_call_id,
+                    ok=result.ok, phase="physical_execution", execution="unknown", reason=result.message)
                 transcript_result = ToolResult(
                     tool_call_id=native_call.tool_call_id,
                     tool_name=requested_tool,
                     status=result_status,
                     message=result.message,
-                    data=dict(result.data),
+                    data=clean_data,
+                    diagnostic=diagnostic,
                     result_ref=action_ref.get("ref"),
                     requested_args=dict(native_call.args),
                     executed_args=dict(step.args),
@@ -255,56 +267,6 @@ class PhysicalWindowExecutor:
                 break
 
         if interrupted_index is not None:
-            skipped_message = (
-                "skipped because an earlier physical call collided"
-                if interruption_status == "collision"
-                else "skipped because an earlier physical call or stabilization failed"
-            )
-            for skipped_index, call in enumerate(
-                native_calls[interrupted_index + 1 :],
-                start=interrupted_index + 1,
-            ):
-                transcript_result = ToolResult(
-                    tool_call_id=call.tool_call_id,
-                    tool_name=call.tool_name,
-                    status="skipped",
-                    message=skipped_message,
-                    requested_args=dict(call.args),
-                )
-                session.transcript.append_tool_result(transcript_result)
-                self._append_native_round_tool_result(native_meta, transcript_result)
-                skipped_step = steps[skipped_index] if skipped_index < len(steps) else None
-                if skipped_step is not None:
-                    executed_steps.append(
-                        {
-                            "step_index": skipped_index,
-                            "step": skipped_step.to_dict(),
-                            "tracking": {
-                                "step_index": skipped_index,
-                                "tool_call_id": call.tool_call_id,
-                                "requested_tool": call.tool_name,
-                                "tool": skipped_step.tool,
-                                "effect": self.tools.registry.get(
-                                    skipped_step.tool
-                                ).runtime.effect,
-                                "status": "skipped",
-                                "action_ref": None,
-                                "result_pose_ref": None,
-                                "requested_args": dict(call.args),
-                                "executed_args": None,
-                                "safety_interventions": [],
-                            },
-                            "result": {
-                                "ok": False,
-                                "status": "skipped",
-                                "message": skipped_message,
-                            },
-                            "stabilization": {
-                                "status": "skipped",
-                                "reason": "physical call was not executed",
-                            },
-                        }
-                    )
             if (
                 interruption_status != "collision"
                 and not isinstance(batch_error, SceneRecoveryRequired)

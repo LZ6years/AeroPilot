@@ -14,14 +14,13 @@ from src.memory.context.contracts import (
 )
 from src.runtime.control.actions.task_plan import (
     apply_plan_update,
-    plan_evidence_refs,
 )
 from src.runtime.control.actions.terminal import apply_terminal, environmental_evidence_refs
 from src.runtime.control.executor import execute_builtin_control
 from src.tools.registry import ToolRegistry
 from src.tools.schemas import ToolSpec, ToolRuntimePolicy
 from src.agent.planning.tool_contract_validator import (
-    NativeTurnValidationError, read_call_signature, validate_native_turn,
+    NativeTurnValidationError, validate_native_turn,
 )
 
 
@@ -60,7 +59,7 @@ def test_builtin_declarations_have_explicit_policies():
 def test_minimal_tool_arguments_and_terminal_evidence():
     specs = {spec.name: spec for spec in builtin_tools()}
     validate_tool_args({"name": "navigation"}, specs["knowledge.load"].input_schema)
-    validate_tool_args({"explanation": "No plan needed", "steps": []},
+    validate_tool_args({"operation": "replace", "explanation": "No plan needed", "steps": []},
                        specs["runtime.update_plan"].input_schema)
     validate_tool_args({"reason": "Arrived", "evidence_refs": ["obs_1"]},
                        specs["runtime.report_completed"].input_schema)
@@ -96,12 +95,14 @@ def test_minimal_tool_arguments_and_terminal_evidence():
             )
 
 
-def test_plan_and_knowledge_descriptions_are_optional_without_new_parameters():
+def test_plan_and_knowledge_descriptions_expose_applicability_and_incremental_updates():
     specs = {spec.name: spec for spec in builtin_tools()}
     plan = specs["runtime.update_plan"]
     knowledge = specs["knowledge.load"]
     assert "optional execution plan" in plan.description
-    assert "long or difficult route" in plan.description
+    assert "multiple ordered stages" in plan.description
+    assert "before the first physical action" not in plan.description
+    assert "optional execution plan" in plan.description
     assert "completed progress" in plan.description
     assert "current and remaining stages" in plan.description
     assert "next intended objective" in plan.description
@@ -111,13 +112,15 @@ def test_plan_and_knowledge_descriptions_are_optional_without_new_parameters():
     assert "parallel-safe" not in plan.description
     assert "provides flight methods" in knowledge.description
     assert "observations and measurements come from" in knowledge.description
-    assert set(plan.input_schema["properties"]) == {"explanation", "steps"}
+    assert set(plan.input_schema["properties"]) == {"operation", "explanation", "steps"}
+    assert set(plan.input_schema["required"]) == {"operation", "explanation", "steps"}
+    assert plan.to_provider_tool()["function"]["strict"] is True
     properties = plan.input_schema["properties"]
     assert properties["explanation"]["description"] == (
-        "Brief reason for creating the plan or changing its recorded progress or approach."
+        "Brief reason; null preserves the previous explanation."
     )
     assert properties["steps"]["description"] == (
-        "Complete ordered task plan snapshot with persistent step identities."
+        "Complete ordered snapshot for replace, or non-empty existing-ID changes for patch."
     )
     step_properties = properties["steps"]["items"]["properties"]
     assert step_properties["id"]["description"] == "Stable step identifier."
@@ -125,12 +128,10 @@ def test_plan_and_knowledge_descriptions_are_optional_without_new_parameters():
         "User-required outcome with its order and conditions."
     )
     assert step_properties["status"]["description"] == (
-        "Current progress state for this outcome."
+        "Model-recorded progress; null retains the previous value in patch mode."
     )
-    assert step_properties["evidence_refs"]["description"] == (
-        "Prior observation IDs or successful ToolResult/action references supporting this step. "
-        "Required and non-empty when status is completed; use an empty array when no evidence is claimed."
-    )
+    assert set(step_properties) == {"id", "description", "status"}
+    validate_tool_args({"operation": "patch", "explanation": None, "steps": [{"description": None, "id": "go", "status": "completed"}]}, plan.input_schema)
     assert set(knowledge.input_schema["properties"]) == {"name", "reference_paths"}
     for spec in (plan, knowledge):
         wire = spec.to_provider_tool()["function"]
@@ -140,29 +141,27 @@ def test_plan_and_knowledge_descriptions_are_optional_without_new_parameters():
 
 def test_plan_application_does_not_reset_windows_or_complete_task():
     mission = state()
-    payload = {"explanation": "Observed the endpoint", "steps": [
-        {"id": "go", "description": "Reach the endpoint", "status": "completed",
-         "evidence_refs": ["obs1"]}]}
-    result = apply_plan_update(mission, payload, available_evidence=frozenset({"obs1"}))
+    payload = {"operation": "replace", "explanation": "Observed the endpoint", "steps": [
+        {"id": "go", "description": "Reach the endpoint", "status": "completed"}]}
+    result = apply_plan_update(mission, payload)
     assert mission.task_plan.revision == 1
     assert mission.window_count == 7
     assert not mission.completed
     assert result["previous_revision"] == 0
+    assert result["changed_step_ids"] == ["go"]
     result["plan"]["steps"][0]["description"] = "mutated"
     assert mission.task_plan.steps[0].description == "Reach the endpoint"
     before = mission.task_plan
     with pytest.raises(ValueError, match="disappear"):
-        apply_plan_update(mission, {"explanation": "forget", "steps": []})
+        apply_plan_update(mission, {"operation": "replace", "explanation": "forget", "steps": []})
     assert mission.task_plan is before
 
-    invalid = {"explanation": "unsupported completion", "steps": [{
+    invalid = {"operation": "replace", "explanation": "unsupported completion", "steps": [{
         "id": "go", "description": "Reach the endpoint", "status": "completed",
         "evidence_refs": ["future_result"],
     }]}
-    with pytest.raises(ValueError, match="before this turn"):
-        apply_plan_update(
-            mission, invalid, available_evidence=frozenset({"obs1"})
-        )
+    with pytest.raises(ValueError, match="requires only"):
+        apply_plan_update(mission, invalid)
     assert mission.task_plan is before
 
 
@@ -173,7 +172,7 @@ def test_terminal_accepts_observed_evidence_without_semantic_judgment():
     assert mission.completed and not mission.stopped
     assert result["stop_source"] == "runtime.report_completed"
     with pytest.raises(ValueError, match="terminal"):
-        apply_plan_update(mission, {"explanation": "another", "steps": []})
+        apply_plan_update(mission, {"operation": "replace", "explanation": "another", "steps": []})
     with pytest.raises(ValueError, match="already terminal"):
         apply_terminal(mission, {}, completed=False, available_evidence=frozenset())
 
@@ -236,22 +235,25 @@ def test_evidence_requires_returned_environment_result_not_intent_or_knowledge()
     assert environmental_evidence_refs(events, registry) == set()
 
 
-def test_plan_evidence_accepts_prior_successful_results_but_not_failed_or_control():
-    registry = ToolRegistry()
-    for spec in builtin_tools():
-        registry.register(spec)
-    registry.register(ToolSpec.from_input_schema(
-        "sensor", "sensor", "skill_capability", "", {},
-        ToolRuntimePolicy("read_only", "immediate", "parallel_safe", True),
-    ))
-    events = (
-        TranscriptEvent("user_instruction", {"instruction": "go"}),
-        TranscriptEvent("state_checkpoint", checkpoint("obs1")),
-        TranscriptEvent("tool_result", ToolResult("read", "sensor", "ok", result_ref="action_read")),
-        TranscriptEvent("tool_result", ToolResult("failed", "sensor", "error", result_ref="bad")),
-        TranscriptEvent("tool_result", ToolResult("plan", "runtime.update_plan", "ok")),
-    )
-    assert plan_evidence_refs(events, registry) == {"obs1", "read", "action_read"}
+def test_incremental_plan_failure_does_not_apply_earlier_patches():
+    mission = state()
+    apply_plan_update(mission, {"operation": "replace", "explanation": None, "steps": [
+        {"id": "one", "description": "Reach gate", "status": "in_progress"},
+        {"id": "two", "description": "Pass gate", "status": "pending"},
+    ]})
+    before = mission.task_plan
+    with pytest.raises(ValueError, match="unknown"):
+        apply_plan_update(mission, {"operation": "patch", "explanation": None, "steps": [
+            {"description": None, "id": "one", "status": "completed"},
+            {"description": None, "id": "missing", "status": "in_progress"},
+        ]})
+    assert mission.task_plan is before
+    receipt = apply_plan_update(mission, {"operation": "patch", "explanation": None, "steps": [
+        {"description": None, "id": "two", "status": "in_progress"},
+        {"description": None, "id": "one", "status": "completed"},
+    ]})
+    assert receipt["changed_step_ids"] == ["one", "two"]
+    assert mission.task_plan.revision == 2 and not mission.completed
 
 
 @pytest.fixture
@@ -262,7 +264,7 @@ def loop_registry():
     schema = {"type": "object", "properties": {"value": {"type": "number"}},
               "required": ["value"], "additionalProperties": False}
     registry.register(ToolSpec.from_input_schema("motion", "motion", "uav_primitive", "", schema,
-                              ToolRuntimePolicy("physical", "after_batch_observation", "ordered", True)))
+                              ToolRuntimePolicy("physical", "after_batch_observation", "single", True)))
     registry.register(ToolSpec.from_input_schema("sensor", "sensor", "skill_capability", "", schema,
                               ToolRuntimePolicy("read_only", "immediate", "parallel_safe", True, 2)))
     registry.register(ToolSpec.from_input_schema("connect", "connect", "uav_primitive", "", {},
@@ -276,50 +278,54 @@ def validate_calls(registry, calls, **kwargs):
                                 latest_observation={"observation_id": "obs1"}, **kwargs)
 
 
-def test_direct_ordered_physical_batch_needs_no_commit_or_plan(loop_registry):
-    calls = [AgentToolCall(str(i), "motion", {"value": i}) for i in range(3)]
-    assert validate_calls(loop_registry, calls) == "physical"
-    assert [call.args["value"] for call in calls] == [0, 1, 2]
+@pytest.mark.parametrize("count", [2, 3, 4])
+def test_single_physical_call_needs_no_plan_and_multiple_calls_reject(loop_registry, count):
+    calls = [AgentToolCall(str(i), "motion", {"value": i}) for i in range(count)]
+    assert validate_calls(loop_registry, calls[:1]) == "physical"
     with pytest.raises(NativeTurnValidationError) as failure:
-        validate_calls(loop_registry, calls + [AgentToolCall("extra", "motion", {"value": 4})])
+        validate_calls(loop_registry, calls)
     assert failure.value.diagnostic["code"] == "physical_batch_invalid"
+    assert failure.value.diagnostic["execution"] == "not_started"
+    assert failure.value.diagnostic["scope"] == "turn"
 
 
 def test_read_batch_prevalidation_includes_all_calls_and_does_not_consume_quota(loop_registry):
-    history = {read_call_signature("obs1", "sensor", {"value": 0})}
+    history = {("obs1", "sensor"): 1}
     calls = [AgentToolCall(str(i), "sensor", {"value": i}) for i in (1, 2)]
     with pytest.raises(NativeTurnValidationError) as failure:
-        validate_calls(loop_registry, calls, executed_read_signatures=history)
-    assert failure.value.diagnostic == {
-        "code": "observation_call_limit", "scope": "call", "source_tool_call_id": "2"}
+        validate_calls(loop_registry, calls, executed_read_counts=history)
+    assert failure.value.diagnostic["code"] == "observation_call_limit"
+    assert failure.value.diagnostic["source_tool_call_id"] == "2"
+    assert failure.value.diagnostic["execution"] == "not_started"
     assert len(history) == 1
     assert validate_calls(loop_registry, calls) == "read_only"
 
 
-def test_read_call_dedup_and_instruction_call_ids(loop_registry):
+def test_repeated_read_calls_and_unique_instruction_call_ids(loop_registry):
     call = AgentToolCall("one", "sensor", {"value": 1})
-    with pytest.raises(NativeTurnValidationError, match="reuse"):
-        validate_calls(loop_registry, [call], executed_read_signatures={
-            read_call_signature("obs1", "sensor", {"value": 1})})
+    assert validate_calls(loop_registry, [call], executed_read_counts={
+        ("obs1", "sensor"): 1}) == "read_only"
+    assert validate_calls(loop_registry, [call, AgentToolCall("two", "sensor", {"value": 1})]) == "read_only"
     with pytest.raises(NativeTurnValidationError, match="unique"):
         validate_calls(loop_registry, [call], prior_call_ids={"one"})
-    assert validate_calls(loop_registry, [call], executed_read_signatures={
-        read_call_signature("old_obs", "sensor", {"value": 1})}) == "read_only"
+    assert validate_calls(loop_registry, [call], executed_read_counts={
+        ("old_obs", "sensor"): 2}) == "read_only"
 
 
 def test_control_and_physical_turns_are_separate(loop_registry):
-    plan = AgentToolCall("plan", "runtime.update_plan", {"explanation": "go", "steps": []})
+    plan = AgentToolCall("plan", "runtime.update_plan", {"operation": "replace", "explanation": "go", "steps": []})
     complete = AgentToolCall("done", "runtime.report_completed", {"reason": "arrived", "evidence_refs": ["obs1"]})
     move = AgentToolCall("move", "motion", {"value": 1})
     assert validate_calls(loop_registry, [plan]) == "runtime_control"
     for calls, code in (([plan, complete], "control_not_exclusive"), ([plan, move], "mixed_effects")):
         with pytest.raises(NativeTurnValidationError) as failure:
             validate_calls(loop_registry, calls)
-        assert failure.value.diagnostic == {"code": code, "scope": "turn"}
+        assert failure.value.diagnostic["code"] == code
+        assert failure.value.diagnostic["scope"] == "turn"
 
 
 def test_plan_may_share_turn_with_parallel_safe_reads_in_any_submission_order(loop_registry):
-    plan = AgentToolCall("plan", "runtime.update_plan", {"explanation": "inspect", "steps": []})
+    plan = AgentToolCall("plan", "runtime.update_plan", {"operation": "replace", "explanation": "inspect", "steps": []})
     reads = [
         AgentToolCall("read1", "sensor", {"value": 1}),
         AgentToolCall("read2", "sensor", {"value": 2}),
@@ -341,7 +347,7 @@ def test_plan_and_visible_depth_contract_validate_together():
 
     registry = default_registry(PluginRegistry.from_config())
     turn = AssistantTurn("turn", "measure", [
-        AgentToolCall("plan", "runtime.update_plan", {"explanation": "measure first", "steps": []}),
+        AgentToolCall("plan", "runtime.update_plan", {"operation": "replace", "explanation": "measure first", "steps": []}),
         AgentToolCall(
             "depth",
             "skill.visual_grounding.measure_visible_depth",
@@ -376,19 +382,18 @@ def test_empty_and_unexposed_turns_fail_before_execution(loop_registry):
 
 def test_control_executor_uses_registry_and_closes_invalid_request(loop_registry):
     mission = state()
-    result = execute_builtin_control(AgentToolCall("plan1", "runtime.update_plan", {
+    result = execute_builtin_control(AgentToolCall("plan1", "runtime.update_plan", {"operation": "replace",
         "explanation": "Short route", "steps": [
-            {"id": "go", "description": "Reach the gate", "status": "in_progress",
-             "evidence_refs": []}],
+            {"id": "go", "description": "Reach the gate", "status": "in_progress"}],
     }), mission, loop_registry, ())
     assert result.status == "ok" and result.data["plan"]["revision"] == 1
-    rejected = execute_builtin_control(AgentToolCall("plan2", "runtime.update_plan", {
+    rejected = execute_builtin_control(AgentToolCall("plan2", "runtime.update_plan", {"operation": "replace",
         "explanation": "Drop old progress", "steps": [],
     }), mission, loop_registry, ())
     assert rejected.tool_call_id == "plan2" and rejected.status == "rejected"
     assert mission.task_plan.revision == 1
     assert rejected.executed_args == {}
-    assert rejected.data["rejection"]["source_tool_call_id"] == "plan2"
+    assert rejected.diagnostic["source_tool_call_id"] == "plan2"
 
 
 def test_control_executor_terminal_and_circular_evidence(loop_registry):
