@@ -210,6 +210,8 @@ def campaign_lock(output):
 
 
 def _attempt_dir(output, task, number):
+    if "dataset" in task and "image_budget" in task:
+        return Path(output) / task["dataset"] / f'images_{task["image_budget"]}' / task["split"] / "attempts" / task["episode_id"] / f"attempt_{number:02d}"
     return Path(output) / task["split"] / "attempts" / task["episode_id"] / f"attempt_{number:02d}"
 
 
@@ -257,11 +259,14 @@ def _cleanup(output, manifest, task, attempt):
 
 def _render_reports(output, queue):
     """Report errors remain independent of flight results and can be repaired."""
+    if any("image_budget" in item["task"] for item in queue.state["tasks"].values()):
+        from evaluation.experiments.image_budget_report import write_report
+        return write_report(output, queue.state)
     for split in ("val_seen", "val_unseen"):
         scored = [item["result"] for item in queue.state["tasks"].values()
                   if item["task"]["split"] == split and item["result"] is not None]
         summary = _summary(scored)
-        summary.update(dataset_split=split, requested_case_count=333 if split == "val_seen" else 531,
+        summary.update(dataset_split=split, requested_case_count=sum(item["task"]["split"] == split for item in queue.state["tasks"].values()),
                        campaign_status=queue.state["status"], campaign_reason=queue.state["reason"])
         directory = Path(output) / split
         directory.mkdir(exist_ok=True)

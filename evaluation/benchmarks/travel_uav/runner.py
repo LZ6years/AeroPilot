@@ -91,7 +91,7 @@ class TravelUavBenchmarkRunner:
         read_only_execution_config=None,
     ) -> None:
         self.config = config
-        self.runtime_factory = RuntimeFactory()
+        self.runtime_factory = RuntimeFactory(context_config_path=config.context_config_path)
         self.read_only_execution_config = read_only_execution_config
         self._simulation_server_factory = simulation_server_factory or SimulationServer
         self.map_packages, self.port_policy = load_map_config(config.map_config_path)
@@ -305,6 +305,9 @@ class TravelUavBenchmarkRunner:
             )
         except Exception as exc:
             setup_error = {"error_type": type(exc).__name__, "error": str(exc)}
+            from src.sim_server.remote.ssh import SshOperationError
+            if isinstance(exc, SshOperationError):
+                setup_error.update(exc.to_dict())
             recorder.event("travel_uav_case_failed", setup_error)
         finally:
             recorder.close()
@@ -600,7 +603,7 @@ def _infrastructure_error(
     if execution is None:
         return setup_error or {"error_type": "SetupError", "error": "case setup failed"}
     runtime_error = getattr(execution.outcome, "error", None)
-    if runtime_error and runtime_error.get("error_type") == "SceneRecoveryRequired":
+    if runtime_error and runtime_error.get("error_type") in {"SceneRecoveryRequired", "ProviderRequestError"}:
         return dict(runtime_error)
     if capabilities is None:
         scene_error = getattr(execution.outcome, "error", None)

@@ -315,7 +315,8 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     assert "STMR Spatial Memory" in review_html
     assert "STMR Map" in review_html
     assert "runtime.report_completed" in review_html
-    assert "Landing language denotes reaching" in review_html
+    assert "Completion requires the whole instructed route" in review_html
+    assert "Landing language denotes reaching" not in review_html
     assert Path(result["summary_paths"]["html_review"]).exists()
     assert Path(result["summary_paths"]["dataset_provenance"]).exists()
     assert Path(result["summary_paths"]["difficulty_assignment"]).exists()
@@ -339,7 +340,7 @@ def test_aerial_vln_dry_episode_writes_metrics_manifest_without_truth_leak(
     )
     assert (
         manifest["protocol_variant"]
-        == "aerial_vln.uav_agent_native_actions.v2"
+        == "aerial_vln.uav_agent_native_actions.v3"
     )
     assert manifest["scene_map"] == {"1": "airvln_env_1"}
     assert manifest["runtime_loop_guard_windows"] == 300

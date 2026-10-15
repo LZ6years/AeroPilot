@@ -40,3 +40,23 @@ def test_default_review_omits_large_events_but_detail_preserves_them(tmp_path):
     assert 'UNIQUE_RAW_DEBUG' in detail
     assert len(page) < len(detail) / 2
     assert Path(compact['case_html']).read_text(encoding='utf-8') == page
+
+
+def test_decision_plan_uses_captured_state_and_never_later_decisions(tmp_path):
+    from evaluation.benchmarks.core.review import _compact_decision, _provider_round
+    plan = {"revision": 2, "explanation": "Route", "steps": [
+        {"id": "gate", "description": "PRIOR_GATE", "status": "in_progress"}]}
+    future = {"revision": 99, "steps": [{"id": "roof", "description": "FUTURE_ROOF", "status": "completed"}]}
+    record = {"loop_schema": "unified_tool_loop_v2", "decision_id": "d1", "decision_index": 1,
+              "current_task_state": {"task_plan": plan}, "model_context": {}, "model_rounds": []}
+    audit = BenchmarkAuditLog(run_dir=str(tmp_path), started_at=None, ended_at=None,
+        task_initial_observation_ref=None, observations=(), frames=(), poses=(), actions=(),
+        events=(), debug_events=(), planner_debug=(record, {"current_task_state": {"task_plan": future}}))
+    html = _compact_decision(record, audit, (), tmp_path, [], {})
+    assert "Plan revision before decision: 2" in html and "PRIOR_GATE" in html
+    assert "FUTURE_ROOF" not in html
+    missing = {**record, "current_task_state": {"task_plan": None}}
+    html = _compact_decision(missing, audit, (), tmp_path, [], {})
+    assert "No plan created" in html and "FUTURE_ROOF" not in html
+    round_html = _provider_round({"round_index": 1, "current_task_state": {"task_plan": plan}}, tmp_path, [])
+    assert "Captured task state before this round" in round_html and "PRIOR_GATE" in round_html

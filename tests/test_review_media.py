@@ -160,7 +160,7 @@ def test_review_preserves_native_plan_and_intent_language(tmp_path):
             "status": "ok",
             "message": "",
             "data": {
-                "plan": {
+                "plan": {"operation": "replace",
                     "explanation": "根据当前观察更新路线。",
                     "steps": [
                         {

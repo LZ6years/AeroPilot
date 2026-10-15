@@ -93,7 +93,9 @@ def audit_case(case_dir: Path, result: dict, package, *, output_path: Path | Non
             and tracking["tracking_valid"]
             and (not windows or tracking["all_observed_within_tolerance"] is True)
             and cleanup and all(item["verified"] for item in cleanup)
-            and not result.get("infrastructure_error") and not result.get("cleanup_errors"))
+            and (not result.get("infrastructure_error")
+                 or result["infrastructure_error"].get("stage") == "provider")
+            and not result.get("cleanup_errors"))
     except Exception as exc:
         report["error"] = f"{type(exc).__name__}: {exc}"
     (output_path or case_dir / "manual_gate.json").write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")

@@ -113,7 +113,7 @@ class AerialVlnBenchmarkRunner:
         self._loaded_model_config: Any | None = None
         self.action_config = _action_config(config)
         self.safety_config = _safety_config(config)
-        self.runtime_factory = RuntimeFactory()
+        self.runtime_factory = RuntimeFactory(context_config_path=config.context_config_path)
         self.plugin_registry = self.runtime_factory.plugin_registry
         self._stmr_session = stmr_session
         self._stmr_warmed = False
@@ -769,9 +769,10 @@ class AerialVlnBenchmarkRunner:
                         "AerialVLN data and metrics with UAV-Agent native "
                         "tools under the declared AirSim control strategy; "
                         "coordinates are reported in "
-                        "AirSim NED meters. Landing language denotes reaching "
-                        "the requested target region and ending the episode; "
-                        "it does not require physical ground contact."
+                        "AirSim NED meters. Completion requires the whole "
+                        "instructed route and its final position relation; "
+                        "an intermediate arrival or stop does not discard "
+                        "explicit subsequent requirements."
                     ),
                 ),
             ),

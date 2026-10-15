@@ -139,6 +139,53 @@ def test_exit_status_replaces_stale_running_lanes_with_final_queue_state(tmp_pat
     assert status["counts"] == {"scored": 1} and status["lanes"] == {}
 
 
+def test_image_campaign_report_failure_does_not_stop_or_modify_queue(tmp_path, monkeypatch):
+    current = task("one")
+    q = queue(tmp_path, [current])
+    q.claim([current], "A")
+    write(tmp_path / "manifest.json", {"experiment": "image_budget"})
+    before = q.path.read_bytes()
+    monkeypatch.setattr(parallel, "_render_reports", lambda *args: (_ for _ in ()).throw(TypeError("bad audit field")))
+    assert parallel.render_reports(tmp_path, q) is None
+    assert q.path.read_bytes() == before
+    assert parallel.read_json(tmp_path / "parallel/report_error.json")["pending"] is True
+
+
+def test_storage_forecast_uses_future_logging_profile_not_old_full_debug_sizes(tmp_path):
+    current = task("one")
+    q = queue(tmp_path, [current])
+    q.state["tasks"][q.key(current)]["attempts"] = [{"retained_bytes": 3 * 1024**3, "logging_profile": "full"}]
+    write(tmp_path / "parallel/execution_overlay.json", {"logging_profile": "paper_process_metrics_v1"})
+    assert parallel.storage_budget(tmp_path, q, [current], 2)
+    check = parallel.read_json(tmp_path / "storage_check.json")
+    assert check["calibration_pending"] and check["observed_cases"] == 0
+    assert check["required_bytes"] == 10 * 1024**3
+
+
+def test_reporting_extension_only_replaces_verified_evaluation_readers(tmp_path, monkeypatch):
+    import hashlib
+    import sys
+    import evaluation.experiments as package
+    import evaluation.experiments.compression_cost as old_cost
+    import evaluation.experiments.image_budget_report as old_report
+    from src.llm import client as original_client
+    hashes = {}
+    for filename, old in (("compression_cost.py", old_cost), ("image_budget_report.py", old_report)):
+        name = "evaluation.experiments." + Path(filename).stem
+        monkeypatch.setitem(sys.modules, name, old)
+        monkeypatch.setattr(package, Path(filename).stem, old)
+        path = tmp_path / filename
+        path.write_text("REPORT_TEST_MARKER = True\n", encoding="utf-8")
+        hashes[filename] = hashlib.sha256(path.read_bytes()).hexdigest()
+    overlay = {"controller_script": str(tmp_path / "parallel_campaign.py"), "source_hashes": hashes}
+    parallel.install_report_readers(overlay, {"experiment": "image_budget"})
+    assert sys.modules["evaluation.experiments.compression_cost"].REPORT_TEST_MARKER
+    assert sys.modules["src.llm.client"] is original_client
+    (tmp_path / "compression_cost.py").write_text("tampered", encoding="utf-8")
+    with pytest.raises(ValueError, match="Unverified"):
+        parallel.install_report_readers(overlay, {"experiment": "image_budget"})
+
+
 def test_two_lanes_claim_different_tasks_and_reject_duplicate_lane(tmp_path):
     tasks = [task("one"), task("two"), task("three")]
     q = queue(tmp_path, tasks)
@@ -150,6 +197,52 @@ def test_two_lanes_claim_different_tasks_and_reject_duplicate_lane(tmp_path):
         q.claim(tasks, "A")
     q.accept(*[first[0], first[1]["number"]], receipt(tasks[0]))
     assert q.claim(tasks, "A")[0] == tasks[2]
+
+
+@pytest.mark.parametrize("unfinished", ["pending", "running", "retry_pending", "retry_exhausted"])
+def test_budget_stage_waits_for_all_valid_scores_including_retries(tmp_path, unfinished):
+    tasks = [{**task(identity), "dataset": "aerial_vln", "image_budget": budget}
+             for identity in ("one", "two") for budget in (30, 10, 20)]
+    manifest = {"experiment": "image_budget", "image_budgets": [10, 20, 30]}
+    q = queue(tmp_path, tasks)
+    for value in q.state["tasks"].values():
+        value["status"] = "scored"
+    current = next(t for t in tasks if t["image_budget"] == 10)
+    q.state["tasks"][q.key(current)]["status"] = unfinished
+    budget, candidates = parallel.image_budget_stage(manifest, tasks, q)
+    assert budget == 10 and {t["image_budget"] for t in candidates} == {10}
+    q.state["tasks"][q.key(current)]["status"] = "scored"
+    later = next(t for t in tasks if t["image_budget"] == 20)
+    q.state["tasks"][q.key(later)]["status"] = "pending"
+    assert parallel.image_budget_stage(manifest, tasks, q)[0] == 20
+
+
+def test_budget_local_pilot_unlocks_only_its_cohort_and_preserves_other_scores(tmp_path):
+    tasks = [{**task(str(index)), "dataset": "aerial_vln", "image_budget": budget}
+             for budget in (10, 20, 30) for index in range(5)]
+    manifest = {"experiment": "image_budget", "image_budgets": [10, 20, 30]}
+    q = queue(tmp_path, tasks)
+    # Completed measurements from the previous interleaved schedule survive.
+    q.state["tasks"][q.key(tasks[5])]["status"] = "scored"
+    budget, cohort = parallel.image_budget_stage(manifest, tasks, q)
+    trial = cohort[:4]
+    assert parallel.stage_candidates(cohort, trial, False, q) == trial[:2]
+    for t in trial:
+        q.state["tasks"][q.key(t)]["status"] = "scored"
+    assert parallel.stage_candidates(cohort, trial, True, q) == cohort
+    remaining, _ = q.claim(cohort, "A")
+    assert remaining == cohort[4] and remaining["image_budget"] == 10
+    q.accept(remaining, 1, receipt(remaining))
+    assert parallel.image_budget_stage(manifest, tasks, q)[0] == 20
+    assert q.state["tasks"][q.key(tasks[5])]["status"] == "scored"
+    assert parallel.technical_check_path(tmp_path, 10) != parallel.technical_check_path(tmp_path, 20)
+
+
+def test_legacy_campaign_keeps_manifest_order(tmp_path):
+    tasks = [task("one"), task("two")]
+    q = queue(tmp_path, tasks)
+    assert parallel.image_budget_stage({}, tasks, q) == (None, tasks)
+    assert parallel.technical_check_path(tmp_path, None) == tmp_path / "parallel/trial_check.json"
 
 
 def test_workers_cannot_mutate_or_save_progress(tmp_path):
@@ -192,6 +285,52 @@ def test_exhausted_tls_trajectory_never_enters_sr(tmp_path):
     assert q.claim([current], "B") is None
 
 
+@pytest.mark.parametrize("flat", [True, False])
+def test_wrapped_freeze_timeout_defers_and_healthy_lane_keeps_result(tmp_path, flat):
+    tasks = [task("timeout"), task("healthy")]
+    q = queue(tmp_path, tasks)
+    failed, a = q.claim(tasks, "A")
+    healthy, b = q.claim(tasks, "B")
+    error = {"error_type": "SceneRecoveryRequired", "error": "AirSim freeze failed: Request timed out"}
+    proof = infrastructure_receipt(failed, stage="scene_control", errors=[error])
+    if flat:
+        proof["result"]["infrastructure_error"] = dict(error)
+    raw = json.dumps(proof, sort_keys=True)
+    assert q.accept(failed, a["number"], proof) == "deferred"
+    assert json.dumps(proof, sort_keys=True) == raw
+    assert q.state["tasks"][q.key(failed)]["result"] is None
+    assert q.accept(healthy, b["number"], receipt(healthy)) == "scored"
+    # Old paused receipts become recoverable using the identical classifier.
+    q.pause("infrastructure_failure", task=failed, number=a["number"])
+    assert q.recoverable_pause(q.state)
+    assert q.state["tasks"][q.key(healthy)]["status"] == "scored"
+
+
+@pytest.mark.parametrize("message,cleanup,retryable", [
+    ("AirSim freeze failed: Request timed out", False, True),
+    ("AirSim freeze failed: Request timed out", True, False),
+    ("AirSim freeze failed: unknown control state", True, True),
+    ("Request timed out", True, True),
+    ("AirSim freeze failed: permission denied", True, True),
+])
+def test_scene_reset_is_not_a_blanket_retry_permission(message, cleanup, retryable):
+    error = {"error_type": "SceneRecoveryRequired", "error": message, "retryable": retryable}
+    value = infrastructure_receipt(task("case"), cleanup=cleanup, stage="scene_control", errors=[error])
+    assert not parallel.ParallelRecoveryQueue.retryable_infrastructure(value)
+
+
+def test_wrapped_scene_timeout_keeps_original_three_attempt_limit(tmp_path):
+    current = task("timeout")
+    q = queue(tmp_path, [current])
+    for number in range(1, 4):
+        _, attempt = q.claim([current], "A")
+        value = infrastructure_receipt(current, stage="scene_control", errors=[{
+            "error_type": "SceneRecoveryRequired", "error": "AirSim freeze failed: Request timed out"}])
+        assert q.accept(current, number, value) == "deferred"
+    assert q.state["tasks"][q.key(current)]["status"] == "retry_exhausted"
+    assert q.claim([current], "A") is None
+
+
 def test_two_final_observation_timeouts_defer_without_interrupting_other_lane_then_score_once(tmp_path):
     tasks = [task("one"), task("two"), task("three")]
     q = queue(tmp_path, tasks)
@@ -229,7 +368,7 @@ def test_three_cleanup_timeouts_exhaust_only_that_episode_while_other_work_conti
     assert q.claim([one, other], "A")[0] == other
 
 
-@pytest.mark.parametrize('shape', ['single', 'list', 'both', 'legacy'])
+@pytest.mark.parametrize('shape', ['single', 'list', 'both', 'legacy', 'flat', 'flat_cleanup'])
 def test_infrastructure_error_shapes_share_the_same_transport_classifier(shape):
     value = infrastructure_receipt(task('one'))
     error = {'error_type': 'ConnectionResetError', 'error': 'connection reset'}
@@ -241,12 +380,52 @@ def test_infrastructure_error_shapes_share_the_same_transport_classifier(shape):
         infrastructure['errors'].append(error)
     elif shape == 'both':
         infrastructure['error'] = error
-    else:
+    elif shape == 'legacy':
         infrastructure.pop('errors')
         value['result']['error'] = error
+    elif shape == 'flat':
+        value['result']['infrastructure_error'] = error
+    else:
+        value['result']['infrastructure_error'] = {'error_type': 'CleanupError', 'error': 'cleanup failed', 'details': [error]}
     before = json.dumps(value, sort_keys=True)
     assert parallel.ParallelRecoveryQueue.retryable_infrastructure(value)
     assert json.dumps(value, sort_keys=True) == before
+
+
+def test_flat_scene_timeout_defers_without_stopping_other_lane_or_reading_text_as_http_metadata(tmp_path):
+    tasks = [task('travel'), task('aerial')]
+    q = queue(tmp_path, tasks)
+    _, attempt = q.claim(tasks, 'A')
+    q.claim(tasks, 'B')
+    failed = infrastructure_receipt(tasks[0])
+    failed['result']['infrastructure_error'] = {'error_type': 'TimeoutExpired', 'error': 'SSH probe timed out after 30 seconds'}
+    original = json.dumps(failed['result'], sort_keys=True)
+    assert q.accept(tasks[0], attempt['number'], failed) == 'deferred'
+    assert q.state['tasks'][q.key(tasks[1])]['status'] == 'running'
+    assert q.state['tasks'][q.key(tasks[0])]['result'] is None
+    assert q.provider_error(failed['result']) == {}
+    assert json.dumps(failed['result'], sort_keys=True) == original
+
+
+@pytest.mark.parametrize('kind', ['ValueError', 'AuthenticationError', 'SceneRecoveryRequired'])
+def test_flat_unknown_errors_still_pause_instead_of_becoming_valid_scores(tmp_path, kind):
+    current = task('one')
+    q = queue(tmp_path, [current])
+    q.claim([current], 'A')
+    failed = infrastructure_receipt(current)
+    failed['result']['infrastructure_error'] = {'error_type': kind, 'error': 'cannot classify'}
+    assert q.accept(current, 1, failed) == 'pause'
+    assert q.state['tasks'][q.key(current)]['result'] is None
+
+
+def test_provider_metadata_requires_provider_stage_and_handles_flat_provider_receipts():
+    cls = parallel.ParallelRecoveryQueue
+    error = {'error_type': 'ProviderRequestError', 'status_code': 429, 'retryable': True}
+    assert cls.provider_error({'infrastructure_error': {'stage': 'provider', 'error': error}}) == error
+    assert cls.provider_error({'infrastructure_error': error}) == error
+    assert cls.provider_error({'infrastructure_error': {'error_type': 'TimeoutExpired', 'error': 'SSH text'}}) == {}
+    assert cls.provider_error({'infrastructure_error': {'stage': 'provider', 'error': 'malformed'}}) == {}
+    assert cls.provider_error({'infrastructure_error': 'malformed'}) == {}
 
 
 @pytest.mark.parametrize('fault', ['unknown', 'authentication', 'mixed', 'missing', 'malformed',
@@ -437,7 +616,11 @@ def test_extension_freeze_does_not_edit_base_catalog(tmp_path, monkeypatch):
     content = base.read_bytes()
     manifest = {"fingerprint": "frozen", "configs": {
         "val_seen": {"map_config_path": str(base), "report_profile": "paper_process"}}}
+    recovery = {"execution_source": str(tmp_path / "recovery/source"), "recovery_revision": "audited",
+                "recovery_policy": {"max_attempts": 6, "deadline_sec": 600}}
+    write(tmp_path / "parallel/execution_overlay.json", recovery)
     overlay = parallel.prepare_extension(tmp_path, manifest)
+    assert all(overlay[key] == value for key, value in recovery.items())
     parallel.verify_overlay(overlay, manifest)
     assert base.read_bytes() == content
     assert overlay["lanes"]["B"]["remote_gpu"] == 2
@@ -571,17 +754,19 @@ def test_completed_boundary_never_arms_for_live_or_partial_provider_child(tmp_pa
     assert parallel.completed_boundary(tmp_path, q.state) is None
 
 
-def test_report_failure_keeps_score_and_depth_without_repeating_flight(tmp_path, monkeypatch):
+@pytest.mark.parametrize("terminal_provider_errors", [False, True])
+def test_report_failure_keeps_score_and_depth_without_repeating_flight(tmp_path, monkeypatch, terminal_provider_errors):
     current = task("one")
     directory = parallel._attempt_dir(tmp_path, current, 1)
     depth = directory / "runs/run/artifacts/depth/data.npy"
     depth.parent.mkdir(parents=True)
     depth.write_bytes(b"depth")
-    write(directory / "result.json", receipt(current)["result"])
+    write(directory / "result.json", {**receipt(current)["result"], "infrastructure_error": None})
     proof = [{"remote_stop": {"cleanup_verified": True}, "endpoint": {"status": "unreachable"}}]
     monkeypatch.setattr(parallel, "cleanup_owned", lambda *a, **k: proof)
     monkeypatch.setattr(parallel, "write_process_review", lambda *a, **k: (_ for _ in ()).throw(ValueError("report")))
-    manifest = {"configs": {"val_seen": {"map_config_path": "unused", "report_profile": "paper_process"}}}
+    manifest = {"terminal_provider_errors": terminal_provider_errors,
+                "configs": {"val_seen": {"map_config_path": "unused", "report_profile": "paper_process"}}}
     done = parallel.finish_attempt(tmp_path, manifest, current, {"number": 1}, {"descendants": []})
     assert done["valid_score"] and done["cleanup_verified"] and depth.exists()
     assert done["result"]["report_error"]["error"] == "report"
@@ -656,7 +841,8 @@ def test_finished_threads_have_independent_configs_and_result_directories(tmp_pa
                 selection=SimpleNamespace(assignment_by_episode={episode: None}), provenance=None)
         def run_case(self, case, directory, **_):
             return {"episode_id": case.episode_id, "metrics": {"success": False}}
-    monkeypatch.setattr(parallel, "AerialVlnBenchmarkRunner", Runner)
+    from evaluation.benchmarks.aerial_vln import campaign_adapter
+    monkeypatch.setattr(campaign_adapter, "AerialVlnBenchmarkRunner", Runner)
     requests = [{"task": task(identity), "attempt": {"number": 1}, "lane": lane,
                  "map_config_path": lane + ".json"} for lane, identity in (("A", "one"), ("B", "two"))]
     with ThreadPoolExecutor(2) as pool:

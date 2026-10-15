@@ -88,6 +88,7 @@ def cleanup_owned(run_root, map_config, descendants, *, control=None):
         settings = json.loads((path.parents[1] / "scenes" / scene_id / "settings.json").read_text(encoding="utf-8"))
         endpoint = control.probe_prepared_port(package, scene_id, "127.0.0.1", settings["ApiServerPort"])
         tunnels = []
+        obsolete_tunnels = []
         for child in descendants:
             command = child["command"]
             if not command or Path(command[0]).stem.lower() != "ssh" or "-L" not in command:
@@ -97,17 +98,24 @@ def cleanup_owned(run_root, map_config, descendants, *, control=None):
             try:
                 process = psutil.Process(child["pid"])
                 if process.create_time() != child["created"] or process.cmdline() != command:
-                    raise ValueError("Tunnel process identity changed")
+                    # Reused PIDs do not belong to this scene. Never signal
+                    # them; require independent endpoint absence below.
+                    obsolete_tunnels.append(child["pid"])
+                    continue
                 process.terminate()
                 process.wait(timeout=10)
             except psutil.NoSuchProcess:
                 pass
             tunnels.append(child["pid"])
-        receipts.append({"scene": scene_id, "remote_stop": stopped, "endpoint": endpoint, "tunnels": tunnels})
+        from src.sim_server.remote.recovery import _closed_local_port
+        receipts.append({"scene": scene_id, "remote_stop": stopped, "endpoint": endpoint, "tunnels": tunnels,
+                         "obsolete_tunnel_pids": obsolete_tunnels,
+                         "local_endpoint_closed": _closed_local_port("127.0.0.1", scene["control_port"])})
     return receipts
 
 
 def cleanup_verified(receipts):
     """Empty cleanup is not proof that a launched scene was stopped."""
     return bool(receipts) and all(item["remote_stop"].get("cleanup_verified") is True
-                                  and item["endpoint"].get("status") == "unreachable" for item in receipts)
+                                  and item["endpoint"].get("status") == "unreachable"
+                                  and item.get("local_endpoint_closed", True) for item in receipts)

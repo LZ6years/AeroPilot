@@ -36,6 +36,7 @@ class TravelUavEvalConfig:
     generate_html_review: bool = True
     enable_action_planner_debug: bool = False
     env_path: str = ".env"
+    context_config_path: str = "configs/context.json"
     shutdown_policy: str = "hover"
     runtime_loop_guard_windows: int = 300
     initialization_min_settle_sec: float = 0.0
@@ -128,6 +129,7 @@ class TravelUavEvalConfig:
             generate_html_review=bool(data.get("generate_html_review", True)),
             enable_action_planner_debug=bool(data.get("enable_action_planner_debug", False)),
             env_path=str(data.get("env_path", ".env")),
+            context_config_path=str(data.get("context_config_path", "configs/context.json")),
             shutdown_policy=str(data.get("shutdown_policy", "hover")),
             runtime_loop_guard_windows=_positive_int(
                 data.get("runtime_loop_guard_windows", 300), "runtime_loop_guard_windows"

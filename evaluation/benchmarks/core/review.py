@@ -463,8 +463,12 @@ def _compact_decision(record, audit, frame_assets, case_dir, assets, results) ->
         return str(index) if strategy else "尚未初始化"
     unified = record.get("loop_schema") == "unified_tool_loop_v2"
     if unified:
-        plan = _dict(context.get("task_plan"))
-        parts.append('<p>Plan revision at checkpoint: ' + _e(plan.get("revision", "No plan created")) + '</p>')
+        task_state = _dict(record.get("current_task_state"))
+        # New checkpoints contain sensory state only. Use this decision's
+        # captured task state; the legacy fallback is from the same record.
+        plan = _dict(task_state.get("task_plan") if "task_plan" in task_state else context.get("task_plan"))
+        parts.append('<p>Plan revision before decision: ' + _e(plan.get("revision", "No plan created")) + '</p>')
+        parts.append('<p class="muted">Plan statuses are model-recorded progress, not environmental proof.</p>')
         if plan:
             parts.append(_record_table(plan.get("steps", []), ("id", "description", "status")))
     else:
@@ -1771,6 +1775,9 @@ def _provider_round(
         f"{_e(outcome.get('status') or 'unknown outcome')}</summary>"
         + availability
         + _key_value_table(visible)
+        + _json_details(model_round.get("current_task_state"),
+                        "Captured task state before this round",
+                        empty_message="Task state was not captured for this round; no future state substituted.")
         + _round_strategy_review(request_messages, canonical, outcome, applied_strategy)
         + "<h5>Raw provider ToolCalls</h5>"
         + _json_details(message.get("tool_calls"), "Wire ToolCalls")

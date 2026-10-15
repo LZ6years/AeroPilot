@@ -50,6 +50,7 @@ class AerialVlnEvalConfig:
     stmr_max_queries: int = 16
     stmr_device: str = "auto"
     env_path: str = ".env"
+    context_config_path: str = "configs/context.json"
     shutdown_policy: str = "land"
     # Long multi-landmark routes need more observation/action windows than the
     # shared Runtime default. This remains benchmark-runner configuration and
@@ -193,6 +194,7 @@ class AerialVlnEvalConfig:
                 field_name="stmr_device",
             ),
             env_path=str(data.get("env_path", ".env")),
+            context_config_path=str(data.get("context_config_path", "configs/context.json")),
             shutdown_policy=str(data.get("shutdown_policy", "land")),
             runtime_loop_guard_windows=int(
                 data.get("runtime_loop_guard_windows", 300)

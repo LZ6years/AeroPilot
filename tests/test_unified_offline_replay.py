@@ -24,6 +24,9 @@ def test_scripted_replay_strict_audit_tracking_and_truthful_html(tmp_path):
     assert report["violations"] == []
     assert report["trace_integrity"] == "ok"
     assert report["real_provider_called"] is False
+    assert report["task_plan"]["revision"] == 4
+    assert [step["status"] for step in report["task_plan"]["steps"]] == ["completed", "completed"]
+    assert report["task_plan"]["steps"][1]["description"] == "Check measured two-move result"
     page = Path(report["case_html"]).read_text(encoding="utf-8")
     assert "Scripted offline replay" in page
     assert "Sensor RGB — not a captured Provider input" in page

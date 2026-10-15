@@ -94,7 +94,7 @@ class UavFlowBenchmarkRunner:
         self.model_config = load_model_config(config.env_path)
         self.action_config = _benchmark_action_config(config)
         self.safety_config = _benchmark_safety_config(config)
-        self.runtime_factory = RuntimeFactory()
+        self.runtime_factory = RuntimeFactory(context_config_path=config.context_config_path)
         self.plugin_registry = self.runtime_factory.plugin_registry
         self._stmr_session = stmr_session
         self._stmr_warmed = False

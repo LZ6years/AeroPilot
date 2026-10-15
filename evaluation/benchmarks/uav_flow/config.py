@@ -46,6 +46,7 @@ class UavFlowEvalConfig:
     limit_per_class: int | None = 1
     enable_sr_judge: bool = False
     env_path: str = ".env"
+    context_config_path: str = "configs/context.json"
     shutdown_policy: str = "hover"
     action_config_overrides: dict[str, float] = field(default_factory=dict)
     safety_overrides: dict[str, float] = field(default_factory=dict)
@@ -127,6 +128,7 @@ class UavFlowEvalConfig:
             ),
             enable_sr_judge=bool(data.get("enable_sr_judge", False)),
             env_path=str(data.get("env_path", cls.env_path)),
+            context_config_path=str(data.get("context_config_path", "configs/context.json")),
             shutdown_policy=str(data.get("shutdown_policy", cls.shutdown_policy)),
             action_config_overrides=_float_dict(data.get("action_config_overrides", {})),
             safety_overrides=_float_dict(data.get("safety_overrides", data.get("safety_config_overrides", {}))),

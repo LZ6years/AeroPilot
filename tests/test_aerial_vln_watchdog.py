@@ -49,6 +49,20 @@ def test_exception_and_storage_classification_does_not_restart_unknown_faults():
     assert watchdog.resume_policy(state, storage={'passed': True}) == 'needs_attention'
 
 
+def test_repaired_controller_fault_requires_a_one_use_explicit_resume(tmp_path, monkeypatch):
+    watcher, clock, alive, starts, kills, probes = fixture_watchdog(tmp_path, monkeypatch, 'controller_exception')
+    campaign.write_json(tmp_path / 'parallel/controller_error.json', {'error_type': 'AttributeError'})
+    watcher.tick()
+    assert not starts
+    (watcher.directory / 'RESUME').write_text('Verified controller repair', encoding='utf-8')
+    watcher.tick()
+    assert len(starts) == 1 and not (watcher.directory / 'RESUME').exists()
+    alive.clear()
+    watcher.tick()
+    assert len(starts) == 1
+    assert campaign.read_json(watcher.directory / 'status.json')['status'] == 'needs_attention'
+
+
 def fixture_watchdog(tmp_path, monkeypatch, reason='cleanup_unverified'):
     directory = tmp_path / 'parallel/watchdog'
     directory.mkdir(parents=True)
@@ -124,6 +138,32 @@ def test_stalled_owned_controller_is_recovered_after_persisted_backoff(tmp_path,
     assert len(starts) == 1
 
 
+def test_live_budget_handoff_is_guarded_without_stall_kill_or_extra_dispatch(tmp_path, monkeypatch):
+    watcher, clock, alive, starts, kills, probes = fixture_watchdog(tmp_path, monkeypatch)
+    controller = watcher.control.owner_of(SimpleNamespace(pid=42))
+    campaign.write_json(tmp_path / 'dispatcher.json', controller)
+    campaign.write_json(tmp_path / 'parallel/scheduling_handoff/status.json', {'status': 'draining', 'controller': controller})
+    campaign.write_json(tmp_path / 'parallel/scheduling_handoff/process.json', {
+        'pid': 43, 'created': 900, 'command': ['python', 'image_budget_order_handoff.py', '--output', str(tmp_path)]})
+    alive.update({42, 43})
+    clock[0] = 10000
+    os.utime(tmp_path / 'progress.json', (0, 0))
+    before = (tmp_path / 'progress.json').read_bytes()
+    watcher.tick()
+    assert not starts and not kills and (tmp_path / 'progress.json').read_bytes() == before
+    assert campaign.read_json(watcher.directory / 'status.json')['status'] == 'monitoring_handoff'
+
+
+def test_dead_handoff_is_reported_and_paused_without_starting_competing_controller(tmp_path, monkeypatch):
+    watcher, clock, alive, starts, kills, probes = fixture_watchdog(tmp_path, monkeypatch)
+    campaign.write_json(tmp_path / 'parallel/scheduling_handoff/status.json', {'status': 'installing'})
+    campaign.write_json(tmp_path / 'parallel/scheduling_handoff/process.json', {
+        'pid': 43, 'created': 900, 'command': ['python', 'image_budget_order_handoff.py', '--output', str(tmp_path)]})
+    watcher.tick()
+    assert not starts and not kills and (tmp_path / 'PAUSE').exists()
+    assert campaign.read_json(watcher.directory / 'status.json')['reason'] == 'budget_order_handoff_exited'
+
+
 def test_provider_outage_probes_before_any_new_task_process(tmp_path, monkeypatch):
     watcher, clock, alive, starts, kills, probes = fixture_watchdog(tmp_path, monkeypatch, 'provider_unavailable')
     before = (tmp_path / 'progress.json').read_bytes()
@@ -133,6 +173,24 @@ def test_provider_outage_probes_before_any_new_task_process(tmp_path, monkeypatc
     clock[0] = 1030
     watcher.tick()
     assert len(starts) == 1 and (tmp_path / 'progress.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('reason', ['pilot_storage_budget', 'storage_budget', 'storage_or_coverage_check'])
+def test_storage_pause_waits_without_relaunch_and_recovers_only_when_capacity_is_sufficient(tmp_path, monkeypatch, reason):
+    watcher, clock, alive, starts, kills, probes = fixture_watchdog(tmp_path, monkeypatch, reason)
+    campaign.write_json(tmp_path / 'storage_check.json', {'passed': False, 'required_bytes': 200})
+    free = [100]
+    monkeypatch.setattr(watchdog.shutil, 'disk_usage', lambda _: SimpleNamespace(free=free[0]))
+    before = (tmp_path / 'progress.json').read_bytes()
+    for _ in range(3):
+        watcher.tick()
+    assert not starts and not kills and watcher.state['failures'] == 0
+    assert campaign.read_json(watcher.directory / 'status.json')['status'] == 'waiting_for_storage'
+    assert campaign.read_json(watcher.directory / 'storage_wait.json')['required_bytes'] == 200
+    free[0] = 200
+    watcher.tick()
+    assert len(starts) == 1 and starts[0][0][-1] == '2'
+    assert (tmp_path / 'progress.json').read_bytes() == before
 
 
 def test_watchdog_completion_and_manual_pause_do_not_start_a_controller(tmp_path, monkeypatch):
