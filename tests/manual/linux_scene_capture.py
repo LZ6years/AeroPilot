@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -68,7 +69,9 @@ def main():
             record['passed'] = record['passed'] and cleanup_verified(record['cleanup'])
             record['total_seconds'] = time.monotonic() - started
             results.append(record)
-            write_json(args.output / 'capture_validation.json', {'passed': all(r['passed'] for r in results) and len(results) == len(packages), 'scenes': results})
+            write_json(args.output / 'capture_validation.json', {
+                'passed': all(r['passed'] for r in results) and len(results) == len(packages),
+                'map_sha256': hashlib.sha256(args.maps.read_bytes()).hexdigest(), 'scenes': results})
             print(json.dumps({key: record[key] for key in ('scene_id', 'passed', 'total_seconds')}, ensure_ascii=False), flush=True)
         if not record['passed']:
             return 1

@@ -214,6 +214,10 @@ class CampaignWatchdog:
         if policy in {'manual_pause', 'needs_attention'}:
             self.checkpoint(policy, reason=state.get('reason'), counts=counts)
             return False
+        if self.manifest.get('execution', {}).get('mode') == 'local' and state.get('reason') in {
+                'cleanup_unverified', 'interrupted_cleanup_unverified'}:
+            self.checkpoint('needs_attention', reason=state.get('reason'), counts=counts)
+            return False
         if state.get('reason') in {'storage_budget', 'pilot_storage_budget', 'storage_or_coverage_check'}:
             storage = self.control.read_json(self.output / 'storage_check.json')
             required = storage.get('required_bytes')

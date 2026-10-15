@@ -1229,6 +1229,10 @@ def run_controller(args):
         globals()["_FROZEN_EXTENSION_DIR"] = Path(overlay["controller_script"]).parent
         verify_overlay(overlay, manifest)
         install_report_readers(overlay, manifest)
+        if execution_settings(manifest)['mode'] == 'local':
+            capture = read_json(output / 'capture/capture_validation.json')
+            if not capture.get('passed') or capture.get('map_sha256') != overlay['lanes']['A']['sha256']:
+                raise RuntimeError('Verified RGB/depth/GPU capture for the frozen local maps is required')
         if discover_gpu_bindings(primary_config(manifest)["map_config_path"], manifest.get("execution")) != overlay["remote_gpu_bindings"]:
             raise RuntimeError("Remote GPU UUID or Vulkan mapping changed since freeze")
         offline_models(output, overlay)
@@ -1567,7 +1571,7 @@ def handoff(args):
 
 def main(*, default_dataset=None, default_output=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("prepare", "validate", "run", "host", "handoff", "watch"))
+    parser.add_argument("command", choices=("prepare", "validate", "bind", "run", "host", "handoff", "watch"))
     parser.add_argument("--output", type=Path, default=default_output or DEFAULT_OUTPUT)
     parser.add_argument("--dataset", default=default_dataset)
     parser.add_argument("--config", type=Path, action="append", default=[])
@@ -1588,6 +1592,15 @@ def main(*, default_dataset=None, default_output=None):
                   else prepare(args.output, args.config, args.dataset, root=REPO, plugin_config=args.plugin_config,
                                execution=read_json(args.execution_config) if args.execution_config else None))
         print(json.dumps(result, ensure_ascii=False), flush=True)
+        return
+    if args.command == 'bind':
+        output = args.output.resolve()
+        manifest = read_json(output / 'manifest.json')
+        verify_frozen(output, manifest)
+        with campaign_lock(output):
+            overlay = read_json(output / 'parallel/execution_overlay.json') or prepare_extension(output, manifest)
+            verify_overlay(overlay, manifest)
+        print(json.dumps({'lanes': overlay['lanes'], 'bindings': overlay['remote_gpu_bindings']}), flush=True)
         return
     # Public entries resume the pinned snapshot instead of replacing a running
     # cohort's control code with whatever happens to be in today's worktree.
