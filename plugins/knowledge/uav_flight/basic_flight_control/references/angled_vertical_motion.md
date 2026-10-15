@@ -22,6 +22,6 @@ a simpler final correction when preserving the exact ratio would add risk or
 increase error.
 
 Choose the next observation position from the remaining altitude relation, the
-previous window's requested and actual vertical displacement, and the observed
+previous action's requested and actual vertical displacement, and the observed
 surface change. Preserve the requested component relation while it remains
 applicable, then recalibrate as the target condition or visible geometry changes.

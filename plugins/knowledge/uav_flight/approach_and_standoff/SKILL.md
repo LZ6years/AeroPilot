@@ -1,50 +1,52 @@
 ---
 name: approach_and_standoff
-description: "Applicable needs: approaching, retreating or holding a target-relative position; Decision questions: choose correction magnitude and decide when to stop; Contents: visual change, qualitative range, metric evidence and relative position; Limits: does not prove traversal or orbit coverage."
-summary: Select only when target-relative proximity, separation, following, or a final held front/back/side position is the terminal concern; exclude route traversal.
+description: "Applicable needs: approaching, retreating, holding a target-relative position, landing or judging task completion; Decision questions: which required relation remains and when further correction is unnecessary; Contents: approach feedback, qualitative/metric range, terminal spatial relations, landing surface and stopping checks; Limits: does not establish route passage or orbit coverage, and height change alone does not prove touchdown."
+summary: Select for Approach, standoff and completion; select when the stopping relation, final correction or landing is the active question.
 ---
 
-# Approach And Standoff
+# Approach, Standoff And Completion
 
 ## Application Boundary
 
-Use for proximity, separation, following or a final target-relative position.
-Traversal belongs to route guidance. Observation-only approach does not establish
-identity or terminal arrival; identification or facing alone needs no extra
-approach unless missing detail or the instruction calls for it.
+Use for approach, retreat, following, final relative position, landing or stopping.
+Identification alone requires no approach.
 
 ## Evidence Model
 
-Combine visual relations, available depth and change after translation for a
-credible rough range. Quantitative distance claims need evidence appropriate to
-the geometry and tolerance. Camera-to-visible-surface depth is not target-center
-or horizontal distance. UAV displacement is not target distance; yaw does not
-establish proximity or a physical side relation.
+Combine target identity, visual relations, actual translation and applicable range.
+Image growth supports approach, not numeric separation. Vehicle displacement is
+not target distance; yaw does not establish a physical side. Surface depth is not
+target-center or horizontal distance. Height change is not touchdown or clearance.
 
 ## Decision Procedure
 
-1. Establish a usable target cue and rough range before correcting distance.
-2. Check the requested stopping relation before another correction.
-3. Approach when cues support being too far; retreat when they support being too
-   near. Choose measurement precision appropriate to the contemplated correction.
-4. Compare actual translation, target growth and visual relations after movement.
-   Comparable geometry can support larger progress while clearly far away; rapid
-   visual change or proximity calls for earlier observation. Re-estimate after a
-   changed viewpoint or target, rather than extrapolating an old ratio.
+1. Check target identity through attributes and surroundings, retained route
+   conditions, and the required final position relation separately.
+2. Check the stopping condition before another correction. Approach when too far,
+   retreat when too near; choose evidence precision suitable for that judgment.
+3. Compare actual movement and visual change. Shorten near surfaces, recalibrate
+   after geometry changes, and add no unrequested centering or height requirement.
+4. For landing, check the surface, remaining descent and usable clearance. Shorten
+   near the required relation, preserve explicit angled-path requirements while
+   applicable, and stop descending if more motion adds unsupported risk.
+
+Worked example: a roof is visible ahead, but being above it remains unproven.
+A short approach can test whether its footprint moves beneath the vehicle; check
+actual translation and roof-edge relations before stopping. Growth alone proves no range.
 
 ## Completion And Stop
 
-Qualitative standoff needs a usable cue and coherent visual or depth evidence
-supporting the requested relation. Numeric standoff needs valid target-relative
-measurement applicable to the current position and requested tolerance. Do not
-infer decimal distance from a color bar. Facing or investigating a candidate is
-not proof of the requested distance relation. Stop when sufficient evidence exists;
-no repeated measurement is imposed merely because one was used earlier.
+Before ending, verify identity, earlier route conditions and final relation.
+Seeing a roof is not being above it; facing a building is not being in front of it.
+Check footprint, facade, entrance-side and route relations with actual motion.
+Numeric standoff needs valid geometry and reasonable tolerance, without mandatory
+repeat measurement. Landing must meet its surface/region and completion contract;
+visible ground or descent alone does not prove touchdown. See
+[completion examples](references/completion_examples.md) for distinctions.
 
 ## Recovery
 
-When the relation becomes unclear, compare historical and current views with actual
-motion. Turn, rise, shift or retrace according to the target's last bearing and the
-occlusion geometry, then re-observe before dependent corrections. Temporary loss
-after established passage need not require returning. Use shorter adjustments as
-the requested standoff relation approaches.
+Use historical and current views with actual motion to reassess the relation.
+Observation can recover a bearing; abnormal recovery handles unexpected
+outcomes. Shorten near surfaces. Temporary loss after established passage does not
+by itself require returning or erase earlier progress.

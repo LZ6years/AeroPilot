@@ -1,6 +1,6 @@
 ---
 name: orbit_and_surround
-description: "Applicable needs: circling a target or covering a requested arc; Decision questions: separate heading change, radial repair and actual circulation progress; Contents: tangential movement, target relation, direction and coverage; Limits: yaw alone does not establish an orbit."
+description: "Applicable needs: specialist orbit maneuvers, circling a target or covering a requested arc; Decision questions: whether tangential progress, radial correction or bearing inspection is needed; Contents: target-relative geometry, circulation direction, changing aspects and coverage checks; Limits: yaw alone does not establish an orbit; basic control handles motion scale and observation handles target visibility."
 summary: Select for orbit, circle-around, surround, clockwise, counterclockwise, or radius-based target-relative loop tasks.
 ---
 
@@ -8,47 +8,44 @@ summary: Select for orbit, circle-around, surround, clockwise, counterclockwise,
 
 ## Application Boundary
 
-Use for orbiting or covering an arc around a target. Facing or holding one side alone is not circulation.
+Use for specialist circulation around a target or covering an arc. Facing one
+side is not circulation. Basic control handles scale; observation handles identity.
 
 ## Evidence Model
 
-Orbit progress requires lateral or tangential translation while maintaining a
-plausible target relation. Yaw alone is not orbit progress. Orbit radius is
-distance to the target, not displacement from the UAV's local origin. Radius
-repair supports circulation but must not replace it.
+Orbit needs lateral or tangential translation with a plausible target relation.
+Yaw alone is not orbit progress. Radius is target distance, not displacement from
+the vehicle's origin. Radial repair supports but does not replace circulation.
+Changing target aspects and actual motion help judge direction and coverage.
 
 ## Decision Procedure
 
-Choose from alignment, tangential progress, or radial repair according to the
-current target relation. Tangential movement
-requires a usable target relation and plausible circulation direction. Re-align
-yaw only when needed to keep the reference usable. Continue tangential progress
-while direction remains consistent; if radius becomes clearly unsuitable, use
-a brief radial repair without replacing circulation.
+1. Choose alignment, tangential progress or radial repair from the current relation.
+   Tangential progress needs an identifiable reference and supported direction.
+2. Maintain useful bearing; realign only when needed. Orbit direction determines
+   tangential movement, not yaw sign; yaw correction follows current image bearing.
+3. Continue tangential progress while direction remains coherent. Briefly repair
+   clearly unsuitable radius, then resume circulation. Use target-relative evidence
+   with precision suitable for the requested tolerance, not vehicle displacement.
+4. Scale the next segment from prior actual translation and target-aspect change.
+   Shorten near changing clearance or relation. A successful segment does not prove
+   the entire remaining orbit is clear. Inspect after a turn before translating.
 
-Radius judgments need target-relative evidence with precision appropriate to
-the requested tolerance and contemplated radial correction. Qualitative range
-and metric distance support different levels of precision; vehicle displacement
-alone does not measure orbit radius.
-
-Orbit direction controls the shift direction, not the yaw sign. Use the target's
-current image side when yaw is specifically for re-alignment.
-Use prior actual translation and changing target aspect to scale the next arc
-segment. Shorten the observation interval when clearance or the target relation
-may change; a previous successful segment does not prove the whole orbit is clear.
+Worked example: sideways movement reveals a new target side while range and
+circulation direction remain coherent. This supports arc progress. If bearing
+becomes unusable, turn, inspect the new view and select the next tangential move.
+That restoring turn adds no orbit coverage.
 
 ## Completion And Stop
 
-Stop orbit movement when the requested arc, circle, or surrounding coverage is
-reasonably supported by accumulated translation and changing target relation.
-Do not continue yaw, standoff correction, or shifting merely because the target
-remains visible. A brief radius uncertainty does not erase valid circulation
-progress.
+Stop when actual translation and changing target relation support the requested
+arc or coverage. Do not keep yawing or repairing standoff merely because the target
+remains visible. Brief radius uncertainty does not erase valid circulation.
 
 ## Recovery
 
-If a required relation disappears after a maneuver, compare pre-maneuver and
-current views with measured motion. Reorient, retrace or change height according to
-the last target bearing, then observe the resulting relation. If repeated radial
-corrections add no tangential progress, choose a different circulation viewpoint.
-Reverse circulation when recovery or a clear directional conflict calls for it.
+Compare pre-maneuver and current views with actual motion when the reference is
+lost. Use observation or abnormal recovery for repositioning, then inspect it.
+If repeated radial repairs add no circulation, choose a different supported
+viewpoint. Correct wrong motion to restore the instructed orbit direction.
+Temporary recovery motion does not automatically add arc coverage.

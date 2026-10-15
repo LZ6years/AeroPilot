@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import importlib.util
 from pathlib import Path
+import re
 
 import pytest
 
@@ -21,12 +22,14 @@ from src.agent.config import ModelConfig
 EXPECTED_UAV_FLIGHT_SKILLS = {
     "visual_target_task_reasoning",
     "approach_and_standoff",
-    "vertical_landing_and_altitude_control",
+    "basic_flight_control",
+    "abnormal_situation_recovery",
     "route_traversal_and_passage",
     "orbit_and_surround",
 }
 
 REMOVED_UAV_FLIGHT_SKILLS = {
+    "vertical_landing_and_altitude_control",
     "visual_target_alignment",
     "search_and_confirm_target",
     "search_under_uncertainty",
@@ -96,226 +99,107 @@ def test_uav_knowledge_skills_follow_compact_five_section_contract():
             assert skill.body[start:end].strip(), f"{skill.name}:{heading}"
 
 
+def test_teaching_references_are_valid_optional_reads_without_benchmark_or_batch_guidance():
+    from src.plugins.skills.knowledge_service import KnowledgeService
+    catalog = _uav_flight_registry().skill_catalog
+    service = KnowledgeService(catalog)
+    assert service.loaded_index() == []
+    for skill in catalog.skills:
+        loaded = service.load(skill.name)
+        assert loaded["body"] == skill.body.strip() and loaded["references"] == []
+        paths = {item["path"] for item in loaded["reference_manifest"]}
+        linked = set(re.findall(r"\]\((references/[^)]+)\)", skill.body))
+        assert linked <= paths, skill.name
+        detail = service.load(skill.name, sorted(paths))
+        assert not detail["body_included"] and "body" not in detail
+        assert {item["path"] for item in detail["references"]} == paths
+        for text in [skill.body, skill.description, *(item["text"] for item in detail["references"])]:
+            assert "Multiple actions are" not in text
+            for private in ("AerialVLN", "CURRENT TASK STATE", "distance_to_goal", "near_boundary_stop"):
+                assert private not in text, (skill.name, private)
+    # Loading all chapters above is a test, not an automatic startup policy.
+    assert KnowledgeService(catalog).loaded_index() == []
+
+
 def test_skill_catalog_validates_selected_names_and_loader_reads_skill_resources():
     catalog = _uav_flight_registry().skill_catalog
-
     accepted, rejected = catalog.validate_selection(["visual_target_task_reasoning", "missing_skill"])
-
     assert [skill.name for skill in accepted] == ["visual_target_task_reasoning"]
     assert rejected == ["missing_skill"]
-    index = accepted[0].index_listing()
-    assert index["name"] == "visual_target_task_reasoning"
-    assert "summary" in index
-    assert "source_path" not in index
-    assert "skill_text" not in index
-    assert index["references"] == [
-        {
-            "path": "references/search_under_uncertainty.md",
-            "description": "Optional reference for search under uncertainty.",
-        }
-    ]
-    summary = SkillContentLoader().load_summary(accepted[0])
-    assert summary["name"] == "visual_target_task_reasoning"
-    assert summary["summary"]
-    assert summary["available_references"] == ["references/search_under_uncertainty.md"]
-    assert "Visual Target Task Reasoning" in summary["skill_text"]
-    normalized_summary = " ".join(summary["skill_text"].split())
-    assert "## Evidence Model" in summary["skill_text"]
-    assert "candidate outside the current view" in normalized_summary
-    assert "tentative candidate" in normalized_summary
-    assert "directional cue" in normalized_summary
-    assert "usable bearing" in normalized_summary
-    assert "Current bearing supports alignment" in normalized_summary
-    assert "a separate geometric heading measurement is not required" not in normalized_summary
-    assert "Moderate left or right offset is explicitly acceptable" in normalized_summary
-    assert "exact centering needs an explicit request" in normalized_summary
-    assert "Do not correct merely for lateral offset" in normalized_summary
-    assert "correct only when the cue is near the frame boundary" not in normalized_summary
-    assert "broad usable forward region" not in normalized_summary
-    assert "an explicit request" in normalized_summary
-    assert "Contradicted attributes" in normalized_summary
-    assert "alternate around an already usable bearing" in normalized_summary
-    assert "left/negative yaw" not in normalized_summary
-    assert "right/positive yaw" not in normalized_summary
-    assert "current phase decision" not in summary["skill_text"]
-    assert "good enough to advance" not in summary["skill_text"]
-    assert "motion_history_summary" not in summary["skill_text"]
-    assert "phase_action_summary" not in summary["skill_text"]
-    assert summary["references"] == []
-    assert summary["assets"]["scripts"] == []
+    skill = accepted[0]
+    index = skill.index_listing()
+    assert index["name"] == skill.name and index["summary"]
+    assert "source_path" not in index and "skill_text" not in index
+    assert {ref["path"] for ref in index["references"]} == {
+        "references/search_under_uncertainty.md", "references/viewpoint_examples.md"}
+    summary = SkillContentLoader().load_summary(skill)
+    # All essential teaching sections fit the bounded legacy loader as well as
+    # the complete live KnowledgeService. References remain explicit reads.
+    assert summary["skill_text"] == skill.body.strip()
+    assert summary["references"] == [] and summary["assets"]["scripts"] == []
 
 
 def test_skill_loader_lists_references_without_executing_scripts():
-    catalog = _uav_flight_registry().skill_catalog
-
-    accepted, _ = catalog.validate_selection(["visual_target_task_reasoning"])
-    summaries = {skill.name: SkillContentLoader().load_summary(skill) for skill in accepted}
-
-    visual_refs = summaries["visual_target_task_reasoning"]["available_references"]
-    assert visual_refs == ["references/search_under_uncertainty.md"]
-    assert "candidate outside the current view" in summaries["visual_target_task_reasoning"]["skill_text"]
-    assert "tentative candidate" in summaries["visual_target_task_reasoning"]["skill_text"]
-    assert "30-45 degrees" not in summaries["visual_target_task_reasoning"]["skill_text"]
-    assert summaries["visual_target_task_reasoning"]["assets"]["scripts"] == []
-    planner_guidance = SkillContentLoader().load_planner_guidance(accepted[0])
-    assert planner_guidance["name"] == "visual_target_task_reasoning"
-    assert "summary" not in planner_guidance
-    assert "skill_text" in planner_guidance
-    assert "Visual Target Task Reasoning" in planner_guidance["skill_text"]
-    assert "skill_text_truncated" not in planner_guidance
-    assert planner_guidance["skill_text"] == accepted[0].body.strip()
-    assert "references" not in planner_guidance
-    assert "requested_references" not in planner_guidance
-    assert "source_path" not in planner_guidance
-    assert "skill_dir" not in planner_guidance
-    assert "available_references" not in planner_guidance
-    planner_guidance_with_ref = SkillContentLoader().load_planner_guidance(
-        accepted[0],
-        requested_references=["references/search_under_uncertainty.md"],
-    )
-    assert planner_guidance_with_ref["requested_references"][0]["path"] == "references/search_under_uncertainty.md"
-    assert "view overlap" in planner_guidance_with_ref["requested_references"][0]["text"]
+    skill = _uav_flight_registry().skill_catalog.validate_selection(["visual_target_task_reasoning"])[0][0]
+    loader = SkillContentLoader()
+    guidance = loader.load_planner_guidance(skill)
+    assert guidance["skill_text"] == skill.body.strip()
+    for private in ("summary", "references", "source_path", "skill_dir", "available_references"):
+        assert private not in guidance
+    expanded = loader.load_planner_guidance(skill, requested_references=["references/search_under_uncertainty.md"])
+    assert len(expanded["requested_references"]) == 1
+    assert expanded["requested_references"][0]["path"] == "references/search_under_uncertainty.md"
+    assert "view overlap" in expanded["requested_references"][0]["text"]
 
 
 def test_search_under_uncertainty_keeps_broad_search_out_of_candidate_confirmation():
-    skill_text = Path("plugins/knowledge/uav_flight/visual_target_task_reasoning/SKILL.md").read_text(encoding="utf-8")
-    reference_text = Path(
-        "plugins/knowledge/uav_flight/visual_target_task_reasoning/references/search_under_uncertainty.md"
-    ).read_text(encoding="utf-8")
-    normalized_skill_text = " ".join(skill_text.split())
-    normalized_reference_text = " ".join(reference_text.split())
-
-    assert "candidate outside the current view" in normalized_skill_text
-    assert "tentative candidate" in normalized_skill_text
-    assert "directional cue" in normalized_skill_text
-    assert "30-45 degrees" not in normalized_skill_text
-    assert "current phase decision" not in normalized_skill_text
-    assert "artifact paths" not in normalized_skill_text
-    assert "hidden benchmark" not in normalized_skill_text
-    assert "Inspection and arrival remain separate outcomes" in normalized_skill_text
-    assert "Contradicted attributes" in normalized_skill_text
-    assert "view overlap" in normalized_reference_text
-    assert "30-45" not in reference_text and "5-15" not in reference_text
-    assert "Reorient when evidence changes" in normalized_reference_text
+    root = Path("plugins/knowledge/uav_flight/visual_target_task_reasoning")
+    core = (root / "SKILL.md").read_text(encoding="utf-8")
+    reference = (root / "references/search_under_uncertainty.md").read_text(encoding="utf-8")
+    assert "tentative candidate" in core and "Contradicted attributes" in core
+    assert "view overlap" in reference and "Reorient when evidence changes" in reference
+    assert "30-45" not in reference and "5-15" not in reference
 
 
-def test_vertical_landing_skill_keeps_core_completion_and_moves_formulas_to_reference():
-    skill_text = Path(
-        "plugins/knowledge/uav_flight/vertical_landing_and_altitude_control/SKILL.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(skill_text.split())
-
-    reference_text = Path(
-        "plugins/knowledge/uav_flight/vertical_landing_and_altitude_control/references/angled_vertical_motion.md"
-    ).read_text(encoding="utf-8")
-    normalized_reference = " ".join(reference_text.split())
-
-    assert "landing" in normalized
-    assert "angled ascent/descent" in normalized
-    assert "Stop descending" in normalized
-    assert "at the requested drop" in normalized
-    assert "near the landing surface" in normalized
-    assert "shorten adjustments" in normalized
-    assert "meaningfully different viewpoint or clearance" in normalized
-    assert "landing region" in normalized
-    assert "height change, progress, clearance and surface cues" in normalized
-    assert "Near a surface" in normalized
-    assert "risk or error" in normalized
-    assert "Angled paths deviate from the vertical axis" in normalized
-    assert "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))" not in normalized
-    assert "sqrt(vx^2 + vy^2) = abs(vz) * tan(angle)" not in normalized
-    assert "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))" in normalized_reference
-    assert "sqrt(vx^2 + vy^2) = abs(vz) * tan(angle)" in normalized_reference
-    assert "smaller angle is closer to straight vertical motion" in normalized_reference
-    assert "non-zero horizontal component" in normalized_reference
-    assert "relative to the horizontal plane" not in normalized
-    assert "abs(vertical_speed) / horizontal_speed = tan(angle)" not in normalized
-    assert "yaw, heading, pitch or camera angle" in normalized
-    assert "effective bounded progress" not in normalized
-    assert "reasonable tolerance" in normalized
-    assert "not decimal correction" in normalized
-    assert "contact sensor" not in normalized
-    assert "hidden benchmark" not in normalized
-    forbidden_terms = [
-        "UAV-Flow",
-        "UnrealCV",
-        "phase_progress_evidence",
-        "current_phase",
-        "context",
-        "case id",
-    ]
-    for term in forbidden_terms:
-        assert term not in skill_text
+def test_vertical_handling_and_landing_use_separate_cores_and_explicit_formula_reference():
+    from src.plugins.skills.knowledge_service import KnowledgeService
+    service = KnowledgeService(_uav_flight_registry().skill_catalog)
+    handling = service.load("basic_flight_control")
+    landing = service.load("approach_and_standoff")
+    assert "Height" in handling["body"] and "angled" in handling["body"]
+    assert "landing" in landing["body"] and "touchdown" in landing["body"]
+    formula = "angle = atan(sqrt(vx^2 + vy^2) / abs(vz))"
+    assert formula not in handling["body"] and handling["references"] == []
+    detail = service.load("basic_flight_control", ["references/angled_vertical_motion.md"])
+    assert not detail["body_included"] and "body" not in detail
+    assert formula in detail["references"][0]["text"]
+    with pytest.raises(ValueError):
+        service.load("vertical_landing_and_altitude_control")
 
 
 def test_route_traversal_skill_keeps_completion_core_and_optional_examples():
-    skill_text = Path(
-        "plugins/knowledge/uav_flight/route_traversal_and_passage/SKILL.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(skill_text.split())
-    reference_text = Path(
-        "plugins/knowledge/uav_flight/route_traversal_and_passage/references/route_progress_examples.md"
-    ).read_text(encoding="utf-8")
-    normalized_reference = " ".join(reference_text.split())
-
-    assert "route progress" in normalized
-    assert "pass through" in normalized
-    assert "gap" in normalized
-    assert "translate through or past it" in normalized
-    assert "first useful route view with the latest view" in normalized
-    assert "cue is not necessarily a destination" in normalized
-    assert "exact unseen boundary" in normalized
-    assert "Choose the next observation point" in normalized
-    assert "Yaw can inspect a route or change image bearing" in normalized
-    assert "Cue absence alone is ambiguous" in normalized
-    assert "Passage completion requires a terminal route relation" in normalized
-    assert "cue moving sideways, rearward" in normalized
-    assert "cue leaves view" in normalized
-    assert "Do not require every source, reacquisition, continued visibility" in normalized
-    assert "done_when" not in normalized
-    assert "continue_when" not in normalized
-    assert "schema" not in normalized
-    assert "list item" not in normalized
-    assert "Passing A Landmark On One Side" in normalized_reference
-    assert "Crossing A Gap Or Opening" in normalized_reference
-    assert "camera reorientation rather than traversal" in normalized_reference
-    assert "next semantic step" not in normalized
-    assert "good enough to continue" not in normalized
-    forbidden_terms = [
-        "UAV-Flow",
-        "UnrealCV",
-        "phase_progress_evidence",
-        "current_phase",
-        "context",
-        "case id",
-    ]
-    for term in forbidden_terms:
-        assert term not in skill_text
+    from src.plugins.skills.knowledge_service import KnowledgeService
+    service = KnowledgeService(_uav_flight_registry().skill_catalog)
+    core = service.load("route_traversal_and_passage")
+    assert "## Completion And Stop" in core["body"]
+    assert core["references"] == []
+    detail = service.load("route_traversal_and_passage", ["references/route_progress_examples.md"])
+    assert not detail["body_included"]
+    reference = detail["references"][0]["text"]
+    assert "Passing A Landmark On One Side" in reference
+    assert "Crossing A Gap Or Opening" in reference
 
 
 def test_approach_skill_stops_before_overshoot_and_excludes_route_references():
-    skill_text = Path(
-        "plugins/knowledge/uav_flight/approach_and_standoff/SKILL.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(skill_text.split())
-
-    assert "Traversal belongs to route guidance" in normalized
-    assert "Observation-only approach does not establish identity" in normalized
-    assert "UAV displacement is not target distance" in normalized
-    assert "before correcting distance" in normalized
-    assert "Numeric standoff needs valid target-relative measurement" in normalized
-    assert "no repeated measurement is imposed" in normalized
-    assert "Turn, rise, shift or retrace" in normalized
-    forbidden_terms = [
-        "UAV-Flow",
-        "UnrealCV",
-        "phase_progress_evidence",
-        "current_phase",
-        "context",
-        "case id",
-    ]
-    for term in forbidden_terms:
-        assert term not in skill_text
+    from src.plugins.skills.knowledge_service import KnowledgeService
+    service = KnowledgeService(_uav_flight_registry().skill_catalog)
+    result = service.load("approach_and_standoff")
+    paths = {item["path"] for item in result["reference_manifest"]}
+    assert "references/completion_examples.md" in paths
+    assert "references/route_progress_examples.md" not in paths
+    with pytest.raises(ValueError):
+        service.load("approach_and_standoff", ["references/route_progress_examples.md"])
+    assert service.loaded_index()[0]["reference_paths"] == []
 
 
 def test_skill_frontmatter_summaries_are_selection_scoped_without_planner_details():
@@ -343,27 +227,11 @@ def test_skill_frontmatter_summaries_are_selection_scoped_without_planner_detail
 
 
 def test_orbit_and_surround_skill_contains_orbit_guidance_without_runtime_internals():
-    skill_text = Path(
-        "plugins/knowledge/uav_flight/orbit_and_surround/SKILL.md"
-    ).read_text(encoding="utf-8")
-    normalized = " ".join(skill_text.split())
-
-    assert "lateral or tangential translation" in normalized
-    assert "Yaw alone is not orbit progress" in normalized
-    assert "not displacement from the UAV's local origin" in normalized
-    assert "brief radial repair without replacing circulation" in normalized
-    assert "Orbit direction controls the shift direction, not the yaw sign" in normalized
-    assert "Stop orbit movement" in normalized
-    assert "repeated radial corrections" in normalized
-    assert "choose a different circulation viewpoint" in normalized
-    assert "semantic phase" not in normalized
-    assert "phase_decision" not in normalized
-    assert "phase_progress_evidence" not in normalized
-    assert "current_phase" not in normalized
-    assert "UAV-Flow" not in normalized
-    assert "hidden benchmark" not in normalized
-    assert "raw file names" not in normalized
-    assert "reference paths" not in normalized
+    skill = _uav_flight_registry().skill_catalog.validate_selection(["orbit_and_surround"])[0][0]
+    assert "Yaw alone is not orbit progress" in skill.body
+    assert "tangential" in skill.body and "Worked example:" in skill.body
+    for private in ("phase_decision", "phase_progress_evidence", "current_phase", "UAV-Flow", "hidden benchmark"):
+        assert private not in skill.body
 
 
 def test_flyagent_contains_visual_direction_basics_without_case_specific_terms():

@@ -23,13 +23,17 @@ def test_flight_catalog_has_consistent_selection_fields_without_schema_expansion
     from src.plugins import PluginRegistry
     service = KnowledgeService(PluginRegistry.from_config().skill_catalog)
     entries = service.catalog()
-    assert len(entries) == 5
+    assert len(entries) == 6
     for item in entries:
         assert set(item) == {"name", "description"}
         for label in ("Applicable needs:", "Decision questions:", "Contents:", "Limits:"):
             assert label in item["description"]
         body = service.load(item["name"])["body"]
         assert "## Completion And Stop" in body
+        assert "Worked example:" in body
+    names = {item["name"] for item in entries}
+    assert {"basic_flight_control", "abnormal_situation_recovery"} <= names
+    assert "vertical_landing_and_altitude_control" not in names
 
 from src.plugins.contracts.skill import Skill
 from src.plugins.skills.catalog import SkillCatalog

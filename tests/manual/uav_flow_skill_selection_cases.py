@@ -55,7 +55,7 @@ def _semantic_hint(
 CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
     "Turn": {
         "expected_any": ["visual_target_task_reasoning"],
-        "forbidden": ["route_traversal_and_passage", "vertical_landing_and_altitude_control"],
+        "forbidden": ["route_traversal_and_passage"],
         "max_selected": 2,
         "semantic_hint": _semantic_hint(
             intent="turn_to_visual_target",
@@ -66,7 +66,7 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
     },
     "Move": {
         "expected_any": ["approach_and_standoff"],
-        "forbidden": ["route_traversal_and_passage", "vertical_landing_and_altitude_control"],
+        "forbidden": ["route_traversal_and_passage"],
         "max_selected": 2,
         "semantic_hint": _semantic_hint(
             intent="approach_or_standoff",
@@ -81,7 +81,6 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
             "visual_target_task_reasoning",
             "approach_and_standoff",
             "route_traversal_and_passage",
-            "vertical_landing_and_altitude_control",
             "orbit_and_surround",
         ],
         "max_selected": 1,
@@ -98,7 +97,6 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
             "visual_target_task_reasoning",
             "approach_and_standoff",
             "route_traversal_and_passage",
-            "vertical_landing_and_altitude_control",
             "orbit_and_surround",
         ],
         "max_selected": 1,
@@ -111,7 +109,7 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
     },
     "Surround": {
         "expected_any": ["orbit_and_surround"],
-        "forbidden": ["route_traversal_and_passage", "vertical_landing_and_altitude_control"],
+        "forbidden": ["route_traversal_and_passage"],
         "max_selected": 2,
         "semantic_hint": _semantic_hint(
             intent="orbit_or_surround_target",
@@ -121,7 +119,7 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "Ascend/Descend": {
-        "expected_any": ["vertical_landing_and_altitude_control"],
+        "expected_any": ["basic_flight_control"],
         "forbidden": ["visual_target_task_reasoning", "route_traversal_and_passage", "orbit_and_surround"],
         "max_selected": 2,
         "semantic_hint": _semantic_hint(
@@ -133,7 +131,7 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
     },
     "Approach": {
         "expected_any": ["approach_and_standoff"],
-        "forbidden": ["route_traversal_and_passage", "vertical_landing_and_altitude_control"],
+        "forbidden": ["route_traversal_and_passage"],
         "max_selected": 3,
         "semantic_hint": _semantic_hint(
             intent="approach_or_standoff",
@@ -144,7 +142,7 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
     },
     "Retreat": {
         "expected_any": ["approach_and_standoff"],
-        "forbidden": ["route_traversal_and_passage", "vertical_landing_and_altitude_control"],
+        "forbidden": ["route_traversal_and_passage"],
         "max_selected": 2,
         "semantic_hint": _semantic_hint(
             intent="approach_or_standoff",
@@ -157,7 +155,6 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
         "expected_any": ["route_traversal_and_passage"],
         "forbidden": [
             "approach_and_standoff",
-            "vertical_landing_and_altitude_control",
             "orbit_and_surround",
         ],
         "max_selected": 3,
@@ -169,7 +166,7 @@ CLASS_EXPECTATIONS: dict[str, dict[str, Any]] = {
         ),
     },
     "Land": {
-        "expected_any": ["vertical_landing_and_altitude_control"],
+        "expected_any": ["approach_and_standoff"],
         "forbidden": ["route_traversal_and_passage", "orbit_and_surround"],
         "max_selected": 3,
         "semantic_hint": _semantic_hint(

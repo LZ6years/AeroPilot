@@ -1,6 +1,6 @@
 ---
 name: route_traversal_and_passage
-description: "Applicable needs: following routes, passing landmarks, crossing openings or conditional turns; Decision questions: judge route continuity, junction arrival, road ends and passage progress; Contents: successive views, measured translation, route nodes, turn conditions and recovery; Limits: does not independently prove object identity or precise target distance."
+description: "Applicable needs: route navigation, passing landmarks, crossing openings or conditional turns; Decision questions: which continuation matches the instruction, when a junction is reached, and whether a required passage occurred; Contents: route continuity, landmark order, before/after relations and turn triggers; Limits: use basic control for action scale, observation for unclear views and abnormal recovery for unexpected outcomes; does not establish precise target distance."
 summary: Select for through, past, between, passage, gap, corridor, opening, or explicit route-cue traversal tasks where route progress is the active concern.
 ---
 
@@ -8,47 +8,47 @@ summary: Select for through, past, between, passage, gap, corridor, opening, or 
 
 ## Application Boundary
 
-Use to pass through a gap, past, between or beyond route cues. A route cue
-is not necessarily a destination. Use approach reasoning for a target-relative
-terminal position.
+Use for route continuity, passing cues, gaps, junctions and conditional turns.
+A route cue is not necessarily the final stopping position.
 
 ## Evidence Model
 
-Combine meaningful translation with visual change. Cue absence alone is ambiguous: it neither proves completion nor
-requires renewed search. Yaw can inspect a route or change image bearing,
-but cannot place the UAV on a physical side or prove traversal.
+Combine translation and successive views. Yaw changes bearing, not physical side
+or passage. Seeing a junction is not reaching or entering it. Cue absence neither
+proves passage nor requires renewed search. A building ahead or hidden road does
+not prove a road end.
 
 ## Decision Procedure
 
-Choose the next observation point from route continuity, side relations and visible
-free space. Once a continuation is usable, translate through or past it rather than
-repeatedly centering. Compare the first useful route view with the latest view and
-accumulated translation. Reacquire when the route changes or conflicts with the
-expected continuation.
-An absent upcoming landmark alone does not invalidate a coherent route.
+1. Preserve instructed order and the next condition: follow, pass, reach, then turn.
+2. Match connected road edges, openings and side relations to that condition.
+   Seeing the junction leaves arrival unproven. Inspect lateral exits before an end;
+   use observation guidance for occlusion.
+3. Choose an observation point to check the condition. When the continuation is
+   usable, translate through or past it rather than repeatedly centering.
+4. Check arrival from opening geometry and translation before turning toward the
+   instructed continuation relative to current heading. If visibility is limited,
+   turn in stages and inspect each adjustment before entering. Confirm entry from
+   translation and aligned boundaries, not the turn alone. Unspecified turns have
+   no fixed angle; preserve explicit angles over guessed road alignment.
 
-Request [route examples](references/route_progress_examples.md) for complex
-side passages or disappearing cues.
+Worked example: for a right turn into an oblique road, reach its entrance and
+turn toward it without assuming 90 degrees. Inspect in stages if obscured;
+enter only with a supported connection and usable direction.
 
 ## Completion And Stop
 
-Seeing a route node is not reaching it or entering its continuation. A building
-or hidden road alone does not prove an end. Compare road edges, lateral exits and
-successive views. At the instructed node, turn toward the supported continuation;
-unspecified turns have no fixed angle. After turning or passing, compare the
-observed continuation with the required route relation. Conflicting evidence may
-reflect position, heading, occlusion or a wrong route interpretation; reassess
-before assuming which explanation is correct. Surface depth can help scale an
-approach but does not independently establish a junction, road end or route.
-
-Passage completion requires a terminal route relation. Meaningful translation
-with a cue moving sideways, rearward or beyond the blocking route supports it.
-Once established, consistent translation remains evidence after the cue leaves
-view unless reversal, blockage or conflict appears. Do not require every source,
-reacquisition, continued visibility, a final image side or an exact unseen boundary.
+Passage needs a supported terminal route relation: translation and a cue moving
+sideways, rearward or beyond the obstruction. Coherent movement remains evidence
+after the cue leaves view unless reversal or conflict appears. Do not demand
+continued visibility or an exact unseen boundary.
+Surface depth alone cannot establish a junction, end or route. Distinguish seeing,
+reaching and entering a junction. Passing an intermediate cue does not establish
+the final stopping relation.
 
 ## Recovery
 
-Compare earlier views with actual motion when cues conflict. Turn, rise, shift or
-translate to recover a useful route view according to the occlusion and route shape.
-Repeated yaw without new coverage does not replace translation progress.
+Preserve confirmed conditions while correcting unsupported interpretations.
+Use observation or abnormal recovery for hidden routes or lost orientation; repeated
+yaw is not passage. Load [route examples](references/route_progress_examples.md)
+for disappearing cues or complex side passages.

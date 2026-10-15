@@ -257,7 +257,7 @@
   {
     "instruction": "Descend 9 meters at a 15 degree angle and stop at the target altitude.",
     "expected_any": [
-      "vertical_landing_and_altitude_control"
+      "basic_flight_control"
     ],
     "forbidden": [
       "visual_target_task_reasoning"
@@ -267,7 +267,7 @@
   {
     "instruction": "Land 4 meters lower and hold steady.",
     "expected_any": [
-      "vertical_landing_and_altitude_control"
+      "approach_and_standoff"
     ],
     "forbidden": [],
     "max_selected": 2
@@ -275,7 +275,6 @@
   {
     "instruction": "Land near the tree on the left side.",
     "expected_any": [
-      "vertical_landing_and_altitude_control",
       "approach_and_standoff"
     ],
     "forbidden": [],
@@ -284,7 +283,7 @@
   {
     "instruction": "Land on the front side of the landmark.",
     "expected_any": [
-      "vertical_landing_and_altitude_control"
+      "approach_and_standoff"
     ],
     "forbidden": [
       "visual_target_task_reasoning"
@@ -294,7 +293,7 @@
   {
     "instruction": "Land on the right side of the target structure.",
     "expected_any": [
-      "vertical_landing_and_altitude_control"
+      "approach_and_standoff"
     ],
     "forbidden": [],
     "max_selected": 2
@@ -305,8 +304,7 @@
       "visual_target_task_reasoning"
     ],
     "forbidden": [
-      "route_traversal_and_passage",
-      "vertical_landing_and_altitude_control"
+      "route_traversal_and_passage"
     ],
     "forbidden_references": {
       "visual_target_task_reasoning": [
@@ -321,8 +319,7 @@
       "approach_and_standoff"
     ],
     "forbidden": [
-      "route_traversal_and_passage",
-      "vertical_landing_and_altitude_control"
+      "route_traversal_and_passage"
     ],
     "max_selected": 3
   },
@@ -332,8 +329,7 @@
       "route_traversal_and_passage"
     ],
     "forbidden": [
-      "approach_and_standoff",
-      "vertical_landing_and_altitude_control"
+      "approach_and_standoff"
     ],
     "max_selected": 2
   },
@@ -343,8 +339,7 @@
       "route_traversal_and_passage"
     ],
     "forbidden": [
-      "approach_and_standoff",
-      "vertical_landing_and_altitude_control"
+      "approach_and_standoff"
     ],
     "max_selected": 3
   },
@@ -354,15 +349,14 @@
       "route_traversal_and_passage"
     ],
     "forbidden": [
-      "approach_and_standoff",
-      "vertical_landing_and_altitude_control"
+      "approach_and_standoff"
     ],
     "max_selected": 3
   },
   {
     "instruction": "Land 4.0 meters",
     "expected_any": [
-      "vertical_landing_and_altitude_control"
+      "approach_and_standoff"
     ],
     "forbidden": [
       "route_traversal_and_passage",
@@ -373,7 +367,7 @@
   {
     "instruction": "Land on the right side of the sunshade",
     "expected_any": [
-      "vertical_landing_and_altitude_control"
+      "approach_and_standoff"
     ],
     "forbidden": [
       "route_traversal_and_passage"
@@ -383,7 +377,7 @@
   {
     "instruction": "Land on the front side of the sun umbrella",
     "expected_any": [
-      "vertical_landing_and_altitude_control"
+      "approach_and_standoff"
     ],
     "forbidden": [
       "route_traversal_and_passage"
@@ -393,7 +387,7 @@
   {
     "instruction": "Descend 9.0 meters at 15 degrees",
     "expected_any": [
-      "vertical_landing_and_altitude_control"
+      "basic_flight_control"
     ],
     "forbidden": [
       "visual_target_task_reasoning",
@@ -404,7 +398,7 @@
   {
     "instruction": "Descend 9.0 meters at 30 degrees",
     "expected_any": [
-      "vertical_landing_and_altitude_control"
+      "basic_flight_control"
     ],
     "forbidden": [
       "visual_target_task_reasoning",
@@ -417,8 +411,7 @@
     "expected_any": [],
     "forbidden": [
       "route_traversal_and_passage",
-      "visual_target_task_reasoning",
-      "vertical_landing_and_altitude_control"
+      "visual_target_task_reasoning"
     ],
     "max_selected": 1
   },
@@ -439,7 +432,6 @@
       "orbit_and_surround"
     ],
     "forbidden": [
-      "vertical_landing_and_altitude_control",
       "route_traversal_and_passage"
     ],
     "max_selected": 2

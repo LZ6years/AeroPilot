@@ -116,10 +116,10 @@ def test_orbit_skill_stays_compact_and_action_oriented():
 
     assert "yaw alone is not orbit progress" in normalized
     assert "lateral or tangential translation" in normalized
-    assert "brief radial repair without replacing circulation" in normalized
-    assert "stop orbit movement" in normalized
-    assert "repeated radial corrections" in normalized
-    assert "choose a different circulation viewpoint" in normalized
+    assert "radial repair supports but does not replace circulation" in normalized
+    assert "stop when actual translation" in normalized
+    assert "repeated radial repairs" in normalized
+    assert "choose a different supported viewpoint" in normalized
     assert "Estimate radius" not in skill
     forbidden_internal_terms = [
         "phase_progress_evidence",
@@ -137,8 +137,7 @@ def test_visual_target_guidance_preserves_reference_frames_without_action_policy
     skill = (root / "SKILL.md").read_text(encoding="utf-8")
     search = (root / "references/search_under_uncertainty.md").read_text(encoding="utf-8")
 
-    assert "remains tied to that frame rather than the current heading" in skill
-    assert "does not prescribe a later motion sequence" in skill
+    assert "do not become body-relative or prescribe a sequence" in skill
     assert "not a prescribed\n  motion sequence" in search
     assert "relevant area not yet covered" in search
 
@@ -155,7 +154,7 @@ def test_tool_user_is_generic_and_task_prompt_preserves_roles_and_active_viewpoi
     assert "runtime.update_plan" not in prompt and "knowledge.load" in prompt
     assert "CURRENT" in prompt and "HISTORY" in prompt
     assert "Use CURRENT RGB to discover and identify candidates" in prompt
-    assert "depth capability measures a selected visible candidate" in prompt
+    assert "depth capability attempts measurements for matching visible candidates" in prompt
     assert "status `collision`" in prompt
     assert "recoverable environment outcome" in prompt
     assert "replan" in prompt
@@ -165,6 +164,9 @@ def test_tool_user_is_generic_and_task_prompt_preserves_roles_and_active_viewpoi
     assert "unknown tool" not in prompt.lower()
     assert "Past intent, plans and guidance" in prompt
     assert "Plans and knowledge organize decisions" in prompt
+    assert "Plan statuses" in prompt and "not environmental proof" in prompt
+    assert "CONTEXT IMAGE" in prompt and "model-authored place labels" in prompt
+    assert "valid citations do not" in prompt and "subsequent corrections" in prompt
     assert "maximum permissions, not defaults" in prompt
     assert "first choose the next observation position and intended travel distance" in prompt
     assert "actual displacement and visual change" in prompt
@@ -177,7 +179,7 @@ def test_tool_user_is_generic_and_task_prompt_preserves_roles_and_active_viewpoi
     ):
         assert biased_phrase not in (prompt + tool_user).lower()
     assert "required inputs" in tool_user and "execution attributes" in tool_user
-    assert "one to three ordered physical" in tool_user
+    assert "exactly one physical call" in tool_user
     for retired in ("commit_phase_turn", "phase_strategy", "completion_assessment", "done_when"):
         assert retired not in prompt
 
@@ -189,14 +191,14 @@ def test_runtime_boundaries_document_the_single_loop():
     assert "report-reading boundary" in guide
 
 
-def test_descriptions_keep_capability_boundaries_without_forced_planning_or_early_blocking():
+def test_descriptions_own_plan_applicability_and_keep_capability_boundaries():
     from src.plugins import PluginRegistry
     from src.tools.registry import default_registry
     registry = default_registry(PluginRegistry.from_config())
     plan = registry.get("runtime.update_plan").description
     assert "optional execution plan" in plan
-    assert "long or difficult route" in plan
     assert "multiple ordered stages" in plan
+    assert "before the first physical action" not in plan
     assert "completed progress" in plan and "next intended objective" in plan
     assert "stable step IDs" in plan and "revision" in plan
     assert "does not execute actions" in plan
@@ -217,7 +219,7 @@ def test_descriptions_keep_capability_boundaries_without_forced_planning_or_earl
     assert "inconsistent_depth_surfaces" in ground["description"]
     assert "no measurement was produced" in ground["description"]
     assert "metric_depth_unavailable" in ground["description"]
-    assert "candidate selected from CURRENT RGB" in ground["parameters"]["properties"]["query"]["description"]
+    assert "Spatial words are not enforced region constraints" in ground["parameters"]["properties"]["query"]["description"]
     assert "x-flyagent-completion-evidence" not in str(ground)
 
 
@@ -227,8 +229,8 @@ def test_visual_target_knowledge_keeps_discovery_in_current_visual_evidence():
     ).read_text(encoding="utf-8")
     normalized = " ".join(skill.split())
 
-    assert "Discover and identify candidates from CURRENT RGB" in normalized
-    assert "surface depth measures a selected visible candidate" in normalized
+    assert "Discover candidates from current RGB" in normalized
+    assert "Surface depth measures a matched visible candidate" in normalized
 
 
 def test_model_facing_guidance_removes_retired_conservative_pressure():

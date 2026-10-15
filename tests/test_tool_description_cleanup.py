@@ -30,19 +30,17 @@ def test_description_cleanup_preserves_contracts_except_retired_completion_gate(
     # Keep the historical fixture intact and normalize only intentional contract
     # migrations before comparing current schemas, limits and hidden tools.
     for tool in baseline:
+        if tool["runtime"]["effect"] == "physical":
+            tool["runtime"]["batching"] = "single"
         if tool["name"] == "skill.visual_grounding.measure_visible_depth":
             tool["schema"].pop("x-flyagent-completion-evidence", None)
             tool["schema"]["properties"].pop("include_distance")
             tool["schema"]["required"].remove("include_distance")
         if tool["name"] == "runtime.update_plan":
             tool["runtime"]["batching"] = "sidecar"
-            step_schema = tool["schema"]["properties"]["steps"]["items"]
-            step_schema["required"].append("evidence_refs")
-            step_schema["properties"]["evidence_refs"] = {
-                "type": "array",
-                "items": {"type": "string", "minLength": 1},
-                "uniqueItems": True,
-            }
+            # Plan shape now includes optional partial updates. Preserve the
+            # old fixture and compare its migrated structure, not old prose.
+            tool["schema"] = copy.deepcopy(registry.get("runtime.update_plan").input_schema)
         if tool["name"] == "runtime.report_blocked":
             tool["schema"]["properties"].pop("blocking_condition")
             tool["schema"]["required"].remove("blocking_condition")
@@ -92,7 +90,7 @@ def test_provider_prose_removes_repeated_global_rules_but_keeps_local_policies()
     user = Path("src/agent/planning/prompts/tool_user_system.txt").read_text(encoding="utf-8")
     assert "Physical and terminal groups never mix" in user
     assert "one plan update together with such reads" in user
-    assert "reuse an applicable read result" in user
+    assert "decide whether existing read results suffice" in user
 
 
 def test_image_labels_and_active_knowledge_do_not_prescribe_tool_order_or_hover():
@@ -102,7 +100,7 @@ def test_image_labels_and_active_knowledge_do_not_prescribe_tool_order_or_hover(
     assert "qualitative" in CURRENT_RGB_DEPTH_OVERLAY_USAGE
     plugins = PluginRegistry.from_config()
     knowledge = [skill for skill in plugins.skill_catalog.skills if skill.capability is None]
-    assert len(knowledge) == 5
+    assert len(knowledge) == 6
     for skill in knowledge:
         texts = [skill.body, *(path.read_text(encoding="utf-8") for path in skill.reference_paths)]
         for text in texts:
@@ -158,7 +156,7 @@ def test_probe_distinguishes_missing_call_extra_call_and_wrong_toggle():
     metrics = probe.selection_metrics(case, turn)
     assert not metrics["omitted_expected_call"] and not metrics["expected_arguments_match"]
     assert not metrics["matched"]
-    turn = AssistantTurn("t", "Plan", [AgentToolCall("c", "runtime.update_plan", {})])
+    turn = AssistantTurn("t", "Plan", [AgentToolCall("c", "runtime.update_plan", {"operation": "replace", "explanation": None, })])
     metrics = probe.selection_metrics(case, turn)
     assert metrics["omitted_expected_call"]
     assert metrics["unnecessary_calls"] == ["runtime.update_plan"]

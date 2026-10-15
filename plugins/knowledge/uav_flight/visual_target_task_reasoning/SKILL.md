@@ -1,49 +1,52 @@
 ---
 name: visual_target_task_reasoning
-description: "Applicable needs: finding, identifying or facing a visual target; Decision questions: choose search direction, disambiguate candidates and decide when visibility is adequate; Contents: directional cues, viewpoint changes, candidate confirmation and alignment; Limits: does not establish passage, metric range or arrival."
-summary: Select for visual target search, confirmation, facing, centering, observation, or attention tasks.
+description: "Applicable needs: checking landmark identity or choosing an observation position for unclear, occluded or competing views; Decision questions: which candidate fits the surroundings and spatial relations, and which move can reveal missing information; Contents: identity checks, historical view comparison, ascent/descent, backing, lateral parallax and bearing inspection; Limits: similar appearance is only a candidate; a better view does not establish metric range, passage or arrival."
+summary: Select for Observation and situational awareness; select when identity, visibility, occlusion or viewpoint is the active question.
 ---
 
-# Visual Target Task Reasoning
+# Observation And Situational Awareness
 
 ## Application Boundary
 
-Use for search, identification, facing and inspection. Facing needs identity and
-bearing; inspection needs detail. Alignment does not establish passage or arrival.
+Use for identity, search, facing or an unclear view. Basic control handles scale;
+abnormal recovery handles lost orientation.
 
 ## Evidence Model
 
-Distinguish a candidate outside the current view, a tentative candidate, a directional
-cue and an identifiable target. Choose viewpoints that separate competing identities.
-Discover and identify candidates from CURRENT RGB; surface depth measures a selected
-visible candidate. Current bearing supports alignment, and metric claims use matching
-geometry.
+Distinguish an outside-view cue, tentative candidate and identifiable target.
+Discover candidates from current RGB. Similar appearance is only a candidate;
+check attributes, nearby landmarks and position relations before accepting identity.
+Surface depth measures a matched visible candidate, not its identity or arrival.
+Use historical views and actual motion to interpret disappearance.
+Turning reveals bearings; translation provides parallax. Ascent may expose an
+occluded region; descent or backing may reveal low detail. These changes move a
+fixed camera's viewpoint, not its pitch, and do not guarantee clearance.
 
 ## Decision Procedure
 
-1. Choose a viewpoint that expands useful coverage. Turning changes bearing;
-   translation, ascent or lateral movement can reveal areas hidden from a stationary
-   view. See [search guidance](references/search_under_uncertainty.md).
-2. Interpret directional cues in their stated reference frame. A direction anchored
-   to the starting heading remains tied to that frame rather than the current heading,
-   but does not prescribe a later motion sequence. Choose the next viewpoint from
-   current coverage, scene cues and accumulated measured motion.
-3. Investigate when a new view can resolve identity. Approach, shift, clear an
-   occlusion or turn according to the viewpoint needed. Inspection and arrival remain
-   separate outcomes.
-4. For facing, correct when clipping, imminent loss or ambiguity prevents usable
-   bearing. Do not correct merely for lateral offset or alternate around an already
-   usable bearing. Preserve explicit angles; otherwise scale turns to visual purpose.
+1. Name missing information: identity, hidden route exit, low detail, clipped
+   bearing or competing candidates. Respect the direction cue's stated frame;
+   starting-heading cues do not become body-relative or prescribe a sequence.
+2. Choose a test: rise to expose a foreground-hidden region, descend/back for low detail,
+   shift sideways for parallax, or turn for another bearing. Preserve instructed
+   constraints and use available clearance. Predict what should become visible.
+3. Perform one action, inspect the resulting view and check that predicted change.
+   If it fails, revise the occlusion explanation instead of repeating the move.
+4. For facing, correct clipping or ambiguous bearing; usable offset is acceptable
+   unless exact centering is requested. Identity and arrival remain separate.
+
+Worked example: a canopy hides the road. A short rise may reveal it where clearance
+permits. If the same canopy still dominates, backing or sideways parallax tests
+a different geometry. Do not assume that another identical rise will help.
 
 ## Completion And Stop
 
-For facing, an identifiable forward cue with usable bearing suffices. Moderate
-left or right offset is explicitly acceptable; exact centering needs an explicit
-request. Identification alone does not require approach; judge any separate
-movement relation independently.
+Stop when the needed information is usable. An identifiable forward cue with
+usable bearing can satisfy facing.
 
 ## Recovery
 
-Contradicted attributes can exclude a candidate and reopen search. If no detail
-appears, compare actual motion, viewpoint and occlusion, then choose a pattern that
-adds different coverage. Temporary occlusion need not invalidate identity.
+Contradicted attributes reopen identification; temporary occlusion need not.
+Seek different useful coverage when no detail appears. Use abnormal recovery for
+unusable views, and optional [search](references/search_under_uncertainty.md) or
+[viewpoint examples](references/viewpoint_examples.md) for longer investigations.

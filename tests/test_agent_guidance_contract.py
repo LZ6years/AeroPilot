@@ -61,3 +61,17 @@ def test_revised_guidance_keeps_feedback_resident_and_knowledge_on_demand():
     assert "When provided, CONTEXT IMAGE" in prompt
     assert not any(message["role"] == "tool" for message in result["messages"])
     assert all("Worked example:" not in str(message["content"]) for message in result["messages"])
+
+
+def test_public_intent_and_generic_path_examples_live_in_owning_layers():
+    root = Path(__file__).resolve().parents[1]
+    prompt = (root / "src/agent/planning/prompts/agent_tool_loop_system.txt").read_text(encoding="utf-8")
+    assert "one concise public intent with each" in prompt
+    assert "whole movement path" in prompt
+    base = root / "plugins/knowledge/uav_flight"
+    basic = (base / "basic_flight_control/SKILL.md").read_text(encoding="utf-8")
+    route = (base / "route_traversal_and_passage/SKILL.md").read_text(encoding="utf-8")
+    assert "intersects the facade" in basic
+    assert "Worked example:" in route
+    reference = (base / "route_traversal_and_passage/references/route_progress_examples.md").read_text(encoding="utf-8")
+    assert "turn once" not in reference
