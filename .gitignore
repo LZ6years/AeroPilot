@@ -29,6 +29,7 @@ data/rec_videos/
 .external_refs/
 outputs/
 **manual_outputs/
+tests/diagnostics/artifacts/
 tmp/
 
 # Local visual/demo artifacts
