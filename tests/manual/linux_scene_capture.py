@@ -12,7 +12,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from evaluation.benchmarks.core.campaign.parallel import REMOTE_GPU_INSPECTION, read_json
+from evaluation.benchmarks.core.campaign.parallel import REMOTE_GPU_INSPECTION, read_json, gpu_violation
 from evaluation.benchmarks.core.campaign.support import environment_diagnostics
 from evaluation.benchmarks.core.report_io import write_json
 from evaluation.benchmarks.core.supervision import cleanup_verified
@@ -27,7 +27,9 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--maps', type=Path, required=True)
     parser.add_argument('--gpu', type=int, required=True)
+    parser.add_argument('--execution-config', type=Path)
     args = parser.parse_args()
+    limits = read_json(args.execution_config).get('graphics_context_limits_mib', {}) if args.execution_config else {}
     import airsim
     packages, policy = load_map_config(args.maps)
     args.output.mkdir(parents=True, exist_ok=True)
@@ -45,7 +47,7 @@ def main():
             sample = json.loads(subprocess.run([sys.executable, '-c', REMOTE_GPU_INSPECTION,
                 json.dumps([{'pid': scene.process_id}])], capture_output=True, text=True, check=True, timeout=15).stdout)
             record['gpu'] = sample
-            if sample['owned'][0]['observed_gpus'] != [args.gpu]:
+            if args.gpu not in sample['owned'][0]['observed_gpus'] or gpu_violation(sample, [args.gpu], limits):
                 raise RuntimeError('UE rendering GPU does not match authorized physical card')
             client = airsim.VehicleClient(ip='127.0.0.1', port=scene.control_port, timeout_value=30)
             record['vehicles'] = client.listVehicles()
@@ -71,7 +73,8 @@ def main():
             results.append(record)
             write_json(args.output / 'capture_validation.json', {
                 'passed': all(r['passed'] for r in results) and len(results) == len(packages),
-                'map_sha256': hashlib.sha256(args.maps.read_bytes()).hexdigest(), 'scenes': results})
+                'map_sha256': hashlib.sha256(args.maps.read_bytes()).hexdigest(),
+                'graphics_context_limits_mib': limits, 'scenes': results})
             print(json.dumps({key: record[key] for key in ('scene_id', 'passed', 'total_seconds')}, ensure_ascii=False), flush=True)
         if not record['passed']:
             return 1

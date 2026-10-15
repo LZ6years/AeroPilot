@@ -49,7 +49,9 @@ for index,gpu in enumerate(ET.fromstring(result.stdout).findall('gpu')):
   pid=int(process.findtext('pid'))
   try: group=os.getpgid(pid)
   except ProcessLookupError: continue
-  processes.append({'pid':pid,'pgid':group,'type':process.findtext('type'),'name':process.findtext('process_name')})
+  memory=process.findtext('used_memory','N/A').split()[0]
+  processes.append({'pid':pid,'pgid':group,'type':process.findtext('type'),'name':process.findtext('process_name'),
+                    'memory_mib':int(memory) if memory.isdigit() else None})
  gpus.append({'index':index,'name':gpu.findtext('product_name'),'uuid':gpu.findtext('uuid'),
               'memory_used':gpu.findtext('fb_memory_usage/used'),'processes':processes})
 owned=[]
@@ -365,7 +367,7 @@ def kill_owned(owner):
 def execution_settings(manifest):
     """Explicit deployment policy; absent policy preserves the legacy SSH lanes."""
     value = {"mode": "remote", "gpu_indices": [0, 2], "gpu_uuids": {},
-             "require_cuda": True, "report_profile": "paper_process"}
+             "require_cuda": True, "report_profile": "paper_process", "graphics_context_limits_mib": {}}
     value.update(manifest.get("execution") or {})
     indices = value["gpu_indices"]
     if value["mode"] not in {"local", "remote"} or not isinstance(indices, list) or not 1 <= len(indices) <= 2:
@@ -374,6 +376,9 @@ def execution_settings(manifest):
         raise ValueError("GPU indices must be unique nonnegative integers")
     if value["mode"] == "local" and len(indices) != 1:
         raise ValueError("Linux local campaign requires one isolated worker")
+    for index, limit in value['graphics_context_limits_mib'].items():
+        if not str(index).isdigit() or int(index) in indices or type(limit) is not int or limit <= 0:
+            raise ValueError('Invalid auxiliary graphics context limit')
     return value
 
 
@@ -420,9 +425,25 @@ def discover_gpu_bindings(map_config_path, execution=None):
     return bindings
 
 
-def gpu_violation(sample, allowed=(0, 2)):
-    """Any owned process on an unauthorized GPU stops new dispatch immediately."""
-    return any(set(item.get("observed_gpus", [])) - set(allowed) for item in sample.get("owned", []))
+def gpu_violation(sample, allowed=(0, 2), graphics_limits=None):
+    """Allow only explicitly bounded G contexts outside the rendering cards.
+
+    Missing memory/type evidence fails closed. Compute contexts are never
+    accepted on an auxiliary card, even when their allocation is small.
+    """
+    graphics_limits = graphics_limits or {}
+    for item in sample.get('owned', []):
+        for index in set(item.get('observed_gpus', [])) - set(allowed):
+            limit = graphics_limits.get(str(index))
+            if limit is None:
+                return True
+            gpu = next((g for g in sample.get('gpus', []) if g['index'] == index), {})
+            processes = [p for p in gpu.get('processes', []) if p['pgid'] == item.get('pid')]
+            if not processes or any(p.get('type') != 'G' or type(p.get('memory_mib')) is not int for p in processes):
+                return True
+            if sum(p['memory_mib'] for p in processes) > limit:
+                return True
+    return False
 
 
 def local_gpu_idle(execution):
@@ -1074,9 +1095,9 @@ def validate_trial(output, queue, tasks, snapshots, *, gpu_samples=None, workers
             # SDL can retain a graphics context on the display's GPU 0 while
             # Vulkan renders on GPU 2. Both are authorized; GPU 1 never is.
             if not any(item["lane"] == lane and gpu in item["observed_gpus"]
-                       and not set(item["observed_gpus"]) - set(allowed) for item in observations):
+                       for item in observations):
                 errors.append("remote_gpu_unverified:" + lane)
-        if any(set(item["observed_gpus"]) - set(allowed) for item in observations):
+        if any(gpu_violation(sample, allowed, execution_settings({'execution': execution})['graphics_context_limits_mib']) for sample in gpu_samples):
             errors.append("forbidden_remote_gpu")
     return {"passed": not errors, "errors": errors, "episodes": len(tasks),
             "image_references": images, "model_snapshot": snapshots[-1] if snapshots else {},
@@ -1231,7 +1252,8 @@ def run_controller(args):
         install_report_readers(overlay, manifest)
         if execution_settings(manifest)['mode'] == 'local':
             capture = read_json(output / 'capture/capture_validation.json')
-            if not capture.get('passed') or capture.get('map_sha256') != overlay['lanes']['A']['sha256']:
+            if (not capture.get('passed') or capture.get('map_sha256') != overlay['lanes']['A']['sha256']
+                    or capture.get('graphics_context_limits_mib', {}) != execution_settings(manifest)['graphics_context_limits_mib']):
                 raise RuntimeError('Verified RGB/depth/GPU capture for the frozen local maps is required')
         if discover_gpu_bindings(primary_config(manifest)["map_config_path"], manifest.get("execution")) != overlay["remote_gpu_bindings"]:
             raise RuntimeError("Remote GPU UUID or Vulkan mapping changed since freeze")
@@ -1389,7 +1411,7 @@ def run_controller(args):
                             gpu_samples.append(sample)
                             write_json(output / "parallel/gpu_samples.json",
                                        {"samples": gpu_samples[-20:] if gate else gpu_samples})
-                            if gpu_violation(sample, execution_settings(manifest)["gpu_indices"]):
+                            if gpu_violation(sample, execution_settings(manifest)["gpu_indices"], execution_settings(manifest)['graphics_context_limits_mib']):
                                 fatal = "unauthorized_remote_gpu"
                                 write_json(output / "parallel/gpu_violation.json", sample)
                     except Exception as exc:

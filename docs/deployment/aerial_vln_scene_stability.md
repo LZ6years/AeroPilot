@@ -24,11 +24,15 @@ $PY tests/manual/linux_local_preflight.py --config "$OUT/inputs/val_seen.json" -
 
 ```bash
 $PY -m evaluation.benchmarks.core.campaign.parallel bind --output "$OUT"
-$PY tests/manual/linux_scene_capture.py --output "$OUT/capture" --maps "$OUT/parallel/maps_A.json" --gpu 3
+$PY tests/manual/linux_scene_capture.py --output "$OUT/capture" --maps "$OUT/parallel/maps_A.json" --gpu 3 --execution-config evaluation/benchmarks/aerial_vln/configs/linux_local_stability_execution.example.json
 tmux new-session -d -s aerialvln-stability "$PY -m evaluation.benchmarks.core.campaign.parallel watch --output $OUT --workers 1 >$OUT/watch.log 2>&1"
 ```
 
 控制器核对实际 RGB/深度/GPU 探测通过记录和地图配置哈希，没有通过记录不能派发导航。
+
+本次获准允许 GPU 0 上附带的少量 G 类型图形上下文，合计显存上限为 16 MiB；
+主渲染仍固定物理 GPU 3。缺失显存证据、出现 C/C+G 类型或超限均暂停派发。
+该例外由 execution 配置显式声明，其他运行默认不允许额外 GPU。
 
 必须先验证实际 GPU UUID、Vulkan 枚举、空闲资源，以及数据与全部场景脚本。
 示例 UUID 属于本次服务器，不能直接用于另一台机器。缺少 PyTorch 如实记录；像素测深与地点地图不要求 CUDA 模型。

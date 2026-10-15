@@ -12,6 +12,15 @@ from evaluation.benchmarks.core.campaign.local_execution import cleanup_local, o
 from src.sim_server.process_manager import ProcessManager
 
 
+@pytest.mark.parametrize('kind,memory,violation', [('G', 6, False), ('G', 16, False),
+    ('G', 17, True), ('C+G', 6, True), ('C', 1, True), ('G', None, True)])
+def test_auxiliary_gpu_exception_requires_bounded_graphics_evidence(kind, memory, violation):
+    sample = {'owned': [{'pid': 123, 'observed_gpus': [0, 3]}],
+              'gpus': [{'index': 0, 'processes': [{'pgid': 123, 'type': kind, 'memory_mib': memory}]}]}
+    assert gpu_violation(sample, [3], {'0': 16}) is violation
+    assert gpu_violation(sample, [3])
+
+
 def test_selection_is_distinct_and_deterministic():
     from evaluation.benchmarks.aerial_vln.scene_stability import select_scene_episodes
     rows = [{'scene_id': s, 'episode_id': e} for s, e in [(10, 'c'), (2, 'b'), (10, 'a'), (2, 'a'), (10, 'b')]]
