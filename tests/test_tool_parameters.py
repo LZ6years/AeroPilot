@@ -107,3 +107,19 @@ def test_parameter_names_cannot_be_duplicated():
         ToolSpec("test", "test", "test", "Test.",
                  (ToolParameter("x"), ToolParameter("x")),
                  ToolRuntimePolicy("read_only", "immediate", "single"))
+
+
+def test_movement_velocity_parameters_declare_units():
+    properties = default_registry().get("uav.move_body").input_schema["properties"]
+    for name in ("vx", "vy", "vz"):
+        assert "m/s" in properties[name]["description"]
+
+
+def test_visible_depth_schema_accepts_current_arguments_and_rejects_retired_toggle():
+    from src.plugins import PluginRegistry
+    spec = default_registry(PluginRegistry.from_config()).get("skill.visual_grounding.measure_visible_depth")
+    assert set(spec.input_schema["properties"]) == {"observation_id", "query"}
+    args = {"observation_id": "obs_1", "query": "visible roof"}
+    validate_tool_args(args, spec.input_schema)
+    with pytest.raises(ToolArgumentError):
+        validate_tool_args({**args, "include_distance": True}, spec.input_schema)

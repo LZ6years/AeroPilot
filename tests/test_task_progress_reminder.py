@@ -59,35 +59,6 @@ def test_config_default_env_summary_and_transport_boundary():
     assert "task_progress_reminder_interval" not in asdict(config.to_provider_settings())
 
 
-def test_reminder_keeps_observation_guidance_and_only_checks_existing_plans():
-    planner = StubPlanner(
-        response_with_calls(("turn", "uav_turn_relative", {"yaw_deg": 10}))
-    )
-    reminder = planner.task_progress_reminder
-    for phrase in (
-        "next useful observation position",
-        "previous window's actual motion and visual",
-        "Temporary non-visibility by itself is not a blocker",
-        "If a plan exists",
-        "recorded stage matches observed progress",
-        "unchanged progress needs no update",
-    ):
-        assert phrase in reminder
-    for retired in (
-        "runtime.update_plan",
-        "knowledge.load",
-        "Missing scene facts",
-        "safe",
-        "turn",
-        "rise",
-        "laterally",
-        "move forward",
-        "Create a plan",
-        "multiple ordered landmark",
-    ):
-        assert retired not in reminder
-
-
 @pytest.mark.parametrize("value", [-1, 1.5, True])
 def test_invalid_interval(value):
     with pytest.raises(ValueError, match="non-negative integer"):

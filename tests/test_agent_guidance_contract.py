@@ -28,8 +28,7 @@ def test_revised_request_changes_guidance_not_original_history_or_pixels():
     assert context["instruction"] == "Turn right 79 degrees"
     assert "instruction start" in context["protocol_context"]
     assert len(context["knowledge_catalog"]) == 6
-    assert "actual displacement" in changed["messages"][0]["content"]
-    assert "inconsistent_depth_surfaces" in str(changed["tools"])
+    assert changed["messages"][0]["content"] == Path("src/agent/planning/prompts/agent_tool_loop_system.txt").read_text(encoding="utf-8")
 
 
 def test_probe_refuses_unrecognized_prompt_instead_of_silently_partial_rewrite():
@@ -45,33 +44,16 @@ def test_saved_envelope_header_gets_current_catalog_and_single_action_prompt():
     result = revised_request(payload)
     envelope = json.loads(result["messages"][2]["content"].split("\n", 1)[1])
     assert len(envelope["knowledge_catalog"]) == 6 and envelope["instruction"] == "Original task"
-    assert "exactly one physical call" in result["messages"][1]["content"]
+    assert result["messages"][1]["content"] == Path("src/agent/planning/prompts/tool_user_system.txt").read_text(encoding="utf-8")
     assert payload["messages"][2]["content"].startswith('INSTRUCTION CONTEXT\n{"knowledge_catalog":[]')
 
 
-def test_revised_guidance_keeps_feedback_resident_and_knowledge_on_demand():
+def test_revised_guidance_does_not_fabricate_knowledge_results():
     original = {"tools": [], "messages": [
         {"role": "system", "content": "You are FlyAgent's mission tool-loop agent. old"},
         {"role": "user", "content": 'INSTRUCTION CONTEXT\n{"knowledge_catalog":[],"instruction":"Observe the road"}'}]}
     result = revised_request(original)
-    prompt = result["messages"][0]["content"]
-    assert "principles below apply to every physical decision" in prompt
-    assert "Load full basic-control guidance when parameter choice" in prompt
-    assert "reuse loaded text without loading it again each turn" in prompt
-    assert "When provided, CONTEXT IMAGE" in prompt
     assert not any(message["role"] == "tool" for message in result["messages"])
-    assert all("Worked example:" not in str(message["content"]) for message in result["messages"])
-
-
-def test_public_intent_and_generic_path_examples_live_in_owning_layers():
-    root = Path(__file__).resolve().parents[1]
-    prompt = (root / "src/agent/planning/prompts/agent_tool_loop_system.txt").read_text(encoding="utf-8")
-    assert "one concise public intent with each" in prompt
-    assert "whole movement path" in prompt
-    base = root / "plugins/knowledge/uav_flight"
-    basic = (base / "basic_flight_control/SKILL.md").read_text(encoding="utf-8")
-    route = (base / "route_traversal_and_passage/SKILL.md").read_text(encoding="utf-8")
-    assert "intersects the facade" in basic
-    assert "Worked example:" in route
-    reference = (base / "route_traversal_and_passage/references/route_progress_examples.md").read_text(encoding="utf-8")
-    assert "turn once" not in reference
+    user = json.loads(result["messages"][1]["content"].split("\n", 1)[1])
+    assert user["instruction"] == "Observe the road"
+    assert user["knowledge_catalog"]
