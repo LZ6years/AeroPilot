@@ -1115,6 +1115,25 @@ def remote_gpu_sample(manifest, output, active, overlay):
     return {**json.loads(response), "checked_at": utc_now()}
 
 
+def retain_gpu_samples(samples, *, workers=2, execution=None):
+    """Keep each lane's measured GPU proof alongside the latest twenty samples.
+
+    A controller revision revalidates the completed technical trial. Keeping
+    only a rolling tail can lose a lane that finished earlier, even though its
+    original binding was verified. Retain existing observations unchanged;
+    missing GPU proof remains missing and cannot be inferred from config.
+    """
+    keep = set(range(max(0, len(samples) - 20), len(samples)))
+    allowed = execution_settings({"execution": execution})["gpu_indices"]
+    for lane, gpu in list(zip(execution_lanes(execution), allowed))[:workers]:
+        for index, sample in enumerate(samples):
+            if any(item.get("lane") == lane and gpu in item.get("observed_gpus", [])
+                   for item in sample.get("owned", [])):
+                keep.add(index)
+                break
+    return [sample for index, sample in enumerate(samples) if index in keep]
+
+
 def validate_trial(output, queue, tasks, snapshots, *, gpu_samples=None, workers=2, execution=None):
     errors, images = [], 0
     for task in tasks:
@@ -1492,8 +1511,11 @@ def run_controller(args):
                         sample = remote_gpu_sample(manifest, output, active, overlay)
                         if sample:
                             gpu_samples.append(sample)
+                            if gate:
+                                gpu_samples = retain_gpu_samples(gpu_samples, workers=args.workers,
+                                                                execution=manifest.get("execution"))
                             write_json(output / "parallel/gpu_samples.json",
-                                       {"samples": gpu_samples[-20:] if gate else gpu_samples})
+                                       {"samples": gpu_samples})
                             if gpu_violation(sample, execution_settings(manifest)["gpu_indices"], execution_settings(manifest)['graphics_context_limits_mib']):
                                 fatal = "unauthorized_remote_gpu"
                                 write_json(output / "parallel/gpu_violation.json", sample)

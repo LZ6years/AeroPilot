@@ -37,6 +37,30 @@ def test_busy_shared_card_does_not_block_other_pinned_cards(monkeypatch):
     assert [parallel.local_gpu_idle(policy, lane) for lane in parallel.execution_lanes(policy)] == [True, False, True]
 
 
+@pytest.mark.parametrize('indices', [[2], [0, 2], [1, 2, 3]])
+def test_gpu_checkpoint_keeps_early_lane_proofs_through_repeated_truncation(indices):
+    policy = dict(mode='local', gpu_indices=indices)
+    samples = [dict(id=lane, owned=[dict(lane=lane, observed_gpus=[gpu])])
+               for lane, gpu in zip(parallel.execution_lanes(policy), indices)]
+    original = deepcopy(samples)
+    for index in range(80):
+        samples.append(dict(id=index, owned=[dict(lane='A', observed_gpus=[indices[0]])]))
+        samples = parallel.retain_gpu_samples(samples, workers=len(indices), execution=policy)
+    assert samples[:len(indices)] == original
+    assert [sample['id'] for sample in samples[-20:]] == list(range(60, 80))
+    assert len(samples) <= 20 + len(indices)
+    assert len({sample['id'] for sample in samples}) == len(samples)
+
+
+def test_gpu_checkpoint_never_fabricates_missing_lane_proof_or_mutates_samples():
+    samples = [dict(id=0, owned=[dict(lane='B', observed_gpus=[1])])]
+    samples.extend(dict(id=index, owned=[]) for index in range(1, 30))
+    original = deepcopy(samples)
+    kept = parallel.retain_gpu_samples(samples, workers=3, execution=dict(mode='local', gpu_indices=[1, 2, 3]))
+    assert samples == original and kept == samples[-20:]
+    assert parallel.retain_gpu_samples([], workers=1, execution=dict(mode='local', gpu_indices=[2])) == []
+
+
 def test_discovery_and_capture_require_all_three_lanes(monkeypatch, tmp_path):
     policy = dict(mode='local', gpu_indices=[1, 2, 3],
                   gpu_uuids={str(i): gpu_binding(i)['uuid'] for i in (1, 2, 3)})
