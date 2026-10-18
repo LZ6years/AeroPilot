@@ -30,6 +30,21 @@ def scene_control_timeout(error):
             and error.get("error") == "AirSim freeze failed: Request timed out")
 
 
+def scene_motion_discontinuity(error):
+    """Recognize a poisoned action window that can only restart in a new scene.
+
+    The action adapter still forbids further control in the damaged scene.
+    Campaign cleanup proves that scene has been destroyed before this error
+    becomes eligible for another bounded episode attempt. Match only the
+    adapter's exact diagnostics; arbitrary reset requests remain operator-only.
+    """
+    return (error.get("error_type") == "SceneRecoveryRequired"
+            and error.get("error") in {
+                "AirSim paused Multirotor move_body failed: motion_discontinuity",
+                "AirSim paused Multirotor turn_relative failed: motion_discontinuity",
+            })
+
+
 
 class RecoveryQueue:
     """Persist before dispatch; retain one first valid score per split/episode."""
@@ -330,7 +345,7 @@ class ParallelRecoveryQueue(RecoveryQueue):
 
     @classmethod
     def retryable_infrastructure(cls, receipt):
-        """Allow deferred transport recovery only after verified scene cleanup."""
+        """Allow known technical failures to restart after verified scene cleanup."""
         if receipt.get("cleanup_verified") is not True:
             return False
         result = receipt.get("result") or {}
@@ -343,6 +358,7 @@ class ParallelRecoveryQueue(RecoveryQueue):
         return bool(errors) and all(
             (error.get("error_type") in TRANSIENT_TRANSPORT_ERRORS or
              scene_control_timeout(error) or
+             scene_motion_discontinuity(error) or
              (error.get("error_type") == "ValueError" and error.get("category") == "runtime_backoff_error"
               and error.get("error") == "sleep length must be non-negative"))
             and error.get("retryable") is not False
@@ -467,9 +483,9 @@ class ParallelRecoveryQueue(RecoveryQueue):
             return "service_check" if self.state["consecutive_provider_failures"] >= 3 else "deferred"
         attempt["status"] = "infrastructure_failed"
         self.state["consecutive_provider_failures"] = 0
-        # Final-observation timeout is carried in cleanup errors[], rather than
-        # error. Verified rollback makes this attempt eligible for a later run;
-        # it still cannot become a navigation score or interrupt the other lane.
+        # Known timeouts and motion discontinuities may restart only after
+        # verified rollback. Partial trajectories remain technical evidence;
+        # another lane keeps running and the episode attempt cap still applies.
         if self.retryable_infrastructure(receipt):
             self.save()
             return "deferred"

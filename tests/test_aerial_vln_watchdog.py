@@ -238,6 +238,29 @@ def test_guard_uses_queue_classifier_to_resume_verified_cleanup_timeout_without_
     assert campaign.read_json(watcher.directory / 'status.json')['status'] == 'monitoring'
 
 
+@pytest.mark.parametrize('action', ['move_body', 'turn_relative'])
+@pytest.mark.parametrize('stop', [None, 'unverified_cleanup', 'manual_pause'])
+def test_guard_resumes_cleaned_motion_discontinuity_once_and_preserves_operator_pause(tmp_path, monkeypatch, action, stop):
+    watcher, clock, alive, starts, kills, probes = fixture_watchdog(tmp_path, monkeypatch, 'infrastructure_failure')
+    state = paused_transport_receipt()
+    attempt = state['tasks']['val_seen/one']['attempts'][0]
+    attempt['result']['infrastructure_error'] = {
+        'error_type': 'SceneRecoveryRequired',
+        'error': f'AirSim paused Multirotor {action} failed: motion_discontinuity'}
+    if stop == 'unverified_cleanup':
+        attempt['cleanup_verified'] = False
+    if stop == 'manual_pause':
+        (tmp_path / 'PAUSE').write_text('operator pause', encoding='utf-8')
+    campaign.write_json(tmp_path / 'progress.json', state)
+    before = (tmp_path / 'progress.json').read_bytes()
+    watcher.tick()
+    watcher.tick()
+    assert len(starts) == (1 if stop is None else 0) and not kills
+    assert (tmp_path / 'progress.json').read_bytes() == before
+    assert campaign.read_json(watcher.directory / 'status.json')['status'] == (
+        'monitoring' if stop is None else 'manual_pause' if stop == 'manual_pause' else 'needs_attention')
+
+
 @pytest.mark.parametrize('fault', ['legacy', 'unknown', 'authentication', 'mixed', 'unverified',
                                   'stale_attempt', 'foreign_episode', 'malformed_cause', 'scored'])
 def test_guard_never_resumes_unknown_or_mismatched_infrastructure_pause(tmp_path, monkeypatch, fault):

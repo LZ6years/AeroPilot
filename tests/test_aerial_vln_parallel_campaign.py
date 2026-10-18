@@ -331,6 +331,75 @@ def test_wrapped_scene_timeout_keeps_original_three_attempt_limit(tmp_path):
     assert q.claim([current], "A") is None
 
 
+@pytest.mark.parametrize("action", ["move_body", "turn_relative"])
+@pytest.mark.parametrize("flat", [True, False])
+def test_cleaned_motion_discontinuity_defers_without_changing_scores_or_receipts(tmp_path, action, flat):
+    failed, healthy = task("jump"), task("healthy")
+    q = queue(tmp_path, [failed, healthy])
+    q.claim([failed], "A")
+    q.claim([healthy], "B")
+    error = {"error_type": "SceneRecoveryRequired",
+             "error": f"AirSim paused Multirotor {action} failed: motion_discontinuity"}
+    value = infrastructure_receipt(failed, stage="scene_control", errors=[error])
+    if flat:
+        value["result"]["infrastructure_error"] = dict(error)
+    original = json.dumps(value, sort_keys=True)
+    assert q.accept(failed, 1, value) == "deferred"
+    assert q.state["status"] != "paused"
+    assert q.state["tasks"][q.key(failed)]["result"] is None
+    assert q.accept(healthy, 1, receipt(healthy)) == "scored"
+    assert json.dumps(value, sort_keys=True) == original
+    # A previously stopped controller can recover the identical receipt;
+    # the watchdog itself never mutates its task or attempt history.
+    q.pause("infrastructure_failure", task=failed, number=1)
+    assert q.recoverable_pause(q.state)
+    retry, attempt = q.claim([failed], "A")
+    assert retry == failed and attempt["number"] == 2
+    assert q.accept(failed, 2, receipt(failed)) == "scored"
+    assert q.accept(failed, 1, value) == "duplicate"
+
+
+@pytest.mark.parametrize("action", ["move_body", "turn_relative"])
+def test_motion_discontinuity_exhausts_three_attempts_without_blocking_other_tasks(tmp_path, action):
+    failed, other = task("jump"), task("other")
+    q = queue(tmp_path, [failed, other])
+    for number in range(1, 4):
+        _, attempt = q.claim([failed], "A")
+        assert attempt["number"] == number
+        value = infrastructure_receipt(failed, stage="scene_control", errors=[{
+            "error_type": "SceneRecoveryRequired",
+            "error": f"AirSim paused Multirotor {action} failed: motion_discontinuity"}])
+        assert q.accept(failed, number, value) == "deferred"
+    item = q.state["tasks"][q.key(failed)]
+    assert item["status"] == "retry_exhausted" and item["result"] is None
+    assert len(item["attempts"]) == 3 and q.claim([failed], "A") is None
+    assert q.claim([failed, other], "A")[0] == other
+
+
+@pytest.mark.parametrize("fault", ["cleanup", "retry_forbidden", "unknown_action", "unknown_reason",
+                                  "wrong_type", "mixed"])
+def test_motion_discontinuity_recovery_requires_exact_diagnostic_and_clean_scene(tmp_path, fault):
+    current = task("jump")
+    error = {"error_type": "SceneRecoveryRequired",
+             "error": "AirSim paused Multirotor turn_relative failed: motion_discontinuity"}
+    if fault == "retry_forbidden":
+        error["retryable"] = False
+    elif fault == "unknown_action":
+        error["error"] = "AirSim paused Multirotor hover failed: motion_discontinuity"
+    elif fault == "unknown_reason":
+        error["error"] = "AirSim paused Multirotor turn_relative failed: unknown control state"
+    elif fault == "wrong_type":
+        error["error_type"] = "ValueError"
+    value = infrastructure_receipt(current, cleanup=fault != "cleanup", stage="scene_control", errors=[error])
+    if fault == "mixed":
+        value["result"]["infrastructure_error"]["errors"].append({"error_type": "ValueError"})
+    q = queue(tmp_path, [current])
+    q.claim([current], "A")
+    assert not q.retryable_infrastructure(value)
+    assert q.accept(current, 1, value) == "pause"
+    assert not q.recoverable_pause(q.state)
+
+
 def test_two_final_observation_timeouts_defer_without_interrupting_other_lane_then_score_once(tmp_path):
     tasks = [task("one"), task("two"), task("three")]
     q = queue(tmp_path, tasks)
