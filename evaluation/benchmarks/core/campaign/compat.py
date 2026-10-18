@@ -94,9 +94,9 @@ def render_report(output, manifest, queue):
 
 
 def attach_review(path, result, manifest):
-    if manifest.get("experiment") in {"pixel_place_memory", "image_budget"}:
-        from evaluation.benchmarks.aerial_vln.pixel_map_campaign import attach_place_report
-        attach_place_report(path, result)
+    if result.get('run_dir'):
+        from evaluation.benchmarks.core.portable_review import attach_place_archive
+        attach_place_archive(Path(path), Path(result['run_dir']))
 
 
 def check_requests(run_path, task, manifest):

@@ -61,7 +61,9 @@ def scene_sort_key(scene_id):
         return (1, value, value)
 
 
-def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None, execution=None):
+def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None, execution=None,
+            full_audit_count=None, audit_seed=42, full_seed_bytes=None, technical_trial_ids=None):
+    """Freeze normal execution and optional task-keyed persistence cohorts."""
     output = Path(output).resolve()
     if (output / "manifest.json").exists():
         raise ValueError("Campaign already prepared; run resumes its frozen selection")
@@ -129,10 +131,26 @@ def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None, exe
     if execution["mode"] == "local":
         split_order = list(dict.fromkeys(t["split"] for t in tasks))
         tasks.sort(key=lambda t: (split_order.index(t["split"]), scene_sort_key(t["scene_id"]), t["episode_id"]))
+    trial = tasks[:4]
+    if technical_trial_ids is not None:
+        lookup = {task['episode_id']: task for task in tasks}
+        if len(lookup) != len(tasks) or len(set(technical_trial_ids)) != len(technical_trial_ids):
+            raise ValueError('Technical trial requires unique selected episode identities')
+        trial = [lookup[identity] for identity in technical_trial_ids]
+        if not trial:
+            raise ValueError('Technical trial must not be empty')
+    retention = None
+    if full_audit_count is not None:
+        from evaluation.benchmarks.core.campaign.retention import select_full_audit, validate as validate_retention
+        full = select_full_audit(tasks, full_audit_count, audit_seed)
+        retention = dict(full_task_keys=[ParallelRecoveryQueue.key(t) for t in full], full_seed_bytes=full_seed_bytes)
+        validate_retention(retention, tasks)
+        if any(ParallelRecoveryQueue.key(t) not in retention['full_task_keys'] for t in trial):
+            raise ValueError('Technical trials must belong to the complete-audit cohort')
     hashes = {p.relative_to(source).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in source.rglob("*") if p.is_file()}
     manifest = {"version": 2, "dataset": dataset, "configs": configs, "primary_config_key": next(iter(configs)),
                 "tasks": tasks, "stage_splits": list(dict.fromkeys(t["split"] for t in tasks)),
-                "counts": dict(Counter(t["split"] for t in tasks)), "technical_trial": tasks[:4],
+                "counts": dict(Counter(t["split"] for t in tasks)), "technical_trial": trial,
                 "strict_workers": len(execution["gpu_indices"]), "dispatch_concurrency": len(execution["gpu_indices"]),
                 "execution": execution, "terminal_provider_errors": False,
                 "model": model, "environment": info, "source_hashes": hashes, "completion_status": "campaign_complete",
@@ -142,6 +160,8 @@ def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None, exe
     if execution["report_profile"] == "audit":
         manifest["logging"] = {"profile": "full"}
         manifest["extension_files"] = {}
+    if retention is not None:
+        manifest['retention_policy'] = retention
     manifest["fingerprint"] = hashlib.sha256(json.dumps(manifest, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
     write_json(output / "manifest.json", manifest)
     write_json(output / "source_hashes.json", hashes)

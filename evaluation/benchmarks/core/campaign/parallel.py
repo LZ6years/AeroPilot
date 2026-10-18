@@ -1,10 +1,11 @@
-"""Run frozen benchmark campaigns on two isolated threads with shared resources.
+"""Run frozen benchmark campaigns on isolated GPU lanes with shared resources.
 
 The external controller is the sole progress writer and scene-cleanup owner.
 A supervised host process runs isolated Runtime/Provider/Transcript objects in
 threads; only capability model instances are shared through their existing
 cache and CUDA gate. Rendering happens in the controller, outside the threads.
-Remote simulators use GPU 0 and GPU 2; GPU 1 is explicitly excluded.
+GPU and port ownership come from the frozen execution configuration. Legacy
+remote campaigns retain their original GPU 0/2 defaults.
 
 Commands: prepare freezes selected cases; validate checks selections offline;
 run completes configured stages after a technical trial; watch supervises the
@@ -378,12 +379,10 @@ def execution_settings(manifest):
              "allow_shared_gpu": False, "minimum_free_gpu_mib": 4096}
     value.update(manifest.get("execution") or {})
     indices = value["gpu_indices"]
-    if value["mode"] not in {"local", "remote"} or not isinstance(indices, list) or not 1 <= len(indices) <= 2:
+    if value["mode"] not in {"local", "remote"} or not isinstance(indices, list) or not 1 <= len(indices) <= 26:
         raise ValueError("Invalid campaign execution configuration")
     if any(type(i) is not int or i < 0 for i in indices) or len(set(indices)) != len(indices):
         raise ValueError("GPU indices must be unique nonnegative integers")
-    if value["mode"] == "local" and len(indices) != 1:
-        raise ValueError("Linux local campaign requires one isolated worker")
     if type(value['allow_shared_gpu']) is not bool or type(value['minimum_free_gpu_mib']) is not int or value['minimum_free_gpu_mib'] < 4096:
         raise ValueError('GPU sharing requires a boolean and at least 4096 MiB free')
     if value['allow_shared_gpu'] and value['mode'] != 'local':
@@ -392,6 +391,16 @@ def execution_settings(manifest):
         if not str(index).isdigit() or int(index) in indices or type(limit) is not int or limit <= 0:
             raise ValueError('Invalid auxiliary graphics context limit')
     return value
+
+
+def execution_lanes(execution=None, workers=None):
+    """Keep A/B compatibility while deriving every lane from pinned GPUs."""
+    count = len(execution_settings({"execution": execution})["gpu_indices"])
+    if workers is not None:
+        if type(workers) is not int or not 1 <= workers <= count:
+            raise ValueError("Worker count exceeds the configured GPU lanes")
+        count = workers
+    return tuple(chr(ord("A") + index) for index in range(count))
 
 
 def validate_gpu_binding(binding, expected, allowed=(0, 2)):
@@ -419,19 +428,21 @@ def discover_gpu_bindings(map_config_path, execution=None):
     if policy["mode"] == "local":
         if sys.platform != "linux" or any(p.connection.get("mode") != "local" for p in packages):
             raise ValueError("Local campaign requires Linux local maps")
-        index = policy["gpu_indices"][0]
-        response = subprocess.run([sys.executable, "-c", REMOTE_VULKAN_BINDING, str(index)],
-                                  capture_output=True, text=True, check=True, timeout=30).stdout
-        binding = validate_gpu_binding(json.loads(response), index, policy["gpu_indices"])
-        if policy["gpu_uuids"].get(str(index)) != binding["uuid"]:
-            raise ValueError("Local GPU UUID must be explicitly pinned")
-        return {"A": binding}
+        bindings = {}
+        for lane, index in zip(execution_lanes(policy), policy["gpu_indices"]):
+            response = subprocess.run([sys.executable, "-c", REMOTE_VULKAN_BINDING, str(index)],
+                                      capture_output=True, text=True, check=True, timeout=30).stdout
+            binding = validate_gpu_binding(json.loads(response), index, policy["gpu_indices"])
+            if policy["gpu_uuids"].get(str(index)) != binding["uuid"]:
+                raise ValueError("Local GPU UUID must be explicitly pinned")
+            bindings[lane] = binding
+        return bindings
     control = RemoteSceneControl()
     target = control.target(packages[0])
     if any(control.target(package) != target for package in packages):
         raise ValueError("All parallel maps must use the same remote host")
     bindings = {}
-    for lane, index in zip(("A", "B"), policy["gpu_indices"]):
+    for lane, index in zip(execution_lanes(policy), policy["gpu_indices"]):
         response = control.runner.run(target, ["python3", "-c", REMOTE_VULKAN_BINDING, str(index)], timeout_sec=30)
         bindings[lane] = validate_gpu_binding(json.loads(response), index, policy["gpu_indices"])
     return bindings
@@ -458,12 +469,13 @@ def gpu_violation(sample, allowed=(0, 2), graphics_limits=None):
     return False
 
 
-def local_gpu_idle(execution):
+def local_gpu_idle(execution, lane="A"):
     """Check pinned-card admission; shared mode never controls other owners."""
     policy = execution_settings({"execution": execution})
     response = subprocess.run([sys.executable, '-c', REMOTE_GPU_INSPECTION, '[]'],
                               capture_output=True, text=True, timeout=15, check=True)
-    gpu = next(g for g in json.loads(response.stdout)['gpus'] if g['index'] == policy['gpu_indices'][0])
+    index = policy['gpu_indices'][execution_lanes(policy).index(lane)]
+    gpu = next(g for g in json.loads(response.stdout)['gpus'] if g['index'] == index)
     expected = policy['gpu_uuids'].get(str(gpu['index']))
     if expected and gpu['uuid'] != expected:
         raise RuntimeError('Physical GPU UUID changed before dispatch')
@@ -478,15 +490,16 @@ def local_gpu_idle(execution):
 
 
 def lane_catalog(catalog, lane, binding, execution=None):
-    """Isolate ports and select remote GPU 0/2, keeping GPU 1 excluded."""
-    if lane not in {"A", "B"}:
-        raise ValueError("Unknown execution lane")
+    """Give each pinned GPU its own simulator endpoint and launch settings."""
     data = json.loads(json.dumps(catalog))
-    offset = 0 if lane == "A" else 1
     policy = execution_settings({"execution": execution})
+    lanes = execution_lanes(policy)
+    if lane not in lanes:
+        raise ValueError("Unknown execution lane")
+    offset = lanes.index(lane)
     validate_gpu_binding(binding, policy["gpu_indices"][offset], policy["gpu_indices"])
     local = policy["mode"] == "local"
-    data["port_policy"] = {"control_port_start": int(catalog["port_policy"]["control_port_start"]) if local else 35001 + offset, "max_scene_num": 1}
+    data["port_policy"] = {"control_port_start": int(catalog["port_policy"]["control_port_start"]) + offset if local else 35001 + offset, "max_scene_num": 1}
     for package in data["maps"]:
         if package.get("connection", {}).get("mode") != policy["mode"]:
             raise ValueError("Campaign scene transport differs from frozen execution policy")
@@ -497,6 +510,32 @@ def lane_catalog(catalog, lane, binding, execution=None):
         package["launch"]["env"] = {**package["launch"].get("env", {}), **binding["environment"]}
         package["launch"]["existing_process_policy"] = "reject"
     return data
+
+
+def validate_local_capture(capture, overlay, execution):
+    """Bind each lane's probe to its catalog, with complete scene coverage.
+
+    Legacy single-lane receipts remain valid. Additional GPUs may use one
+    representative scene after the complete catalog has been checked overall.
+    """
+    lanes = execution_lanes(execution)
+    receipts = capture.get("lane_captures") or ({"A": capture} if len(lanes) == 1 else {})
+    limits = execution_settings({"execution": execution})['graphics_context_limits_mib']
+    if not capture.get('passed') or set(receipts) != set(lanes):
+        raise RuntimeError('Verified RGB/depth/GPU capture is required for every execution lane')
+    observed = set()
+    for lane in lanes:
+        receipt = receipts[lane]
+        if (not receipt.get('passed') or receipt.get('map_sha256') != overlay['lanes'][lane]['sha256']
+                or receipt.get('graphics_context_limits_mib', {}) != limits):
+            raise RuntimeError('Capture does not match the frozen local maps')
+        if len(lanes) > 1 and not receipt.get('scenes'):
+            raise RuntimeError('Missing scene capture on execution lane ' + lane)
+        observed.update(str(scene['scene_id']) for scene in receipt.get('scenes', []))
+    if len(lanes) > 1:
+        catalog = read_json(overlay['lanes']['A']['map_config_path'])
+        if observed != {str(item['scene_id']) for item in catalog['maps']}:
+            raise RuntimeError('Capture does not cover every configured scene')
 
 
 def verify_frozen(output, manifest):
@@ -516,7 +555,7 @@ def verify_frozen(output, manifest):
 def prepare_extension(output, manifest, *, dataset_order=None, retention_policy=None):
     """Freeze the additive controller, queue and read-only recovery helper."""
     existing_overlay = read_json(output / "parallel/execution_overlay.json")
-    retention_policy = retention_policy or existing_overlay.get('retention_policy')
+    retention_policy = retention_policy or existing_overlay.get('retention_policy') or manifest.get('retention_policy')
     if retention_policy:
         from evaluation.benchmarks.core.campaign.retention import validate
         validate(retention_policy, manifest['tasks'])
@@ -611,13 +650,16 @@ def verify_overlay(overlay, manifest):
     if overlay.get("scheduling_policy_sha256") and hashlib.sha256(json.dumps(
             overlay["scheduling_policy"], sort_keys=True).encode()).hexdigest() != overlay["scheduling_policy_sha256"]:
         raise ValueError("Frozen scheduling policy changed")
+    lanes = execution_lanes(policy)
+    if set(overlay["lanes"]) != set(lanes) or set(overlay["remote_gpu_bindings"]) != set(lanes):
+        raise ValueError("Frozen execution lanes do not cover the pinned GPUs")
     for lane, info in overlay["lanes"].items():
         path = Path(info["map_config_path"])
         if hashlib.sha256(path.read_bytes()).hexdigest() != info["sha256"]:
             raise ValueError("Lane configuration changed")
         expected = lane_catalog(read_json(primary_config(manifest)["map_config_path"]), lane,
                                 overlay["remote_gpu_bindings"][lane], manifest.get("execution"))
-        if read_json(path) != expected or info["remote_gpu"] != execution_settings(manifest)["gpu_indices"][0 if lane == "A" else 1]:
+        if read_json(path) != expected or info["remote_gpu"] != policy["gpu_indices"][lanes.index(lane)]:
             raise ValueError("Lane differs from frozen GPU configuration")
     directory = Path(overlay["controller_script"]).parent
     for name, digest in overlay["source_hashes"].items():
@@ -770,7 +812,7 @@ def execute_thread(output, manifest, request, environment):
 
 
 def host_main(args):
-    """Persistent two-thread host; a dead controller cannot leave it running."""
+    """Persistent lane host; a dead controller cannot leave it running."""
     output, session = args.output.resolve(), args.session.resolve()
     manifest = read_json(output / "manifest.json")
     overlay = read_json(output / "parallel/execution_overlay.json")
@@ -838,7 +880,7 @@ def host_main(args):
                 if not futures:
                     return
             else:
-                for lane in ("A", "B")[:args.workers]:
+                for lane in execution_lanes(manifest.get("execution"), args.workers):
                     request = read_json(session / "commands" / (lane + ".json"))
                     if not request or request["id"] in processed or lane in futures:
                         continue
@@ -1133,9 +1175,9 @@ def validate_trial(output, queue, tasks, snapshots, *, gpu_samples=None, workers
     if gpu_samples is not None:
         observations = [item for sample in gpu_samples for item in sample.get("owned", [])]
         allowed = execution_settings({"execution": execution})["gpu_indices"]
-        for lane, gpu in list(zip(("A", "B"), allowed))[:workers]:
-            # SDL can retain a graphics context on the display's GPU 0 while
-            # Vulkan renders on GPU 2. Both are authorized; GPU 1 never is.
+        for lane, gpu in list(zip(execution_lanes(execution), allowed))[:workers]:
+            # A primary rendering context must be observed on this lane's GPU;
+            # auxiliary contexts separately obey the explicit deployment policy.
             if not any(item["lane"] == lane and gpu in item["observed_gpus"]
                        for item in observations):
                 errors.append("remote_gpu_unverified:" + lane)
@@ -1197,7 +1239,7 @@ def dispatch_candidates(manifest, candidates, lane, active, workers, queue):
         raise ValueError("Invalid dispatch concurrency")
     assignments = manifest.get("task_lane_assignments", {})
     if assignments and (set(assignments) != {t["episode_id"] for t in manifest["tasks"]}
-                        or any(value not in ("A", "B")[:workers] for value in assignments.values())):
+                        or any(value not in execution_lanes(manifest.get("execution"), workers) for value in assignments.values())):
         raise ValueError("Invalid fixed task lane assignments")
     if len(active) >= limit:
         return []
@@ -1262,11 +1304,11 @@ def technical_check_path(output, budget):
     return output / "parallel" / name
 
 
-def stage_candidates(stage_tasks, trial, gate, queue):
-    """Run two-case technical waves, then admit only the active stage cohort."""
+def stage_candidates(stage_tasks, trial, gate, queue, workers=2):
+    """Size technical waves to the configured workers, preserving old defaults."""
     if gate:
         return stage_tasks
-    waves = [trial[index:index + 2] for index in range(0, len(trial), 2)]
+    waves = [trial[index:index + workers] for index in range(0, len(trial), workers)]
     return next((wave for wave in waves if any(
         not queue.terminal(queue.state["tasks"][queue.key(task)]) for task in wave)), [])
 
@@ -1276,7 +1318,8 @@ def run_controller(args):
     output = args.output.resolve()
     manifest = read_json(output / "manifest.json")
     if manifest.get("strict_workers") and args.workers != manifest["strict_workers"]:
-        raise ValueError("This experiment requires exactly two execution lanes")
+        raise ValueError("Worker count differs from the frozen execution lanes")
+    execution_lanes(manifest.get("execution"), args.workers)
     verify_frozen(output, manifest)
     if (output / "PAUSE").exists():
         raise RuntimeError("Campaign has a pending manual pause")
@@ -1294,9 +1337,7 @@ def run_controller(args):
         install_report_readers(overlay, manifest)
         if execution_settings(manifest)['mode'] == 'local':
             capture = read_json(output / 'capture/capture_validation.json')
-            if (not capture.get('passed') or capture.get('map_sha256') != overlay['lanes']['A']['sha256']
-                    or capture.get('graphics_context_limits_mib', {}) != execution_settings(manifest)['graphics_context_limits_mib']):
-                raise RuntimeError('Verified RGB/depth/GPU capture for the frozen local maps is required')
+            validate_local_capture(capture, overlay, manifest.get('execution'))
         if discover_gpu_bindings(primary_config(manifest)["map_config_path"], manifest.get("execution")) != overlay["remote_gpu_bindings"]:
             raise RuntimeError("Remote GPU UUID or Vulkan mapping changed since freeze")
         offline_models(output, overlay)
@@ -1416,7 +1457,7 @@ def run_controller(args):
                             # Stop dispatch, but allow the other flight to finish.
                             drain_reason = queue.state["reason"]
                         exception = json.dumps(fact.get("exception") or {}).lower()
-                        if args.workers == 2 and "out of memory" in exception and "cuda" in exception:
+                        if args.workers > 1 and "out of memory" in exception and "cuda" in exception:
                             fallback = True
                             fatal = "parallel_cuda_memory"
                         provider_error = queue.provider_error(receipt.get("result"))
@@ -1424,7 +1465,7 @@ def run_controller(args):
                             rate_limits += 1
                         elif action == "scored":
                             rate_limits = 0
-                        if args.workers == 2 and rate_limits >= 2:
+                        if args.workers > 1 and rate_limits >= 2:
                             fallback = True
                             fatal = "parallel_rate_limit"
                         continue
@@ -1439,7 +1480,7 @@ def run_controller(args):
                 if child.poll() is not None:
                     fatal = fatal or "host_exited"
                     error_text = read_process_diagnostic(session / "stderr.log").lower()
-                    if args.workers == 2 and "cuda" in error_text and "out of memory" in error_text:
+                    if args.workers > 1 and "cuda" in error_text and "out of memory" in error_text:
                         fallback = True
                         fatal = "parallel_cuda_memory"
                 if now - started > 900 and not (session / "host_environment.json").exists():
@@ -1513,14 +1554,14 @@ def run_controller(args):
                         break
                     gate = True
                     print(json.dumps({"parallel_trial_passed": True, "episodes": len(trial)}), flush=True)
-                candidates = stage_candidates(stage_tasks, trial, gate, queue)
+                candidates = stage_candidates(stage_tasks, trial, gate, queue, args.workers)
                 candidates = recovery_candidates(output, overlay, candidates, queue)
                 if overlay.get('retention_policy'):
                     from evaluation.benchmarks.core.campaign.retention import candidates as retention_candidates
-                    allowed = {queue.key(t) for t in retention_candidates(tasks, queue, overlay['retention_policy'])}
+                    allowed = {queue.key(t) for t in retention_candidates(stage_tasks, queue, overlay['retention_policy'])}
                     candidates = [t for t in candidates if queue.key(t) in allowed]
                 if (session / "host_environment.json").exists() and not service_due and not drain_reason:
-                    for lane in ("A", "B")[:args.workers]:
+                    for lane in execution_lanes(manifest.get("execution"), args.workers):
                         if lane in active:
                             continue
                         info = overlay["lanes"][lane]
@@ -1530,9 +1571,9 @@ def run_controller(args):
                                 fatal = 'storage_or_coverage_check'
                                 break
                         eligible = dispatch_candidates(manifest, admitted, lane, active, args.workers, queue)
-                        if eligible and execution_settings(manifest)['mode'] == 'local' and not local_gpu_idle(manifest.get('execution')):
-                            fatal = 'authorized_gpu_busy'
-                            break
+                        if eligible and execution_settings(manifest)['mode'] == 'local' and not local_gpu_idle(manifest.get('execution'), lane):
+                            # A shared card can be busy without blocking other lanes.
+                            continue
                         lease = queue.claim(eligible, lane, metadata={
                             "map_config_path": info["map_config_path"], "local_port": info["local_port"],
                             "remote_port": info["remote_port"], "remote_gpu": info["remote_gpu"], "session": str(session),
@@ -1654,7 +1695,7 @@ def main(*, default_dataset=None, default_output=None):
     parser.add_argument("--config", type=Path, action="append", default=[])
     parser.add_argument("--plugin-config", type=Path)
     parser.add_argument("--execution-config", type=Path)
-    parser.add_argument("--workers", type=int, choices=(1, 2), default=2)
+    parser.add_argument("--workers", type=int, default=2)
     parser.add_argument("--session", type=Path)
     parser.add_argument("--parent-pid", type=int)
     parser.add_argument("--parent-created", type=float)

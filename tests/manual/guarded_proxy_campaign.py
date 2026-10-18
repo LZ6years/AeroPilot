@@ -51,6 +51,7 @@ def main():
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--minimum-free-bytes', type=int, required=True)
     parser.add_argument('--proxy', required=True)
+    parser.add_argument('--workers', type=int, default=1)
     args = parser.parse_args()
     out = args.output.resolve()
     manifest = json.loads((out / 'manifest.json').read_text())
@@ -67,7 +68,7 @@ def main():
             status = 'waiting_' + reason if reason else 'paused' if (out / 'PAUSE').exists() else 'monitoring'
             if child is None and reason is None and not (out / 'PAUSE').exists():
                 command = [sys.executable, '-u', '-m', 'evaluation.benchmarks.core.campaign.parallel',
-                           'watch', '--output', str(out), '--workers', '1']
+                           'watch', '--output', str(out), '--workers', str(args.workers)]
                 child = subprocess.Popen(command, cwd=out / 'source', env=proxy_environment(args.proxy),
                                          stdout=log, stderr=subprocess.STDOUT)
             record = dict(status=status, reason=reason, free_bytes=free, required_bytes=required,

@@ -5,8 +5,36 @@ current cohort, and compact estimates are calibrated from actual receipts.
 No historical artifacts are removed by this policy.
 """
 import shutil
+from collections import defaultdict
+import hashlib
 
 from evaluation.benchmarks.core.campaign.recovery import ParallelRecoveryQueue
+
+
+def select_full_audit(tasks, count, seed=42):
+    """Select audit retention by proportional strata and stable hash order.
+
+    Largest remainders break ties by scene/difficulty. Outcome-independent
+    selection never removes any task from the scored population.
+    """
+    if type(count) is not int or not 1 <= count <= len(tasks):
+        raise ValueError('Full-audit count must be between one and the population size')
+    buckets = defaultdict(list)
+    keys = [ParallelRecoveryQueue.key(t) for t in tasks]
+    if len(set(keys)) != len(keys):
+        raise ValueError('Audit population contains duplicate task identities')
+    for task in tasks:
+        buckets[(str(task['scene_id']), str(task['difficulty']))].append(task)
+    quota = {key: len(values) * count // len(tasks) for key, values in buckets.items()}
+    order = sorted(buckets, key=lambda key: (-(len(buckets[key]) * count % len(tasks)), key))
+    for key in order[:count - sum(quota.values())]:
+        quota[key] += 1
+    result = []
+    for key in sorted(buckets):
+        ranked = sorted(buckets[key], key=lambda t: (hashlib.sha256(
+            (str(seed) + ':' + t['episode_id']).encode()).hexdigest(), ParallelRecoveryQueue.key(t)))
+        result.extend(ranked[:quota[key]])
+    return result
 
 
 def profile(task, policy):

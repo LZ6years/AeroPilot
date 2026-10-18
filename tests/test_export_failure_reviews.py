@@ -5,7 +5,7 @@ import re
 from PIL import Image
 import pytest
 
-from evaluation.benchmarks.core.portable_review import embed_images
+from evaluation.benchmarks.core.portable_review import embed_images, attach_place_archive
 
 
 def test_embeds_encoded_paths_and_click_links_without_changing_source(tmp_path):
@@ -53,3 +53,22 @@ def test_place_archive_is_embedded_with_scoped_anchors_and_no_external_iframe(tm
     assert exported.index('id="place-memory"') < exported.index('</html>')
     assert source.read_text(encoding="utf-8") == original
     assert (archive / "index.html").read_text(encoding="utf-8") == original_archive
+
+
+def test_live_archive_uses_rebased_assets_and_remains_portable(tmp_path):
+    run = tmp_path / 'runs/task'
+    archive = run / 'contexts/place_memory/instruction'
+    archive.mkdir(parents=True)
+    Image.new('RGB', (3, 2), 'blue').save(archive / 'map.png')
+    (archive / 'index.html').write_text('<img src="map.png"><a href="#P1">place</a><article id="P1">move</article>')
+    page = tmp_path / 'evaluation/cases/task/review.html'
+    page.parent.mkdir(parents=True)
+    page.write_text('<html><body>process</body></html>')
+    attach_place_archive(page, run)
+    original = page.read_text(encoding='utf-8')
+    assert '<iframe' not in original and 'data:image' not in original
+    assert 'href="#place-archive-P1"' in original
+    attach_place_archive(page, run)
+    assert page.read_text(encoding='utf-8') == original
+    exported, count = embed_images(page)
+    assert count == 1 and 'src="data:image/png;base64,' in exported

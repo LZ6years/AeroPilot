@@ -112,7 +112,7 @@ def test_missing_metric_stays_blank_when_other_metrics_have_full_coverage(tmp_pa
     q.accept(current, 1, {"cleanup_verified": True, "valid_score": True, "process": {},
                          "result": {"metrics": {"success": False}}})
     report = write_report(tmp_path, {"dataset": "travel_uav", "fingerprint": "frozen"}, q.state)
-    assert report["groups"][0]["paper"] == {"success": 0, "navigation_error": None}
+    assert report["groups"][0]["paper"] == {"success": 0, "navigation_error": None, "oracle_success": None, "spl": None}
 
 
 def test_aerial_report_full_denominator_and_weighted_overall(tmp_path):

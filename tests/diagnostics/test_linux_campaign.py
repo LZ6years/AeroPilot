@@ -98,8 +98,7 @@ def test_explicit_local_gpu_does_not_authorize_legacy_cards():
     assert configured['maps'][0]['launch']['env']['CUDA_VISIBLE_DEVICES'] == binding['uuid']
     assert gpu_violation({'owned': [{'observed_gpus': [0, 3]}]}, [3])
     assert not gpu_violation({'owned': [{'observed_gpus': [3]}]}, [3])
-    with pytest.raises(ValueError):
-        execution_settings({'execution': {**policy, 'gpu_indices': [0, 3]}})
+    assert execution_settings({'execution': {**policy, 'gpu_indices': [0, 3]}})['gpu_indices'] == [0, 3]
 
 
 @pytest.mark.skipif(platform.system() != 'Linux', reason='Requires real Linux process groups')

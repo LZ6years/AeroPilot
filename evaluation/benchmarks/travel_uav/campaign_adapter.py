@@ -14,7 +14,7 @@ class TravelUavCampaignAdapter:
     """Keep target placement, original instruction and 3D metrics runner-owned."""
 
     dataset = "travel_uav"
-    metric_fields = ("success", "navigation_error")
+    metric_fields = ("success", "navigation_error", "oracle_success", "spl")
 
     def prepare(self, config, *, require_execution_ready=False):
         settings = TravelUavEvalConfig.from_dict(config)
