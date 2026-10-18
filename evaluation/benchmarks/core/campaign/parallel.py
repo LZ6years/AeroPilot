@@ -1402,7 +1402,7 @@ def run_controller(args):
         queue.state.update(status="running", reason=None, execution_mode="parallel", workers=args.workers)
         queue.save()
         from evaluation.benchmarks.core.campaign.cleanup import CleanupChecks
-        cleanups = CleanupChecks()
+        cleanups = CleanupChecks(workers=args.workers)
         drain_reason = None
         active, completed, service_due = {}, 0, False
         gpu_samples = read_json(output / "parallel/gpu_samples.json").get("samples", [])

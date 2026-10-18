@@ -8,9 +8,9 @@ import time
 
 
 class CleanupChecks:
-    def __init__(self, *, clock=time.monotonic, budget=120):
+    def __init__(self, *, clock=time.monotonic, budget=120, workers=2):
         self.clock, self.budget = clock, budget
-        self.pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="lane-cleanup")
+        self.pool = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="lane-cleanup")
         self.jobs = {}
 
     def start(self, lane, verify):
