@@ -17,7 +17,14 @@ Distinguish an outside-view cue, tentative candidate and identifiable target.
 Discover candidates from current RGB. Similar appearance is only a candidate;
 check attributes, nearby landmarks and position relations before accepting identity.
 Surface depth measures a matched visible candidate, not its identity or arrival.
-Use historical views and actual motion to interpret disappearance.
+Descriptive surroundings may establish identity across views while target and
+scene continuity remain supported. Distinguish these cues from required final
+relations, image coverage or continued observation; simultaneous visibility is
+needed when the task requires it. Past identity evidence may become stale for
+moving targets or changing scenes. Historical range belongs to its source time;
+estimating present separation requires supported intervening vehicle and target
+motion, compatible geometry and uncertainty. Compare historical and current views
+with actual motion to interpret disappearance.
 Turning reveals bearings; translation provides parallax. Ascent may expose an
 occluded region; descent or backing may reveal low detail. These changes move a
 fixed camera's viewpoint, not its pitch, and do not guarantee clearance.

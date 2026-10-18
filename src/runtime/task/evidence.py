@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 from src.perception.raw_observation import RawObservation
+from src.runtime.context.observation_media import ObservationMediaStore
 from src.runtime.task.session import TaskSession
 
 
@@ -17,6 +18,7 @@ class FlightEvidenceRecorder:
         self.tools = tools
         self.memory_writer = memory_writer
         self.journal = journal
+        self.observation_media = ObservationMediaStore(recorder.run_dir)
 
     def record_action(
         self,
@@ -55,6 +57,10 @@ class FlightEvidenceRecorder:
         data = raw.to_dict()
         started = time.monotonic()
         try:
+            # Scene-owned capture storage can be shared by multiple Runtime
+            # runs. Import originals before Memory or a checkpoint commits a
+            # path that its run-relative media consumers cannot address.
+            data["frames"] = self.observation_media.materialize_frames(data["frames"])
             write_result = self.memory_writer.write_observation(data)
         finally:
             self.journal.debug_event(

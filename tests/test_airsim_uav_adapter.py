@@ -277,16 +277,13 @@ def test_paused_multirotor_move_no_effect_reports_collision(monkeypatch):
     assert adapter.move_body(1.0, 0.0, 0.0, 1.0).ok
 
 
-@pytest.mark.parametrize("timestamps", [True, False])
-def test_paused_multirotor_new_collision_displacement_is_recoverable(
-    monkeypatch, timestamps
-):
+def test_paused_multirotor_small_collision_displacement_is_recoverable(monkeypatch):
     adapter = AirSimUavAdapter(
         mode="Multirotor",
         control_strategy="paused_multirotor",
     )
     client = FakeAirSimClient()
-    client.action_effect_scale = 7.0
+    client.action_effect_scale = 2.0
     client.rotateToYawAsync = (
         lambda yaw, timeout_sec, margin, vehicle_name:
         client.moveByVelocityBodyFrameAsync(0.0, 0.0, 1.0, 1.0, vehicle_name)
@@ -296,9 +293,8 @@ def test_paused_multirotor_new_collision_displacement_is_recoverable(
         has_collided=True,
         object_name="SM_NYCB_1-9",
     )
-    if timestamps:
-        before_collision.time_stamp = 10
-        after_collision.time_stamp = 11
+    before_collision.time_stamp = 10
+    after_collision.time_stamp = 11
     collisions = iter([before_collision, after_collision])
     client.simGetCollisionInfo = lambda vehicle_name: next(collisions)
     adapter._client = client
@@ -311,7 +307,7 @@ def test_paused_multirotor_new_collision_displacement_is_recoverable(
     assert result.execution_state["requires_scene_reset"] is False
     assert result.execution_state["verified_paused_pose"]
     assert result.data["collision"] == {
-        "kind": "displacement",
+        "kind": "blocked",
         "object_name": "SM_NYCB_1-9",
     }
 

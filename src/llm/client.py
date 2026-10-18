@@ -13,6 +13,7 @@ import httpx2
 from openai import OpenAI
 
 from src.llm.audit import snapshot_request
+from src.llm.http_errors import http_error_diagnostic
 from src.llm.recovery import CURRENT_RECOVERY, RequestGuard, retry_after_seconds
 from src.llm.contracts import (
     DEFAULT_ERROR_PREFIX,
@@ -152,6 +153,8 @@ class DefaultModelClient:
                     error.elapsed_seconds = self._clock() - started
                     attempt.update(status="failed", **error.to_dict())
                     attempt["exception_chain"] = [type(e).__name__ for e in _exception_chain(exc)]
+                    if isinstance(exc, openai.APIStatusError):
+                        attempt["provider_error"] = http_error_diagnostic(exc, api_key=self.settings.api_key)
                     attempt["elapsed_seconds"] = self._clock() - attempt_started
                     request_id = getattr(exc, "request_id", None)
                     if request_id:

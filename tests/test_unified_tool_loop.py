@@ -778,6 +778,37 @@ def test_repeated_reads_execute_and_failed_attempts_consume_quota(tmp_path, with
     assert runtime.session.executed_read_counts[("obs_0001", "test.repeat")] == 2
 
 
+def test_historical_read_quota_survives_current_observation_change(tmp_path):
+    runtime, state, scene, backend = harness(tmp_path, [
+        [call("old_first", "test.source", observation_id="obs_0001")],
+        [move("change_view")],
+        [call("old_second", "test.source", observation_id="obs_0001")],
+        [call("old_exhausted", "test.source", observation_id="obs_0001")],
+        [call("current", "test.source", observation_id="obs_0002")],
+        [done(observation="obs_0002")],
+    ])
+    runtime.tools.registry.register(ToolSpec.from_input_schema(
+        "test.source", "test_source", "skill_capability", "source read", {
+            "type": "object", "required": ["observation_id"],
+            "properties": {"observation_id": {"type": "string", "minLength": 1}}},
+        ToolRuntimePolicy("read_only", "immediate", "parallel_safe", True,
+                          max_calls_per_observation=2, observation_id_parameter="observation_id")))
+    original = runtime.tools.call
+    measured = []
+    def read_call(_scene, _agent, tool, args, **kwargs):
+        if tool != "test.source":
+            return original(_scene, _agent, tool, args, **kwargs)
+        measured.append(args["observation_id"])
+        return ActionResult(True, tool, "historical source")
+    runtime.tools.call = read_call
+    run_loop(runtime, state, scene)
+    results = {e.payload.tool_call_id: e.payload for e in runtime.agent_transcript.items if e.kind == "tool_result"}
+    assert measured == ["obs_0001", "obs_0001", "obs_0002"]
+    assert results["old_exhausted"].diagnostic["code"] == "observation_call_limit"
+    assert runtime.session.executed_read_counts[("obs_0001", "test.source")] == 2
+    assert runtime.session.executed_read_counts[("obs_0002", "test.source")] == 1
+
+
 def test_plan_changes_cannot_reset_nonphysical_guard(tmp_path):
     plans = [[call(f"plan{i}", "runtime.update_plan", explanation=f"revision {i}", operation="replace", steps=[])]
              for i in range(2)]

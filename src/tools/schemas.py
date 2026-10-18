@@ -47,6 +47,9 @@ class ToolRuntimePolicy:
     batching: ToolBatching
     model_exposed: bool = False
     max_calls_per_observation: int | None = None
+    # Optional declared argument binding for source-observation quotas. Tools
+    # without a binding retain the current-observation execution-window policy.
+    observation_id_parameter: str | None = None
 
     def __post_init__(self) -> None:
         if self.effect not in {"read_only", "physical", "runtime_control", "lifecycle"}:
@@ -62,6 +65,12 @@ class ToolRuntimePolicy:
             raise ValueError(f"unsupported tool batching policy: {self.batching}")
         if self.max_calls_per_observation is not None and self.max_calls_per_observation <= 0:
             raise ValueError("max_calls_per_observation must be positive when provided")
+        if self.observation_id_parameter is not None and (
+            not isinstance(self.observation_id_parameter, str)
+            or not self.observation_id_parameter.strip()
+            or self.effect != "read_only"
+        ):
+            raise ValueError("observation_id_parameter must name a read-only tool argument")
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "ToolRuntimePolicy":
@@ -90,6 +99,7 @@ class ToolRuntimePolicy:
                 if max_calls is not None
                 else None
             ),
+            observation_id_parameter=data.get("observation_id_parameter"),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -101,7 +111,18 @@ class ToolRuntimePolicy:
         }
         if self.max_calls_per_observation is not None:
             result["max_calls_per_observation"] = self.max_calls_per_observation
+        if self.observation_id_parameter is not None:
+            result["observation_id_parameter"] = self.observation_id_parameter
         return result
+
+    def observation_key(self, args: dict[str, Any], latest_observation: dict[str, Any]) -> str:
+        """Share the exact source identity between validation and execution."""
+        if self.observation_id_parameter is not None:
+            value = args.get(self.observation_id_parameter)
+            if not isinstance(value, str) or not value:
+                raise ValueError("declared source observation argument must be a non-empty string")
+            return value
+        return str(latest_observation.get("observation_id") or "")
 
 
 @dataclass(frozen=True)
@@ -164,6 +185,11 @@ class ToolSpec:
         names = [item.name for item in self.parameters]
         if len(names) != len(set(names)):
             raise ValueError("duplicate tool parameter name")
+        binding = self.runtime.observation_id_parameter
+        if binding is not None:
+            parameter = next((item for item in self.parameters if item.name == binding), None)
+            if parameter is None or not parameter.required or parameter.type != "string":
+                raise ValueError("observation_id_parameter must bind a required string parameter")
         if {"properties", "required"} & self.schema_options.keys():
             raise ValueError("properties and required are generated from parameters")
         object.__setattr__(self, "parameters", tuple(copy.deepcopy(self.parameters)))
@@ -233,6 +259,8 @@ class ToolSpec:
         text = f"effect={self.runtime.effect}; result_timing={self.runtime.result_timing}. {batching[self.runtime.batching]}"
         if self.runtime.max_calls_per_observation is not None:
             text += f" At most {self.runtime.max_calls_per_observation} calls per observation, including same-turn calls."
+            if self.runtime.observation_id_parameter is not None:
+                text += f" The source observation is selected by {self.runtime.observation_id_parameter}; changing the current view does not reset that source's quota."
         return text
 
 

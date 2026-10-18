@@ -7,11 +7,11 @@ from evaluation.benchmarks.travel_uav.protocol import (
 
 
 def test_protocol_is_explicitly_front_view_no_assistant_transfer():
-    assert TRAVEL_UAV_PROTOCOL == "travel_uav.flyagent_native_actions.front_view.no_assistant.v2"
+    assert TRAVEL_UAV_PROTOCOL == "travel_uav.flyagent_native_actions.front_view.no_assistant.v3"
     context = TRAVEL_UAV_PARSER_PROTOCOL_CONTEXT.lower()
     assert "visually confirmed" in context
     assert "physical ground contact" in context
-    assert "approximately 20 m" in context
+    assert "no more than 20 m" in context
     assert "accurate target bearing" in context
     assert "measured from the uav heading at instruction start" in context
     assert "world-referenced ray from the instruction-start pose" in context

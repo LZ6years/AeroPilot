@@ -314,6 +314,30 @@ class MemoryRecordReader:
                 records.append(record)
         return records
 
+    def read_observation(self, observation_id: str) -> dict[str, Any]:
+        """Rehydrate one persisted observation, independent of rolling memory.
+
+        Callers own task authorization. Only frames referenced by this exact
+        observation are read; never pair old RGB with a newer depth frame.
+        """
+        lines = self._read_lines(self.run_dir / "memory/observations.jsonl") or []
+        record = next((item for line in lines if line.strip()
+                       and (item := json.loads(line)).get("id") == observation_id), None)
+        if record is None:
+            raise ValueError(f"observation {observation_id!r} is not available in this run")
+        frames = {}
+        for ref in record.get("frame_refs", []):
+            frame = self.read_ref(ref)
+            if frame is None or frame.get("observation_id") != observation_id or frame.get("id") != ref.get("id"):
+                raise ValueError("observation frame reference is missing or mismatched")
+            modality = frame["modality"]
+            if modality in frames:
+                raise ValueError("observation contains duplicate frame modalities")
+            frames[modality] = frame
+        pose = self.read_ref(record.get("pose_ref"))
+        return {**record, "observation_id": observation_id, "frames": frames,
+                "pose": pose.get("pose", {}) if pose else {}}
+
 
 def _timestamp() -> str:
     return datetime.now(timezone.utc).isoformat()

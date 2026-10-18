@@ -5,6 +5,7 @@ import csv
 import html
 import json
 import os
+from collections import Counter
 from pathlib import Path
 
 from evaluation.benchmarks.core.campaign.compat import adapter_for, dataset_name
@@ -14,12 +15,15 @@ from evaluation.benchmarks.core.report_io import atomic_write_text, write_json
 def write_report(output, manifest, state):
     """Aggregate only valid retained results, keeping missing coverage explicit."""
     root = Path(output)
-    rows, groups = [], {}
+    rows, groups, totals = [], {}, {}
     for key, item in state["tasks"].items():
         task = item["task"]
         dataset = dataset_name(manifest, task)
-        group = groups.setdefault((dataset, task["split"]), {"planned": 0, "valid": 0, "metrics": {}})
-        group["planned"] += 1
+        targets = [groups.setdefault((dataset, task["split"]), {"planned": 0, "valid": 0, "metrics": {}, "statuses": Counter()}),
+                   totals.setdefault((dataset, "all"), {"planned": 0, "valid": 0, "metrics": {}, "statuses": Counter()})]
+        for group in targets:
+            group["planned"] += 1
+            group["statuses"][item["status"]] += 1
         result = item.get("result") if item["status"] == "scored" else None
         original_metrics = (result or {}).get("metrics") or {}
         metrics = {field: original_metrics.get(field) for field in adapter_for(manifest, task).metric_fields} if result else {}
@@ -28,35 +32,50 @@ def write_report(output, manifest, state):
                "attempts": len(item["attempts"]), "review_path": None, "metrics": metrics,
                "distance_to_goal": original_metrics.get("distance_to_goal"),
                "marginal_20_25m": original_metrics.get("marginal_20_25m", False),
-               "stop_reason": (result or {}).get("stopped_reason") or (result or {}).get("status"),
+               "stop_reason": (result or {}).get("stopped_reason") or (result or {}).get("stop_source") or (result or {}).get("status"),
                "cleanup_verified": bool(item["attempts"] and item["attempts"][-1].get("cleanup_verified"))}
         if result:
-            group["valid"] += 1
-            for field in adapter_for(manifest, task).metric_fields:
-                value = metrics.get(field)
-                if type(value) in (int, float, bool):
-                    group["metrics"].setdefault(field, []).append(float(value))
+            for group in targets:
+                group["valid"] += 1
+                for field in adapter_for(manifest, task).metric_fields:
+                    value = metrics.get(field)
+                    if type(value) in (int, float, bool):
+                        group["metrics"].setdefault(field, []).append(float(value))
             if result.get("run_dir"):
                 row["review_path"] = str(Path(result["run_dir"]).parents[1] / "evaluation/cases" / task["episode_id"] / "review.html")
         rows.append(row)
     summaries = []
-    for (dataset, split), group in groups.items():
-        values = {key: sum(items) / len(items) * (100 if key in {"success", "success_25m", "sdtw", "ndtw"} else 1)
+    # Pool episode values for the overall result, never average split means.
+    for (dataset, split), group in [*groups.items(), *totals.items()]:
+        values = {key: sum(items) / len(items) * (100 if key in {"success", "success_25m", "oracle_success", "sdtw", "ndtw"} else 1)
                   for key, items in group["metrics"].items() if items}
         metric_fields = adapter_for(manifest, {"dataset": dataset}).metric_fields
         summaries.append({"dataset": dataset, "split": split, "planned": group["planned"], "valid": group["valid"],
                           "complete": group["valid"] == group["planned"], "provisional": values,
+                          "status_counts": dict(group["statuses"]),
+                          "unscored": group["planned"] - group["valid"],
+                          # Unfinished/technical failures remain in the denominator.
+                          # Missing NE/nDTW values are never synthesized as zero.
+                          "full_denominator_rates": {key: 100 * sum(group["metrics"].get(key, [])) / group["planned"]
+                                                     for key in ("success", "success_25m") if key in metric_fields},
                           "metric_coverage": {key: len(group["metrics"].get(key, [])) for key in metric_fields},
                           "paper": {key: values.get(key) if group["valid"] == group["planned"] and
                                     len(group["metrics"].get(key, [])) == group["planned"] else None for key in metric_fields}})
     record = {"status": state["status"], "reason": state.get("reason"), "fingerprint": manifest["fingerprint"],
               "planned_executions": len(rows), "valid_executions": sum(row["status"] == "scored" for row in rows),
-              "groups": summaries, "excluded_attempts": sum(a["status"] not in {"scored", "running"} for item in state["tasks"].values() for a in item["attempts"])}
+              "groups": [s for s in summaries if s["split"] != "all"],
+              "overall": [s for s in summaries if s["split"] == "all"],
+              "excluded_attempts": sum(a["status"] not in {"scored", "running"} for item in state["tasks"].values() for a in item["attempts"])}
     record["marginal_cases"] = [row for row in rows if row["marginal_20_25m"]]
     record["first_attempt_scored"] = sum(row["status"] == "scored" and row["attempts"] == 1 for row in rows)
     record["retried_scored"] = sum(row["status"] == "scored" and row["attempts"] > 1 for row in rows)
     record["stability_passed"] = bool(rows) and all(row["status"] == "scored" and row["cleanup_verified"] for row in rows)
     write_json(root / "metrics.json", record)
+    with (root / "summary.csv").open("w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=list(summaries[0]) if summaries else ["dataset"])
+        writer.writeheader()
+        writer.writerows({key: json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value
+                         for key, value in row.items()} for row in summaries)
     write_json(root / "marginal_cases.json", record["marginal_cases"])
     body = ['<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Campaign report</title>',
             '<style>body{font:15px/1.6 system-ui;margin:28px}table{border-collapse:collapse;width:100%}td,th{padding:8px;border:1px solid #ddd}</style>',

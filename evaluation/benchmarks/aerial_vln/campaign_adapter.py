@@ -15,7 +15,7 @@ class AerialVlnCampaignAdapter:
     """Preserve the existing runner's navigation and scoring contracts."""
 
     dataset = "aerial_vln"
-    metric_fields = ("success", "success_25m", "ndtw")
+    metric_fields = ("success", "success_25m", "oracle_success", "distance_to_goal", "ndtw", "sdtw")
 
     def prepare(self, config, *, require_execution_ready=False):
         settings = AerialVlnEvalConfig.from_dict(config)

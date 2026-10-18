@@ -8,6 +8,44 @@ import sys
 import pytest
 
 from evaluation.benchmarks.core.campaign.parallel import execution_settings, gpu_violation, lane_catalog
+
+
+@pytest.mark.parametrize('shared,free,expected', [(False, '13000 MiB', False), (True, '4096 MiB', True), (True, '4095 MiB', False), (True, 'N/A', False)])
+def test_shared_gpu_admission_keeps_existing_processes(monkeypatch, shared, free, expected):
+    from types import SimpleNamespace
+    from evaluation.benchmarks.core.campaign import parallel
+    sample = {'gpus': [{'index': 2, 'uuid': 'fixed', 'memory_free': free, 'memory_used': '11000 MiB',
+                       'processes': [{'name': 'other-experiment', 'type': 'C'}]}]}
+    monkeypatch.setattr(parallel.subprocess, 'run', lambda *a, **k: SimpleNamespace(stdout=json.dumps(sample)))
+    config = {'mode': 'local', 'gpu_indices': [2], 'gpu_uuids': {'2': 'fixed'}, 'allow_shared_gpu': shared}
+    assert parallel.local_gpu_idle(config) is expected
+    config['gpu_uuids']['2'] = 'changed'
+    with pytest.raises(RuntimeError, match='UUID changed'):
+        parallel.local_gpu_idle(config)
+
+
+def test_sharing_policy_validation():
+    assert not execution_settings({})['allow_shared_gpu']
+    for changes in [{'allow_shared_gpu': 'true'}, {'minimum_free_gpu_mib': 0}, {'minimum_free_gpu_mib': True}]:
+        with pytest.raises(ValueError):
+            execution_settings({'execution': changes})
+    with pytest.raises(ValueError, match='only for Linux local'):
+        execution_settings({'execution': {'allow_shared_gpu': True}})
+
+
+def test_duplicate_icd_manifests_are_loaded_once():
+    from types import SimpleNamespace
+    from evaluation.benchmarks.core.campaign.parallel import REMOTE_VULKAN_BINDING
+    class Manifest:
+        def read_text(self):
+            return json.dumps({'ICD': {'library_path': 'libGLX_nvidia.so.0'}})
+        def __str__(self):
+            return '/manifest/nvidia.json'
+    namespace = {'pathlib': SimpleNamespace(Path=lambda _: SimpleNamespace(glob=lambda _: [Manifest()])), 'json': json}
+    start = REMOTE_VULKAN_BINDING.index('icds=[]')
+    end = REMOTE_VULKAN_BINDING.index("if not icds:")
+    exec(REMOTE_VULKAN_BINDING[start:end], namespace)
+    assert namespace['icds'] == ['/manifest/nvidia.json']
 from evaluation.benchmarks.core.campaign.local_execution import cleanup_local, owned_members
 from src.sim_server.process_manager import ProcessManager
 

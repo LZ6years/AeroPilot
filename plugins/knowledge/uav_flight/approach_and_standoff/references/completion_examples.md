@@ -7,6 +7,18 @@ approach change. Do not add exact image centering to a qualitative request. A
 specified metric separation instead needs valid evidence for the relevant target
 geometry; surface depth is not automatically horizontal or center-to-center range.
 Empty or invalid measurements leave distance unknown, not zero.
+An earlier measurement remains evidence about its original viewpoint. Account
+for subsequent vehicle and target motion, geometry and uncertainty before using
+it to estimate current separation. A qualitative request does not introduce an
+exact numeric threshold; an approximate distance retains its stated tolerance.
+
+For an approach-and-hold task, a nearby tree and doorway may identify the intended
+building before leaving view. They need not both remain visible at the requested
+hold if target and scene continuity remain supported. Extra motion merely to
+recover that descriptive background is unnecessary. An inspection photo explicitly
+requiring both features still needs simultaneous visibility. A following task needs
+updated evidence as the target moves; an earlier satisfied separation does not
+establish continued satisfaction.
 
 ## Landing And Task Order
 

@@ -224,6 +224,11 @@ a new observation and does not change `CURRENT`; confidence alone is not proof
 that a candidate matches the instruction.
 
 Capabilities may declare a generic per-observation call limit through ToolSpec.
+An optional observation_id_parameter binds that quota to a declared source
+observation argument; otherwise it remains bound to the current observation.
+Pixel depth may measure an authorized observation from the active instruction's
+complete persisted history. Historical results retain their source time and
+HISTORY identity and cannot become a new CURRENT view or current range proof.
 Past distance-tool use does not impose a final-observation re-query.
 Evidence precision and geometric meaning must support the requested judgment;
 this does not impose an order between direct visual interpretation and callable

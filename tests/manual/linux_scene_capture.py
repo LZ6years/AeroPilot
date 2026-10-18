@@ -12,7 +12,7 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from evaluation.benchmarks.core.campaign.parallel import REMOTE_GPU_INSPECTION, read_json, gpu_violation
+from evaluation.benchmarks.core.campaign.parallel import REMOTE_GPU_INSPECTION, read_json, gpu_violation, local_gpu_idle, execution_settings
 from evaluation.benchmarks.core.campaign.support import environment_diagnostics
 from evaluation.benchmarks.core.report_io import write_json
 from evaluation.benchmarks.core.supervision import cleanup_verified
@@ -29,13 +29,19 @@ def main():
     parser.add_argument('--gpu', type=int, required=True)
     parser.add_argument('--execution-config', type=Path)
     args = parser.parse_args()
-    limits = read_json(args.execution_config).get('graphics_context_limits_mib', {}) if args.execution_config else {}
+    execution = read_json(args.execution_config) if args.execution_config else None
+    limits = execution.get('graphics_context_limits_mib', {}) if execution else {}
+    if execution and execution_settings({'execution': execution})['gpu_indices'] != [args.gpu]:
+        raise ValueError('Capture GPU must match execution policy')
     import airsim
     packages, policy = load_map_config(args.maps)
     args.output.mkdir(parents=True, exist_ok=True)
     write_json(args.output / 'environment.json', environment_diagnostics())
     results = []
     for package in packages:
+        while execution and not local_gpu_idle(execution):
+            print('Waiting for GPU admission before scene ' + str(package.scene_id), flush=True)
+            time.sleep(30)
         directory = args.output / str(package.scene_id)
         server = SimulationServer([package], policy, run_dir=directory, show_display=False)
         scene, client = None, None

@@ -115,18 +115,19 @@ class PausedMultirotorActionExecutor:
         }
         failure_kind = outcome.failure_kind
         collision_kind: str | None = None
-        if failure_kind is None and actual_distance is None:
-            failure_kind = "rpc_error"
-            tracking["verification_error"] = "post-action pose unavailable"
-        elif failure_kind is None and actual_distance > max(
+        discontinuity = actual_distance is not None and actual_distance > max(
             self.policy.translation_slack_m,
             self.policy.max_translation_ratio * expected_distance,
-        ):
-            if self._is_recoverable_new_collision(outcome):
-                collision_kind = "displacement"
-            else:
-                failure_kind = "motion_discontinuity"
-                self._recovery_required = True
+        )
+        tracking["motion_discontinuity"] = discontinuity
+        # RPC failure and new contact do not make a position jump trustworthy.
+        # Preserve the RPC result independently while poisoning further control.
+        if discontinuity:
+            failure_kind = "motion_discontinuity"
+            self._recovery_required = True
+        elif failure_kind is None and actual_distance is None:
+            failure_kind = "rpc_error"
+            tracking["verification_error"] = "post-action pose unavailable"
         elif (
             failure_kind is None
             and expected_distance >= self._NO_EFFECT_MIN_EXPECTED_TRANSLATION_M
@@ -195,16 +196,14 @@ class PausedMultirotorActionExecutor:
         }
         failure_kind = outcome.failure_kind
         collision_kind: str | None = None
-        if (
-            failure_kind is None
-            and tracking["observed_translation_m"] is not None
+        discontinuity = (
+            tracking["observed_translation_m"] is not None
             and tracking["observed_translation_m"] > self.policy.translation_slack_m
-        ):
-            if self._is_recoverable_new_collision(outcome):
-                collision_kind = "displacement"
-            else:
-                failure_kind = "motion_discontinuity"
-                self._recovery_required = True
+        )
+        tracking["motion_discontinuity"] = discontinuity
+        if discontinuity:
+            failure_kind = "motion_discontinuity"
+            self._recovery_required = True
         if failure_kind is None and collision_kind is None and observed_delta is None:
             failure_kind = "rpc_error"
             tracking["verification_error"] = "post-action yaw unavailable"
@@ -380,6 +379,7 @@ class PausedMultirotorActionExecutor:
             "after": outcome.after,
             "tracking": tracking,
             "failure_kind": failure_kind,
+            "rpc_failure_kind": outcome.failure_kind,
             "collision_kind": collision_kind,
         }
         collision = collision_kind is not None
@@ -439,43 +439,6 @@ class PausedMultirotorActionExecutor:
             )
         except (KeyError, TypeError, ValueError):
             return False
-
-    @classmethod
-    def _is_recoverable_new_collision(cls, outcome: _PhysicalActionOutcome) -> bool:
-        return cls._has_trustworthy_final_pose(outcome) and cls._has_new_collision(
-            outcome.before, outcome.after
-        )
-
-    @staticmethod
-    def _has_new_collision(
-        before: dict[str, Any], after: dict[str, Any]
-    ) -> bool:
-        before_collision = before.get("collision")
-        after_collision = after.get("collision")
-        if not isinstance(after_collision, dict) or after_collision.get(
-            "has_collided"
-        ) is not True:
-            return False
-        if not isinstance(before_collision, dict):
-            before_collision = {}
-        before_timestamp = PausedMultirotorActionExecutor._collision_timestamp(
-            before_collision
-        )
-        after_timestamp = PausedMultirotorActionExecutor._collision_timestamp(
-            after_collision
-        )
-        if before_timestamp is not None and after_timestamp is not None:
-            return after_timestamp > before_timestamp
-        return before_collision.get("has_collided") is not True
-
-    @staticmethod
-    def _collision_timestamp(collision: dict[str, Any]) -> float | None:
-        value = collision.get("time_stamp")
-        if isinstance(value, (int, float)) and not isinstance(value, bool):
-            timestamp = float(value)
-            if math.isfinite(timestamp) and timestamp > 0:
-                return timestamp
-        return None
 
     @staticmethod
     def _collision_summary(

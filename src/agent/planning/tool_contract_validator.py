@@ -157,8 +157,11 @@ def _validate_read_calls(
             code="read_batch_invalid",
         )
     counts = dict(executed_read_counts or {})
-    observation_id = str(latest_observation.get("observation_id") or "")
     for call, spec in calls_and_specs:
+        try:
+            observation_id = spec.runtime.observation_key(call.args, latest_observation)
+        except ValueError as exc:
+            raise NativeTurnValidationError(str(exc), code="invalid_arguments", call_id=call.tool_call_id) from exc
         key = (observation_id, call.tool_name)
         limit = spec.runtime.max_calls_per_observation
         count = counts.get(key, 0)

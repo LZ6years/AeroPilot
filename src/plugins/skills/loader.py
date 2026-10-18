@@ -119,7 +119,7 @@ class SkillContentLoader:
         """Load model-facing guidance for a selected skill.
 
         Selection remains index-only, but once a skill is accepted the planner
-        receives the bounded SKILL.md body. References stay opt-in so large
+        receives the complete SKILL.md body. References stay opt-in so large
         supporting material only appears when explicitly requested.
         """
 

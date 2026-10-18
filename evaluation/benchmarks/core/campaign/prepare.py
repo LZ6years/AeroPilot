@@ -52,6 +52,15 @@ def validate(config_paths, dataset, *, root=ROOT):
             "splits": [s.config["split"] for s in selections], "validation": [s.validation for s in selections]}
 
 
+def scene_sort_key(scene_id):
+    """Keep numeric scene order while accepting named simulator packages."""
+    value = str(scene_id)
+    try:
+        return (0, int(value), value)
+    except ValueError:
+        return (1, value, value)
+
+
 def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None, execution=None):
     output = Path(output).resolve()
     if (output / "manifest.json").exists():
@@ -119,7 +128,7 @@ def prepare(output, config_paths, dataset, *, root=ROOT, plugin_config=None, exe
         raise ValueError("Campaign task identities are duplicated")
     if execution["mode"] == "local":
         split_order = list(dict.fromkeys(t["split"] for t in tasks))
-        tasks.sort(key=lambda t: (split_order.index(t["split"]), int(t["scene_id"]), t["episode_id"]))
+        tasks.sort(key=lambda t: (split_order.index(t["split"]), scene_sort_key(t["scene_id"]), t["episode_id"]))
     hashes = {p.relative_to(source).as_posix(): hashlib.sha256(p.read_bytes()).hexdigest() for p in source.rglob("*") if p.is_file()}
     manifest = {"version": 2, "dataset": dataset, "configs": configs, "primary_config_key": next(iter(configs)),
                 "tasks": tasks, "stage_splits": list(dict.fromkeys(t["split"] for t in tasks)),

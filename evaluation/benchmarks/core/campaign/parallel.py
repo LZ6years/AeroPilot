@@ -53,7 +53,8 @@ for index,gpu in enumerate(ET.fromstring(result.stdout).findall('gpu')):
   processes.append({'pid':pid,'pgid':group,'type':process.findtext('type'),'name':process.findtext('process_name'),
                     'memory_mib':int(memory) if memory.isdigit() else None})
  gpus.append({'index':index,'name':gpu.findtext('product_name'),'uuid':gpu.findtext('uuid'),
-              'memory_used':gpu.findtext('fb_memory_usage/used'),'processes':processes})
+              'memory_used':gpu.findtext('fb_memory_usage/used'),
+              'memory_free':gpu.findtext('fb_memory_usage/free'),'processes':processes})
 owned=[]
 for scene in scenes:
  observed=[gpu['index'] for gpu in gpus if any(p['pgid']==scene['pid'] for p in gpu['processes'])]
@@ -74,10 +75,16 @@ row=next(row for row in rows if int(row[0])==index)
 domain,bus,slot=row[2].split(':')
 device,function=slot.split('.')
 icds=[]
+driver_libraries=set()
 for directory in ('/usr/share/vulkan/icd.d','/etc/vulkan/icd.d'):
  for path in pathlib.Path(directory).glob('*.json'):
   manifest=json.loads(path.read_text())
-  if 'nvidia' in manifest.get('ICD',{}).get('library_path','').lower(): icds.append(str(path))
+  driver=manifest.get('ICD',{}).get('library_path','')
+  # Distributions can install the same driver manifest under both directories.
+  # Loading both repeats each physical device and breaks unique UUID binding.
+  if 'nvidia' in driver.lower() and driver not in driver_libraries:
+   icds.append(str(path))
+   driver_libraries.add(driver)
 if not icds: raise RuntimeError('Existing NVIDIA Vulkan ICD is required')
 environment={'VK_ICD_FILENAMES':':'.join(sorted(icds)), 'VK_DRIVER_FILES':':'.join(sorted(icds)),
              'CUDA_VISIBLE_DEVICES':row[1]}
@@ -367,7 +374,8 @@ def kill_owned(owner):
 def execution_settings(manifest):
     """Explicit deployment policy; absent policy preserves the legacy SSH lanes."""
     value = {"mode": "remote", "gpu_indices": [0, 2], "gpu_uuids": {},
-             "require_cuda": True, "report_profile": "paper_process", "graphics_context_limits_mib": {}}
+             "require_cuda": True, "report_profile": "paper_process", "graphics_context_limits_mib": {},
+             "allow_shared_gpu": False, "minimum_free_gpu_mib": 4096}
     value.update(manifest.get("execution") or {})
     indices = value["gpu_indices"]
     if value["mode"] not in {"local", "remote"} or not isinstance(indices, list) or not 1 <= len(indices) <= 2:
@@ -376,6 +384,10 @@ def execution_settings(manifest):
         raise ValueError("GPU indices must be unique nonnegative integers")
     if value["mode"] == "local" and len(indices) != 1:
         raise ValueError("Linux local campaign requires one isolated worker")
+    if type(value['allow_shared_gpu']) is not bool or type(value['minimum_free_gpu_mib']) is not int or value['minimum_free_gpu_mib'] < 4096:
+        raise ValueError('GPU sharing requires a boolean and at least 4096 MiB free')
+    if value['allow_shared_gpu'] and value['mode'] != 'local':
+        raise ValueError('GPU sharing is supported only for Linux local execution')
     for index, limit in value['graphics_context_limits_mib'].items():
         if not str(index).isdigit() or int(index) in indices or type(limit) is not int or limit <= 0:
             raise ValueError('Invalid auxiliary graphics context limit')
@@ -447,11 +459,17 @@ def gpu_violation(sample, allowed=(0, 2), graphics_limits=None):
 
 
 def local_gpu_idle(execution):
-    """Check the pinned card before dispatch; never migrate a busy workload."""
+    """Check pinned-card admission; shared mode never controls other owners."""
     policy = execution_settings({"execution": execution})
     response = subprocess.run([sys.executable, '-c', REMOTE_GPU_INSPECTION, '[]'],
                               capture_output=True, text=True, timeout=15, check=True)
     gpu = next(g for g in json.loads(response.stdout)['gpus'] if g['index'] == policy['gpu_indices'][0])
+    expected = policy['gpu_uuids'].get(str(gpu['index']))
+    if expected and gpu['uuid'] != expected:
+        raise RuntimeError('Physical GPU UUID changed before dispatch')
+    if policy['allow_shared_gpu']:
+        free = str(gpu.get('memory_free') or '').split()
+        return bool(free and free[0].isdigit() and int(free[0]) >= policy['minimum_free_gpu_mib'])
     # The system display server appears on all cards with a few MiB even when
     # no experiment is running. Other graphics/compute owners block dispatch.
     desktop_only = all(Path(p.get('name') or '').name in {'Xorg', 'Xwayland'} and p['type'] == 'G'
@@ -495,9 +513,13 @@ def verify_frozen(output, manifest):
     (output / "temp").mkdir(exist_ok=True)
 
 
-def prepare_extension(output, manifest, *, dataset_order=None):
+def prepare_extension(output, manifest, *, dataset_order=None, retention_policy=None):
     """Freeze the additive controller, queue and read-only recovery helper."""
     existing_overlay = read_json(output / "parallel/execution_overlay.json")
+    retention_policy = retention_policy or existing_overlay.get('retention_policy')
+    if retention_policy:
+        from evaluation.benchmarks.core.campaign.retention import validate
+        validate(retention_policy, manifest['tasks'])
     files = {
         "parallel_campaign.py": SCRIPT,
         "parallel_recovery.py": Path(sys.modules[ParallelRecoveryQueue.__module__].__file__),
@@ -514,6 +536,8 @@ def prepare_extension(output, manifest, *, dataset_order=None):
         files["adapters/" + dataset + ".py"] = Path(sys.modules[type(adapter).__module__].__file__)
     for name, path in compat.extra_files(manifest, REPO).items():
         files[name] = SCRIPT.with_name(name) if SCRIPT.with_name(name).is_file() else Path(path)
+    if retention_policy:
+        files['compact_logging.py'] = REPO / 'evaluation/experiments/compact_logging.py'
     hashes = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in files.items()}
     revision = hashlib.sha256(json.dumps(hashes, sort_keys=True).encode()).hexdigest()
     destination = output / "parallel/controller_source" / revision[:16]
@@ -547,6 +571,9 @@ def prepare_extension(output, manifest, *, dataset_order=None):
     logging = compat.logging_settings(manifest)
     overlay["logging_profile"] = logging["profile"]
     overlay["logging_adapter"] = logging.get("adapter")
+    if retention_policy:
+        overlay['retention_policy'] = retention_policy
+        overlay['retention_policy_sha256'] = hashlib.sha256(json.dumps(retention_policy, sort_keys=True).encode()).hexdigest()
     field, order = compat.group_policy(manifest)
     if field:
         overlay["scheduling_policy"] = {"mode": "budget_sequential", "group_field": field, "budget_order": order,
@@ -573,6 +600,11 @@ def prepare_extension(output, manifest, *, dataset_order=None):
 
 
 def verify_overlay(overlay, manifest):
+    if overlay.get('retention_policy'):
+        from evaluation.benchmarks.core.campaign.retention import validate
+        validate(overlay['retention_policy'], manifest['tasks'])
+        if hashlib.sha256(json.dumps(overlay['retention_policy'], sort_keys=True).encode()).hexdigest() != overlay.get('retention_policy_sha256'):
+            raise ValueError('Retention policy changed after activation')
     policy = execution_settings(manifest)
     if overlay["base_fingerprint"] != manifest["fingerprint"] or (policy['mode'] == 'remote' and overlay["forbidden_remote_gpus"] != [1]):
         raise ValueError("Execution overlay does not belong to this campaign")
@@ -751,7 +783,12 @@ def host_main(args):
         expected_source = Path(overlay["execution_source"]).resolve()
         if expected_source not in Path(src.llm.client.__file__).resolve().parents:
             raise RuntimeError("Recovery runtime source mismatch before dispatch")
-    if overlay.get("logging_adapter"):
+    if overlay.get('retention_policy'):
+        from evaluation.benchmarks.core.campaign.retention import profile
+        logging_adapter = _extension('compact_logging.py', 'evaluation/experiments/compact_logging.py')
+        logging_adapter.install(full_episode_ids={t['episode_id'] for t in manifest['tasks']
+                                                 if profile(t, overlay['retention_policy']) == 'full'})
+    elif overlay.get("logging_adapter"):
         logging_adapter = _extension(overlay["logging_adapter"], "evaluation/experiments/compact_logging.py")
         logging_adapter.install()
     environment = environment_diagnostics()
@@ -876,7 +913,7 @@ def finish_attempt(output, manifest, task, attempt, process, *, reason=None):
         write_json(case_dir / "case_result.json", result)
         write_json(directory / "result.json", result)
     depth_bytes = 0
-    if valid and verified and result.get("report") and not result.get("report_error") and compat.logging_settings(manifest)["profile"] != "full":
+    if valid and verified and result.get("report") and not result.get("report_error") and attempt.get('logging_profile', compat.logging_settings(manifest)["profile"]) != "full":
         owned = (directory / "runs").resolve()
         for path in owned.rglob("*.npy"):
             if owned in path.resolve().parents and any("depth" in part.lower() for part in path.parts):
@@ -927,6 +964,11 @@ def repair_pending_reports(output, manifest, queue):
 
 def storage_budget(output, queue, tasks, workers):
     overlay = read_json(output / "parallel/execution_overlay.json")
+    if overlay.get('retention_policy'):
+        from evaluation.benchmarks.core.campaign.retention import budget
+        record = budget(output, tasks, queue, overlay['retention_policy'], workers)
+        write_json(output / 'storage_check.json', record)
+        return record['passed']
     if overlay.get("logging_profile") == "paper_process_metrics_v1":
         # Historical full-debug attempts are already included in disk usage;
         # they do not predict future retention under the new logging profile.
@@ -1473,12 +1515,20 @@ def run_controller(args):
                     print(json.dumps({"parallel_trial_passed": True, "episodes": len(trial)}), flush=True)
                 candidates = stage_candidates(stage_tasks, trial, gate, queue)
                 candidates = recovery_candidates(output, overlay, candidates, queue)
+                if overlay.get('retention_policy'):
+                    from evaluation.benchmarks.core.campaign.retention import candidates as retention_candidates
+                    allowed = {queue.key(t) for t in retention_candidates(tasks, queue, overlay['retention_policy'])}
+                    candidates = [t for t in candidates if queue.key(t) in allowed]
                 if (session / "host_environment.json").exists() and not service_due and not drain_reason:
                     for lane in ("A", "B")[:args.workers]:
                         if lane in active:
                             continue
                         info = overlay["lanes"][lane]
                         admitted = recovery_candidates(output, overlay, candidates, queue)
+                        if overlay.get('retention_policy'):
+                            if not storage_budget(output, queue, tasks, args.workers):
+                                fatal = 'storage_or_coverage_check'
+                                break
                         eligible = dispatch_candidates(manifest, admitted, lane, active, args.workers, queue)
                         if eligible and execution_settings(manifest)['mode'] == 'local' and not local_gpu_idle(manifest.get('execution')):
                             fatal = 'authorized_gpu_busy'
@@ -1491,6 +1541,11 @@ def run_controller(args):
                         if not lease:
                             continue
                         task, attempt = lease
+                        if overlay.get('retention_policy'):
+                            from evaluation.benchmarks.core.campaign.retention import profile
+                            attempt['logging_profile'] = profile(task, overlay['retention_policy'])
+                            queue.state['tasks'][queue.key(task)]['attempts'][-1]['logging_profile'] = attempt['logging_profile']
+                            queue.save()
                         request = {"id": uuid.uuid4().hex, "lane": lane, "task": task,
                                    "attempt": attempt, "map_config_path": info["map_config_path"],
                                    "episode_deadline": args.episode_deadline}

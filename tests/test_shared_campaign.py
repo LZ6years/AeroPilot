@@ -18,6 +18,10 @@ from evaluation.benchmarks.core.campaign.reporting import write_report
 from evaluation.benchmarks.core.campaign.support import freeze_source
 
 
+def test_local_scene_order_accepts_named_and_numeric_packages():
+    scenes = ['NYCEnvironmentMegapa', '10', '2', 'BrushifyUrban', '02']
+    assert sorted(scenes, key=prepare.scene_sort_key) == ['02', '2', '10', 'BrushifyUrban', 'NYCEnvironmentMegapa']
+
 def task(dataset, split, identity):
     return {"dataset": dataset, "split": split, "episode_id": identity, "scene_id": "scene", "difficulty": "hard"}
 
@@ -109,6 +113,33 @@ def test_missing_metric_stays_blank_when_other_metrics_have_full_coverage(tmp_pa
                          "result": {"metrics": {"success": False}}})
     report = write_report(tmp_path, {"dataset": "travel_uav", "fingerprint": "frozen"}, q.state)
     assert report["groups"][0]["paper"] == {"success": 0, "navigation_error": None}
+
+
+def test_aerial_report_full_denominator_and_weighted_overall(tmp_path):
+    import csv
+    tasks = [task('aerial_vln', split, str(i)) for i, split in enumerate(
+        ['val_seen', 'val_seen', 'val_seen', 'val_unseen'])]
+    q = recovery.ParallelRecoveryQueue(tmp_path / 'progress.json', tasks, 'frozen')
+    for i, distance in [(0, 20.0), (1, 25.0), (3, 10.0)]:
+        current, attempt = q.claim([tasks[i]], 'A')
+        success = distance <= 20
+        q.accept(current, attempt['number'], {'cleanup_verified': True, 'valid_score': True, 'process': {},
+            'result': {'stop_source': 'runtime.report_completed', 'metrics': {
+                'success': success, 'success_25m': distance < 25, 'oracle_success': True,
+                'distance_to_goal': distance, 'ndtw': .5, 'sdtw': .5 if success else 0}}})
+    q.state['tasks'][q.key(tasks[2])]['status'] = 'retry_exhausted'
+    report = write_report(tmp_path, {'dataset': 'aerial_vln', 'fingerprint': 'frozen'}, q.state)
+    overall = report['overall'][0]
+    assert overall['planned'] == 4 and overall['valid'] == 3
+    assert overall['full_denominator_rates'] == {'success': 50, 'success_25m': 50}
+    assert overall['provisional']['oracle_success'] == 100
+    assert overall['provisional']['distance_to_goal'] == pytest.approx(55 / 3)
+    assert overall['provisional']['sdtw'] == pytest.approx(100 / 3)
+    assert overall['status_counts']['retry_exhausted'] == 1
+    assert all(v is None for v in overall['paper'].values())
+    rows = list(csv.DictReader((tmp_path / 'summary.csv').open(encoding='utf-8-sig')))
+    assert json.loads(rows[-1]['full_denominator_rates']) == overall['full_denominator_rates']
+    assert 'full_denominator_rates' in (tmp_path / 'report.html').read_text(encoding='utf-8')
 
 
 def test_standalone_prepare_freezes_context_selection_and_generic_keys(tmp_path, monkeypatch):

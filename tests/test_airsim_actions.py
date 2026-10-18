@@ -109,3 +109,37 @@ def test_freeze_failure_marks_scene_unusable_and_never_issues_receipt():
     assert result.data['action_diagnostics']['timings_sec']['freeze'] >= 0
     held = control.move_body(client, 0, 0, 0, 1)
     assert not held.ok and held.execution_state['requires_scene_reset']
+
+
+@pytest.mark.parametrize("rpc_result,new_collision", [(False, False), (True, True)])
+@pytest.mark.parametrize("action", ["turn", "move"])
+def test_position_jump_is_fatal_even_with_controller_failure_or_new_collision(rpc_result, new_collision, action):
+    from types import SimpleNamespace
+    client = FakeAirSimClient()
+    client.future_result = rpc_result
+    original = client.rotateToYawAsync if action == "turn" else client.moveByVelocityBodyFrameAsync
+    def displaced(*args, **kwargs):
+        future = original(*args, **kwargs)
+        get = future.get
+        def jump():
+            value = get()
+            client.kinematics.position.x_val += 200
+            if new_collision:
+                client.collision = SimpleNamespace(has_collided=True, object_name="new_contact", time_stamp=2)
+            return value
+        future.get = jump
+        return future
+    if action == "turn":
+        client.rotateToYawAsync = displaced
+    else:
+        client.moveByVelocityBodyFrameAsync = displaced
+    control = strategy()
+    result = control.turn_relative(client, 30) if action == "turn" else control.move_body(client, 1, 0, 0, 1)
+    assert result.data["failure_kind"] == "motion_discontinuity"
+    assert result.execution_state["requires_scene_reset"] is True
+    diagnostics = result.data["action_diagnostics"]
+    assert diagnostics["rpc"]["result"] is rpc_result
+    assert diagnostics["tracking"]["motion_discontinuity"] is True
+    assert diagnostics["rpc_failure_kind"] == (None if rpc_result else "controller_timeout_or_rejected")
+    with pytest.raises(RuntimeError, match="recreate the scene"):
+        control.turn_relative(client, 10)

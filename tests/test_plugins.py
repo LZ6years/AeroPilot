@@ -136,7 +136,8 @@ def test_skill_loader_lists_references_without_executing_scripts():
     skill = _uav_flight_registry().skill_catalog.validate_selection(["visual_target_task_reasoning"])[0][0]
     loader = SkillContentLoader()
     guidance = loader.load_planner_guidance(skill)
-    assert guidance["skill_text"] == skill.body[:loader.max_skill_chars].strip()
+    # Planner guidance is complete; only the legacy summary view is bounded.
+    assert guidance["skill_text"] == skill.body.strip()
     for private in ("summary", "references", "source_path", "skill_dir", "available_references"):
         assert private not in guidance
     expanded = loader.load_planner_guidance(skill, requested_references=["references/search_under_uncertainty.md"])

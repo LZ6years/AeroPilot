@@ -305,10 +305,11 @@ def test_real_runtime_interactive_single_window_builds_three_checkpoints(tmp_pat
     ]
 
 
+@pytest.mark.parametrize("shared_capture", [False, True])
 def test_runtime_factory_hydrates_workspace_relative_capture_path(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, shared_capture
 ):
-    """Cover the production path shape that previously duplicated run_dir."""
+    """Cover workspace-relative capture paths both inside and outside the run."""
 
     from src.env_client import ActionResult, Observation, SceneInstance
     from src.plugins import PluginRegistry
@@ -342,7 +343,7 @@ def test_runtime_factory_hydrates_workspace_relative_capture_path(
         def get_observation(self, scene_id, agent_id, modalities):
             self.observation_count += 1
             image = (
-                run_dir
+                (Path("scene_session_runtime") if shared_capture else run_dir)
                 / "artifacts"
                 / "scene"
                 / "rgb"
@@ -403,7 +404,11 @@ def test_runtime_factory_hydrates_workspace_relative_capture_path(
         if fragment["name"] == "image"
     )
     ref = image_fragment["media_refs"][0]["media_ref"]["ref"]
-    assert ref == "artifacts/scene/rgb/frame_000001.png"
+    if shared_capture:
+        assert ref.startswith("artifacts/observations/")
+        assert (run_dir / ref).read_bytes() == Path("scene_session_runtime/artifacts/scene/rgb/frame_000001.png").read_bytes()
+    else:
+        assert ref == "artifacts/scene/rgb/frame_000001.png"
 
 
 def test_checkpoint_build_defers_media_read_until_projection(

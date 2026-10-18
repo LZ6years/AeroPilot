@@ -417,7 +417,8 @@ class TurnExecutor:
             began = time.perf_counter()
             call = calls[index]
             # Completed attempts consume quota, including handler failures.
-            key = (str(session.state.latest_observation.get("observation_id") or ""), call.tool_name)
+            policy = self.tools.registry.get(call.tool_name).runtime
+            key = (policy.observation_key(call.args, session.state.latest_observation), call.tool_name)
             session.executed_read_counts[key] = session.executed_read_counts.get(key, 0) + 1
             self.tool_telemetry.read_result_event(
                 "read_result_received", decision_id, call.tool_call_id

@@ -36,11 +36,20 @@ actual translation and roof-edge relations before stopping. Growth alone proves 
 
 ## Completion And Stop
 
-Before ending, verify identity, earlier route conditions and final relation.
+Before ending, verify identity, earlier route conditions and required final
+relations or observations. Descriptive surroundings may establish identity across
+views while target and scene continuity remain supported. They need not share the
+final image unless the task requires simultaneous visibility, framing or continued
+observation. Once the required outcome is supported, avoid extra motion solely to
+restore descriptive background or add unrequested composition.
 Seeing a roof is not being above it; facing a building is not being in front of it.
 Check footprint, facade, entrance-side and route relations with actual motion.
-Numeric standoff needs valid geometry and reasonable tolerance, without mandatory
-repeat measurement. Landing must meet its surface/region and completion contract;
+Numeric standoff uses the task's distance definition and stated tolerance. When
+using surface depth, account for camera and sampled-surface offsets; match evidence
+precision to the requested accuracy. For a strict numeric bound, an estimate whose
+uncertainty straddles the limit leaves satisfaction unresolved. Seek a supported
+check or safe correction without inventing a fixed margin or requiring repeated
+measurement by default. Landing must meet its surface/region and completion contract;
 visible ground or descent alone does not prove touchdown. See
 [completion examples](references/completion_examples.md) for distinctions.
 

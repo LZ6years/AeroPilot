@@ -75,6 +75,14 @@ flowchart LR
 instruction 级 SHA-LRU 上限为 32 项、32 MiB，结束后清空。独立诊断工具可以在不提供
 `base_dir` 时使用绝对临时引用，但这种引用不得写入 Runtime 的 V3 artifact。
 
+场景采集服务可以被多个 Runtime 复用，其产物目录不必位于当前 run 内。
+`FlightEvidenceRecorder` 在观测入库之前，通过 `ObservationMediaStore` 将外部图片、
+配对深度和已有预览原样归档到 `artifacts/observations/`，按内容哈希去重；当前 run
+内已有的文件直接复用。帧记录和当前观测使用同一份归档路径，原采集路径仅作来源
+审计。这样 RGB 上下文、历史像素深度及地点照片都由当前 Runtime 持有，不依赖共享
+场景目录的存续。明确提供但无法读取、校验或写入的媒体沿观测错误链路报告，避免
+把归档故障伪装成一次有效的无图观测；真正没有 RGB 的观测仍保持 unavailable。
+
 每个 Provider 请求最多选择 20 张图片，优先级依次为：真实的 instruction-start
 observation、当前 observation、最近 3 个更早 observation、最多 4 张位于 raw tail 或被
 Capsule 引用的 tool evidence，以及填充剩余名额的对数采样旧 observation。tool evidence
@@ -95,6 +103,7 @@ contexts/instruction_envelope.json
 contexts/latest_checkpoint.json
 debug/context_checkpoints/<checkpoint_id>.json
 memory/agent_transcript.jsonl
+artifacts/observations/<sha-prefix>/<sha>.<format>
 artifacts/model_media/<observation_id>/<sha>.png
 ```
 

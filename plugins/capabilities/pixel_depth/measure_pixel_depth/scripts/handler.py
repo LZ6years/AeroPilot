@@ -14,26 +14,32 @@ import numpy as np
 from PIL import ImageDraw
 
 from src.memory.context.media_refs import image_media_ref
+from src.memory.stores import MemoryRecordReader
 from src.perception.frame_payload import frame_metadata, load_depth_frame, load_rgb_frame
 from src.plugins.contracts.skill import SkillCapabilityResult
 
 
 def measure_pixel_depth(observation: dict, observation_id: str, pixel_x: int, pixel_y: int,
-                        *, run_dir: str | None = None, tool_call_id: str | None = None) -> SkillCapabilityResult:
-    """Return a 0.1 m sensor sample; mismatched or stale inputs fail explicitly."""
+                        *, run_dir: str | None = None, tool_call_id: str | None = None,
+                        latest_observation_id: str | None = None) -> SkillCapabilityResult:
+    """Return a source-time 0.1 m sample; mismatched inputs fail explicitly."""
     if not observation_id or observation_id != observation.get("observation_id"):
-        raise ValueError("pixel depth requires the latest observation_id")
+        raise ValueError("pixel depth requires the matching source observation_id")
+    historical = latest_observation_id is not None and observation_id != latest_observation_id
+    role = "HISTORY" if historical else "CURRENT"
     if any(type(v) is not int for v in (pixel_x, pixel_y)):
         raise ValueError("pixel coordinates must be integers")
     frames = observation.get("frames") or {}
     rgb = frames.get("rgb")
     if not isinstance(rgb, dict):
-        raise ValueError("latest observation has no original RGB frame")
+        raise ValueError("source observation has no original RGB frame")
     image = load_rgb_frame(rgb)
     width, height = image.size
     if not (0 <= pixel_x < width and 0 <= pixel_y < height):
         raise ValueError(f"pixel outside original scene bounds: x:[0,{width}), y:[0,{height})")
     data = {"observation_id": observation_id, "pixel_x": pixel_x, "pixel_y": pixel_y,
+            "observation_timestamp": observation.get("timestamp"), "observation_role": role,
+            "evidence_origin": "historical_memory" if historical else "current_observation",
             "scene_size": [width, height], "distance_m": None,
             "distance_status": "metric_depth_unavailable", "depth_geometry": "sensor_depth",
             "measurement_semantics": "Depth at the selected visible pixel, not horizontal or target-center distance."}
@@ -69,7 +75,7 @@ def measure_pixel_depth(observation: dict, observation_id: str, pixel_x: int, pi
             if values.size:
                 audit.update(nearby_min_m=float(values.min()), nearby_max_m=float(values.max()))
     else:
-        audit["depth_error"] = "latest observation has no metric-depth frame"
+        audit["depth_error"] = "source observation has no metric-depth frame"
     data["audit_details"] = audit
     artifacts, inputs = (), ()
     if run_dir:
@@ -84,18 +90,33 @@ def measure_pixel_depth(observation: dict, observation_id: str, pixel_x: int, pi
         image.save(path, format="PNG")
         artifacts = (str(path),)
         inputs = (image_media_ref(path, run_dir=run_dir, observation_id=observation_id,
-                                 frame_id=f"pixel_depth_{identity}", role="selected_pixel_evidence",
-                                 usage="The red marker is the exact sampled point in the associated original RGB. Verify its visible surface.").to_model_input(),)
+                                 frame_id=f"pixel_depth_{identity}", role="historical_pixel_evidence" if historical else "selected_pixel_evidence",
+                                 usage=f"{role} source {observation_id}, acquired {observation.get('timestamp') or 'at the recorded observation'}. The red marker is the exact sampled visible surface; historical range is not current distance.").to_model_input(),)
     message = (f"Selected pixel ({pixel_x}, {pixel_y}) depth: {data['distance_m']} m ({data['depth_geometry']})."
                if data["distance_status"] == "ok" else
                f"No numeric depth at selected pixel: {data['distance_status']}. Reassess the point or viewpoint.")
-    return SkillCapabilityResult(message, data, artifacts, inputs)
+    return SkillCapabilityResult(f"{role} observation {observation_id}: " + message, data, artifacts, inputs)
 
 
 def handle(payload: dict) -> SkillCapabilityResult:
     """Adapt the generic plugin runtime context without accessing Runtime."""
     args = payload.get("args") or {}
     context = payload.get("runtime_context") or {}
-    return measure_pixel_depth(context.get("latest_observation") or {}, str(args.get("observation_id") or ""),
+    latest = context.get("latest_observation") or {}
+    observation_id = str(args.get("observation_id") or "")
+    source = latest
+    if observation_id != latest.get("observation_id"):
+        # Runtime supplies task-local provenance, not an arbitrary filesystem
+        # lookup supplied by the model. Read the full store, not its recent tail.
+        if not context.get("run_dir") or observation_id not in context.get("evidence_refs", []):
+            raise ValueError("source observation is not available in the active instruction")
+        reader = MemoryRecordReader(context["run_dir"])
+        with reader.read_scope():
+            source = reader.read_observation(observation_id)
+        for field in ("scene_instance_id", "agent_id"):
+            if latest.get(field) and source.get(field) != latest[field]:
+                raise ValueError("source observation belongs to a different scene or agent")
+    return measure_pixel_depth(source, observation_id,
                                args.get("pixel_x"), args.get("pixel_y"),
-                               run_dir=context.get("run_dir"), tool_call_id=context.get("tool_call_id"))
+                               run_dir=context.get("run_dir"), tool_call_id=context.get("tool_call_id"),
+                               latest_observation_id=str(latest.get("observation_id") or ""))

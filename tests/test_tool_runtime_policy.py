@@ -135,6 +135,14 @@ def test_runtime_policy_round_trips_optional_observation_quota():
     assert policy.to_dict()["max_calls_per_observation"] == 2
 
 
+@pytest.mark.parametrize("value", ["", " ", 2, True, []])
+def test_runtime_policy_rejects_invalid_observation_binding(value):
+    with pytest.raises(ValueError, match="observation_id_parameter"):
+        ToolRuntimePolicy.from_dict({"effect": "read_only", "result_timing": "immediate",
+            "batching": "parallel_safe", "model_exposed": True,
+            "observation_id_parameter": value})
+
+
 @pytest.mark.parametrize("value", [0, -1, True, "2"])
 def test_runtime_policy_rejects_invalid_observation_quota(value):
     with pytest.raises(ValueError, match="max_calls_per_observation"):

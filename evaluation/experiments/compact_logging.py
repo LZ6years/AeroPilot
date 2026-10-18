@@ -74,7 +74,7 @@ def reference_recorded_path(value, run_dir, destination, stem):
     return next((p for p in candidates if p.is_file()), None)
 
 
-def install():
+def install(full_episode_ids=None):
     """Install only logging/report bindings in this private execution host."""
     from evaluation.benchmarks.aerial_vln import runner as aerial
     from evaluation.benchmarks.travel_uav import runner as travel
@@ -90,4 +90,17 @@ def install():
     capture._metrics_adapter = True
     RuntimeJournal.capture_provider_exchange = capture
     aerial.AsyncRunLogger = travel.AsyncRunLogger = MetricsRunLogger
-    audit._copy_recorded_path = reference_recorded_path
+    if full_episode_ids is not None:
+        full_episode_ids = frozenset(full_episode_ids)
+        def select_logger(run_dir, **kwargs):
+            # Run directories are beneath attempts/<episode_id>/attempt_N/runs.
+            # Select by an exact path component, never by a substring in a title.
+            logger = AsyncRunLogger if full_episode_ids.intersection(Path(run_dir).parts) else MetricsRunLogger
+            return logger(run_dir, **kwargs)
+        aerial.AsyncRunLogger = travel.AsyncRunLogger = select_logger
+    original_copy = audit._copy_recorded_path
+    def copy_for_profile(value, run_dir, destination, stem):
+        if full_episode_ids is not None and full_episode_ids.intersection(Path(run_dir).parts):
+            return original_copy(value, run_dir, destination, stem)
+        return reference_recorded_path(value, run_dir, destination, stem)
+    audit._copy_recorded_path = copy_for_profile

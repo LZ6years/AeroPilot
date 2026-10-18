@@ -3,6 +3,15 @@
 Read [AGENT.md](AGENT.md) before changing this repository; it contains the
 project's architecture, ownership boundaries and development rules.
 
+## Remote generated files
+
+On the wangzequan Linux server, put newly generated evaluation results, logs,
+frozen snapshots and diagnostic files under `$DATADIR`, grouped by dataset or
+purpose, never directly under `~`. The verified DATADIR is
+`/home/Newdisk/wangzequan`; non-interactive SSH may not inherit it, so launchers
+must explicitly resolve/set it. Do not move active runs or edit their frozen
+paths while they are running. Preserve existing source, credentials and assets.
+
 ## Required local Python environment
 
 For this Windows workspace, run all project Python commands in the **Conda
