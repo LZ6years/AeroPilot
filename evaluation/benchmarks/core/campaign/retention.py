@@ -41,8 +41,26 @@ def profile(task, policy):
     return 'full' if ParallelRecoveryQueue.key(task) in policy['full_task_keys'] else 'paper_process_metrics_v1'
 
 
+def _finished_for_retention(item, queue):
+    """Release the next logging cohort after all allowed attempts are closed.
+
+    Exhausted technical failures remain unscored in campaign coverage. They
+    only stop blocking the next retention cohort when every attempt is invalid
+    and independently cleaned; this grants no new attempt or valid result.
+    Incomplete cleanup, missing receipts and available retry budgets still block.
+    """
+    if queue.terminal(item):
+        return True
+    attempts = item.get('attempts', [])
+    return (item.get('status') == 'retry_exhausted' and item.get('result') is None
+            and len(attempts) >= queue.attempt_limit(item)
+            and all(a.get('cleanup_verified') is True and a.get('valid_score') is False
+                    and a.get('status') in {'infrastructure_failed', 'provider_failed', 'interrupted'}
+                    for a in attempts))
+
+
 def candidates(tasks, queue, policy):
-    remaining = [t for t in tasks if not queue.terminal(queue.state['tasks'][queue.key(t)])]
+    remaining = [t for t in tasks if not _finished_for_retention(queue.state['tasks'][queue.key(t)], queue)]
     full = [t for t in remaining if profile(t, policy) == 'full']
     return full or remaining
 
@@ -58,7 +76,8 @@ def budget(output, tasks, queue, policy, workers):
     required = max(10 * 1024**3, len(stage) * per_case * 2 + workers * peak)
     free = shutil.disk_usage(output).free
     return dict(scope='retention_cohort', logging_profile=selected, remaining_cases=len(stage),
-                total_remaining_cases=sum(not queue.terminal(queue.state['tasks'][queue.key(t)]) for t in tasks),
+                total_remaining_cases=sum(not _finished_for_retention(queue.state['tasks'][queue.key(t)], queue)
+                                          for t in tasks),
                 observed_max_retained_bytes=per_case, observed_cases=len(attempts),
                 calibration_pending=not attempts, required_bytes=required, free_bytes=free, passed=free >= required)
 
