@@ -9,6 +9,7 @@ from collections import defaultdict
 import hashlib
 
 from evaluation.benchmarks.core.campaign.recovery import ParallelRecoveryQueue
+from evaluation.benchmarks.core.campaign.artifacts import PROFILE as ARCHIVE_PROFILE
 
 
 def select_full_audit(tasks, count, seed=42):
@@ -38,7 +39,8 @@ def select_full_audit(tasks, count, seed=42):
 
 
 def profile(task, policy):
-    return 'full' if ParallelRecoveryQueue.key(task) in policy['full_task_keys'] else 'paper_process_metrics_v1'
+    return ('full' if ParallelRecoveryQueue.key(task) in policy['full_task_keys']
+            else policy.get('compact_profile', 'paper_process_metrics_v1'))
 
 
 def _finished_for_retention(item, queue):
@@ -67,18 +69,23 @@ def candidates(tasks, queue, policy):
 
 def budget(output, tasks, queue, policy, workers):
     stage = candidates(tasks, queue, policy)
-    selected = profile(stage[0], policy) if stage else 'paper_process_metrics_v1'
+    selected = profile(stage[0], policy) if stage else policy.get('compact_profile', 'paper_process_metrics_v1')
     attempts = [a for t in tasks for a in queue.state['tasks'][queue.key(t)]['attempts']
                 if a.get('logging_profile', 'full') == selected and a.get('retained_bytes')]
-    per_case = max([a['retained_bytes'] for a in attempts] +
-                   ([policy['full_seed_bytes']] if selected == 'full' else [0]))
-    peak = max((a.get('temporary_depth_bytes', 0) for a in attempts), default=0)
+    # The measured seed prevents a newly selected archive format from starting
+    # with a zero-byte estimate. Old formats already occupy the measured free
+    # space, but cannot predict this format's future per-case retention.
+    seed = policy['full_seed_bytes'] if selected == 'full' else policy.get('compact_seed_bytes', 0)
+    per_case = max([a['retained_bytes'] for a in attempts] + [seed])
+    peak = max([max(a.get('temporary_depth_bytes', 0), a.get('archive_working_bytes', 0))
+                for a in attempts] + [policy.get('compact_peak_bytes', 0) if selected != 'full' else 0])
     required = max(10 * 1024**3, len(stage) * per_case * 2 + workers * peak)
     free = shutil.disk_usage(output).free
     return dict(scope='retention_cohort', logging_profile=selected, remaining_cases=len(stage),
                 total_remaining_cases=sum(not _finished_for_retention(queue.state['tasks'][queue.key(t)], queue)
                                           for t in tasks),
                 observed_max_retained_bytes=per_case, observed_cases=len(attempts),
+                measured_seed_bytes=seed, temporary_peak_bytes=peak,
                 calibration_pending=not attempts, required_bytes=required, free_bytes=free, passed=free >= required)
 
 
@@ -89,3 +96,9 @@ def validate(policy, tasks):
         raise ValueError('Retention cohort must identify unique frozen tasks')
     if type(policy.get('full_seed_bytes')) is not int or policy['full_seed_bytes'] <= 0:
         raise ValueError('Retention requires a measured full-record size')
+    if policy.get('compact_profile', 'paper_process_metrics_v1') not in {'paper_process_metrics_v1', ARCHIVE_PROFILE}:
+        raise ValueError('Unknown compact artifact profile')
+    if policy.get('compact_profile') == ARCHIVE_PROFILE:
+        if any(type(policy.get(key)) is not int or policy[key] <= 0
+               for key in ('compact_seed_bytes', 'compact_peak_bytes')):
+            raise ValueError('Post-attempt archives require measured retained and working sizes')

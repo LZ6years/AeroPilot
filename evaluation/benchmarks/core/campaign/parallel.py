@@ -961,10 +961,29 @@ def finish_attempt(output, manifest, task, attempt, process, *, reason=None):
             if owned in path.resolve().parents and any("depth" in part.lower() for part in path.parts):
                 depth_bytes += path.stat().st_size
                 path.unlink()
+    archive_info, archive_error, archive_working_bytes = None, None, 0
+    from evaluation.benchmarks.core.campaign.artifacts import PROFILE as archive_profile, compact_attempt
+    if verified and attempt.get('logging_profile') == archive_profile:
+        try:
+            if valid and (not result.get('report') or result.get('report_error')):
+                raise ValueError('Public review must be durable before artifact archiving')
+            archived = compact_attempt(directory, profile=archive_profile)
+            archive_working_bytes = archived['before_bytes'] + depth_bytes
+            archive_info = dict(profile=archive_profile, verified=True,
+                                manifest='diagnostic_archive.json', members=len(archived['members']),
+                                original_bytes=archived['archived_original_bytes'], archive_bytes=archived['archive_bytes'])
+        except Exception as exc:
+            # Presentation/storage failures never change a navigation score.
+            # Preserve originals and drain other flights before stopping dispatch.
+            archive_error = dict(error_type=type(exc).__name__, error=str(exc))
+            write_json(directory / 'artifact_archive_error.json', archive_error)
     retained = sum(path.stat().st_size for path in directory.rglob("*") if path.is_file())
     receipt = {"result": result, "cleanup_verified": verified, "valid_score": valid,
                "process": process, "directory": str(directory), "retained_bytes": retained,
                "temporary_depth_bytes": depth_bytes}
+    if attempt.get('logging_profile') == archive_profile:
+        receipt.update(artifact_archive=archive_info, artifact_archive_error=archive_error,
+                       archive_working_bytes=archive_working_bytes)
     write_json(directory / "receipt.json", receipt)
     return receipt
 
@@ -1475,6 +1494,9 @@ def run_controller(args):
                         if action == "pause":
                             # Stop dispatch, but allow the other flight to finish.
                             drain_reason = queue.state["reason"]
+                        if receipt.get('artifact_archive_error'):
+                            drain_reason = 'artifact_archive_failed'
+                            queue.pause(drain_reason)
                         exception = json.dumps(fact.get("exception") or {}).lower()
                         if args.workers > 1 and "out of memory" in exception and "cuda" in exception:
                             fallback = True
