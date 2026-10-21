@@ -189,3 +189,44 @@ def test_controller_archiving_never_changes_a_valid_navigation_score(tmp_path, m
         assert done["artifact_archive_error"]["error"] == "disk full"
     else:
         assert not (directory / artifacts.ARCHIVE).exists()
+
+
+def test_polling_during_real_cleanup_cannot_overwrite_terminal_archive_proof(tmp_path, monkeypatch):
+    """Reproduce the live race with a blocked archive and actual cleanup worker."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+    from evaluation.benchmarks.core.campaign import parallel
+    task = dict(split="seen", episode_id="test", scene_id="map")
+    directory = parallel._attempt_dir(tmp_path, task, 1)
+    _, _, result = closed_attempt(directory)
+    put(directory / "result.json", result)
+    monkeypatch.setattr(parallel, "cleanup_owned", lambda *a, **k: [
+        {"remote_stop": {"cleanup_verified": True}, "endpoint": {"status": "unreachable"}}])
+    monkeypatch.setattr(parallel.compat, "attach_review", lambda *a: None)
+    entered, release = Event(), Event()
+    original = artifacts.compact_attempt
+
+    def waiting_archive(*args, **kwargs):
+        entered.set()
+        assert release.wait(10), "Polling test failed to release the archive"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(artifacts, "compact_attempt", waiting_archive)
+    running = {"status": "running", "descendants": []}
+    parallel.write_attempt_heartbeat(directory, running, cleanup_pending=False)
+    assert parallel.read_json(directory / "process.json")["status"] == "running"
+    manifest = {"configs": {"seen": {"map_config_path": "unused", "report_profile": "paper_process"}}}
+    with ThreadPoolExecutor(max_workers=1) as worker:
+        future = worker.submit(parallel.finish_attempt, tmp_path, manifest, task,
+                               dict(number=1, logging_profile=artifacts.PROFILE), running)
+        try:
+            assert entered.wait(10), "Cleanup worker did not reach archive"
+            for _ in range(20):
+                parallel.write_attempt_heartbeat(directory, running, cleanup_pending=True)
+            assert parallel.read_json(directory / "process.json")["status"] == "finished"
+        finally:
+            release.set()
+        done = future.result(timeout=10)
+    assert done["valid_score"] and done["cleanup_verified"]
+    assert done["artifact_archive_error"] is None and done["artifact_archive"]["verified"]
+    artifacts.validate_archive(directory)

@@ -898,6 +898,17 @@ def attempt_result(directory, task):
     return result or read_json(directory / "evaluation/cases" / task["episode_id"] / "case_result.json")
 
 
+def write_attempt_heartbeat(directory, process, *, cleanup_pending):
+    """Hand process-record ownership to the cleanup worker when it starts.
+
+    The lane remains reserved while cleanup/report/archive work is pending.
+    Its writer must not replace the worker's terminal proof with a stale
+    running heartbeat during that interval.
+    """
+    if not cleanup_pending:
+        write_json(Path(directory) / "process.json", process)
+
+
 def finish_attempt(output, manifest, task, attempt, process, *, reason=None):
     """Verify this lane's ownership, render the original HTML and clean depth."""
     directory = _attempt_dir(output, task, attempt["number"])
@@ -1465,7 +1476,8 @@ def run_controller(args):
                     fact = read_json(session / "results" / (request["id"] + ".json"))
                     process = {**host, "descendants": descendants, "lane": lane,
                                "status": "running", "elapsed_seconds": now - request["started"]}
-                    write_json(directory / "process.json", process)
+                    write_attempt_heartbeat(directory, process,
+                                            cleanup_pending=request.get("cleanup_pending", False))
                     if fact:
                         if fact["task"] != request["task"] or fact["attempt"] != request["attempt"]:
                             raise ValueError("Host receipt lease identity mismatch")

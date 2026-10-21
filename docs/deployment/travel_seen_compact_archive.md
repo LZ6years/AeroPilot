@@ -18,6 +18,11 @@ each original path, byte count and SHA256. ZIP contents are read back and
 verified before any original is unlinked. Failed archives preserve recoverable
 data and stop further dispatch after other active flights drain. An archive
 failure never changes a valid navigation score or grants another attempt.
+While a cleanup worker is pending, the controller stops publishing running
+heartbeats to that attempt's process record. This transfers record ownership
+to the worker and preserves its terminal proof through report generation and
+archiving. A concurrency regression holds the real archive worker at a barrier
+while the polling writer ticks, then verifies a successful unchanged score.
 
 The original full audit cohort and existing attempts keep their original
 retention profile. Newly claimed compact attempts carry the new profile, so
